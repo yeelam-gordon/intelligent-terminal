@@ -850,33 +850,37 @@ try
 {
     RETURN_HR_IF_NULL(E_POINTER, cancelled);
     RETURN_HR_IF_NULL(E_POINTER, selected);
-    RETURN_HR_IF_NULL(E_NOT_VALID_STATE, s_handler);
+    RETURN_HR_IF_NULL(E_NOT_VALID_STATE, s_emperor);
     *cancelled = TRUE;
     *selected = nullptr;
 
-    // Build JSON request params
-    Json::Value params;
-    if (title && SysStringLen(title) > 0)
-        params["title"] = winrt::to_string(std::wstring_view(title, SysStringLen(title)));
-
+    // Serialize choices to JSON for ShowProtocolQuickPick.
     Json::Value choicesArr(Json::arrayValue);
     for (UINT32 i = 0; i < choiceCount; ++i)
     {
         if (choices[i])
             choicesArr.append(winrt::to_string(std::wstring_view(choices[i], SysStringLen(choices[i]))));
     }
-    params["choices"] = choicesArr;
-    params["allow_free_input"] = allowFreeInput ? true : false;
+    Json::StreamWriterBuilder wb;
+    wb["indentation"] = "";
+    const auto choicesJson = winrt::to_hstring(Json::writeString(wb, choicesArr));
 
-    Json::Value request;
-    request["type"] = "request";
-    request["id"] = "com-quick-pick";
-    request["method"] = "quick_pick";
-    request["params"] = params;
+    const auto titleHstr = (title && SysStringLen(title) > 0)
+        ? winrt::hstring(std::wstring_view(title, SysStringLen(title)))
+        : winrt::hstring{};
 
-    const auto response = s_handler->HandleRequest(request, _authenticated);
-    const auto& r = response["result"];
-    if (r.isNull())
+    const auto host = s_emperor->GetMostRecentWindow();
+    RETURN_HR_IF_NULL(E_FAIL, host);
+
+    const auto page = _getPage(host);
+    RETURN_HR_IF_NULL(E_FAIL, page);
+
+    const auto resultJson = winrt::to_string(page.ShowProtocolQuickPick(titleHstr, choicesJson, allowFreeInput ? true : false));
+    if (resultJson.empty())
+        return E_FAIL;
+
+    Json::Value r;
+    if (!_parseJson(resultJson, r))
         return E_FAIL;
 
     *cancelled = r.get("cancelled", true).asBool() ? TRUE : FALSE;
@@ -900,16 +904,22 @@ try
     if (!_authenticated)
         return E_ACCESSDENIED;
 
-    // Trigger lazy page event registration once per instance
-    if (!_eventsInitialized && s_handler)
+    // Trigger lazy page event registration once per instance.
+    if (!_eventsInitialized && s_emperor)
     {
         _eventsInitialized = true;
-        Json::Value capReq;
-        capReq["type"] = "request";
-        capReq["id"] = "com-poll-init";
-        capReq["method"] = "get_capabilities";
-        capReq["params"] = Json::objectValue;
-        s_handler->HandleRequest(capReq, _authenticated);
+        for (const auto& host : s_emperor->GetWindows())
+        {
+            const auto page = _getPage(host.get());
+            if (!page)
+                continue;
+
+            page.ProtocolVtSequenceReceived(
+                [](auto&&, const winrt::hstring& eventJson) {
+                    s_BroadcastEventToComClients(winrt::to_string(eventJson));
+                });
+            break; // Single-window for now
+        }
     }
 
     // Wait for events up to timeoutMs

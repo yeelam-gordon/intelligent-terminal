@@ -25,6 +25,8 @@ class WindowEmperor;
 struct __declspec(uuid(__CLSID_TerminalProtocolServer))
 TerminalProtocolComServer : public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::RuntimeClassType::ClassicCom>, ITerminalProtocolServer>
 {
+    ~TerminalProtocolComServer() { _unregisterFromEvents(); }
+
     // ITerminalProtocolServer — typed methods
     STDMETHODIMP Authenticate(BSTR token, BOOL* authenticated, BSTR* protocolVersion) override;
     STDMETHODIMP GetCapabilities(BSTR* protocolVersion, BSTR* supportedMethodsJson) override;
