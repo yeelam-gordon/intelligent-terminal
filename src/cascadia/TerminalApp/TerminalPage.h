@@ -200,6 +200,7 @@ namespace winrt::TerminalApp::implementation
         til::property_changed_event PropertyChanged;
 
         // -------------------------------- WinRT Events ---------------------------------
+        til::typed_event<IInspectable, winrt::hstring> ProtocolVtSequenceReceived;
         til::typed_event<IInspectable, IInspectable> TitleChanged;
         til::typed_event<IInspectable, IInspectable> CloseWindowRequested;
         til::typed_event<IInspectable, winrt::Windows::UI::Xaml::UIElement> SetTitleBarContent;
@@ -266,14 +267,6 @@ namespace winrt::TerminalApp::implementation
         // Temporary env vars to inject into the next pane created via protocol.
         // Set before calling _OpenNewTab/_SplitPane, cleared after.
         std::optional<std::unordered_map<std::wstring, std::wstring>> _pendingProtocolEnvVars;
-
-        // Quick-pick state for protocol quick_pick tool (CommandPalette-based).
-        struct QuickPickState
-        {
-            HANDLE completedEvent = nullptr;
-            hstring result;
-        };
-        std::shared_ptr<QuickPickState> _quickPickState;
 
         // Coordinator sidecar state
         winrt::Microsoft::Terminal::Control::TermControl _coordinatorControl{ nullptr };

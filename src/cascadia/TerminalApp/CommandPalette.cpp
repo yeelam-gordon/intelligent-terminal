@@ -766,6 +766,10 @@ namespace winrt::TerminalApp::implementation
         {
             _dispatchAgentPrompt();
         }
+        else if (_currentMode == CommandPaletteMode::QuickPickMode)
+        {
+            _dispatchQuickPick(filteredCommand);
+        }
         else if (_currentMode == CommandPaletteMode::TabSwitchMode || _currentMode == CommandPaletteMode::TabSearchMode)
         {
             _switchToTab(filteredCommand);
@@ -931,6 +935,28 @@ namespace winrt::TerminalApp::implementation
             AgentBackgroundTaskRequested.raise(*this, promptText);
         }
 
+        _close();
+    }
+
+    void CommandPalette::_dispatchQuickPick(const winrt::TerminalApp::FilteredCommand& filteredCommand)
+    {
+        if (!filteredCommand)
+        {
+            return;
+        }
+
+        auto item{ filteredCommand.Item() };
+        if (item.Type() != PaletteItemType::Action)
+        {
+            return;
+        }
+
+        const auto actionPaletteItem{ winrt::get_self<ActionPaletteItem>(item) };
+        auto command{ actionPaletteItem->Command() };
+
+        // Raise the event BEFORE closing so the handler can set the result
+        // and signal the I/O thread before the visibility callback fires.
+        QuickPickCompleted.raise(*this, command.Name());
         _close();
     }
 
@@ -1217,6 +1243,12 @@ namespace winrt::TerminalApp::implementation
             PrefixCharacter(L"&");
             modeAnnouncementResourceKey = USES_RESOURCE(L"CommandPaletteModeAnnouncement_AgentBackgroundMode");
             break;
+        case CommandPaletteMode::QuickPickMode:
+            SearchBoxPlaceholderText(L"Select an option...");
+            NoMatchesText(RS_(L"CommandPalette_NoMatchesText/Text"));
+            ControlName(RS_(L"CommandPaletteControlName"));
+            PrefixCharacter(L"");
+            break;
         case CommandPaletteMode::ActionMode:
         default:
             SearchBoxPlaceholderText(RS_(L"CommandPalette_SearchBox/PlaceholderText"));
@@ -1267,7 +1299,7 @@ namespace winrt::TerminalApp::implementation
         {
             std::copy(begin(commandsToFilter), end(commandsToFilter), std::back_inserter(actions));
         }
-        else if (_currentMode == CommandPaletteMode::TabSearchMode || _currentMode == CommandPaletteMode::ActionMode || _currentMode == CommandPaletteMode::CommandlineMode)
+        else if (_currentMode == CommandPaletteMode::TabSearchMode || _currentMode == CommandPaletteMode::ActionMode || _currentMode == CommandPaletteMode::CommandlineMode || _currentMode == CommandPaletteMode::QuickPickMode)
         {
             auto pattern = std::make_shared<fzf::matcher::Pattern>(fzf::matcher::ParsePattern(searchText));
 
@@ -1364,9 +1396,7 @@ namespace winrt::TerminalApp::implementation
 
     void CommandPalette::SetQuickPickCommands(IVector<Command> const& commands)
     {
-        // Set up ActionMode for filtering behavior, but without the ">" prefix
-        // and with quick-pick-appropriate placeholder text.
-        _currentMode = CommandPaletteMode::ActionMode;
+        _currentMode = CommandPaletteMode::QuickPickMode;
         ParsedCommandLineText(L"");
         _searchBox().Text(L"");
         _searchBox().Select(_searchBox().Text().size(), 0);

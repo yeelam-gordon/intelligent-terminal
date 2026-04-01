@@ -1512,6 +1512,7 @@ void WindowEmperor::_initializeProtocolServer()
     _protocolHandler->SetAuthToken(_mcpToken);
 
     _protocolServer = std::make_unique<TerminalProtocolServer>(_protocolPipeName, _mcpToken, *_protocolHandler);
+    _protocolHandler->SetServer(_protocolServer.get());
     _protocolServer->Start();
 
     // Register COM class factory for cross-process access (runs on STA/UI thread).

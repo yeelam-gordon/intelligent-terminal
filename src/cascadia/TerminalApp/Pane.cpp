@@ -18,8 +18,8 @@ using namespace winrt::TerminalApp;
 static const int PaneBorderSize = 2;
 static const int CombinedPaneBorderSize = 2 * PaneBorderSize;
 
-// Process-global counter for protocol pane IDs.
-std::atomic<uint32_t> Pane::s_nextProtocolId{ 1 };
+// Process-global counter for content IDs (assigned to leaf panes only).
+std::atomic<uint32_t> Pane::s_nextContentId{ 1 };
 
 // WARNING: Don't do this! This won't work
 //   Duration duration{ std::chrono::milliseconds{ 200 } };
@@ -31,10 +31,9 @@ static const int AnimationDurationInMilliseconds = 200;
 static const Duration AnimationDuration = DurationHelper::FromTimeSpan(winrt::Windows::Foundation::TimeSpan(std::chrono::milliseconds(AnimationDurationInMilliseconds)));
 
 Pane::Pane(IPaneContent content, const bool lastFocused) :
-    _protocolId{ s_nextProtocolId.fetch_add(1) },
     _lastActive{ lastFocused }
 {
-    _setPaneContent(std::move(content));
+    _setPaneContent(std::move(content), s_nextContentId.fetch_add(1));
     _root.Children().Append(_borderFirst);
 
     const auto& control{ _content.GetRoot() };
@@ -64,7 +63,6 @@ Pane::Pane(std::shared_ptr<Pane> first,
     _secondChild{ second },
     _splitState{ splitState },
     _desiredSplitPosition{ splitPosition },
-    _protocolId{ s_nextProtocolId.fetch_add(1) },
     _lastActive{ lastFocused }
 {
     _CreateRowColDefinitions();
@@ -1419,8 +1417,12 @@ void Pane::_CloseChild(const bool closeFirst)
         // Find what borders need to persist after we close the child
         _borders = _GetCommonBorders();
 
-        // take the control, profile, id and isDefTermSession of the pane that _wasn't_ closed.
-        _setPaneContent(remainingChild->_takePaneContent());
+        // take the control, content ID, and per-tab id from the remaining child.
+        // _takePaneContent extracts the content and clears the child's contentId;
+        // we pass the child's contentId to _setPaneContent so it transfers with
+        // the content automatically.
+        auto remainingContentId = remainingChild->_contentId;
+        _setPaneContent(remainingChild->_takePaneContent(), remainingContentId);
         if (!_content)
         {
             // GH#18071: our content is still null after taking the other pane's content,
@@ -1429,7 +1431,6 @@ void Pane::_CloseChild(const bool closeFirst)
             return;
         }
         _id = remainingChild->Id();
-        _protocolId = remainingChild->_protocolId;
 
         // Revoke the old event handlers. Remove both the handlers for the panes
         // themselves closing, and remove their handlers for their controls
@@ -1733,18 +1734,22 @@ void Pane::_SetupChildCloseHandlers()
     });
 }
 
-// With this method you take ownership of the control from this Pane.
+// With this method you take ownership of the control and content ID from
+// this Pane. The content ID moves with the content so that protocol lookups
+// continue to find the same content after tree mutations.
 // Assign it to another Pane with _setPaneContent() or Close() it.
 IPaneContent Pane::_takePaneContent()
 {
     _closeRequestedRevoker.revoke();
+    _contentId = std::nullopt;
     return std::move(_content);
 }
 
 // This method safely sets the content of the Pane. It'll ensure to revoke and
 // assign event handlers, and to Close() the existing content if there's any.
 // The new content can be nullptr to remove any content.
-void Pane::_setPaneContent(IPaneContent content)
+// The contentId parameter transfers the content's identity to this pane.
+void Pane::_setPaneContent(IPaneContent content, std::optional<uint32_t> contentId)
 {
     // The IPaneContent::Close() implementation may be buggy and raise the CloseRequested event again.
     // _takePaneContent() avoids this as it revokes the event handler.
@@ -1756,6 +1761,7 @@ void Pane::_setPaneContent(IPaneContent content)
     if (content)
     {
         _content = std::move(content);
+        _contentId = contentId;
         _closeRequestedRevoker = _content.CloseRequested(winrt::auto_revoke, [this](auto&&, auto&&) { Close(); });
     }
 }
@@ -2309,11 +2315,13 @@ std::pair<std::shared_ptr<Pane>, std::shared_ptr<Pane>> Pane::_Split(SplitDirect
     }
     else
     {
-        //   Move our control, guid, isDefTermSession into the first one.
+        //   Move our content and content ID into the first child.
+        auto originalContentId = _contentId;
         _firstChild = std::make_shared<Pane>(_takePaneContent());
         _firstChild->_broadcastEnabled = _broadcastEnabled;
-        // Preserve the protocol ID so the coordinator can still track this pane.
-        _firstChild->_protocolId = _protocolId;
+        // Overwrite the fresh content ID with the original so protocol
+        // lookups continue to find this content after the split.
+        _firstChild->_contentId = originalContentId;
     }
 
     _splitState = actualSplitType;
@@ -2628,9 +2636,9 @@ std::shared_ptr<Pane> Pane::FindPane(const uint32_t id)
     return _FindPane([=](const auto& p) { return p->_IsLeaf() && p->_id == id; });
 }
 
-std::shared_ptr<Pane> Pane::FindPaneByProtocolId(const uint32_t protocolId)
+std::shared_ptr<Pane> Pane::FindPaneByContentId(const uint32_t contentId)
 {
-    return _FindPane([=](const auto& p) { return p->_IsLeaf() && p->_protocolId == protocolId; });
+    return _FindPane([=](const auto& p) { return p->_contentId.has_value() && *p->_contentId == contentId; });
 }
 
 // Method Description:

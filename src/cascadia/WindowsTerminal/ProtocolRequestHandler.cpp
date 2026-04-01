@@ -3,6 +3,8 @@
 
 #include "pch.h"
 #include "ProtocolRequestHandler.h"
+#include "TerminalProtocolServer.h"
+#include "TerminalProtocolComServer.h"
 #include "WindowEmperor.h"
 #include "AppHost.h"
 
@@ -43,6 +45,11 @@ ProtocolRequestHandler::ProtocolRequestHandler(WindowEmperor& emperor) :
 void ProtocolRequestHandler::SetAuthToken(const std::string& token)
 {
     _authToken = token;
+}
+
+void ProtocolRequestHandler::SetServer(TerminalProtocolServer* server)
+{
+    _server = server;
 }
 
 Json::Value ProtocolRequestHandler::_makeError(const std::string& code, const std::string& message)
@@ -109,6 +116,10 @@ Json::Value ProtocolRequestHandler::HandleRequest(const Json::Value& request, bo
     {
         return _makeErrorResponse(id, "auth_required", "Authentication required. Send 'authenticate' first.");
     }
+
+    // Lazily register for page VT events on first authenticated request.
+    // By this point windows and pages are fully initialized.
+    _ensurePageEventsRegistered();
 
     // Check per-action confirmation for non-read operations.
     if (!_checkConfirmation(method, params))
@@ -250,6 +261,33 @@ static TerminalApp::TerminalPage _getPage(AppHost* host)
         return nullptr;
     }
     return root.try_as<TerminalApp::TerminalPage>();
+}
+
+void ProtocolRequestHandler::_ensurePageEventsRegistered()
+{
+    if (_pageEventsRegistered || !_server)
+        return;
+
+    for (const auto& host : _emperor._windows)
+    {
+        const auto page = _getPage(host.get());
+        if (!page)
+            continue;
+
+        // Found a page — register once. TerminalPage unconditionally raises
+        // ProtocolVtSequenceReceived for all panes (wired in _RegisterTerminalEvents).
+        _pageEventsRegistered = true;
+        auto* server = _server;
+        page.ProtocolVtSequenceReceived(
+            [server](auto&&, const winrt::hstring& eventJson) {
+                const auto jsonStr = winrt::to_string(eventJson);
+                // Broadcast to named-pipe clients
+                server->BroadcastEvent(jsonStr);
+                // Broadcast to COM clients
+                TerminalProtocolComServer::s_BroadcastEventToComClients(jsonStr);
+            });
+        break; // Single-window for now
+    }
 }
 
 // ============================================================================

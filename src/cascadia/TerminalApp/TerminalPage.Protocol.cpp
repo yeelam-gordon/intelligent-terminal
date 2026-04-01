@@ -26,6 +26,13 @@ using namespace winrt::Microsoft::Terminal::Settings::Model;
 
 namespace winrt::TerminalApp::implementation
 {
+    // Cross-thread state for ShowProtocolQuickPick.
+    struct QuickPickState
+    {
+        HANDLE completedEvent = nullptr;
+        winrt::hstring result;
+    };
+
     // Helper: run a function on the UI thread and block until it completes.
     // If already on the UI thread, runs directly.
     template<typename F>
@@ -160,7 +167,7 @@ namespace winrt::TerminalApp::implementation
             if (!activePane)
                 return result;
 
-            result.PaneId = winrt::to_hstring(std::to_string(activePane->ProtocolId()));
+            result.PaneId = winrt::to_hstring(std::to_string(activePane->ContentId().value()));
             result.TabId = winrt::to_hstring(std::to_string(focusedTabIdx.value()));
             result.IsActive = true;
 
@@ -229,7 +236,7 @@ namespace winrt::TerminalApp::implementation
                         return; // Skip branch nodes
 
                     TerminalApp::ProtocolPaneInfo info{};
-                    info.PaneId = winrt::to_hstring(std::to_string(pane->ProtocolId()));
+                    info.PaneId = winrt::to_hstring(std::to_string(pane->ContentId().value()));
                     info.TabId = winrt::to_hstring(tabIdStr);
                     info.IsActive = (activePane == pane);
                     info.Pid = _getPidFromPane(pane);
@@ -279,7 +286,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -374,7 +381,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -446,7 +453,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -491,7 +498,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -551,7 +558,7 @@ namespace winrt::TerminalApp::implementation
                 const auto rootPane = tabImpl->GetRootPane();
                 if (rootPane)
                 {
-                    result.PaneId = winrt::to_hstring(std::to_string(rootPane->ProtocolId()));
+                    result.PaneId = winrt::to_hstring(std::to_string(rootPane->ContentId().value()));
                     result.Pid = _getPidFromPane(rootPane);
                 }
             }
@@ -577,7 +584,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -592,14 +599,14 @@ namespace winrt::TerminalApp::implementation
                     return result;
 
                 // Capture new pane info before moving it into the split.
-                const auto newPaneProtocolId = newPane->ProtocolId();
+                const auto newPaneContentId = newPane->ContentId().value();
                 const auto newPanePid = _getPidFromPane(newPane);
 
                 _SplitPane(tabImpl, direction, size, std::move(newPane), /*focusNewPane=*/!background);
                 _tabContent.UpdateLayout(); // Force synchronous terminal initialization
 
                 result.TabId = winrt::to_hstring(std::to_string(tabIdx));
-                result.PaneId = winrt::to_hstring(std::to_string(newPaneProtocolId));
+                result.PaneId = winrt::to_hstring(std::to_string(newPaneContentId));
                 result.Pid = newPanePid;
                 return result;
             }
@@ -624,7 +631,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -651,7 +658,7 @@ namespace winrt::TerminalApp::implementation
                 if (!rootPane)
                     continue;
 
-                const auto foundPane = rootPane->FindPaneByProtocolId(paneIdVal);
+                const auto foundPane = rootPane->FindPaneByContentId(paneIdVal);
                 if (!foundPane)
                     continue;
 
@@ -706,39 +713,41 @@ namespace winrt::TerminalApp::implementation
                     return;
                 }
 
-                // Store the quick-pick state so _OnDispatchCommandRequested can intercept.
-                strongThis->_quickPickState = state;
-
-                // Build Command objects for each choice (Name + dummy SendInput action).
+                // Build Command objects for each choice (name only, no action needed).
                 auto commands = winrt::single_threaded_vector<Command>();
                 for (Json::ArrayIndex i = 0; i < capturedChoices.size(); ++i)
                 {
                     auto choiceText = winrt::to_hstring(capturedChoices[i].asString());
-                    SendInputArgs sendArgs{ choiceText };
-                    ActionAndArgs actionAndArgs{ ShortcutAction::SendInput, sendArgs };
-
                     auto cmd = Command{};
                     cmd.Name(choiceText);
-                    cmd.ActionAndArgs(actionAndArgs);
                     commands.Append(cmd);
                 }
 
-                // Load and configure the command palette.
-                // SetQuickPickCommands handles mode setup internally
-                // (ActionMode filtering without the ">" prefix).
                 auto palette = strongThis->LoadCommandPalette();
                 palette.SetQuickPickCommands(commands);
 
-                // Register a visibility callback to detect cancellation (Escape key).
-                // CRITICAL: _close() is called BEFORE DispatchCommandRequested.raise()
-                // in CommandPalette::_dispatchCommand, so a synchronous visibility
-                // callback would incorrectly signal cancellation before the dispatch
-                // handler runs. We defer the cancel check via Dispatcher().RunAsync()
-                // so that the dispatch event (selection path) gets processed first.
+                // Subscribe to QuickPickCompleted for the selection path.
+                // The event fires BEFORE _close() in _dispatchQuickPick,
+                // so we can set the result and signal the I/O thread directly.
+                auto qpToken = std::make_shared<winrt::event_token>();
+                *qpToken = palette.QuickPickCompleted(
+                    [state, weakThis, qpToken](auto&&, const winrt::hstring& selectedName) {
+                        // Build properly-escaped JSON result.
+                        Json::Value result;
+                        result["cancelled"] = false;
+                        result["selected"] = winrt::to_string(selectedName);
+                        Json::StreamWriterBuilder wb;
+                        wb["indentation"] = "";
+                        state->result = winrt::to_hstring(Json::writeString(wb, result));
+                        SetEvent(state->completedEvent);
+                    });
+
+                // Visibility callback handles cancellation (Escape / click-away)
+                // and cleanup (unregister event handlers, restore action map).
                 auto visToken = std::make_shared<int64_t>(0);
                 *visToken = palette.RegisterPropertyChangedCallback(
                     winrt::Windows::UI::Xaml::UIElement::VisibilityProperty(),
-                    [state, weakThis, visToken](
+                    [state, weakThis, visToken, qpToken](
                         winrt::Windows::UI::Xaml::DependencyObject const& sender,
                         winrt::Windows::UI::Xaml::DependencyProperty const&) {
                         auto vis = winrt::unbox_value<winrt::Windows::UI::Xaml::Visibility>(
@@ -749,38 +758,21 @@ namespace winrt::TerminalApp::implementation
                             return;
                         }
 
-                        // Unregister immediately to avoid repeat firing.
+                        // Unregister both callbacks immediately.
                         sender.UnregisterPropertyChangedCallback(
                             winrt::Windows::UI::Xaml::UIElement::VisibilityProperty(), *visToken);
 
-                        // Defer the cancel check so DispatchCommandRequested runs first.
                         if (auto page = weakThis.get())
                         {
-                            page->Dispatcher().RunAsync(CoreDispatcherPriority::Normal,
-                                [state, weakThis]() {
-                                    if (auto page2 = weakThis.get())
-                                    {
-                                        // Restore the palette's action map.
-                                        auto palette2 = page2->LoadCommandPalette();
-                                        palette2.SetActionMap(page2->_settings.ActionMap());
-                                        page2->_quickPickState = nullptr;
-                                    }
-
-                                    // If result is still empty, the user cancelled (Escape/click away).
-                                    if (state->result.empty())
-                                    {
-                                        state->result = winrt::to_hstring("{\"cancelled\":true,\"selected\":\"\"}");
-                                    }
-                                    SetEvent(state->completedEvent);
-                                });
+                            auto palette2 = page->LoadCommandPalette();
+                            palette2.QuickPickCompleted(*qpToken);
+                            palette2.SetActionMap(page->_settings.ActionMap());
                         }
-                        else
+
+                        // If result is still empty, the user cancelled (Escape / click-away).
+                        if (state->result.empty())
                         {
-                            // Page gone — just signal cancellation.
-                            if (state->result.empty())
-                            {
-                                state->result = winrt::to_hstring("{\"cancelled\":true,\"selected\":\"\"}");
-                            }
+                            state->result = winrt::to_hstring("{\"cancelled\":true,\"selected\":\"\"}");
                             SetEvent(state->completedEvent);
                         }
                     });
@@ -788,7 +780,7 @@ namespace winrt::TerminalApp::implementation
                 palette.Visibility(winrt::Windows::UI::Xaml::Visibility::Visible);
             });
 
-        // Block the pipe I/O thread until the palette completes.
+        // Block the I/O thread until the palette completes.
         WaitForSingleObject(state->completedEvent, INFINITE);
         CloseHandle(state->completedEvent);
         return state->result;
@@ -842,8 +834,6 @@ namespace winrt::TerminalApp::implementation
                     commandline = L"cmd.exe";
                 }
 
-                // No cmd.exe wrapper needed — WT_PIPE_NAME is inherited from
-                // the process environment, set in WindowEmperor::_startProtocolServer().
                 NewTerminalArgs newTermArgs;
                 newTermArgs.Commandline(winrt::hstring{ commandline });
 
