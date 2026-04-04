@@ -110,14 +110,6 @@ namespace Microsoft.Terminal.Settings.Model
         INHERITABLE_SETTING(String, AgentCliPath);
         INHERITABLE_SETTING(String, AgentPanePosition);
 
-        // AI Integration settings
-        INHERITABLE_SETTING(Boolean, AiCoordinatorEnabled);
-        INHERITABLE_SETTING(String, AiCoordinatorCommandline);
-        INHERITABLE_SETTING(String, AiCoordinatorProfile);
-        INHERITABLE_SETTING(String, AiConfirmationReadOps);
-        INHERITABLE_SETTING(String, AiConfirmationCreateOps);
-        INHERITABLE_SETTING(String, AiConfirmationInputOps);
-
         Windows.Foundation.Collections.IMapView<String, ColorScheme> ColorSchemes();
         void AddColorScheme(ColorScheme scheme);
         void RemoveColorScheme(String schemeName);

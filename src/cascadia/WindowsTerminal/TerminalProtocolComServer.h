@@ -74,14 +74,12 @@ TerminalProtocolComServer : winrt::implements<TerminalProtocolComServer, Protoco
                                            winrt::hstring const& commandline,
                                            winrt::hstring const& title,
                                            bool suppressAppTitle,
-                                           bool injectMcpCredentials,
                                            bool background);
     Protocol::TabCreationResult SplitPane(winrt::hstring const& paneId,
                                            winrt::hstring const& direction,
                                            float size,
                                            winrt::hstring const& profile,
                                            winrt::hstring const& commandline,
-                                           bool injectMcpCredentials,
                                            bool background);
     void ClosePane(winrt::hstring const& paneId);
     void SendInput(winrt::hstring const& paneId, winrt::hstring const& text);

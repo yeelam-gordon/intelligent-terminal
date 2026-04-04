@@ -1814,26 +1814,6 @@ namespace winrt::TerminalApp::implementation
             auto settingsInternal{ winrt::get_self<Settings::TerminalSettings>(settings) };
             auto environment = settingsInternal->EnvironmentVariables();
 
-            // If there are pending protocol environment overrides (e.g. WT_MCP_TOKEN),
-            // merge them into the environment map for this connection.
-            if (_pendingProtocolEnvVars.has_value() && _pendingProtocolEnvVars->size() > 0)
-            {
-                // Build a new map that combines profile env vars with protocol overrides.
-                auto merged = winrt::single_threaded_map<winrt::hstring, winrt::hstring>();
-                if (environment)
-                {
-                    for (const auto& [k, v] : environment)
-                    {
-                        merged.Insert(k, v);
-                    }
-                }
-                for (const auto& [k, v] : _pendingProtocolEnvVars.value())
-                {
-                    merged.Insert(winrt::hstring{ k }, winrt::hstring{ v });
-                }
-                environment = merged.GetView();
-            }
-
             // Update the path to be relative to whatever our CWD is.
             //
             // Refer to the examples in

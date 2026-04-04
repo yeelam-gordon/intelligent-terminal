@@ -225,31 +225,12 @@ winrt::com_array<Protocol::WindowInfo> TerminalProtocolComServer::ListWindows()
 // Queries
 // ============================================================================
 
-Protocol::AuthResult TerminalProtocolComServer::Authenticate(winrt::hstring const& token)
+Protocol::AuthResult TerminalProtocolComServer::Authenticate(winrt::hstring const& /*token*/)
 {
     THROW_HR_IF(E_NOT_VALID_STATE, !s_emperor);
 
-    const auto tokenStr = winrt::to_string(token);
-    const auto& expectedToken = s_emperor->GetMcpToken();
-
-    // DEV BYPASS: allow empty token to authenticate without credentials.
-    // TODO: Remove this bypass before shipping.
-    if (tokenStr.empty())
-    {
-        _authenticated = true;
-    }
-    else
-    {
-        // Constant-time comparison to prevent timing attacks.
-        bool match = (tokenStr.size() == expectedToken.size());
-        volatile bool dummy = false;
-        for (size_t i = 0; i < std::min(tokenStr.size(), expectedToken.size()); ++i)
-        {
-            if (tokenStr[i] != expectedToken[i])
-                dummy = true;
-        }
-        _authenticated = match && !dummy;
-    }
+    // DEV BYPASS: always authenticate — MCP credential plumbing removed.
+    _authenticated = true;
 
     // Register for event delivery on successful authentication
     if (_authenticated)
@@ -451,7 +432,6 @@ Protocol::TabCreationResult TerminalProtocolComServer::CreateTab(
     winrt::hstring const& commandline,
     winrt::hstring const& title,
     bool suppressAppTitle,
-    bool injectMcpCredentials,
     bool background)
 {
     THROW_HR_IF(E_NOT_VALID_STATE, !s_emperor);
@@ -484,20 +464,6 @@ Protocol::TabCreationResult TerminalProtocolComServer::CreateTab(
             newTermArgs.SuppressApplicationTitle(true);
     }
 
-    // Inject MCP credentials when requested.
-    if (injectMcpCredentials)
-    {
-        const auto& token = s_emperor->GetMcpToken();
-        if (!token.empty())
-        {
-            page.SetPendingProtocolEnv(L"WT_MCP_TOKEN", winrt::to_hstring(token));
-            page.SetPendingProtocolEnv(L"WT_PIPE_NAME", winrt::hstring{ s_emperor->GetProtocolPipeName() });
-            const auto& comClsid = s_emperor->GetComClsid();
-            if (!comClsid.empty())
-                page.SetPendingProtocolEnv(L"WT_COM_CLSID", winrt::hstring{ comClsid });
-        }
-    }
-
     auto cr = page.CreateProtocolTab(newTermArgs, background);
     THROW_HR_IF(E_FAIL, cr.TabId.empty());
 
@@ -512,7 +478,6 @@ Protocol::TabCreationResult TerminalProtocolComServer::SplitPane(
     float size,
     winrt::hstring const& profile,
     winrt::hstring const& commandline,
-    bool injectMcpCredentials,
     bool background)
 {
     THROW_HR_IF(E_NOT_VALID_STATE, !s_emperor);
@@ -543,20 +508,6 @@ Protocol::TabCreationResult TerminalProtocolComServer::SplitPane(
         const auto page = _getPage(host.get());
         if (!page)
             continue;
-
-        // Inject MCP credentials when requested.
-        if (injectMcpCredentials)
-        {
-            const auto& token = s_emperor->GetMcpToken();
-            if (!token.empty())
-            {
-                page.SetPendingProtocolEnv(L"WT_MCP_TOKEN", winrt::to_hstring(token));
-                page.SetPendingProtocolEnv(L"WT_PIPE_NAME", winrt::hstring{ s_emperor->GetProtocolPipeName() });
-                const auto& comClsid = s_emperor->GetComClsid();
-                if (!comClsid.empty())
-                    page.SetPendingProtocolEnv(L"WT_COM_CLSID", winrt::hstring{ comClsid });
-            }
-        }
 
         auto cr = page.SplitProtocolPane(paneId, splitDir, size, newTermArgs, background);
         if (cr.TabId.empty())

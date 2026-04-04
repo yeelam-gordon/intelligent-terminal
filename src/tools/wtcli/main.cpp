@@ -35,13 +35,10 @@ static Protocol::IProtocolServer ConnectToTerminal()
         return nullptr;
     }
 
-    wchar_t token[256]{};
-    GetEnvironmentVariableW(L"WT_MCP_TOKEN", token, ARRAYSIZE(token));
-
     try
     {
         auto server = winrt::create_instance<Protocol::IProtocolServer>(cls, CLSCTX_LOCAL_SERVER);
-        auto authResult = server.Authenticate(token);
+        auto authResult = server.Authenticate(L"");
         if (!authResult.Authenticated)
         {
             fprintf(stderr, "[wtcli] Authentication failed\n");
@@ -350,7 +347,7 @@ int main()
                 L"", L"",
                 winrt::to_hstring(newTabCommand),
                 winrt::to_hstring(newTabTitle),
-                false, false, true);
+                false, true);
             if (jsonMode)
                 PrintJson(CreationResultToJson(result));
             else
@@ -382,7 +379,7 @@ int main()
             winrt::hstring dir = splitHorizontal ? L"horizontal" : (splitVertical ? L"vertical" : L"automatic");
             auto result = server.SplitPane(
                 paneId, dir, static_cast<float>(splitSize),
-                L"", winrt::to_hstring(splitPaneCommand), false, true);
+                L"", winrt::to_hstring(splitPaneCommand), true);
             if (jsonMode)
                 PrintJson(CreationResultToJson(result));
             else
@@ -463,18 +460,6 @@ int main()
             printf("  COM CLSID: %ls\n", clsid);
         else
             printf("  COM CLSID: (not set)\n");
-
-        wchar_t pipeName[256]{};
-        if (GetEnvironmentVariableW(L"WT_PIPE_NAME", pipeName, ARRAYSIZE(pipeName)))
-            printf("  Pipe:      %ls\n", pipeName);
-        else
-            printf("  Pipe:      (not set)\n");
-
-        wchar_t token[256]{};
-        if (GetEnvironmentVariableW(L"WT_MCP_TOKEN", token, ARRAYSIZE(token)))
-            printf("  Token:     (set)\n");
-        else
-            printf("  Token:     (dev bypass)\n");
 
         printf("\n");
 
@@ -566,49 +551,26 @@ int main()
         }
     });
 
-    // ── pipe-id ──
-    auto* pipeIdCmd = app.add_subcommand("pipe-id", "Show pipe name");
-    pipeIdCmd->callback([&]() {
-        wchar_t pipeName[256]{};
-        if (GetEnvironmentVariableW(L"WT_PIPE_NAME", pipeName, ARRAYSIZE(pipeName)))
-            printf("%ls\n", pipeName);
-        else
-        {
-            fprintf(stderr, "WT_PIPE_NAME not set.\n");
-            exitCode = 1;
-        }
-    });
-
     // ── set-env ──
     std::string setEnvShell = "powershell";
     auto* setEnvCmd = app.add_subcommand("set-env", "Print env setup commands")->alias("setenv");
     setEnvCmd->add_option("-s,--shell", setEnvShell, "Shell: powershell, bash, cmd");
     setEnvCmd->callback([&]() {
-        wchar_t pipeName[256]{}, token[256]{}, clsid[128]{};
-        GetEnvironmentVariableW(L"WT_PIPE_NAME", pipeName, ARRAYSIZE(pipeName));
-        GetEnvironmentVariableW(L"WT_MCP_TOKEN", token, ARRAYSIZE(token));
+        wchar_t clsid[128]{};
         GetEnvironmentVariableW(L"WT_COM_CLSID", clsid, ARRAYSIZE(clsid));
 
-        auto pn = winrt::to_string(winrt::hstring{ pipeName });
-        auto tk = winrt::to_string(winrt::hstring{ token });
         auto cl = winrt::to_string(winrt::hstring{ clsid });
 
         if (setEnvShell == "powershell" || setEnvShell == "pwsh")
         {
-            if (!pn.empty()) printf("$env:WT_PIPE_NAME = '%s'\n", pn.c_str());
-            if (!tk.empty()) printf("$env:WT_MCP_TOKEN = '%s'\n", tk.c_str());
             if (!cl.empty()) printf("$env:WT_COM_CLSID = '%s'\n", cl.c_str());
         }
         else if (setEnvShell == "bash" || setEnvShell == "sh" || setEnvShell == "zsh")
         {
-            if (!pn.empty()) printf("export WT_PIPE_NAME='%s'\n", pn.c_str());
-            if (!tk.empty()) printf("export WT_MCP_TOKEN='%s'\n", tk.c_str());
             if (!cl.empty()) printf("export WT_COM_CLSID='%s'\n", cl.c_str());
         }
         else if (setEnvShell == "cmd")
         {
-            if (!pn.empty()) printf("set WT_PIPE_NAME=%s\n", pn.c_str());
-            if (!tk.empty()) printf("set WT_MCP_TOKEN=%s\n", tk.c_str());
             if (!cl.empty()) printf("set WT_COM_CLSID=%s\n", cl.c_str());
         }
     });
@@ -659,17 +621,13 @@ int main()
     });
 
     // ── listen ──
-    // TODO: WinRT interface events aren't wired yet. Use the named pipe
-    // (WT_PIPE_NAME) for event streaming instead. Run `wtcli pipe-id` to
-    // get the pipe name.
+    // TODO: WinRT interface events aren't wired yet.
     std::string listenTarget;
     auto* listenCmd = app.add_subcommand("listen", "Stream real-time events from Windows Terminal");
     listenCmd->add_option("-t,--target", listenTarget, "Filter by pane ID");
     listenCmd->callback([&]() {
         fprintf(stderr,
-            "Event streaming via the COM interface is not yet supported with the WinRT protocol.\n"
-            "Use the named pipe for event streaming instead.\n"
-            "Run 'wtcli pipe-id' to get the pipe name, or check the WT_PIPE_NAME environment variable.\n");
+            "Event streaming via the COM interface is not yet supported with the WinRT protocol.\n");
         exitCode = 1;
     });
 

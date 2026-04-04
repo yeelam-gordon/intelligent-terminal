@@ -117,16 +117,11 @@ namespace TerminalApp
         Microsoft.Terminal.Protocol.ProcessStatus GetProtocolProcessStatus(String paneId);
         Microsoft.Terminal.Protocol.SessionVariable GetProtocolSessionVariable(String paneId, String name);
         Boolean SetProtocolSessionVariable(String paneId, String name, String value);
-        void SetPendingProtocolEnv(String key, String value);
-        void ClearPendingProtocolEnv();
         Microsoft.Terminal.Protocol.TabCreationResult CreateProtocolTab(Microsoft.Terminal.Settings.Model.NewTerminalArgs args, Boolean background);
         Microsoft.Terminal.Protocol.TabCreationResult SplitProtocolPane(String paneId, Microsoft.Terminal.Settings.Model.SplitDirection direction, Single size, Microsoft.Terminal.Settings.Model.NewTerminalArgs args, Boolean background);
         Boolean CloseProtocolPane(String paneId);
         Boolean SendProtocolInput(String paneId, String text);
         String ShowProtocolQuickPick(String title, String choicesJson, Boolean allowFreeInput);
         event Windows.Foundation.TypedEventHandler<Object, String> ProtocolVtSequenceReceived;
-        void InitializeCoordinator(Microsoft.Terminal.Settings.Model.NewTerminalArgs args);
-        void ToggleCoordinator();
-        Boolean CoordinatorVisible { get; };
     }
 }

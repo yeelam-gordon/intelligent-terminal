@@ -56,8 +56,6 @@
     <ClInclude Include="NonClientIslandWindow.h" />
     <ClInclude Include="VirtualDesktopUtils.h" />
     <ClInclude Include="WindowEmperor.h" />
-    <ClInclude Include="TerminalProtocolServer.h" />
-    <ClInclude Include="ProtocolRequestHandler.h" />
     <ClInclude Include="TerminalProtocolComServer.h" />
   </ItemGroup>
   <ItemGroup>
@@ -70,8 +68,6 @@
     <ClCompile Include="NonClientIslandWindow.cpp" />
     <ClCompile Include="VirtualDesktopUtils.cpp" />
     <ClCompile Include="WindowEmperor.cpp" />
-    <ClCompile Include="TerminalProtocolServer.cpp" />
-    <ClCompile Include="ProtocolRequestHandler.cpp" />
     <ClCompile Include="TerminalProtocolComServer.cpp" />
     <ClCompile Include="icon.cpp" />
   </ItemGroup>

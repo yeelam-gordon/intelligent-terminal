@@ -186,16 +186,11 @@ namespace winrt::TerminalApp::implementation
         Microsoft::Terminal::Protocol::ProcessStatus GetProtocolProcessStatus(hstring paneId);
         Microsoft::Terminal::Protocol::SessionVariable GetProtocolSessionVariable(hstring paneId, hstring name);
         bool SetProtocolSessionVariable(hstring paneId, hstring name, hstring value);
-        void SetPendingProtocolEnv(hstring key, hstring value);
-        void ClearPendingProtocolEnv();
         Microsoft::Terminal::Protocol::TabCreationResult CreateProtocolTab(Microsoft::Terminal::Settings::Model::NewTerminalArgs args, bool background);
         Microsoft::Terminal::Protocol::TabCreationResult SplitProtocolPane(hstring paneId, Microsoft::Terminal::Settings::Model::SplitDirection direction, float size, Microsoft::Terminal::Settings::Model::NewTerminalArgs args, bool background);
         bool CloseProtocolPane(hstring paneId);
         bool SendProtocolInput(hstring paneId, hstring text);
         hstring ShowProtocolQuickPick(hstring title, hstring choicesJson, bool allowFreeInput);
-        void InitializeCoordinator(Microsoft::Terminal::Settings::Model::NewTerminalArgs args);
-        void ToggleCoordinator();
-        bool CoordinatorVisible();
 
         til::property_changed_event PropertyChanged;
 
@@ -264,13 +259,6 @@ namespace winrt::TerminalApp::implementation
         bool _isMaximized{ false };
         bool _isAlwaysOnTop{ false };
 
-        // Temporary env vars to inject into the next pane created via protocol.
-        // Set before calling _OpenNewTab/_SplitPane, cleared after.
-        std::optional<std::unordered_map<std::wstring, std::wstring>> _pendingProtocolEnvVars;
-
-        // Coordinator sidecar state
-        winrt::Microsoft::Terminal::Control::TermControl _coordinatorControl{ nullptr };
-        bool _coordinatorInitialized{ false };
         bool _showTabsFullscreen{ false };
 
         std::optional<uint32_t> _loadFromPersistedLayoutIdx{};
