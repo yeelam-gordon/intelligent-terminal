@@ -712,8 +712,12 @@ async fn build_terminal_context_json(
             for pane in panes_arr {
                 let pane_id = json_str_or_num(pane.get("pane_id"))?;
 
-                // Skip the agent pane entirely — no need to expose it in context
-                if coordinator_target.as_deref() == Some(pane_id.as_str()) {
+                // Skip agent panes — no need to expose them in context
+                let is_agent_pane = pane
+                    .get("is_agent_pane")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if is_agent_pane {
                     continue;
                 }
 

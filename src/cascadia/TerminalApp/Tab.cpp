@@ -1353,10 +1353,23 @@ namespace winrt::TerminalApp::implementation
     // - <none>
     void Tab::_UpdateActivePane(std::shared_ptr<Pane> pane)
     {
+        // Remember previous active pane for source-of-agent tracking.
+        auto previousActive = _activePane;
+
         // Clear the active state of the entire tree, and mark only the pane as active.
+        // NOTE: ClearActive() also clears _isSourceOfAgentPane on all panes.
         _rootPane->ClearActive();
         _activePane = pane;
         _activePane->SetActive();
+
+        // If the newly focused pane is an agent pane and the previously
+        // focused pane was a normal (non-agent) pane, mark it as the
+        // "source" so it retains a blue border while the agent pane is green.
+        if (pane->IsAgentPane() && previousActive && !previousActive->IsAgentPane())
+        {
+            previousActive->SetSourceOfAgentPane(true);
+            previousActive->UpdateVisuals();
+        }
 
         // Update our own title text to match the newly-active pane.
         UpdateTitle();

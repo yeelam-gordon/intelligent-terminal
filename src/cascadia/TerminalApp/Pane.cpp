@@ -1151,6 +1151,7 @@ TermControl Pane::GetTerminalControl() const
 void Pane::ClearActive()
 {
     _lastActive = false;
+    _isSourceOfAgentPane = false;
     if (!_IsLeaf())
     {
         _firstChild->ClearActive();
@@ -3193,6 +3194,16 @@ void Pane::IsAgentPane(bool value) noexcept
     _isAgentPane = value;
 }
 
+bool Pane::IsSourceOfAgentPane() const noexcept
+{
+    return _isSourceOfAgentPane;
+}
+
+void Pane::SetSourceOfAgentPane(bool value) noexcept
+{
+    _isSourceOfAgentPane = value;
+}
+
 // Method Description:
 // - If we're a parent, place the taskbar state for all our leaves into the
 //   provided vector.
@@ -3302,6 +3313,15 @@ void Pane::BroadcastString(const winrt::Microsoft::Terminal::Control::TermContro
 winrt::Windows::UI::Xaml::Media::SolidColorBrush Pane::_ComputeBorderColor()
 {
     if (_lastActive)
+    {
+        if (_isAgentPane && _themeResources.agentFocusedBorderBrush)
+        {
+            return _themeResources.agentFocusedBorderBrush;
+        }
+        return _themeResources.focusedBorderBrush;
+    }
+
+    if (_isSourceOfAgentPane)
     {
         return _themeResources.focusedBorderBrush;
     }

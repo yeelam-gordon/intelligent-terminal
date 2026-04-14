@@ -121,6 +121,7 @@ Json::Value PaneInfoToJson(const Protocol::PaneInfo& p)
     v["title"] = winrt::to_string(p.Title);
     v["profile"] = winrt::to_string(p.Profile);
     v["is_active"] = p.IsActive;
+    v["is_agent_pane"] = p.IsAgentPane;
     v["pid"] = static_cast<Json::UInt>(p.Pid);
     v["size"]["rows"] = p.Rows;
     v["size"]["columns"] = p.Columns;

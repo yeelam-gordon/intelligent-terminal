@@ -6149,6 +6149,17 @@ namespace winrt::TerminalApp::implementation
             // will eat focus.
             _paneResources.broadcastBorderBrush = SolidColorBrush{ Colors::Black() };
         }
+
+        const auto agentColorKey = winrt::box_value(L"AgentPaneBorderColor");
+        if (res.HasKey(agentColorKey))
+        {
+            auto obj = ThemeLookup(res, requestedTheme, agentColorKey);
+            _paneResources.agentFocusedBorderBrush = obj.try_as<winrt::Windows::UI::Xaml::Media::SolidColorBrush>();
+        }
+        else
+        {
+            _paneResources.agentFocusedBorderBrush = SolidColorBrush{ Colors::Black() };
+        }
     }
 
     void TerminalPage::_adjustProcessPriority() const

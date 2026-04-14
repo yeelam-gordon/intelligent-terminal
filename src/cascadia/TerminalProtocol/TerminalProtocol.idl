@@ -30,6 +30,7 @@ namespace Microsoft.Terminal.Protocol
         String Title;
         String Profile;
         Boolean IsActive;
+        Boolean IsAgentPane;
         UInt32 Pid;
         Int32 Rows;
         Int32 Columns;

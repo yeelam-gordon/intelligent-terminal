@@ -103,18 +103,34 @@ namespace winrt::TerminalApp::implementation
         if (!activePane)
             co_return result;
 
-        result.PaneId = activePane->ContentId().value();
+        // If the active pane is an agent pane, return the source pane instead.
+        // "Active" in the protocol means "the pane the user is working in".
+        auto effectivePane = activePane;
+        if (activePane->IsAgentPane())
+        {
+            const auto rootPane = tabImpl->GetRootPane();
+            if (rootPane)
+            {
+                rootPane->WalkTree([&](const auto& pane) {
+                    if (pane->IsSourceOfAgentPane())
+                        effectivePane = pane;
+                });
+            }
+        }
+
+        result.PaneId = effectivePane->ContentId().value();
         result.TabId = focusedTabIdx.value();
         result.IsActive = true;
+        result.IsAgentPane = effectivePane->IsAgentPane();
 
-        if (const auto termContent = activePane->GetContent().try_as<TerminalApp::TerminalPaneContent>())
+        if (const auto termContent = effectivePane->GetContent().try_as<TerminalApp::TerminalPaneContent>())
         {
             result.Title = termContent.Title();
             const auto profile = termContent.GetProfile();
             result.Profile = profile ? profile.Name() : L"";
         }
 
-        result.Pid = _getPidFromPane(activePane);
+        result.Pid = _getPidFromPane(effectivePane);
         co_return result;
     }
 
@@ -167,6 +183,7 @@ namespace winrt::TerminalApp::implementation
                 continue;
 
             const auto activePane = tabImpl->GetActivePane();
+            const auto activeIsAgent = activePane && activePane->IsAgentPane();
 
             rootPane->WalkTree([&](const auto& pane) {
                 if (!pane->GetContent())
@@ -175,7 +192,11 @@ namespace winrt::TerminalApp::implementation
                 Protocol::PaneInfo info{};
                 info.PaneId = pane->ContentId().value();
                 info.TabId = tabIdx;
-                info.IsActive = (activePane == pane);
+                info.IsAgentPane = pane->IsAgentPane();
+                // When the active pane is an agent, report the source pane as active instead.
+                info.IsActive = activeIsAgent
+                    ? pane->IsSourceOfAgentPane()
+                    : (activePane == pane);
                 info.Pid = _getPidFromPane(pane);
 
                 if (const auto termContent = pane->GetContent().try_as<TerminalApp::TerminalPaneContent>())

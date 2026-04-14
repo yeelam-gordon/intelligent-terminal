@@ -159,6 +159,12 @@ fn animated_activity_label(frame: usize) -> Vec<Span<'static>> {
 }
 
 fn activity_preview(app: &App) -> Option<(String, Style)> {
+    // Don't show "Thinking..." preview when the pending thought block
+    // is already visible — it's redundant.
+    if !app.pending_thought_response.trim().is_empty() {
+        return None;
+    }
+
     app.progress_status
         .as_deref()
         .map(single_line_tail_preview)

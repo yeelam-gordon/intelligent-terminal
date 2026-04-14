@@ -57,6 +57,7 @@ struct PaneResources
     winrt::Windows::UI::Xaml::Media::SolidColorBrush focusedBorderBrush{ nullptr };
     winrt::Windows::UI::Xaml::Media::SolidColorBrush unfocusedBorderBrush{ nullptr };
     winrt::Windows::UI::Xaml::Media::SolidColorBrush broadcastBorderBrush{ nullptr };
+    winrt::Windows::UI::Xaml::Media::SolidColorBrush agentFocusedBorderBrush{ nullptr };
 };
 
 class Pane : public std::enable_shared_from_this<Pane>
@@ -168,6 +169,8 @@ public:
 
     bool IsAgentPane() const noexcept;
     void IsAgentPane(bool value) noexcept;
+    bool IsSourceOfAgentPane() const noexcept;
+    void SetSourceOfAgentPane(bool value) noexcept;
     bool IsHidden() const noexcept { return _hidden; }
 
     void EnableBroadcast(bool enabled);
@@ -289,6 +292,7 @@ private:
     bool _hidden{ false };
     bool _broadcastEnabled{ false };
     bool _isAgentPane{ false };
+    bool _isSourceOfAgentPane{ false };
 
     bool _IsLeaf() const noexcept;
     bool _HasFocusedChild() const noexcept;
