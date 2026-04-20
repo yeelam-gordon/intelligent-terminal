@@ -2925,7 +2925,11 @@ Pane::SnapSizeResult Pane::_CalcSnappedDimension(const bool widthOrHeight, const
     if (_IsLeaf())
     {
         const auto& snappable{ _content.try_as<ISnappable>() };
-        if (!snappable)
+        // Agent panes are fixed-position and don't participate in the terminal
+        // character grid. Their TermControl may also be uninitialized, which
+        // makes GridUnitSize/SnapDownToGrid return inf/NaN and poisons the
+        // whole snap calculation via parent aggregation.
+        if (!snappable || _isAgentPane)
         {
             return { dimension, dimension };
         }
@@ -3012,7 +3016,9 @@ void Pane::_AdvanceSnappedDimension(const bool widthOrHeight, LayoutSizeNode& si
     if (_IsLeaf())
     {
         const auto& snappable{ _content.try_as<ISnappable>() };
-        if (snappable)
+        // Same reasoning as _CalcSnappedDimension: treat agent panes as
+        // non-snappable so we never touch their (uninitialized) GridUnitSize.
+        if (snappable && !_isAgentPane)
         {
             // We're a leaf pane, so just add one more row or column (unless isMinimumSize
             // is true, see below).

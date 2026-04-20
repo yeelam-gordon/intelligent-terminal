@@ -1859,27 +1859,65 @@ pub fn armed_fix_preview(rec: &crate::coordinator::RecommendationSet) -> String 
 /// Publish a raw JSON event via `wtcli publish`. The event flows through
 /// IProtocolServer::SendEvent; our modified COM server special-cases
 /// method=="autofix_state" and dispatches directly to TerminalPage.
-/// Intentionally spawned detached: the caller doesn't wait for wtcli.
+///
+/// Events are funnelled through a single background thread that waits
+/// for each `wtcli publish` subprocess to exit before launching the next.
+/// Without this, two rapid emits (e.g. armed → cleared) could race at
+/// the OS process-scheduling layer and arrive at WT out of order,
+/// leaving the bottom-bar stuck in the earlier state.
 pub fn send_wt_protocol_event(json_payload: String) {
+    let tx = publisher_sender();
+    if let Err(err) = tx.send(json_payload) {
+        crate::log_event_diag!(Warn, "publish queue send failed: {err}");
+    }
+}
+
+fn publisher_sender() -> &'static std::sync::mpsc::Sender<String> {
+    static SENDER: std::sync::OnceLock<std::sync::mpsc::Sender<String>> =
+        std::sync::OnceLock::new();
+    SENDER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::Builder::new()
+            .name("wt-event-publisher".into())
+            .spawn(move || {
+                while let Ok(payload) = rx.recv() {
+                    publish_event_blocking(&payload);
+                }
+            })
+            .expect("spawn wt-event-publisher thread");
+        tx
+    })
+}
+
+fn publish_event_blocking(json_payload: &str) {
     let exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("wtcli.exe")))
         .filter(|p| p.exists())
         .unwrap_or_else(|| std::path::PathBuf::from("wtcli.exe"));
     let mut cmd = std::process::Command::new(exe);
-    cmd.arg("publish").arg(&json_payload);
+    cmd.arg("publish").arg(json_payload);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    // Drop stdout/stderr so wtcli doesn't block on the pipes.
     cmd.stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null());
     match cmd.spawn() {
-        Ok(_child) => autofix_log(&format!("published event: {}", truncate(&json_payload, 200))),
-        Err(err) => autofix_log(&format!("publish failed to spawn: {err}")),
+        Ok(mut child) => {
+            // Block the publisher thread until this publish finishes so
+            // the next event's subprocess can't overtake it.
+            let wait_result = child.wait();
+            crate::log_event_diag!(
+                Debug,
+                "published event: {} (wait={:?})",
+                truncate(json_payload, 200),
+                wait_result.as_ref().map(|s| s.code()).ok()
+            );
+        }
+        Err(err) => crate::log_event_diag!(Warn, "publish failed to spawn: {err}"),
     }
 }
 

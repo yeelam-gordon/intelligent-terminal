@@ -20,7 +20,7 @@
   <Identity
     Name="AgenticTerminal"
     Publisher="CN=Agentic Terminal Dev"
-    Version="0.0.5.3" />
+    Version="0.0.5.7" />
 
   <Properties>
     <DisplayName>ms-resource:AppStoreNameDev</DisplayName>
