@@ -10,8 +10,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::coordinator::{
-    parse_recommendation_set, recommended_choice_index,
-    validate_recommendation_set_for_coordinator_target, RecommendationChoice, RecommendationSet,
+    parse_autofix_response, parse_recommendation_set, recommended_choice_index,
+    validate_recommendation_set_for_coordinator_target, AutofixDecision, RecommendationChoice,
+    RecommendationSet,
 };
 use crate::preflight::{CheckStatus, PreflightResult};
 use crate::protocol::acp::client::{prompt_timing_log, PromptSubmission};
@@ -1945,6 +1946,11 @@ impl App {
 
         let text = std::mem::take(&mut self.pending_agent_response);
 
+        // Autofix responses use a minimal prompt/format; parse them separately.
+        if self.autofix_pane_id.is_some() {
+            return self.finalize_autofix_response(text);
+        }
+
         match parse_recommendation_set(&text).and_then(|recommendations| {
             validate_recommendation_set_for_coordinator_target(
                 &recommendations,
@@ -1962,13 +1968,6 @@ impl App {
                         recommendations.recommended_choice
                     ),
                 );
-                // Promote bottom-bar state to Armed when this recommendation
-                // was produced by an auto-fix prompt. armed_fix_preview reads
-                // the recommended choice's first Send action.
-                if let Some(pane_id) = self.autofix_pane_id.clone() {
-                    let preview = Self::armed_fix_preview(&recommendations);
-                    self.emit_autofix_state_armed(&pane_id, &preview);
-                }
                 self.recommendations = Some(recommendations);
                 self.selection_visible_pending = true;
                 FinalizeOutcome::SelectionReady
@@ -1985,17 +1984,6 @@ impl App {
                         error_text
                     ),
                 );
-                // If this was an auto-fix that couldn't be parsed into
-                // actions, clear the bottom-bar state so the user isn't
-                // left staring at a Pending icon forever.
-                if let Some(pane_id) = self.autofix_pane_id.take() {
-                    self.emit_autofix_state_cleared(&pane_id);
-                }
-                // For normal (user-driven) prompts we wrap the failed
-                // response into a completed turn and clear the in-flight
-                // chat state. For auto-fix (no current_prompt_text) there's
-                // no turn to wrap and we want to leave the Error message
-                // visible to the user.
                 if self.current_prompt_text.is_some() {
                     self.stage_completed_turn(text);
                     self.commit_pending_completed_turn();
@@ -2005,6 +1993,38 @@ impl App {
                     self.progress_status = None;
                     self.agent_streaming = false;
                 }
+                FinalizeOutcome::None
+            }
+        }
+    }
+
+    fn finalize_autofix_response(&mut self, text: String) -> FinalizeOutcome {
+        let pane_id = match self.autofix_pane_id.clone() {
+            Some(p) => p,
+            None => return FinalizeOutcome::None,
+        };
+
+        match parse_autofix_response(&text) {
+            AutofixDecision::Fix(recommendations) => {
+                self.log_selection_phase(
+                    "autofix_fix",
+                    &format!("pane={pane_id} title={:?}", recommendations.choices.first().map(|c| &c.title)),
+                );
+                let preview = Self::armed_fix_preview(&recommendations);
+                self.emit_autofix_state_armed(&pane_id, &preview);
+                self.selected_recommendation = recommended_choice_index(&recommendations);
+                self.recommendations = Some(recommendations);
+                self.selection_visible_pending = true;
+                FinalizeOutcome::SelectionReady
+            }
+            AutofixDecision::Ignore => {
+                self.log_selection_phase("autofix_ignore", &format!("pane={pane_id}"));
+                self.autofix_pane_id = None;
+                self.clear_recommendations();
+                self.emit_autofix_state_cleared(&pane_id);
+                self.prompt_in_flight = false;
+                self.progress_status = None;
+                self.agent_streaming = false;
                 FinalizeOutcome::None
             }
         }

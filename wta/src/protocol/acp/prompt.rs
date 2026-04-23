@@ -10,6 +10,8 @@ const EMBEDDED_DEFAULT_PROMPT: &str = include_str!(concat!(
     "/prompts/terminal-agent.md"
 ));
 
+const AUTOFIX_USER_PROMPT_FILE_NAME: &str = "auto-fix.md";
+const AUTOFIX_DEFAULT_PROMPT_FILE_NAME: &str = "auto-fix.default.md";
 const EMBEDDED_AUTOFIX_PROMPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/auto-fix.md"
@@ -23,11 +25,10 @@ pub(crate) struct PlannerPromptTemplate {
 }
 
 pub(crate) fn load_autofix_prompt_template() -> PlannerPromptTemplate {
-    PlannerPromptTemplate {
-        display_name: "Auto-Fix Agent".to_string(),
-        content: EMBEDDED_AUTOFIX_PROMPT.to_string(),
-        source_label: "embedded:auto-fix.md".to_string(),
-    }
+    load_autofix_prompt_template_from_root(
+        runtime_prompt_root().as_deref(),
+        EMBEDDED_AUTOFIX_PROMPT,
+    )
 }
 
 pub(crate) fn load_planner_prompt_template() -> PlannerPromptTemplate {
@@ -58,6 +59,39 @@ pub(crate) fn merge_runtime_sections(template: &str, runtime_sections: &[String]
 
 fn runtime_prompt_root() -> Option<PathBuf> {
     crate::runtime_paths::runtime_prompt_root()
+}
+
+fn load_autofix_prompt_template_from_root(
+    prompt_root: Option<&Path>,
+    embedded_default_prompt: &str,
+) -> PlannerPromptTemplate {
+    if let Some(prompt_root) = prompt_root {
+        let _ = seed_autofix_prompt_files(prompt_root, embedded_default_prompt);
+
+        let user_path = prompt_root.join(AUTOFIX_USER_PROMPT_FILE_NAME);
+        if let Ok(content) = fs::read_to_string(&user_path) {
+            return PlannerPromptTemplate {
+                display_name: "Auto-Fix Agent".to_string(),
+                content,
+                source_label: format!("user:{}", user_path.display()),
+            };
+        }
+
+        let default_path = prompt_root.join(AUTOFIX_DEFAULT_PROMPT_FILE_NAME);
+        if let Ok(content) = fs::read_to_string(&default_path) {
+            return PlannerPromptTemplate {
+                display_name: "Auto-Fix Agent".to_string(),
+                content,
+                source_label: format!("default:{}", default_path.display()),
+            };
+        }
+    }
+
+    PlannerPromptTemplate {
+        display_name: "Auto-Fix Agent".to_string(),
+        content: embedded_default_prompt.to_string(),
+        source_label: "embedded:auto-fix.md".to_string(),
+    }
 }
 
 fn load_planner_prompt_template_from_root(
@@ -109,6 +143,28 @@ fn extract_prompt_display_name(content: &str) -> String {
     }
 
     "Prompt".to_string()
+}
+
+fn seed_autofix_prompt_files(
+    prompt_root: &Path,
+    embedded_default_prompt: &str,
+) -> std::io::Result<()> {
+    fs::create_dir_all(prompt_root)?;
+
+    let default_path = prompt_root.join(AUTOFIX_DEFAULT_PROMPT_FILE_NAME);
+    let previous_default = fs::read_to_string(&default_path).ok();
+    let user_path = prompt_root.join(AUTOFIX_USER_PROMPT_FILE_NAME);
+    let existing_user = fs::read_to_string(&user_path).ok();
+
+    write_if_changed(&default_path, embedded_default_prompt)?;
+
+    if !user_path.exists() {
+        fs::write(&user_path, embedded_default_prompt)?;
+    } else if previous_default.as_deref() == existing_user.as_deref() {
+        fs::write(&user_path, embedded_default_prompt)?;
+    }
+
+    Ok(())
 }
 
 fn seed_prompt_files(prompt_root: &Path, embedded_default_prompt: &str) -> std::io::Result<()> {

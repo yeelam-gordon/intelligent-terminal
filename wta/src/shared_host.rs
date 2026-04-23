@@ -16,8 +16,8 @@ use crate::app::{
     AppEvent, ChatMessage, CompletedTurn, ConnectionState, DebugDir, DebugMessage, PermOption,
 };
 use crate::coordinator::{
-    parse_recommendation_set, validate_recommendation_set_for_coordinator_target,
-    RecommendationChoice, RecommendationSet,
+    parse_autofix_response, parse_recommendation_set,
+    validate_recommendation_set_for_coordinator_target, AutofixDecision, RecommendationSet,
 };
 use crate::protocol::acp::client::{prompt_timing_log, run_acp_client, PromptSubmission};
 use crate::shell::wt_channel::ConnectionInfo;
@@ -1913,6 +1913,12 @@ impl HostSessionState {
             .current_prompt_pane_context
             .as_ref()
             .and_then(|ctx| ctx.source_pane_id.clone());
+
+        // Autofix responses use a minimal prompt/format; parse them separately.
+        if is_autofix {
+            return self.finalize_autofix_response(text, autofix_source_pane);
+        }
+
         match parse_recommendation_set(&text) {
             Ok(recommendations) => {
                 match validate_recommendation_set_for_coordinator_target(
@@ -1922,45 +1928,11 @@ impl HostSessionState {
                         .and_then(|context| context.pane_id.as_deref()),
                 ) {
                     Ok(filtered) => {
-                        // When no attach TUI is running, this host is the
-                        // only process that sees the recommendation become
-                        // ready — so it must emit autofix_state:armed.
-                        if is_autofix {
-                            if let Some(pane_id) = autofix_source_pane.as_ref() {
-                                let preview = crate::app::armed_fix_preview(&filtered);
-                                let evt = serde_json::json!({
-                                    "type": "event",
-                                    "method": "autofix_state",
-                                    "params": {
-                                        "state": "armed",
-                                        "pane_id": pane_id,
-                                        "fix_preview": preview,
-                                        "hotkey_hint": "Ctrl+Alt+.",
-                                    }
-                                });
-                                crate::app::send_wt_protocol_event(evt.to_string());
-                            }
-                            self.current_prompt_is_autofix = false;
-                        }
                         self.stage_completed_turn(text);
                         self.recommendations = Some(filtered);
                         FinalizeOutcome::SelectionReady
                     }
                     Err(_) => {
-                        if is_autofix {
-                            if let Some(pane_id) = autofix_source_pane.as_ref() {
-                                let evt = serde_json::json!({
-                                    "type": "event",
-                                    "method": "autofix_state",
-                                    "params": {
-                                        "state": "cleared",
-                                        "pane_id": pane_id,
-                                    }
-                                });
-                                crate::app::send_wt_protocol_event(evt.to_string());
-                            }
-                            self.current_prompt_is_autofix = false;
-                        }
                         self.recommendations = None;
                         self.pending_completed_turn = None;
                         self.stage_completed_turn(text);
@@ -1971,25 +1943,56 @@ impl HostSessionState {
                 }
             }
             Err(_) => {
-                if is_autofix {
-                    if let Some(pane_id) = autofix_source_pane.as_ref() {
-                        let evt = serde_json::json!({
-                            "type": "event",
-                            "method": "autofix_state",
-                            "params": {
-                                "state": "cleared",
-                                "pane_id": pane_id,
-                            }
-                        });
-                        crate::app::send_wt_protocol_event(evt.to_string());
-                    }
-                    self.current_prompt_is_autofix = false;
-                }
                 self.recommendations = None;
                 self.pending_completed_turn = None;
                 self.stage_completed_turn(text);
                 self.commit_pending_completed_turn();
                 self.clear_chat_history();
+                FinalizeOutcome::None
+            }
+        }
+    }
+
+    fn finalize_autofix_response(
+        &mut self,
+        text: String,
+        source_pane: Option<String>,
+    ) -> FinalizeOutcome {
+        self.current_prompt_is_autofix = false;
+
+        let emit_cleared = |pane_id: &str| {
+            let evt = serde_json::json!({
+                "type": "event", "method": "autofix_state",
+                "params": { "state": "cleared", "pane_id": pane_id }
+            });
+            crate::app::send_wt_protocol_event(evt.to_string());
+        };
+
+        match parse_autofix_response(&text) {
+            AutofixDecision::Fix(recommendations) => {
+                if let Some(pane_id) = source_pane.as_ref() {
+                    let preview = crate::app::armed_fix_preview(&recommendations);
+                    let evt = serde_json::json!({
+                        "type": "event", "method": "autofix_state",
+                        "params": {
+                            "state": "armed",
+                            "pane_id": pane_id,
+                            "fix_preview": preview,
+                            "hotkey_hint": "Ctrl+Alt+.",
+                        }
+                    });
+                    crate::app::send_wt_protocol_event(evt.to_string());
+                }
+                self.stage_completed_turn(text);
+                self.recommendations = Some(recommendations);
+                FinalizeOutcome::SelectionReady
+            }
+            AutofixDecision::Ignore => {
+                if let Some(pane_id) = source_pane.as_ref() {
+                    emit_cleared(pane_id);
+                }
+                self.recommendations = None;
+                self.current_prompt_pane_context = None;
                 FinalizeOutcome::None
             }
         }

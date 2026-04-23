@@ -907,7 +907,14 @@ async fn build_prompt_text(
 
     let assemble_started = std::time::Instant::now();
     let prompt_body = prompt::merge_runtime_sections(&planner_template.content, &runtime_sections);
-    let prompt = format!("{}\n\n## User Request\n{}", prompt_body, user_text);
+    // Autofix prompt is self-contained — terminal buffer is injected via the
+    // runtime context marker and the instructions are in the template itself.
+    // No "## User Request" section is needed.
+    let prompt = if is_autofix {
+        prompt_body
+    } else {
+        format!("{}\n\n## User Request\n{}", prompt_body, user_text)
+    };
     prompt_timing_log(
         prompt_id,
         submitted_at_unix_s,

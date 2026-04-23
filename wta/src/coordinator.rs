@@ -147,6 +147,80 @@ pub fn parse_recommendation_set(text: &str) -> Result<RecommendationSet> {
     Ok(parsed)
 }
 
+/// The result of parsing an autofix response.
+#[derive(Debug, Clone)]
+pub enum AutofixDecision {
+    /// AI found a single-command fix.
+    Fix(RecommendationSet),
+    /// AI decided no fix is appropriate; caller should silently clear state.
+    Ignore,
+}
+
+/// Parse a response from the minimal autofix prompt.
+///
+/// Expected formats:
+///   {"action": "fix", "title": "...", "command": "...", "rationale": "..."}
+///   {"action": "ignore"}
+///
+/// Returns `AutofixDecision::Ignore` for both explicit ignore responses and
+/// unrecognised JSON (fail-safe: never leave a stale Pending bar).
+pub fn parse_autofix_response(text: &str) -> AutofixDecision {
+    let json = match extract_json_code_block(text).or_else(|| extract_first_json_object(text)) {
+        Some(j) => j,
+        None => {
+            tracing::warn!(target: "autofix", "no JSON in autofix response, ignoring");
+            return AutofixDecision::Ignore;
+        }
+    };
+
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(target: "autofix", "failed to parse autofix JSON: {e}, ignoring");
+            return AutofixDecision::Ignore;
+        }
+    };
+
+    match value.get("action").and_then(|v| v.as_str()) {
+        Some("fix") => {
+            let command = match value.get("command").and_then(|v| v.as_str()) {
+                Some(c) if !c.trim().is_empty() => c.to_string(),
+                _ => {
+                    tracing::warn!(target: "autofix", "fix response missing 'command', ignoring");
+                    return AutofixDecision::Ignore;
+                }
+            };
+            let title = value
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Fix")
+                .to_string();
+            let rationale = value
+                .get("rationale")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            AutofixDecision::Fix(RecommendationSet {
+                recommended_choice: Some(1),
+                choices: vec![RecommendationChoice {
+                    choice: 1,
+                    title,
+                    rationale,
+                    actions: vec![RecommendedAction::Send {
+                        parent: String::new(),
+                        input: command,
+                    }],
+                }],
+            })
+        }
+        Some("ignore") | None => AutofixDecision::Ignore,
+        Some(other) => {
+            tracing::warn!(target: "autofix", "unknown autofix action {other:?}, ignoring");
+            AutofixDecision::Ignore
+        }
+    }
+}
+
 /// Filter out choices that target the coordinator's own pane.
 /// Returns the filtered set. If all choices are removed, returns an error.
 pub fn validate_recommendation_set_for_coordinator_target(
