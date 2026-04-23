@@ -309,8 +309,6 @@ namespace winrt::TerminalApp::implementation
         };
         struct DiagnosticState
         {
-            uint32_t unacknowledgedErrors{ 0 };
-            std::wstring lastErrorSummary;
             std::wstring lastErrorPaneId;
             AutofixState autofixState{ AutofixState::Idle };
             std::wstring fixPreview;
@@ -325,7 +323,6 @@ namespace winrt::TerminalApp::implementation
         void _HistoryButtonOnClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
         void _AgentSettingsButtonOnClick(const IInspectable& sender, const Windows::UI::Xaml::RoutedEventArgs& eventArgs);
         void _UpdateBottomBarState();
-        void _IncrementDiagnosticErrors(const std::wstring& paneId, const std::wstring& summary);
         void _PopulateAgentSelectorFlyout();
         void _TriggerAutofix();
 

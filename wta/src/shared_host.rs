@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::net::windows::named_pipe::{ClientOptions, ServerOptions};
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;
@@ -488,9 +488,27 @@ pub async fn run_host_server(
         host_pipe_name, wt_connected
     ));
 
+    // Try to become the primary host. If another instance already holds the
+    // pipe (first_pipe_instance fails), exit cleanly — the caller (ensure-host)
+    // should terminate rather than running a useless host service.
+    let initial_server = match ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(&host_pipe_name)
+    {
+        Ok(s) => s,
+        Err(err) => {
+            host_log(&format!(
+                "shared host pipe already held by another instance ({}), yielding",
+                err
+            ));
+            return Ok(());
+        }
+    };
+
     let (host_command_tx, host_command_rx) = mpsc::unbounded_channel();
     tokio::spawn(run_accept_loop(
         host_pipe_name.clone(),
+        initial_server,
         host_command_tx.clone(),
     ));
 
@@ -804,21 +822,12 @@ async fn send_host_request<W: AsyncWrite + Unpin>(
     Ok(())
 }
 
-async fn run_accept_loop(pipe_name: String, host_command_tx: mpsc::UnboundedSender<HostCommand>) {
-    let mut server = match ServerOptions::new()
-        .first_pipe_instance(true)
-        .create(&pipe_name)
-    {
-        Ok(server) => server,
-        Err(err) => {
-            host_log(&format!(
-                "failed to create shared host pipe {}: {}",
-                pipe_name, err
-            ));
-            return;
-        }
-    };
-
+async fn run_accept_loop(
+    pipe_name: String,
+    initial_server: NamedPipeServer,
+    host_command_tx: mpsc::UnboundedSender<HostCommand>,
+) {
+    let mut server = initial_server;
     let mut next_client_id = 1u64;
     loop {
         if let Err(err) = server.connect().await {
@@ -1016,8 +1025,10 @@ fn handle_host_command(
                 && armed_pane == Some(pane_id.as_str());
             if matches || has_armed_recs {
                 // Bump generation to stale any still-running agent response.
+                // Do NOT clear inflight_autofix_generation here: if the agent
+                // is still streaming, AgentMessageEnd must see Some(old_gen) !=
+                // new autofix_generation so it can discard the stale response.
                 state.autofix_generation = state.autofix_generation.wrapping_add(1);
-                state.inflight_autofix_generation = None;
                 let cleared_evt = serde_json::json!({
                     "type": "event",
                     "method": "autofix_state",
@@ -1322,13 +1333,26 @@ fn handle_host_command(
 async fn connect_client(
     pipe_name: &str,
 ) -> io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         match try_connect_client_once(pipe_name) {
             Ok(client) => return Ok(client),
             Err(err) if err.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "timed out waiting for shared host pipe",
+                    ));
+                }
                 sleep(Duration::from_millis(50)).await;
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "timed out: shared host pipe not found",
+                    ));
+                }
                 sleep(Duration::from_millis(50)).await;
             }
             Err(err) => return Err(err),

@@ -1059,12 +1059,13 @@ impl App {
                                 .unwrap_or(false);
                             if is_exit_zero && self.autofix_pane_id.as_deref() == Some(pane_id.as_str()) {
                                 self.autofix_generation = self.autofix_generation.wrapping_add(1);
+                                // Do NOT clear inflight_autofix_generation: the stale
+                                // check in AgentMessageEnd relies on Some(old) != new_gen.
                                 let pane = self.autofix_pane_id.take().unwrap();
                                 self.clear_recommendations();
                                 self.prompt_in_flight = false;
                                 self.agent_streaming = false;
                                 self.progress_status = None;
-                                self.inflight_autofix_generation = None;
                                 self.emit_autofix_state_cleared(&pane);
                             }
                         }

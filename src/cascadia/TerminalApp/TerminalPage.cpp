@@ -1169,8 +1169,26 @@ namespace winrt::TerminalApp::implementation
     {
         if (_agentHostStarted)
         {
-            _agentPaneLog("_EnsureAgentHostStarted: already started, skipping");
-            return;
+            const bool alive = _agentHostProcess != nullptr &&
+                WaitForSingleObject(_agentHostProcess, 0) == WAIT_TIMEOUT;
+            if (alive)
+            {
+                _agentPaneLog("_EnsureAgentHostStarted: already started, process alive, skipping");
+                return;
+            }
+            _agentPaneLog("_EnsureAgentHostStarted: process has exited, re-launching");
+            _agentHostStarted = false;
+            if (_agentHostProcess)
+            {
+                CloseHandle(_agentHostProcess);
+                _agentHostProcess = nullptr;
+            }
+            if (_agentHostJob)
+            {
+                CloseHandle(_agentHostJob);
+                _agentHostJob = nullptr;
+            }
+            // Fall through to re-launch.
         }
 
         const auto wtaPath = _DetectWtaPath();
@@ -3246,17 +3264,6 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    void TerminalPage::_IncrementDiagnosticErrors(const std::wstring& paneId,
-                                                    const std::wstring& summary)
-    {
-        _diagnostics.unacknowledgedErrors++;
-        _diagnostics.lastErrorPaneId = paneId;
-        _diagnostics.lastErrorSummary = summary;
-        // State transitions are driven exclusively by WTA via OnAutofixStateChanged.
-        // We just record the error here; WTA will send pending/armed/cleared events.
-        _UpdateBottomBarState();
-    }
-
     // Inbound event from WTA carrying an autofix_state update. Called by the
     // COM server on the UI thread. Payload shape:
     //   {"type":"event","method":"autofix_state",
@@ -3290,18 +3297,12 @@ namespace winrt::TerminalApp::implementation
         else if (state == "cleared")
         {
             _diagnostics.autofixState = AutofixState::Idle;
-            _diagnostics.unacknowledgedErrors = 0;
             _diagnostics.fixPreview.clear();
         }
         if (params.isMember("pane_id") && params["pane_id"].isString())
         {
             const auto s = params["pane_id"].asString();
             _diagnostics.lastErrorPaneId.assign(s.begin(), s.end());
-        }
-        if (params.isMember("summary") && params["summary"].isString())
-        {
-            const auto s = params["summary"].asString();
-            _diagnostics.lastErrorSummary.assign(s.begin(), s.end());
         }
         if (params.isMember("fix_preview") && params["fix_preview"].isString())
         {
@@ -3793,14 +3794,7 @@ namespace winrt::TerminalApp::implementation
                                     auto codeStr = rest.substr(2);
                                     int exitCode = 0;
                                     try { exitCode = std::stoi(codeStr); } catch (...) {}
-                                    if (exitCode != 0)
-                                    {
-                                        auto widePaneId = std::wstring(paneIdStr.begin(), paneIdStr.end());
-                                        auto summary = fmt::format(FMT_COMPILE(L"Command failed in pane {} (exit code {})"),
-                                                                   widePaneId, exitCode);
-                                        page->_IncrementDiagnosticErrors(widePaneId, summary);
-                                    }
-                                    // exit_code=0 is handled by WTA via autofix_state:cleared event.
+                                    // All bar state transitions come from WTA via autofix_state events.
                                 }
                             }
 
