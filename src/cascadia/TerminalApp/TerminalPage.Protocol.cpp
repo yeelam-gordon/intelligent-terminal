@@ -272,16 +272,24 @@ namespace winrt::TerminalApp::implementation
                     result.PaneId = paneId;
                     const auto lastPrompt = termControl.ReadLastPrompt();
                     auto lastPromptStr = winrt::to_string(lastPrompt);
-                    int32_t lineCount = 0;
-                    if (!lastPromptStr.empty())
+                    if (lastPromptStr.empty())
                     {
-                        lineCount = 1;
-                        for (auto ch : lastPromptStr)
-                        {
-                            if (ch == '\n')
-                                ++lineCount;
-                        }
+                        // No OSC 133 marks (or no completed prompt yet) —
+                        // signal so the caller can fall back to a line-count
+                        // read. Mirrors ReadProtocolPaneLastCommand behavior.
+                        result.HasMarks = false;
+                        result.Content = L"";
+                        result.LineCount = 0;
+                        result.Truncated = false;
+                        co_return result;
                     }
+                    int32_t lineCount = 1;
+                    for (auto ch : lastPromptStr)
+                    {
+                        if (ch == '\n')
+                            ++lineCount;
+                    }
+                    result.HasMarks = true;
                     result.Content = winrt::to_hstring(lastPromptStr);
                     result.LineCount = lineCount;
                     result.Truncated = false;
