@@ -324,11 +324,6 @@ namespace winrt::TerminalApp::implementation
         void _UpdateBottomBarState();
         void _TriggerAutofix();
 
-        // Pane that was focused before the agent pane was shown, so we can
-        // restore focus on toggle-off.
-        std::optional<uint32_t> _priorPaneId;
-
-
         // Hot-reload of agent/model settings. Snapshot is captured on first
         // SetSettings and after every rebuild; a diff drives teardown/rebuild
         // of the agent pane.
@@ -554,6 +549,7 @@ namespace winrt::TerminalApp::implementation
         winrt::hstring _DetectWtaPath() const;
         std::shared_ptr<Pane> _FindAgentPane();
         winrt::com_ptr<Tab> _FindTabContainingAgentPane();
+        std::optional<uint32_t> _FindSourceOfAgentPaneId(const std::shared_ptr<Pane>& root);
         void _DelegatePromptToAgent(const winrt::hstring& prompt);
         void _OpenOrReuseAgentPane(const winrt::hstring& prompt);
         void _FocusAgentPane();

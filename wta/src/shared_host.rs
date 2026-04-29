@@ -474,7 +474,6 @@ pub enum HostAutofixCommand {
     Trigger {
         pane_id: String,
         summary: String,
-        source_cwd: Option<String>,
     },
     Execute {
         pane_id: String,
@@ -545,7 +544,6 @@ pub async fn run_host_server(
                     HostAutofixCommand::Trigger {
                         pane_id,
                         summary,
-                        source_cwd,
                     } => {
                         // Always let the host handle Trigger regardless of attach count.
                         // The attach TUI in shared mode defers to the host (shared_mode
@@ -571,7 +569,7 @@ pub async fn run_host_server(
                             pane_id: None,
                             tab_id: None,
                             window_id: None,
-                            cwd: source_cwd,
+                            cwd: None,
                             source_pane_id: Some(pane_id.clone()),
                         };
                         let prompt_text =
@@ -642,14 +640,12 @@ pub async fn run_host_server(
     // shared host until the agent CLI is installed. If the CLI is missing
     // here the spawn will fail and surface as an AgentError to any attached
     // client.
-    let initial_cwd = std::env::var("WTA_SOURCE_CWD").ok().filter(|s| !s.is_empty());
     tokio::task::spawn_local(run_acp_client(
         agent_cmd,
         event_tx.clone(),
         prompt_rx,
         shell_mgr,
         wt_connected,
-        initial_cwd,
     ));
 
     run_host_service(

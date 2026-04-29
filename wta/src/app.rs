@@ -382,9 +382,6 @@ pub struct App {
     pub pane_id: Option<String>,
     pub tab_id: Option<String>,
     pub window_id: Option<String>,
-    // Source pane context (from WTA_SOURCE_* env vars set by WT)
-    pub source_pane_id: Option<String>,
-    pub source_cwd: Option<String>,
     current_prompt_text: Option<String>,
     pending_completed_turn: Option<CompletedTurn>,
     // WT event notifications
@@ -462,8 +459,6 @@ impl App {
             pane_id: None,
             tab_id: None,
             window_id: None,
-            source_pane_id: None,
-            source_cwd: None,
             current_prompt_text: None,
             pending_completed_turn: None,
             wt_notifications: VecDeque::new(),
@@ -1046,7 +1041,7 @@ impl App {
                                 .to_string();
                             tracing::info!(target: "autofix", prompt_len = prompt.len(), "agent_prompt: delegating");
                             if !prompt.is_empty() {
-                                self.delegate_to_tab_agent(&prompt, None);
+                                self.delegate_to_tab_agent(&prompt);
                             }
                             return;
                         }
@@ -1373,8 +1368,8 @@ impl App {
                         pane_id: self.pane_id.clone(),
                         tab_id: self.tab_id.clone(),
                         window_id: self.window_id.clone(),
-                        cwd: self.source_cwd.clone(),
-                        source_pane_id: self.source_pane_id.clone(),
+                        cwd: None,
+                        source_pane_id: None,
                     };
                     let prompt = PromptSubmission::new(text, Some(pane_context));
                     self.current_prompt_id = Some(prompt.id);
@@ -1705,7 +1700,7 @@ impl App {
     /// Delegate a prompt to a new tab agent by spawning `wta delegate` subprocess.
     /// This is the same path used by the command palette — single code path for
     /// context capture, prompt building, and tab creation.
-    pub fn delegate_to_tab_agent(&self, prompt: &str, source_pane_id: Option<&str>) {
+    pub fn delegate_to_tab_agent(&self, prompt: &str) {
         tracing::info!(target: "autofix", prompt_len = prompt.len(), "delegate_to_tab_agent called");
         let exe = match std::env::current_exe() {
             Ok(p) => p,
@@ -1720,9 +1715,6 @@ impl App {
         }
         if let Ok(token) = std::env::var("WT_MCP_TOKEN") {
             cmd.arg("--pipe-token").arg(&token);
-        }
-        if let Some(pane_id) = source_pane_id {
-            cmd.arg("--source-pane").arg(pane_id);
         }
 
         // Fire-and-forget: spawn hidden, don't wait.
@@ -1781,7 +1773,7 @@ impl App {
             pane_id: self.pane_id.clone(),
             tab_id: self.tab_id.clone(),
             window_id: self.window_id.clone(),
-            cwd: self.source_cwd.clone(),
+            cwd: None,
             source_pane_id: Some(notification.pane_id.clone()),
         };
 

@@ -282,10 +282,6 @@ enum Command {
         /// Working directory for the delegate agent tab
         #[arg(long)]
         cwd: Option<String>,
-
-        /// Source pane ID to read terminal context from
-        #[arg(long)]
-        source_pane: Option<String>,
     },
 
     /// Show a quick-pick dialog in Windows Terminal and print the user's selection
@@ -541,9 +537,8 @@ async fn main() -> Result<()> {
             delegate_agent,
             delegate_model,
             cwd,
-            source_pane,
         }) => {
-            run_delegate(&pipe_override, &prompt, &agent, delegate_agent.as_deref(), delegate_model.as_deref(), cwd.as_deref(), source_pane.as_deref()).await
+            run_delegate(&pipe_override, &prompt, &agent, delegate_agent.as_deref(), delegate_model.as_deref(), cwd.as_deref()).await
         }
 
         // ── Quick pick ──
@@ -994,10 +989,9 @@ async fn run_delegate(
     delegate_agent_cmd: Option<&str>,
     delegate_model: Option<&str>,
     cwd: Option<&str>,
-    source_pane: Option<&str>,
 ) -> Result<()> {
     let _guard = logging::init("delegate");
-    tracing::info!(prompt, agent = agent_cmd, cwd, source_pane, "run_delegate started");
+    tracing::info!(prompt, agent = agent_cmd, cwd, "run_delegate started");
 
     let (debug_tx, _) = tokio::sync::mpsc::unbounded_channel::<app::DebugMessage>();
     let channel = match connect_to_wt_pipe(po, debug_tx).await {
@@ -1007,26 +1001,35 @@ async fn run_delegate(
     let shell_mgr = ShellManager::new()
         .with_wt_channel(Arc::new(channel) as Arc<dyn shell::wt_channel::WtChannel>);
 
-    match delegate_with_context(&shell_mgr, prompt, agent_cmd, delegate_agent_cmd, delegate_model, source_pane, cwd).await {
+    match delegate_with_context(&shell_mgr, prompt, agent_cmd, delegate_agent_cmd, delegate_model, cwd).await {
         Ok(()) => { tracing::info!("delegate OK"); Ok(()) }
         Err(e) => { tracing::warn!(error = %e, "delegate FAILED"); Err(e) }
     }
 }
 
-/// Shared delegation logic: read context from source pane, build a rich prompt,
-/// and create a new tab with the delegate agent. Used by both `wta delegate`
-/// CLI and the auto-fix flow.
+/// Shared delegation logic: enrich the prompt with the active pane's recent
+/// output (when available), build the delegate-agent commandline, and create a
+/// new tab to launch it. WT's GetActivePane already resolves the agent pane to
+/// the user's working pane, so a single query is enough.
 async fn delegate_with_context(
     shell_mgr: &ShellManager,
     prompt: &str,
     agent_cmd: &str,
     delegate_agent_cmd: Option<&str>,
     delegate_model: Option<&str>,
-    source_pane_id: Option<&str>,
     cwd: Option<&str>,
 ) -> Result<()> {
-    // Read terminal context from the source pane if provided.
-    let pane_context = if let Some(pane_id) = source_pane_id {
+    let active = shell_mgr.wt_get_active_pane().await.ok();
+    let active_pane_id = active
+        .as_ref()
+        .and_then(|v| v.get("pane_id"))
+        .and_then(|v| match v {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            _ => None,
+        });
+
+    let pane_context = if let Some(ref pane_id) = active_pane_id {
         match shell_mgr.wt_read_pane_output(pane_id, Some(30)).await {
             Ok(value) => value
                 .get("content")
@@ -1038,19 +1041,14 @@ async fn delegate_with_context(
         None
     };
 
-    // Build a rich prompt with terminal context.
-    let full_prompt = if let Some(ref context) = pane_context {
-        format!(
+    let full_prompt = match (pane_context, active_pane_id) {
+        (Some(context), Some(pane_id)) => format!(
             "{}\n\n## Terminal Context (pane {})\n```\n{}\n```",
-            prompt,
-            source_pane_id.unwrap_or("?"),
-            context
-        )
-    } else {
-        prompt.to_string()
+            prompt, pane_id, context
+        ),
+        _ => prompt.to_string(),
     };
 
-    // Build the delegate agent commandline.
     let delegate_agents = crate::coordinator::default_delegate_agent_runtimes(
         delegate_agent_cmd,
         Some(agent_cmd),
@@ -1064,7 +1062,6 @@ async fn delegate_with_context(
 
     tracing::debug!(commandline, cwd, "delegate_with_context: launching");
 
-    // Launch the delegate agent directly as the tab process.
     shell_mgr
         .wt_create_tab(Some(&commandline), cwd, None)
         .await?;
@@ -1240,9 +1237,6 @@ async fn run_ensure_host(
                                 shared_host::HostAutofixCommand::Trigger {
                                     pane_id: pane_id.clone(),
                                     summary: note.summary.clone(),
-                                    source_cwd: std::env::var("WTA_SOURCE_CWD")
-                                        .ok()
-                                        .filter(|s| !s.is_empty()),
                                 },
                             );
                         }
@@ -1442,10 +1436,8 @@ async fn run_attach_tui(
                 pane_id: pane_identity.as_ref().map(|(p, _, _)| p.clone()),
                 tab_id: pane_identity.as_ref().map(|(_, t, _)| t.clone()),
                 window_id: pane_identity.as_ref().map(|(_, _, w)| w.clone()),
-                cwd: std::env::var("WTA_SOURCE_CWD").ok().filter(|s| !s.is_empty()),
-                source_pane_id: std::env::var("WTA_SOURCE_PANE_ID")
-                    .ok()
-                    .filter(|s| !s.is_empty()),
+                cwd: None,
+                source_pane_id: None,
             };
 
             // Spawn the attach client (replaces run_acp_client in shared mode).
@@ -1489,10 +1481,6 @@ async fn run_attach_tui(
                 app_state.tab_id = Some(tab_id);
                 app_state.window_id = Some(window_id);
             }
-            app_state.source_pane_id =
-                std::env::var("WTA_SOURCE_PANE_ID").ok().filter(|s| !s.is_empty());
-            app_state.source_cwd =
-                std::env::var("WTA_SOURCE_CWD").ok().filter(|s| !s.is_empty());
 
             app_state.run(&mut terminal, event_rx, ui_event_rx).await
         })
@@ -1877,14 +1865,12 @@ async fn run_acp_app(
                 let acp_event_tx = event_tx.clone();
                 let shell_mgr_clone = Arc::clone(&shell_mgr);
                 let agent_cmd_clone = agent_cmd.clone();
-                let acp_initial_cwd = std::env::var("WTA_SOURCE_CWD").ok().filter(|s| !s.is_empty());
                 tokio::task::spawn_local(protocol::acp::client::run_acp_client(
                     agent_cmd_clone,
                     acp_event_tx,
                     prompt_rx,
                     shell_mgr_clone,
                     wt_connected,
-                    acp_initial_cwd,
                 ));
             }
 
@@ -1920,15 +1906,12 @@ async fn run_acp_app(
                 app_state.tab_id = Some(tab_id);
                 app_state.window_id = Some(window_id);
             }
-            // Read source pane context from env vars set by WT when creating the agent pane.
-            app_state.source_pane_id = std::env::var("WTA_SOURCE_PANE_ID").ok().filter(|s| !s.is_empty());
-            app_state.source_cwd = std::env::var("WTA_SOURCE_CWD").ok().filter(|s| !s.is_empty());
 
             // If a prompt was passed via CLI arg (e.g., from command palette creating
             // a new agent pane), delegate it to a new tab agent on startup.
             if let Some(ref initial_prompt) = cli.prompt {
                 if !initial_prompt.is_empty() {
-                    app_state.delegate_to_tab_agent(initial_prompt, None);
+                    app_state.delegate_to_tab_agent(initial_prompt);
                 }
             }
 

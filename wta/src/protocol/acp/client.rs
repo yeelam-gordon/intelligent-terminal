@@ -800,77 +800,35 @@ async fn read_pane_last_message(
     result
 }
 
-async fn build_terminal_context_json(
-    shell_mgr: &ShellManager,
-    pane_context: Option<&PaneContext>,
-) -> Option<String> {
-    let source_pane_id = pane_context
-        .and_then(|context| context.effective_source_pane_id())
-        .map(str::to_string);
-    let source_tab_id = pane_context.and_then(|context| context.tab_id.clone());
-    let source_window_id = pane_context.and_then(|context| context.window_id.clone());
-    let source_cwd = pane_context.and_then(|context| context.cwd.clone());
+async fn build_terminal_context_json(shell_mgr: &ShellManager) -> Option<String> {
+    // WT's GetActivePane already resolves the agent pane to the user's working
+    // pane (the "source"), so a single active-pane query gives us the right
+    // target. Pane IDs are process-globally unique, so we only need the pane
+    // id itself — tab/window aren't needed for addressing.
+    let active = shell_mgr.wt_get_active_pane().await.ok()?;
 
-    let active = shell_mgr.wt_get_active_pane().await.ok();
-    let active_pane_id = active
-        .as_ref()
-        .and_then(|v| json_str_or_num(v.get("pane_id")));
-    let active_cwd = active
-        .as_ref()
-        .and_then(|v| v.get("cwd"))
+    let is_agent = active
+        .get("is_agent_pane")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if is_agent {
+        return None;
+    }
+
+    let target_pane_id = json_str_or_num(active.get("pane_id"))?;
+    let target_window_title = active
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let target_cwd = active
+        .get("cwd")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
-    // Always have a cwd in the prompt: use the explicit pane_context cwd when
-    // present, otherwise fall back to the active pane's cwd.
-    let effective_cwd = source_cwd.clone().or_else(|| active_cwd.clone());
-
-    // Send only the active tab's active pane. Prefer the user's source pane
-    // (the terminal they were using before invoking the agent); fall back to
-    // whatever WT reports as currently active, skipping the agent's own pane.
-    let (target_pane_id, target_tab_id, target_window_id, target_window_title, target_pid) =
-        if let Some(src) = source_pane_id.clone() {
-            (
-                src,
-                source_tab_id.clone(),
-                source_window_id.clone(),
-                None,
-                None,
-            )
-        } else if let (Some(act_value), Some(act_id)) =
-            (active.as_ref(), active_pane_id.clone())
-        {
-            let is_agent = act_value
-                .get("is_agent_pane")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if is_agent {
-                return None;
-            }
-            (
-                act_id,
-                json_str_or_num(act_value.get("tab_id")),
-                json_str_or_num(act_value.get("window_id")),
-                act_value
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                act_value.get("pid").and_then(|v| v.as_u64()),
-            )
-        } else {
-            return None;
-        };
-
-    let target_is_source = source_pane_id.as_deref() == Some(target_pane_id.as_str());
-    let pane_role = if target_is_source { "source" } else { "active" };
-
     tracing::debug!(
         target: "acp.terminal_context",
         target_pane_id = %target_pane_id,
-        target_role = pane_role,
-        source_pane_id = source_pane_id.as_deref().unwrap_or(""),
-        active_pane_id = active_pane_id.as_deref().unwrap_or(""),
         "terminal_context_target_resolved"
     );
 
@@ -881,44 +839,12 @@ async fn build_terminal_context_json(
         ACTIVE_PANE_CONTEXT_MAX_CHARS,
     )
     .await;
-    // Per-pane cwd: prefer source's explicit cwd, else active's cwd. Always
-    // populate when we know one.
-    let pane_cwd = if target_is_source {
-        source_cwd.clone().or_else(|| active_cwd.clone())
-    } else {
-        active_cwd.clone()
-    };
-    let pane_is_active = active_pane_id.as_deref() == Some(target_pane_id.as_str());
-
-    let panel_json = serde_json::json!({
-        "id": target_pane_id.clone(),
-        "pane_id": target_pane_id.clone(),
-        "window_id": target_window_id.clone(),
-        "tab_id": target_tab_id.clone(),
-        "window_title": target_window_title,
-        "is_active": pane_is_active,
-        "pid": target_pid,
-        "role": pane_role,
-        "cwd": pane_cwd,
-        "buffer": buffer,
-    });
-
-    let tab_json = serde_json::json!({
-        "id": target_tab_id.clone(),
-        "tab_id": target_tab_id.clone(),
-        "window_id": target_window_id.clone(),
-        "label": "",
-        "is_active": true,
-        "panels": [panel_json],
-    });
 
     serde_json::to_string(&serde_json::json!({
-        "activeTarget": active_pane_id,
-        "sourceTarget": source_pane_id,
-        "sourceTabId": source_tab_id,
-        "sourceWindowId": source_window_id,
-        "sourceCwd": effective_cwd,
-        "tabs": [tab_json],
+        "activeTarget": target_pane_id,
+        "window_title": target_window_title,
+        "cwd": target_cwd,
+        "buffer": buffer,
     }))
     .ok()
 }
@@ -971,7 +897,7 @@ async fn build_prompt_text(
 
         if wt_connected {
             let terminal_context_started = std::time::Instant::now();
-            let terminal_context_json = build_terminal_context_json(shell_mgr, pane_context).await;
+            let terminal_context_json = build_terminal_context_json(shell_mgr).await;
             prompt_timing_log(
                 prompt_id,
                 submitted_at_unix_s,
@@ -1430,7 +1356,6 @@ pub async fn run_acp_client(
     mut prompt_rx: mpsc::UnboundedReceiver<PromptSubmission>,
     shell_mgr: Arc<ShellManager>,
     wt_connected: bool,
-    initial_cwd: Option<String>,
 ) {
     let startup_probe = StartupProbe::new();
     startup_probe.log(&format!(
@@ -1444,7 +1369,6 @@ pub async fn run_acp_client(
         &mut prompt_rx,
         shell_mgr,
         wt_connected,
-        initial_cwd,
     )
     .await
     {
@@ -1461,7 +1385,6 @@ async fn run_inner(
     prompt_rx: &mut mpsc::UnboundedReceiver<PromptSubmission>,
     shell_mgr: Arc<ShellManager>,
     wt_connected: bool,
-    initial_cwd: Option<String>,
 ) -> Result<()> {
     let startup_probe = StartupProbe::new();
 
@@ -1599,11 +1522,7 @@ async fn run_inner(
     // Create session — also with a timeout.
     let _ = event_tx.send(AppEvent::ConnectionStage("Creating session...".to_string()));
     startup_probe.log("Creating session");
-    let cwd = initial_cwd
-        .as_deref()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let cwd = std::env::current_dir().unwrap_or_default();
     startup_probe.log(&format!("Using session cwd={}", cwd.display()));
     let session_future = conn.new_session(acp::NewSessionRequest::new(cwd));
     let session = tokio::time::timeout(std::time::Duration::from_secs(15), session_future)

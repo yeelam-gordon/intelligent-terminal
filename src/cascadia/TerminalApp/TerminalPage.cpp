@@ -1016,18 +1016,6 @@ namespace winrt::TerminalApp::implementation
             cmdline += L" --cwd " + quoteArg(std::wstring_view{ activeCwd });
         }
 
-        // Pass the source pane ID so the delegate agent can read terminal context.
-        if (const auto activeTab = _GetFocusedTabImpl())
-        {
-            if (const auto sourcePane = activeTab->GetActivePane())
-            {
-                if (const auto paneId = sourcePane->ContentId())
-                {
-                    cmdline += L" --source-pane " + std::to_wstring(paneId.value());
-                }
-            }
-        }
-
         // Append the prompt as a positional argument.
         std::wstring escapedPrompt{ prompt };
         for (size_t pos = 0; (pos = escapedPrompt.find(L'"', pos)) != std::wstring::npos; pos += 2)
@@ -1490,11 +1478,6 @@ namespace winrt::TerminalApp::implementation
                 {
                     _agentPaneLog("toggle: moving agent pane from other tab to active tab");
 
-                    if (const auto ap = activeTab->GetActivePane())
-                    {
-                        _priorPaneId = ap->Id();
-                    }
-
                     // Detach from source tab; Detached event removes Tab 1 event handlers.
                     agentTabRoot->DetachPane(existingPane);
 
@@ -1580,11 +1563,6 @@ namespace winrt::TerminalApp::implementation
 
             if (existingPane->IsHidden())
             {
-                if (const auto activePane = agentTab->GetActivePane())
-                {
-                    _priorPaneId = activePane->Id();
-                }
-
                 // Capture panes at buffer bottom before restore so we can re-pin them.
                 std::vector<winrt::Microsoft::Terminal::Control::TermControl> wasAtBottom;
                 rootPane->WalkTree([&](const std::shared_ptr<Pane>& p) {
@@ -1625,10 +1603,13 @@ namespace winrt::TerminalApp::implementation
             {
                 _agentPaneLog("toggle: hiding visible agent pane");
                 rootPane->HidePane(existingPane);
-                if (_priorPaneId.has_value())
+                // After hiding the agent pane, return focus to the source pane
+                // (the last non-agent pane the user was on before focus moved
+                // to the agent pane). Tab::_UpdateActivePane keeps this flag
+                // up to date for both hotkey and mouse focus changes.
+                if (const auto target = _FindSourceOfAgentPaneId(rootPane))
                 {
-                    agentTab->FocusPane(_priorPaneId.value());
-                    _priorPaneId.reset();
+                    agentTab->FocusPane(target.value());
                 }
                 _FocusCurrentTab(true);
                 _UpdateBottomBarState();
@@ -1774,22 +1755,24 @@ namespace winrt::TerminalApp::implementation
 
         if (agentIsFocused)
         {
-            // Already on the agent pane — return focus to the prior pane.
-            _agentPaneLog("focus-toggle: returning focus to prior pane");
-            if (_priorPaneId.has_value())
+            // Already on the agent pane — return focus to the source pane.
+            // Tab::_UpdateActivePane tags the last non-agent pane as the
+            // source whenever focus shifts to the agent pane (mouse or
+            // hotkey), so this is always up to date.
+            const auto target = _FindSourceOfAgentPaneId(agentTab->GetRootPane());
+            _agentPaneLog(std::string{ "focus-toggle: returning focus; target=" } +
+                          (target.has_value() ? std::to_string(target.value()) : std::string{ "<none>" }));
+            if (target.has_value())
             {
-                activeTab->FocusPane(_priorPaneId.value());
-                _priorPaneId.reset();
+                activeTab->FocusPane(target.value());
             }
             return;
         }
 
-        // Focus is elsewhere — remember it and move focus to the agent pane.
-        _agentPaneLog("focus-toggle: focusing agent pane");
-        if (activeId.has_value())
-        {
-            _priorPaneId = activeId;
-        }
+        // Focus is elsewhere — move focus to the agent pane.
+        _agentPaneLog(std::string{ "focus-toggle: focusing agent pane; activeId=" } +
+                      (activeId.has_value() ? std::to_string(activeId.value()) : std::string{ "<none>" }) +
+                      " agentId=" + (agentId.has_value() ? std::to_string(agentId.value()) : std::string{ "<none>" }));
         if (agentId.has_value())
         {
             activeTab->FocusPane(agentId.value());
@@ -1799,6 +1782,27 @@ namespace winrt::TerminalApp::implementation
             ctrl.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
         }
         _UpdateBottomBarState();
+    }
+
+    // Walk the pane tree and return the id of the pane currently flagged as
+    // "source of agent pane" — i.e. the last non-agent pane the user was on
+    // before focus moved to the agent. Tab::_UpdateActivePane keeps this in
+    // sync for both hotkey and mouse focus changes, so it's the source of
+    // truth for "where to go back to".
+    std::optional<uint32_t> TerminalPage::_FindSourceOfAgentPaneId(const std::shared_ptr<Pane>& root)
+    {
+        std::optional<uint32_t> result;
+        if (!root)
+        {
+            return result;
+        }
+        root->WalkTree([&](const std::shared_ptr<Pane>& p) {
+            if (!result.has_value() && p->IsSourceOfAgentPane())
+            {
+                result = p->Id();
+            }
+        });
+        return result;
     }
 
     // Method Description:
