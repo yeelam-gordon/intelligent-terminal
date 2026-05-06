@@ -928,7 +928,6 @@ LPWINDOWPOS
 lpwpos
 lpwstr
 LRESULT
-LSBs
 lsconfig
 lstatus
 lstrcmp
@@ -2023,3 +2022,4 @@ dotnet
 inbox
 prioritization
 sourced
+IME
