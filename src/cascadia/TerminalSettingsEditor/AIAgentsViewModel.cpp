@@ -115,13 +115,21 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         namespace Reg = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
 
         // ACP-capable agents (shared list — see inc/AgentRegistry.h).
+        // Skip agents whose CLI isn't installed — the dropdown only offers
+        // choices the user can actually launch. If the persisted setting
+        // names a missing agent, the SelectedItem fallback in
+        // CurrentAcpAgent picks the "Add New" entry.
         std::vector<Editor::AgentEntry> acpEntries;
         for (const auto& a : Reg::BuiltinAcpAgents)
         {
+            if (!_IsAgentInstalled(std::wstring{ a.id }.c_str()))
+            {
+                continue;
+            }
             acpEntries.push_back(winrt::make<AgentEntry>(
                 winrt::hstring{ a.id },
                 winrt::hstring{ a.displayName },
-                _IsAgentInstalled(std::wstring{ a.id }.c_str())));
+                true));
         }
         _acpAgentList = winrt::single_threaded_observable_vector(std::move(acpEntries));
         _MaybeAppendCustomEntry(_acpAgentList, _GlobalSettings.AcpCustomCommand(), _GlobalSettings.AcpAgent());
@@ -144,13 +152,18 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
             });
 
         // Delegate agents (shared list — see inc/AgentRegistry.h).
+        // Same install-filter rule as the ACP list above.
         std::vector<Editor::AgentEntry> delegateEntries;
         for (const auto& a : Reg::BuiltinDelegateAgents)
         {
+            if (!_IsAgentInstalled(std::wstring{ a.id }.c_str()))
+            {
+                continue;
+            }
             delegateEntries.push_back(winrt::make<AgentEntry>(
                 winrt::hstring{ a.id },
                 winrt::hstring{ a.displayName },
-                _IsAgentInstalled(std::wstring{ a.id }.c_str())));
+                true));
         }
         _delegateAgentList = winrt::single_threaded_observable_vector(std::move(delegateEntries));
         _MaybeAppendCustomEntry(_delegateAgentList, _GlobalSettings.DelegateCustomCommand(), _GlobalSettings.DelegateAgent());
