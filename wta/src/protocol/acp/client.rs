@@ -14,7 +14,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::app::{AppEvent, PermOption, PlanEntry, PlanEntryStatus};
 use crate::coordinator::default_supported_delegate_agents;
-use crate::shared_host::PaneContext;
+use crate::pane_context::PaneContext;
 use crate::shell::{ShellManager, TerminalConfig};
 
 const ACTIVE_PANE_CONTEXT_MAX_CHARS: usize = 4000;
@@ -56,21 +56,6 @@ impl PromptSubmission {
         }
     }
 
-    pub fn from_parts(
-        id: u64,
-        text: String,
-        pane_context: Option<PaneContext>,
-        submitted_at_unix_s: f64,
-        is_autofix: bool,
-    ) -> Self {
-        Self {
-            id,
-            text,
-            pane_context,
-            submitted_at_unix_s,
-            is_autofix,
-        }
-    }
 
     pub fn preview(&self) -> String {
         prompt_preview(&self.text)

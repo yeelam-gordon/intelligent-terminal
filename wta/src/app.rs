@@ -14,8 +14,8 @@ use crate::coordinator::{
     validate_recommendation_set_for_coordinator_target, AutofixDecision, RecommendationChoice,
     RecommendationSet,
 };
+use crate::pane_context::PaneContext;
 use crate::protocol::acp::client::{prompt_timing_log, PromptSubmission};
-use crate::shared_host::SharedStateSnapshot;
 use crate::ui;
 use crate::ui_trace;
 
@@ -263,7 +263,6 @@ pub enum AppEvent {
     Resize(u16, u16), // terminal resize (handled by ratatui)
     ConnectionStage(String),
     ProgressStatus(String),
-    UserMessage(String),
     AgentConnected {
         name: String,
         model: Option<String>,
@@ -299,14 +298,8 @@ pub enum AppEvent {
         options: Vec<PermOption>,
         responder: tokio::sync::oneshot::Sender<String>,
     },
-    SharedPermissionRequest {
-        description: String,
-        options: Vec<PermOption>,
-    },
-    PermissionCleared,
     SystemMessage(String),
     DebugPipeMessage(DebugMessage),
-    SharedStateSnapshot(SharedStateSnapshot),
     /// Push event from Windows Terminal protocol (VT sequence or connection state).
     WtEvent {
         method: String,
@@ -342,6 +335,7 @@ pub struct App {
     pub progress_status: Option<String>,
     pub activity_frame: usize,
     pub session_id: String,
+    #[allow(dead_code)]
     pub wt_connected: bool,
     pub messages: Vec<ChatMessage>,
     pub completed_turns: Vec<CompletedTurn>,
@@ -640,7 +634,6 @@ impl App {
             AppEvent::Resize(_, _) => "resize",
             AppEvent::ConnectionStage(_) => "connection_stage",
             AppEvent::ProgressStatus(_) => "progress_status",
-            AppEvent::UserMessage(_) => "user_message",
             AppEvent::AgentConnected { .. } => "agent_connected",
             AppEvent::PromptTemplateLoaded { .. } => "prompt_template_loaded",
             AppEvent::AgentError(_) => "agent_error",
@@ -653,11 +646,8 @@ impl App {
             AppEvent::ToolCallUpdate { .. } => "tool_call_update",
             AppEvent::Plan(_) => "plan",
             AppEvent::PermissionRequest { .. } => "permission_request",
-            AppEvent::SharedPermissionRequest { .. } => "shared_permission_request",
-            AppEvent::PermissionCleared => "permission_cleared",
             AppEvent::SystemMessage(_) => "system_message",
             AppEvent::DebugPipeMessage(_) => "debug_pipe_message",
-            AppEvent::SharedStateSnapshot(_) => "shared_state_snapshot",
             AppEvent::WtEvent { .. } => "wt_event",
         }
     }
@@ -745,11 +735,6 @@ impl App {
             }
             AppEvent::ProgressStatus(status) => {
                 self.progress_status = Some(status);
-                self.scroll_to_bottom();
-            }
-            AppEvent::UserMessage(text) => {
-                self.prepare_for_new_prompt(&text);
-                self.messages.push(ChatMessage::User(text));
                 self.scroll_to_bottom();
             }
             AppEvent::AgentConnected {
@@ -889,20 +874,6 @@ impl App {
                     responder: Some(responder),
                 });
             }
-            AppEvent::SharedPermissionRequest {
-                description,
-                options,
-            } => {
-                self.permission = Some(PermissionState {
-                    description,
-                    options,
-                    selected: 0,
-                    responder: None,
-                });
-            }
-            AppEvent::PermissionCleared => {
-                self.permission = None;
-            }
             AppEvent::SystemMessage(message) => {
                 self.messages.push(ChatMessage::System(message));
                 self.scroll_to_bottom();
@@ -913,9 +884,6 @@ impl App {
                 if self.debug_messages.len() > 500 {
                     self.debug_messages.remove(0);
                 }
-            }
-            AppEvent::SharedStateSnapshot(snapshot) => {
-                self.apply_shared_snapshot(snapshot);
             }
             AppEvent::WtEvent {
                 method,
@@ -989,15 +957,18 @@ impl App {
                             return;
                         }
 
-                        // When auto-fix is disabled, skip notification display entirely.
-                        if !self.autofix_enabled {
-                            return;
-                        }
-
-                        // maybe_trigger_autofix pushes ChatMessage::Error (red dot)
-                        // itself — don't double-push here as a System message.
                         self.show_notification_banner = true;
-                        self.maybe_trigger_autofix(&notification);
+                        if self.autofix_enabled {
+                            // maybe_trigger_autofix pushes ChatMessage::Error (red dot)
+                            // itself — don't double-push here as a System message.
+                            self.maybe_trigger_autofix(&notification);
+                        } else {
+                            // Autofix disabled: surface the event in chat so the
+                            // user still sees it.
+                            self.messages
+                                .push(ChatMessage::System(notification.summary.clone()));
+                            self.scroll_to_bottom();
+                        }
                     }
                     WtEventSeverity::Informational => {
                         // A successful command (exit 0) in the armed/pending pane
@@ -1274,7 +1245,7 @@ impl App {
                     self.prepare_for_new_prompt(&text);
                     self.messages.push(ChatMessage::User(text.clone()));
                     self.scroll_to_bottom();
-                    let pane_context = crate::shared_host::PaneContext {
+                    let pane_context = PaneContext {
                         pane_id: self.pane_id.clone(),
                         tab_id: self.tab_id.clone(),
                         window_id: self.window_id.clone(),
@@ -1342,6 +1313,7 @@ impl App {
     }
 
     /// Get the most recent unacknowledged notification (for the banner).
+    #[allow(dead_code)]
     pub fn active_notification(&self) -> Option<&WtNotification> {
         self.wt_notifications
             .iter()
@@ -1350,6 +1322,7 @@ impl App {
     }
 
     /// Count of unacknowledged actionable/critical notifications.
+    #[allow(dead_code)]
     pub fn unacknowledged_count(&self) -> usize {
         self.wt_notifications
             .iter()
@@ -1366,6 +1339,7 @@ impl App {
     }
 
     /// Get the latest status-bar badge text (if any unacknowledged notification exists).
+    #[allow(dead_code)]
     pub fn notification_badge(&self) -> Option<(&str, &WtEventSeverity)> {
         // Show the most severe unacknowledged notification
         self.wt_notifications
@@ -1656,7 +1630,7 @@ impl App {
         );
 
         // Use the failing pane as the source so the agent reads its buffer.
-        let pane_context = crate::shared_host::PaneContext {
+        let pane_context = PaneContext {
             pane_id: self.pane_id.clone(),
             tab_id: self.tab_id.clone(),
             window_id: self.window_id.clone(),
@@ -1894,20 +1868,6 @@ impl App {
         }
     }
 
-    fn normalize_history_state(&mut self) {
-        if self.completed_turns.is_empty() {
-            self.selected_history = None;
-            self.expanded_history = None;
-            return;
-        }
-
-        let last = self.completed_turns.len() - 1;
-        self.selected_history = Some(self.selected_history.unwrap_or(last).min(last));
-        if let Some(expanded) = self.expanded_history {
-            self.expanded_history = Some(expanded.min(last));
-        }
-    }
-
     fn selected_recommendation(&self) -> Option<&RecommendationChoice> {
         self.recommendations
             .as_ref()
@@ -2063,80 +2023,6 @@ impl App {
         }
     }
 
-    fn apply_shared_snapshot(&mut self, snapshot: SharedStateSnapshot) {
-        let recommendations_changed = self.recommendations != snapshot.recommendations;
-        let completed_turns_changed = self.completed_turns != snapshot.completed_turns;
-        let permission_changed = self
-            .permission
-            .as_ref()
-            .map(|perm| (&perm.description, &perm.options))
-            != snapshot
-                .permission
-                .as_ref()
-                .map(|perm| (&perm.description, &perm.options));
-
-        self.state = snapshot.state;
-        self.agent_name = snapshot.agent_name;
-        self.agent_model = snapshot.agent_model;
-        self.agent_version = snapshot.agent_version;
-        self.prompt_name = snapshot.prompt_name;
-        self.progress_status = snapshot.progress_status;
-        self.session_id = snapshot.session_id;
-        self.wt_connected = snapshot.wt_connected;
-        self.messages = snapshot.messages;
-        self.completed_turns = snapshot.completed_turns;
-        self.recommendations = snapshot.recommendations;
-        self.agent_streaming = snapshot.agent_streaming;
-        self.pending_thought_response = snapshot.pending_thought_response;
-        self.pending_agent_response = snapshot.pending_agent_response;
-        self.timing_note = snapshot.timing_note;
-        self.prompt_in_flight = snapshot.prompt_in_flight;
-
-        if recommendations_changed {
-            self.selected_recommendation = self
-                .recommendations
-                .as_ref()
-                .map(recommended_choice_index)
-                .unwrap_or(0);
-            if self.recommendations.is_some() {
-                self.selection_visible_pending = true;
-            }
-        }
-
-        if completed_turns_changed {
-            if self.completed_turns.is_empty() {
-                self.selected_history = None;
-                self.expanded_history = None;
-            } else {
-                self.focus_latest_completed_turn();
-            }
-        }
-
-        if let Some(permission) = snapshot.permission {
-            let selected = if permission_changed {
-                0
-            } else {
-                self.permission
-                    .as_ref()
-                    .map(|current| current.selected)
-                    .unwrap_or(0)
-            };
-            let max_selected = permission.options.len().saturating_sub(1);
-            self.permission = Some(PermissionState {
-                description: permission.description,
-                options: permission.options,
-                selected: selected.min(max_selected),
-                responder: None,
-            });
-        } else {
-            self.permission = None;
-        }
-
-        self.normalize_history_state();
-    }
-}
-
-impl App {
     fn log_selection_phase(&self, phase: &str, details: &str) {
         if let (Some(prompt_id), Some(submitted_at_unix_s)) = (
             self.current_prompt_id,
@@ -2233,7 +2119,6 @@ fn append_thought_preview(buffer: &mut String, chunk: &str) {
 
 /// Extract a short preview string from the recommended choice's first
 /// Send action, for display in the bottom-bar tooltip on Armed state.
-/// Free function so both `App` (attach TUI) and the shared host can call it.
 pub fn armed_fix_preview(rec: &crate::coordinator::RecommendationSet) -> String {
     let idx = rec
         .recommended_choice
@@ -2559,7 +2444,7 @@ mod tests {
         let params = json!({"pane_id": "2", "sequence": "osc:133;D;1"});
         let n = classify_wt_event("vt_sequence", "2", &params);
         assert_eq!(n.severity, WtEventSeverity::Actionable);
-        assert!(n.summary.contains("command failed"));
+        assert!(n.summary.contains("Command failed"));
         assert!(n.summary.contains("exit 1"));
     }
 
