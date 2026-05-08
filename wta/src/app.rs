@@ -302,6 +302,13 @@ pub enum AppEvent {
         session_id: Option<String>,
         message: String,
     },
+    /// Same-tab single-flight guard rejection. The user submitted a new
+    /// prompt while the previous one is still in flight on the same tab.
+    /// The ACP client side enforces this for safety; the front-end Enter
+    /// handler also has its own guard so the bounce is rare.
+    AgentBusy {
+        tab_id: String,
+    },
     ExecutionInfo(String),
     AgentThoughtChunk {
         session_id: String,
@@ -842,6 +849,7 @@ impl App {
             AppEvent::SessionAttached { .. } => "session_attached",
             AppEvent::PromptTemplateLoaded { .. } => "prompt_template_loaded",
             AppEvent::AgentError { .. } => "agent_error",
+            AppEvent::AgentBusy { .. } => "agent_busy",
             AppEvent::ExecutionInfo(_) => "execution_info",
             AppEvent::AgentThoughtChunk { .. } => "agent_thought_chunk",
             AppEvent::AgentMessageChunk { .. } => "agent_message_chunk",
@@ -1005,6 +1013,14 @@ impl App {
             }
             AppEvent::PromptTemplateLoaded { name } => {
                 self.prompt_name = Some(name);
+            }
+            AppEvent::AgentBusy { tab_id } => {
+                let tab = self.tab_mut(&tab_id);
+                tab.messages.push(ChatMessage::System(
+                    "Agent is busy on this tab — wait for the current prompt to finish."
+                        .to_string(),
+                ));
+                tab.scroll_to_bottom();
             }
             AppEvent::AgentError { session_id, message } => {
                 self.state = ConnectionState::Failed(message.clone());
@@ -1509,6 +1525,20 @@ impl App {
                 } else if self.history_navigation_enabled() {
                     self.toggle_selected_history_turn();
                 } else if !self.input.is_empty() && self.state == ConnectionState::Connected {
+                    // Same-tab single-flight: refuse a new prompt if this
+                    // tab is still streaming the previous one. The ACP
+                    // client enforces this server-side too, but bouncing
+                    // here keeps the user's input intact instead of
+                    // appearing to drop it.
+                    if self.current_tab().prompt_in_flight {
+                        let tab = self.current_tab_mut();
+                        tab.messages.push(ChatMessage::System(
+                            "Agent is busy on this tab — wait for the current prompt to finish."
+                                .to_string(),
+                        ));
+                        tab.scroll_to_bottom();
+                        return;
+                    }
                     let text = self.input.clone();
                     self.input.clear();
                     self.cursor_pos = 0;
