@@ -100,7 +100,24 @@ enum Command {
     ///
     /// Exits 0 even if a CLI is not installed — only writes for present
     /// `~/.claude/` and `~/.copilot/` directories.
+    ///
+    /// **Hidden alias** for `wta hooks install`. Kept for backward
+    /// compatibility with the Settings UI's "Install hooks" button which
+    /// shells out to `wta install-hooks`. Prefer `wta hooks install` in
+    /// new code.
+    #[command(hide = true)]
     InstallHooks,
+
+    /// Inspect, install, or remove the wt-agent-hooks bridge.
+    ///
+    /// Source of truth for both the Settings UI ("Install hooks" button)
+    /// and `Verify-AgentHooks.ps1`. `wta hooks status --json` returns a
+    /// per-CLI install report; `wta hooks uninstall` reverses what
+    /// `wta hooks install` produces.
+    Hooks {
+        #[command(subcommand)]
+        action: HooksAction,
+    },
 
     /// List all Windows Terminal windows
     #[command(alias = "lsw")]
@@ -335,6 +352,49 @@ enum Command {
     },
 }
 
+/// Subcommands for `wta hooks`. See `agent_hooks_installer` for what
+/// each action does.
+#[derive(Subcommand, Debug)]
+enum HooksAction {
+    /// (Re-)install the wt-agent-hooks bridge for every supported CLI.
+    Install,
+
+    /// Print per-CLI install state. Returns JSON with `--json` (suitable
+    /// for the Settings UI / Verify-AgentHooks.ps1), or a human-readable
+    /// table by default.
+    Status,
+
+    /// Uninstall the bridge for one or all CLIs. Best-effort: missing
+    /// CLIs are skipped at info level. With `--json` returns a structured
+    /// per-CLI result report.
+    Uninstall {
+        /// Which CLI(s) to uninstall for. Default: `all`.
+        #[arg(long, value_enum, default_value_t = HooksCliFilter::All)]
+        cli: HooksCliFilter,
+    },
+}
+
+/// `--cli` filter for `wta hooks uninstall`.
+#[derive(Copy, Clone, Debug, clap::ValueEnum)]
+enum HooksCliFilter {
+    All,
+    Copilot,
+    Claude,
+    Gemini,
+}
+
+impl HooksCliFilter {
+    fn into_scope(self) -> agent_hooks_installer::CliScope {
+        use agent_hooks_installer::{CliKind, CliScope};
+        match self {
+            HooksCliFilter::All => CliScope::All,
+            HooksCliFilter::Copilot => CliScope::One(CliKind::Copilot),
+            HooksCliFilter::Claude => CliScope::One(CliKind::Claude),
+            HooksCliFilter::Gemini => CliScope::One(CliKind::Gemini),
+        }
+    }
+}
+
 // ─── Entry Point ────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -366,13 +426,15 @@ async fn main() -> Result<()> {
         // CLI's settings.json has drifted (e.g. user removed our entry by
         // hand, or upgraded from an older wta) running this subcommand
         // resets it without launching the full agent pane.
-        Some(Command::InstallHooks) => {
-            agent_hooks_installer::ensure_installed();
-            println!("wt-agent-hooks install attempted (idempotent). \
-                Inspect ~/.claude/settings.json, ~/.copilot/settings.json, \
-                and ~/.gemini/extensions/wt-agent-hooks/ to confirm.");
-            Ok(())
-        }
+        Some(Command::InstallHooks) => run_hooks_install(),
+
+        // New `wta hooks <action>` group. Source of truth for the
+        // Settings UI / Verify-AgentHooks.ps1.
+        Some(Command::Hooks { action }) => match action {
+            HooksAction::Install => run_hooks_install(),
+            HooksAction::Status => run_hooks_status(json_mode),
+            HooksAction::Uninstall { cli } => run_hooks_uninstall(cli, json_mode),
+        },
 
         // ── List commands ──
         Some(Command::ListWindows) => {
@@ -791,6 +853,115 @@ fn print_output(val: &serde_json::Value, json_mode: bool, formatter: fn(&serde_j
         formatter(val);
     }
 }
+
+// ─── `wta hooks <action>` handlers ──────────────────────────────────────────
+
+fn run_hooks_install() -> Result<()> {
+    agent_hooks_installer::ensure_installed();
+    println!(
+        "wt-agent-hooks install attempted (idempotent). \
+         Run `wta hooks status` to inspect the result."
+    );
+    Ok(())
+}
+
+fn run_hooks_status(json_mode: bool) -> Result<()> {
+    let report = agent_hooks_installer::status();
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .unwrap_or_else(|_| serde_json::to_string(&report).unwrap_or_default())
+        );
+    } else {
+        format_hooks_status_human(&report);
+    }
+    Ok(())
+}
+
+fn run_hooks_uninstall(cli: HooksCliFilter, json_mode: bool) -> Result<()> {
+    let report = agent_hooks_installer::uninstall(cli.into_scope());
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .unwrap_or_else(|_| serde_json::to_string(&report).unwrap_or_default())
+        );
+    } else {
+        format_hooks_uninstall_human(&report);
+    }
+    Ok(())
+}
+
+fn format_hooks_status_human(r: &agent_hooks_installer::StatusReport) {
+    println!(
+        "bundle source: {}{}",
+        r.bundle_source.kind,
+        r.bundle_source
+            .path
+            .as_deref()
+            .map(|p| format!(" ({})", p))
+            .unwrap_or_default(),
+    );
+    println!();
+    for c in &r.clis {
+        let summary = if !c.binary_on_path {
+            "✗ CLI not on PATH".to_string()
+        } else if c.plugin_installed && c.plugin_enabled {
+            "✓ installed".to_string()
+        } else if c.plugin_installed {
+            "⚠ installed but disabled".to_string()
+        } else {
+            "✗ not installed".to_string()
+        };
+        let detail = format!(
+            "marketplace={}, plugin={}, enabled={}{}",
+            yn(c.marketplace_registered),
+            yn(c.plugin_installed),
+            yn(c.plugin_enabled),
+            c.detection_fallback
+                .map(|m| format!(", detection={}", m))
+                .unwrap_or_default(),
+        );
+        println!("  {:<10} {:<28}  ({})", c.name, summary, detail);
+    }
+}
+
+fn format_hooks_uninstall_human(r: &agent_hooks_installer::UninstallReport) {
+    for c in &r.clis {
+        let summary = if !c.attempted {
+            "skipped (CLI not on PATH)".to_string()
+        } else {
+            let plugin = c
+                .plugin_uninstalled
+                .map(|b| if b { "ok" } else { "failed" })
+                .unwrap_or("-");
+            let mkt = c
+                .marketplace_removed
+                .map(|b| if b { "ok" } else { "failed" })
+                .unwrap_or("-");
+            format!(
+                "plugin={} marketplace={} staging={}",
+                plugin,
+                mkt,
+                if c.staging_dir_removed { "ok" } else { "failed" },
+            )
+        };
+        println!("  {:<10} {}", c.name, summary);
+        for m in &c.messages {
+            println!("    · {}", m);
+        }
+    }
+}
+
+fn yn(b: bool) -> &'static str {
+    if b {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
 
 // ─── debug-live: drive the real UI via wtcli ────────────────────────────────
 //
