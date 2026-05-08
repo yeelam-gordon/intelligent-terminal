@@ -346,6 +346,18 @@ namespace winrt::TerminalApp::implementation
         void _RebuildAgentStack();
         void _AutoCreateHiddenAgentPane(winrt::com_ptr<Tab> tab);
 
+        // Per-tab agent-pane state reconciliation. The single shared agent
+        // pane follows the active tab based on each tab's AgentPaneOpen()
+        // flag.
+        void _RelocateAgentPaneToTab(winrt::com_ptr<Tab> targetTab);
+        void _ReconcileAgentPaneForActiveTab();
+        void _ClearAllAgentPaneFlags();
+        // Tells wta which tab is currently active so it routes per-tab events
+        // (autofix triggers, prompt deliveries, ...) to the right TabSession.
+        // Deduped against _lastNotifiedAgentTabId so we only emit on change.
+        void _NotifyAgentTabChanged(const winrt::com_ptr<Tab>& targetTab);
+        std::optional<uint32_t> _lastNotifiedAgentTabId{};
+
         winrt::Windows::UI::Xaml::Controls::TextBox::LayoutUpdated_revoker _renamerLayoutUpdatedRevoker;
         int _renamerLayoutCount{ 0 };
         bool _renamerPressedEnter{ false };
