@@ -13,6 +13,9 @@ struct DeferredAcpParams {
     agent_cmd: String,
     acp_model: Option<String>,
     prompt_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::PromptSubmission>>,
+    cancel_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::CancelRequest>>,
+    new_session_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::NewSessionForTab>>,
+    restart_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::RestartRequest>>,
     shell_mgr: Arc<crate::shell::ShellManager>,
     wt_connected: bool,
 }
@@ -1107,6 +1110,9 @@ impl App {
         agent_cmd: String,
         acp_model: Option<String>,
         prompt_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::PromptSubmission>,
+        cancel_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::CancelRequest>,
+        new_session_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::NewSessionForTab>,
+        restart_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::RestartRequest>,
         shell_mgr: Arc<crate::shell::ShellManager>,
         wt_connected: bool,
     ) {
@@ -1114,6 +1120,9 @@ impl App {
             agent_cmd,
             acp_model,
             prompt_rx: Some(prompt_rx),
+            cancel_rx: Some(cancel_rx),
+            new_session_rx: Some(new_session_rx),
+            restart_rx: Some(restart_rx),
             shell_mgr,
             wt_connected,
         });
@@ -1127,7 +1136,12 @@ impl App {
         self.pending_acp_start = false;
 
         if let (Some(ref tx), Some(ref mut params)) = (&self.event_tx, &mut self.deferred_acp) {
-            if let Some(prompt_rx) = params.prompt_rx.take() {
+            if let (Some(prompt_rx), Some(cancel_rx), Some(new_session_rx), Some(restart_rx)) = (
+                params.prompt_rx.take(),
+                params.cancel_rx.take(),
+                params.new_session_rx.take(),
+                params.restart_rx.take(),
+            ) {
                 // Resolve the agent executable path (bare "copilot" may not
                 // be on PATH in packaged apps — use WinGet Links fallback).
                 let agent_cmd = resolve_agent_cmd(&params.agent_cmd);
@@ -1141,6 +1155,9 @@ impl App {
                     acp_model,
                     event_tx,
                     prompt_rx,
+                    cancel_rx,
+                    new_session_rx,
+                    restart_rx,
                     shell_mgr,
                     wt_connected,
                 ));
@@ -1351,6 +1368,63 @@ impl App {
                 let result = crate::auth::check_auth(&id).await;
                 let _ = tx.send(AppEvent::AuthCheckComplete(result));
             });
+        }
+    }
+
+    /// FRE setup key handler — agent selection + auth trigger.
+    fn handle_fre_setup_key(&mut self, key: KeyEvent) {
+        if let Some(ref mut setup) = self.setup {
+            let agent_count = setup.agents.len();
+            match key.code {
+                KeyCode::Up => {
+                    if setup.selected_index > 0 {
+                        setup.selected_index -= 1;
+                    }
+                }
+                KeyCode::Down => {
+                    if setup.selected_index < agent_count.saturating_sub(1) {
+                        setup.selected_index += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(agent) = setup.agents.get(setup.selected_index) {
+                        let agent_name = agent.name.clone();
+                        let agent_id = crate::agent_registry::KNOWN_AGENTS
+                            .iter()
+                            .find(|p| p.display_name == agent_name)
+                            .map(|p| p.id.to_string())
+                            .unwrap_or_else(|| "copilot".to_string());
+
+                        if agent.is_available {
+                            self.mode = AppMode::Auth;
+                            self.auth = Some(AuthState {
+                                agent_id: agent_id.clone(),
+                                agent_name,
+                                auth_hint: String::new(),
+                                login_command: String::new(),
+                                checking: true,
+                                status_message: String::new(),
+                            });
+                            self.spawn_auth_check(&agent_id);
+                        } else {
+                            let profile = crate::agent_registry::lookup_profile_by_id(&agent_id);
+                            self.mode = AppMode::Auth;
+                            self.auth = Some(AuthState {
+                                agent_id: agent_id.clone(),
+                                agent_name,
+                                auth_hint: format!("Install: {}", profile.install_hint),
+                                login_command: String::new(),
+                                checking: false,
+                                status_message: format!("{} is not installed. {}", profile.display_name, profile.install_hint),
+                            });
+                        }
+                    }
+                }
+                KeyCode::Esc => {
+                    self.should_quit = true;
+                }
+                _ => {}
+            }
         }
     }
 
@@ -2022,6 +2096,8 @@ impl App {
                 if !result.all_passed() {
                     self.mode = AppMode::Setup;
                     self.setup = Some(SetupState {
+                        reason: SetupReason::AgentMissing,
+                        agents: Vec::new(),
                         preflight: result,
                         selected_index: 0,
                         install_in_progress: false,
@@ -2274,10 +2350,14 @@ impl App {
             "key received"
         );
 
-        // Setup mode (preflight failed): route everything to the setup key
-        // handler. No agent / chat keybindings apply in this mode.
+        // Setup mode: FRE agent selection or preflight wizard
         if self.mode == AppMode::Setup {
-            self.handle_setup_key(key);
+            let is_fre = self.setup.as_ref().map_or(false, |s| s.reason == SetupReason::FirstRun);
+            if is_fre {
+                self.handle_fre_setup_key(key);
+            } else {
+                self.handle_setup_key(key);
+            }
             return;
         }
 

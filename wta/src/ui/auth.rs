@@ -21,7 +21,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     if auth.checking {
-        let spinner_char = SPINNER[app.activity_frame % SPINNER.len()];
+        let spinner_char = SPINNER[app.activity_frame as usize % SPINNER.len()];
 
         lines.push(Line::from(vec![
             Span::styled("● ", Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),

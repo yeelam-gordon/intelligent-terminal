@@ -2,6 +2,7 @@ mod auth;
 mod chat;
 mod command_popup;
 mod debug_panel;
+mod fre_setup;
 mod input;
 mod layout;
 mod permission;

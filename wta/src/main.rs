@@ -1650,7 +1650,7 @@ async fn run_acp_app(
 
             // Spawn the ACP client -- but not in setup mode, where the user
             // hasn't chosen an agent yet. Store params for deferred start.
-            if cli.setup.is_none() {
+            let deferred_channels = if cli.setup.is_none() {
                 tokio::task::spawn_local(protocol::acp::client::run_acp_client(
                     agent_cmd.clone(),
                     cli.acp_model.clone(),
@@ -1662,7 +1662,10 @@ async fn run_acp_app(
                     Arc::clone(&shell_mgr),
                     wt_connected,
                 ));
-            }
+                None
+            } else {
+                Some((cancel_rx, new_session_rx, restart_rx))
+            };
 
             let (recommendation_tx, recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
             let (permission_tx, _permission_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1687,19 +1690,19 @@ async fn run_acp_app(
             let mut app_state = app::App::new(prompt_tx, recommendation_tx, permission_tx, cancel_tx, new_session_tx, restart_tx, debug_capture_enabled, wt_connected, autofix_enabled);
 
             // ── Preflight: check the agent CLI before connecting ──────────
-            // If the CLI is missing or unauthenticated we surface the
-            // Setup wizard via AppEvent::PreflightComplete. Sent before
-            // the run loop drains the channel so the wizard appears on
-            // first frame.
-            let preflight_result = preflight::check_agent(&agent_cmd).await;
-            tracing::info!(
-                target: "preflight",
-                agent_id = %preflight_result.agent_id,
-                cli = ?preflight_result.cli_status,
-                auth = ?preflight_result.auth_status,
-                "preflight done"
-            );
-            let _ = event_tx.send(app::AppEvent::PreflightComplete(preflight_result));
+            // Skip preflight when FRE is active — FRE has its own agent
+            // selection + auth flow and doesn't need the preflight wizard.
+            if cli.setup.is_none() {
+                let preflight_result = preflight::check_agent(&agent_cmd).await;
+                tracing::info!(
+                    target: "preflight",
+                    agent_id = %preflight_result.agent_id,
+                    cli = ?preflight_result.cli_status,
+                    auth = ?preflight_result.auth_status,
+                    "preflight done"
+                );
+                let _ = event_tx.send(app::AppEvent::PreflightComplete(preflight_result));
+            }
 
             // ── install-hooks request channel ─────────────────────────────
             // The Settings UI / in-TUI install button signals via this
@@ -1729,7 +1732,9 @@ async fn run_acp_app(
                 .merge_historical(history_loader::load_all());
 
             // Enter setup mode if --setup <reason> was passed.
+            tracing::info!("cli.setup = {:?}", cli.setup);
             if let Some(ref reason_str) = cli.setup {
+                tracing::info!("Entering FRE setup mode: reason={}", reason_str);
                 let reason = app::SetupReason::from_str(reason_str);
                 // Detect available agents on PATH
                 let mut agents = detect_agents();
@@ -1778,18 +1783,34 @@ async fn run_acp_app(
                     reason,
                     agents,
                     selected_index: 0,
+                    preflight: preflight::PreflightResult {
+                        agent_id: String::new(),
+                        display_name: String::new(),
+                        cli_status: preflight::CheckStatus::Skipped,
+                        cli_path: None,
+                        auth_status: preflight::CheckStatus::Skipped,
+                        install_hint: String::new(),
+                        install_url: String::new(),
+                        auth_hint: String::new(),
+                    },
+                    install_in_progress: false,
+                    install_log: Vec::new(),
+                    install_error: None,
                 });
             }
 
             app_state.set_event_tx(event_tx.clone());
 
             // If in setup mode, store ACP params for deferred start after login.
-            if cli.setup.is_some() {
-                let (deferred_prompt_tx, deferred_prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+            if let Some((cancel_rx, new_session_rx, restart_rx)) = deferred_channels {
+                let (_deferred_prompt_tx, deferred_prompt_rx) = tokio::sync::mpsc::unbounded_channel();
                 app_state.set_acp_params(
                     agent_cmd.clone(),
                     cli.acp_model.clone(),
                     deferred_prompt_rx,
+                    cancel_rx,
+                    new_session_rx,
+                    restart_rx,
                     Arc::clone(&shell_mgr),
                     wt_connected,
                 );
