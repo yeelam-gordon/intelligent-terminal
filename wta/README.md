@@ -1,6 +1,6 @@
 # WTA -- Windows Terminal Agent
 
-A Rust TUI client, MCP tool server, and tmux-like CLI that connects AI agents to Windows Terminal.
+A Rust TUI client and tmux-like CLI that connects AI agents to Windows Terminal.
 
 Customization:
 - See [CUSTOMIZATION.md](CUSTOMIZATION.md) for changing the agent model and runtime prompt.
@@ -36,15 +36,6 @@ When ACP mode is connected to Windows Terminal, the current agent-facing contrac
 The agent is expected to shell out to commands like `wta active-pane --json`, `wta list-panes --json`, and `wta capture-pane --json`.
 The CLI then talks to Windows Terminal over the protocol.
 
-### Run (MCP server mode)
-
-Headless -- intended to be spawned by an agent as an MCP tool server.
-
-```bash
-wta mcp
-wta --mcp          # legacy flag, still works
-```
-
 ### tmux-like CLI
 
 WTA exposes tmux-equivalent subcommands for controlling Windows Terminal from the shell. Useful for humans and AI agents that can shell out.
@@ -67,16 +58,18 @@ Short aliases are supported: `lsw`, `lst`, `lsp`, `neww`, `splitw`, `send`, `cap
 
 When `-t` (target pane) is omitted, the active pane is used automatically.
 
-### Pipe Discovery & Environment Setup
+### Protocol Discovery & Environment Setup
 
-WTA discovers the Windows Terminal pipe automatically via VT OSC sequences or `WT_PIPE_NAME` env var. You can also specify it explicitly:
+WTA finds Windows Terminal via the `WT_COM_CLSID` environment variable, which
+WT propagates into every conpty child it spawns. You usually don't need to do
+anything — just run `wta` inside a WT pane.
 
 ```bash
-# Discover pipe name
-wta pipe-id                               # print pipe name
-wta pipe-id --json                        # JSON with source info
+# Inspect the inherited value
+wta pipe-id                               # print CLSID
+wta pipe-id --json                        # JSON with metadata
 
-# Set env vars for current shell session
+# Re-export it into another shell session (rarely needed)
 eval "$(wta set-env)"                     # bash/zsh
 wta set-env -s powershell | Invoke-Expression   # PowerShell
 wta set-env -s fish | source              # fish
@@ -139,96 +132,47 @@ Press **F12** to open a side panel showing all JSON-RPC messages between WTA and
 - Cyan `<<<` = response from WT
 - Shift+PageUp/Down to scroll
 
-## Debug Log Files
+## Debug Logs
 
-WTA writes three log files to the current working directory:
+WTA writes structured logs under `%LOCALAPPDATA%\IntelligentTerminal\logs\`
+(or the package-sandboxed equivalent when launched packaged):
 
-| File | Contents | Control |
-|------|----------|---------|
-| `wta-pipe-debug.log` | Named pipe request/response JSON (WT protocol layer) | `WTA_DEBUG_LOG=0` to disable |
-| `wta-acp-debug.log` | ACP protocol events (session notifications, permissions, terminal ops) | Always on |
-| `wta-mcp-debug.log` | MCP tool invocations with params and results (when running `--mcp`) | `WTA_DEBUG_LOG=0` to disable |
+| File | Contents |
+|------|----------|
+| `wta-main.log` | Main TUI runtime: lifecycle, agent events, protocol calls |
+| `wta-agent-pane.log` | Agent-pane session (per-pane wta instance) |
+| `wta-ensure-host.log` | Background host startup / COM connection |
+| `wta-acp-debug.log` | ACP protocol debug trace |
+| `wta-delegate.log` | `?<prompt>` delegation flow |
+| `wta-attach.log` | Agent pane TUI in attach mode |
 
-Tail them in a separate pane for live debugging:
-
-```bash
-# In another WT pane -- watch all three layers at once
-tail -f wta-pipe-debug.log wta-acp-debug.log wta-mcp-debug.log
-```
-
-## Debugging MCP Protocol
-
-When `wta mcp` is used as a headless tool server, the MCP traffic flows through three layers:
-
-```
-Agent CLI  <--MCP/stdio-->  wta --mcp  <--named pipe-->  Windows Terminal
-                            ^                            ^
-                    wta-mcp-debug.log            wta-pipe-debug.log
-```
-
-### Method 1: Log files (recommended)
-
-The `wta --mcp` subprocess logs every tool call to `wta-mcp-debug.log`:
-
-```
-[1742123456.789] === MCP server starting ===
-[1742123456.790] WT_PIPE_NAME=Some("\\\\.\pipe\\WindowsTerminal-12345")
-[1742123457.001] >>> wt_list_windows()
-[1742123457.015] <<< wt_list_windows: { "windows": [...] }
-[1742123457.200] >>> wt_list_panes(tab_id=0)
-[1742123457.210] <<< wt_list_panes: { "panes": [...] }
-```
-
-The pipe layer is also logged (from the MCP subprocess's own pipe connection) to `wta-pipe-debug.log`.
-
-### Method 2: Run wta --mcp manually
-
-Test MCP tools interactively by running `wta --mcp` directly and typing JSON-RPC on stdin:
-
-```bash
-set WT_PIPE_NAME=\\.\pipe\WindowsTerminal-12345
-set WT_MCP_TOKEN=
-wta --mcp
-```
-
-Then paste MCP JSON-RPC requests:
-
-```json
-{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wt_list_windows","arguments":{}}}
-```
-
-Responses appear on stdout. Check `wta-mcp-debug.log` for the tool-level trace.
-
-### Method 3: F12 debug panel (pipe layer only)
-
-In ACP TUI mode, press F12 to see the named pipe traffic from the **main** wta process. This shows the pane identity discovery at startup but not the MCP subprocess's traffic (that goes to the log files).
+Set `WTA_LOG=debug` for verbose output (default: `info`). The F12 debug panel
+in the TUI shows protocol traffic live without tailing log files.
 
 ## Project Structure
 
 ```
 wta/src/
-+-- main.rs                    Entry point, CLI subcommands, pipe discovery, pane identity
++-- main.rs                    Entry point, CLI subcommands, protocol discovery
 +-- app.rs                     TUI state machine, event loop, debug panel state
 +-- event.rs                   Crossterm event reader
 +-- theme.rs                   Color constants
 +-- protocol/
 |   +-- acp/client.rs          ACP client -- spawns agent, handles requests
-|   +-- mcp/server.rs          MCP server -- 15 tools (shell + WT state + WT control)
 +-- shell/
 |   +-- shell_manager.rs       Terminal abstraction (local subprocess or WT pane)
 |   +-- wt_channel/
 |       +-- mod.rs             WtChannel trait definition
-|       +-- pipe_channel.rs    Named pipe transport + debug emitter
-|       +-- vt_channel.rs      VT OSC 9001 discovery (pipe name + token)
-|       +-- types.rs           Wire format structs (WireRequest, WireResponse)
+|       +-- cli_channel.rs     wtcli subprocess (CoCreateInstance via wtcli.exe)
+|       +-- pipe_channel.rs    Inherited duplex pipe pair (send_input only)
+|       +-- routed_channel.rs  Routes per-method between Pipe and Cli channels
 +-- ui/
     +-- layout.rs              Main layout (+ debug panel split)
     +-- chat.rs                Message rendering
     +-- input.rs               Input box with cursor
     +-- status_bar.rs          Connection status, pane identity, debug hint
     +-- permission.rs          Permission modal dialog
-    +-- debug_panel.rs         Pipe traffic viewer (F12)
+    +-- debug_panel.rs         Protocol traffic viewer (F12)
 ```
 
 ## Development
@@ -256,31 +200,27 @@ target/debug/wta.exe
 ### Development workflow
 
 1. Open Windows Terminal
-2. Run `wta pipe-id` to verify pipe discovery works
-3. Run `wta` to start the TUI (or `eval "$(wta set-env)"` first if discovery fails)
-4. Press F12 to open the debug panel and see all pipe traffic
+2. Run `wta pipe-id` to verify `WT_COM_CLSID` is set
+3. Run `wta` to start the TUI
+4. Press F12 to open the debug panel and see all protocol traffic
 5. Interact with the agent -- watch requests/responses flow in real time
 6. Use `wta list-panes`, `wta capture-pane` etc. in another pane for debugging
 
 ### Adding a new WT protocol method
 
-1. Add the handler in `ProtocolRequestHandler.cpp` (C++ side)
-2. Add a wrapper in `shell_manager.rs` calling `self.wt()?.request("method_name", params)`
-3. Add an MCP tool in `mcp/server.rs` if it should be agent-callable
-4. Rebuild both WT and wta
-
-### Adding a new MCP tool
-
-1. Define a params struct with `#[derive(Deserialize, schemars::JsonSchema)]`
-2. Add a `#[tool(...)]` method in the `#[tool_router]` impl block in `server.rs`
-3. The tool calls into `ShellManager` for the actual work
+1. Declare the method in `src/cascadia/TerminalProtocol/TerminalProtocol.idl`
+2. Implement it on `TerminalProtocolComServer` (`src/cascadia/WindowsTerminal/TerminalProtocolComServer.cpp`)
+3. Add a `wtcli` subcommand in `src/tools/wtcli/main.cpp` that calls the new method
+4. Add a `CliChannel::request` arm in `wta/src/shell/wt_channel/cli_channel.rs` mapping a method name to the new `wtcli` subcommand
+5. Rebuild WT, wtcli, and wta
 
 ## Architecture Notes
 
-- **ShellManager** is shared between ACP and MCP modes via `Arc<ShellManager>`
-- **PipeChannel** holds a single `Mutex<NamedPipeClient>` -- all requests are serialized
+- **ShellManager** owns local terminals and the active `WtChannel`
+- **CliChannel** shells out to `wtcli.exe` per call; `wtcli` does `CoCreateInstance` to reach WT's COM server
+- **PipeChannel** uses the inherited duplex anonymous-pipe pair (handed off via `STARTUPINFOEX`) for `send_input` only
+- **RoutedChannel** picks per method: `send_input` → pipe, everything else → COM
 - **Protocol discovery**: `WT_COM_CLSID` env var, inherited from the WT-spawned conpty
-- **CLI subcommands** are thin wrappers over `PipeChannel::request()` -- no ShellManager needed
+- **CLI subcommands** call `CliChannel::connect()` directly; no ShellManager needed
 - **Pane identity** is discovered at startup via PID matching (list all panes, find ours)
-- **ACP WT contract**: In ACP mode with WT connected, WTA adds prompt context that tells the agent to use local `wta` CLI commands for WT inspection/control. MCP remains a separate headless server mode.
-- **Graceful degradation**: If the WT pipe is unavailable, WTA falls back to local-only mode (no WT tools, just local shell operations)
+- **Graceful degradation**: if the WT protocol is unavailable, WTA falls back to local-only mode (no WT tools, just local shell operations)

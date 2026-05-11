@@ -40,7 +40,7 @@ enum Terminal {
 }
 
 /// Protocol-agnostic shell integration layer.
-/// Manages terminal subprocesses — shared between ACP and MCP modes.
+/// Manages terminal subprocesses for the ACP TUI runtime.
 /// When a WtChannel is available, `create_terminal` creates real WT panes
 /// instead of headless subprocesses. All other operations (get_output,
 /// wait_for_exit, kill, release) are routed accordingly.
