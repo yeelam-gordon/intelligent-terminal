@@ -2961,7 +2961,47 @@ impl App {
                     }
                 }
                 KeyCode::Esc => {
-                    self.mode = AppMode::Setup;
+                    if self.setup.is_some() {
+                        // Go back to setup screen
+                        self.mode = AppMode::Setup;
+                    } else {
+                        // No setup to go back to (e.g. preflight auth failure) —
+                        // rebuild setup as AgentMissing for this agent
+                        let agent_id = self.auth.as_ref()
+                            .map(|a| a.agent_id.clone())
+                            .unwrap_or_default();
+                        if !agent_id.is_empty() {
+                            let all_agents = crate::agent_check::check_all_agents();
+                            let agent_status = crate::agent_check::check_agent(&agent_id);
+                            let profile = crate::agent_registry::lookup_profile_by_id(&agent_id);
+                            let reason = SetupReason::AgentError;
+                            let options = build_setup_options(&reason, Some(&agent_status), &all_agents);
+                            self.mode = AppMode::Setup;
+                            self.setup = Some(SetupState {
+                                reason,
+                                agents: Vec::new(),
+                                selected_index: 0,
+                                preflight: PreflightResult {
+                                    agent_id: agent_id.clone(),
+                                    display_name: profile.display_name.to_string(),
+                                    cli_status: CheckStatus::Passed,
+                                    cli_path: None,
+                                    auth_status: CheckStatus::Failed("Authentication failed".to_string()),
+                                    install_hint: profile.install_hint.to_string(),
+                                    install_url: String::new(),
+                                    auth_hint: profile.auth_hint.to_string(),
+                                },
+                                install_in_progress: false,
+                                install_log: Vec::new(),
+                                install_error: None,
+                                options,
+                                title: format!("{} needs sign-in", profile.display_name),
+                                subtitle: "Authentication is required to use this agent".to_string(),
+                            });
+                        } else {
+                            self.mode = AppMode::Chat;
+                        }
+                    }
                     self.auth = None;
                 }
                 _ => {}
