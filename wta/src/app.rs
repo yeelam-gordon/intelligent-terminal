@@ -211,8 +211,8 @@ pub fn build_setup_options(
                             hint: status.install_hint.clone(),
                         });
                     }
-                } else if !status.has_credential {
-                    // CLI found but no auth
+                } else if !status.has_credential || *reason == SetupReason::AgentError {
+                    // CLI found but auth missing or known to have failed
                     opts.push(SetupOption::SignIn {
                         agent_id: status.id.clone(),
                         display_name: status.display_name.clone(),
