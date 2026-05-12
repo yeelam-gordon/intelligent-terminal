@@ -1,5 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::queue;
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use ratatui::backend::CrosstermBackend;
 use ratatui::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -742,6 +744,13 @@ pub enum AppEvent {
     /// Posting via the main loop keeps `agent_sessions` access single-threaded
     /// and lets `tracing::*` calls emit on a stable thread.
     AgentSessionEvent(crate::agent_sessions::SessionEvent),
+    /// Historical agent sessions scanned off the main thread by a
+    /// `spawn_blocking` task wrapping `history_loader::load_all()`. Posted
+    /// instead of running the scan inline so a large `~/.copilot/session-state`
+    /// (hundreds of dirs, each with an `events.jsonl` to sniff) doesn't block
+    /// the LocalSet — which would otherwise stall `run_acp_client`,
+    /// the first frame, and therefore the user-visible "connecting" state.
+    HistoricalSessionsLoaded(Vec<crate::agent_sessions::AgentSession>),
 }
 
 // --- Per-tab session storage ---
@@ -1143,6 +1152,11 @@ pub struct App {
     /// session list itself is global; only the *picker view* (open state
     /// + selected row) lives per-tab on `TabSession`.
     pub agent_sessions: crate::agent_sessions::AgentSessionRegistry,
+    /// Tracks the lazy load of historical sessions. Flipped to Loading
+    /// on first F2; flipped to Loaded when `HistoricalSessionsLoaded`
+    /// arrives. The agents_view reads this to render a "Loading..."
+    /// row instead of an empty list during the scan.
+    pub history_load_state: HistoryLoadState,
     // Onboarding: signals main.rs to install agent hook plugins on demand.
     install_request_tx: Option<mpsc::UnboundedSender<()>>,
     /// Posts `AppEvent::AgentSessionEvent` from background callbacks
@@ -1183,6 +1197,32 @@ pub enum View {
 impl Default for View {
     fn default() -> Self {
         View::Chat
+    }
+}
+
+/// Lazy-load tracking for the historical `agent_sessions` registry.
+///
+/// `history_loader::load_all()` scans `~/.copilot/session-state`,
+/// `~/.claude/projects`, `~/.gemini/tmp` and reads `events.jsonl`
+/// from each Copilot session to sniff the wta-internal autofix
+/// fingerprint. On a populated machine that's hundreds of file
+/// opens — observed ~10 seconds.
+///
+/// Doing that eagerly on every wta spawn (including every model
+/// switch, which kills the old wta and starts a new one) is wasted
+/// work — the data is only consumed by the Agents view (F2). We
+/// defer the scan to the first F2 press and cache the result for
+/// the rest of this wta's lifetime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryLoadState {
+    NotStarted,
+    Loading,
+    Loaded,
+}
+
+impl Default for HistoryLoadState {
+    fn default() -> Self {
+        HistoryLoadState::NotStarted
     }
 }
 
@@ -1243,6 +1283,7 @@ impl App {
             tab_sessions,
             session_to_tab: HashMap::new(),
             agent_sessions: crate::agent_sessions::AgentSessionRegistry::new(),
+            history_load_state: HistoryLoadState::NotStarted,
             install_request_tx: None,
             agent_event_tx: None,
             #[cfg(test)]
@@ -1546,6 +1587,39 @@ impl App {
 
     pub fn set_event_tx(&mut self, tx: mpsc::UnboundedSender<AppEvent>) {
         self.event_tx = Some(tx);
+    }
+
+    /// First-call: spawn a blocking task to scan `~/.copilot`, `~/.claude`,
+    /// `~/.gemini` for historical agent sessions and merge the result into
+    /// `agent_sessions` via `AppEvent::HistoricalSessionsLoaded`. Subsequent
+    /// calls are no-ops — the registry is cached for this wta's lifetime.
+    ///
+    /// Called from the F2 toggle into the Agents view. Pre-F2 the scan
+    /// would be pure overhead — chat mode never reads historical entries —
+    /// and on a populated machine the scan is ~10s of disk I/O, so an
+    /// eager-load at startup would either block the LocalSet (slowing the
+    /// first agent_status event) or churn the disk on every model switch.
+    pub fn ensure_history_loaded(&mut self) {
+        if self.history_load_state != HistoryLoadState::NotStarted {
+            return;
+        }
+        let Some(tx) = self.event_tx.clone() else {
+            // No event channel yet — Setup mode at startup. The first F2
+            // press post-FRE will retry. Safe to leave state as NotStarted.
+            return;
+        };
+        self.history_load_state = HistoryLoadState::Loading;
+        tokio::task::spawn_blocking(move || {
+            let scan_started = std::time::Instant::now();
+            let sessions = crate::history_loader::load_all();
+            tracing::info!(
+                target: "history_loader",
+                count = sessions.len(),
+                elapsed_ms = scan_started.elapsed().as_millis() as u64,
+                "background history scan complete (lazy)"
+            );
+            let _ = tx.send(AppEvent::HistoricalSessionsLoaded(sessions));
+        });
     }
 
     fn spawn_login(&self, agent_id: &str, login_command: &str) {
@@ -2084,6 +2158,18 @@ impl App {
         ui::render(&mut frame, self);
         ui_trace::log_slow("ui_render", render_started.elapsed(), || self.trace_state());
 
+        // Wrap the whole frame in a synchronized-update boundary (CSI ? 2026
+        // h/l, supported by Windows Terminal). Without it, every cursor
+        // call in the ratatui-crossterm backend (`hide_cursor`,
+        // `show_cursor`, `set_cursor_position` — all `execute!`-based, see
+        // ratatui-crossterm lib.rs:288/292/303) flushes stdout on its own,
+        // so WT can render partial states between them — most visibly the
+        // brief cursor-hidden window during the shimmer redraw, which the
+        // eye reads as the inputbox cursor blinking at ~8Hz. Inside a sync
+        // block WT freezes rendering until End and paints the final state
+        // in a single frame.
+        queue!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
+
         let flush_started = std::time::Instant::now();
         terminal.flush()?;
         ui_trace::log_slow("terminal_flush", flush_started.elapsed(), || {
@@ -2091,18 +2177,22 @@ impl App {
         });
 
         let cursor_started = std::time::Instant::now();
-        match ui::input_cursor_position(self, area) {
-            Some(position) => {
-                terminal.show_cursor()?;
-                terminal.set_cursor_position(position)?;
-            }
-            None => {
-                terminal.hide_cursor()?;
-            }
+        if let Some(position) = ui::input_cursor_position(self, area) {
+            // Order matters: position first, then show. Showing first would
+            // briefly reveal the cursor wherever the flush left it (typically
+            // the last redrawn cell on the chat side) before the move lands.
+            // (Inside the sync block this is academic — WT won't render
+            // either intermediate — but the ordering also documents intent.)
+            terminal.set_cursor_position(position)?;
+            terminal.show_cursor()?;
+        } else {
+            terminal.hide_cursor()?;
         }
         ui_trace::log_slow("terminal_cursor", cursor_started.elapsed(), || {
             self.trace_state()
         });
+
+        queue!(terminal.backend_mut(), EndSynchronizedUpdate)?;
 
         terminal.swap_buffers();
 
@@ -2153,6 +2243,7 @@ impl App {
             AppEvent::LoginComplete { .. } => "login_complete",
             AppEvent::PreflightComplete(_) => "preflight_complete",
             AppEvent::AgentSessionEvent(_) => "agent_session_event",
+            AppEvent::HistoricalSessionsLoaded(_) => "historical_sessions_loaded",
         }
     }
 
@@ -2217,15 +2308,15 @@ impl App {
             }
             AppEvent::Tick => {
                 // Fan out across all tabs: a background tab with an in-flight
-                // prompt should keep its spinner advancing so when the user
-                // switches back the animation is in step. Must match
-                // ACTIVITY_HIGHLIGHT_WINDOWS.len() in ui/chat.rs.
+                // prompt should keep its shimmer phase advancing so when the
+                // user switches back the animation is in step.
                 for tab in self.tab_sessions.values_mut() {
                     if tab.prompt_in_flight
                         || tab.agent_streaming
                         || tab.progress_status.is_some()
                     {
-                        tab.activity_frame = (tab.activity_frame + 1) % 10;
+                        tab.activity_frame =
+                            (tab.activity_frame + 1) % crate::ui::ACTIVITY_CYCLE_FRAMES;
                     }
                 }
                 // Setup-mode spinner: ticks while we're showing the wizard
@@ -2568,6 +2659,15 @@ impl App {
                     "AgentSessionEvent posted from background callback"
                 );
                 self.agent_sessions.apply(ev);
+            }
+            AppEvent::HistoricalSessionsLoaded(sessions) => {
+                tracing::info!(
+                    target: "history_loader",
+                    count = sessions.len(),
+                    "historical sessions merged from background scan"
+                );
+                self.agent_sessions.merge_historical(sessions);
+                self.history_load_state = HistoryLoadState::Loaded;
             }
             AppEvent::WtEvent {
                 method,
@@ -2919,6 +3019,10 @@ impl App {
             AppEvent::Tick => self.has_activity_indicator() || self.show_notification_banner,
             AppEvent::AgentMessageChunk { .. } => true,
             AppEvent::DebugPipeMessage(_) => self.show_debug_panel,
+            // History only affects the Agents view; chat doesn't read it.
+            // A redraw is cheap enough that we don't bother gating on which
+            // view is showing — pay the one frame.
+            AppEvent::HistoricalSessionsLoaded(_) => true,
             _ => true,
         }
     }
@@ -3196,17 +3300,26 @@ impl App {
                 // tab — the active tab's TabSession holds the open state
                 // so other tabs are unaffected.
                 let has_sessions = !self.agent_sessions.iter_sorted().is_empty();
-                let tab = self.current_tab_mut();
-                tab.current_view = match tab.current_view {
-                    View::Chat => {
-                        // Seed selection on first open if there's anything to select.
-                        if tab.agents_list_state.selected().is_none() && has_sessions {
-                            tab.agents_list_state.select(Some(0));
+                let entering_agents = self.current_tab().current_view == View::Chat;
+                {
+                    let tab = self.current_tab_mut();
+                    tab.current_view = match tab.current_view {
+                        View::Chat => {
+                            // Seed selection on first open if there's anything to select.
+                            if tab.agents_list_state.selected().is_none() && has_sessions {
+                                tab.agents_list_state.select(Some(0));
+                            }
+                            View::Agents
                         }
-                        View::Agents
-                    }
-                    View::Agents => View::Chat,
-                };
+                        View::Agents => View::Chat,
+                    };
+                }
+                // Kick off the historical-sessions scan the first time the
+                // user actually asks to see the Agents view. No-op after
+                // the first call.
+                if entering_agents {
+                    self.ensure_history_loaded();
+                }
                 return;
             }
             KeyCode::F(12) => {
@@ -3635,11 +3748,17 @@ impl App {
                 // are immediately useful. Esc / F2 still close the view.
                 // Per-tab — only flips the active tab's view state.
                 let has_sessions = !self.agent_sessions.iter_sorted().is_empty();
-                let tab = self.current_tab_mut();
-                if tab.agents_list_state.selected().is_none() && has_sessions {
-                    tab.agents_list_state.select(Some(0));
+                {
+                    let tab = self.current_tab_mut();
+                    if tab.agents_list_state.selected().is_none() && has_sessions {
+                        tab.agents_list_state.select(Some(0));
+                    }
+                    tab.current_view = View::Agents;
                 }
-                tab.current_view = View::Agents;
+                // F2 path also kicks the lazy history scan here. Without this,
+                // /sessions left the registry empty and rendered a blank view
+                // forever (state stuck at NotStarted, no Loading row, no rows).
+                self.ensure_history_loaded();
             }
             CommandKind::Restart => {
                 // Full reconnect. Reset every tab: drop session_id (the
@@ -3766,14 +3885,7 @@ impl App {
         };
         let mut cmd = std::process::Command::new(exe);
         cmd.arg("delegate").arg(prompt);
-
-        // Pass pipe credentials from environment (set when agent pane was created).
-        if let Ok(pipe_name) = std::env::var("WT_PIPE_NAME") {
-            cmd.arg("--pipe-name").arg(&pipe_name);
-        }
-        if let Ok(token) = std::env::var("WT_MCP_TOKEN") {
-            cmd.arg("--pipe-token").arg(&token);
-        }
+        // The delegate child inherits WT_COM_CLSID from our env; no explicit pass needed.
 
         // Fire-and-forget: spawn hidden, don't wait.
         #[cfg(windows)]

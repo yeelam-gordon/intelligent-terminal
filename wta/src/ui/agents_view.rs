@@ -1,6 +1,6 @@
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style, Stylize},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
     Frame,
@@ -8,12 +8,14 @@ use ratatui::{
 use std::time::SystemTime;
 
 use crate::agent_sessions::{AgentSession, AgentSessionRegistry, AgentStatus};
+use crate::app::HistoryLoadState;
 
 pub fn render(
     f:    &mut Frame,
     area: Rect,
     reg:  &AgentSessionRegistry,
     list_state: &mut ListState,
+    history_load_state: HistoryLoadState,
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -30,9 +32,21 @@ pub fn render(
         )).collect::<Vec<_>>(),
         area_w = area.width,
         area_h = area.height,
+        load_state = ?history_load_state,
         "rendering agents view"
     );
-    let rows: Vec<ListItem> = sorted.into_iter().map(row_for).collect();
+    // While the lazy history scan is in flight, replace the whole list
+    // with a single high-visibility loading row. Showing live rows alongside
+    // a dim "loading…" hint led users to think the list was complete (only
+    // the 1 live session) and dismiss the view before the scan finished.
+    let rows: Vec<ListItem> = if history_load_state == HistoryLoadState::Loading {
+        vec![ListItem::new(Line::from(Span::styled(
+            "  Loading historical sessions… (first open scans ~hundreds of files)",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )))]
+    } else {
+        sorted.into_iter().map(row_for).collect()
+    };
     let list = List::new(rows)
         .block(block)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));

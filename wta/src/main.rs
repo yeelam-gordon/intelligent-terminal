@@ -20,6 +20,7 @@ mod ui_trace;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use crossterm::{
+    cursor::SetCursorStyle,
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     style::Print,
@@ -87,14 +88,6 @@ struct Cli {
     /// Output raw JSON instead of human-readable format
     #[arg(long, global = true)]
     json: bool,
-
-    /// Windows Terminal pipe name (overrides VT discovery and WT_PIPE_NAME env var)
-    #[arg(long, global = true)]
-    pipe_name: Option<String>,
-
-    /// Windows Terminal auth token (overrides WT_MCP_TOKEN env var, use with --pipe-name)
-    #[arg(long, global = true)]
-    pipe_token: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -102,7 +95,7 @@ enum Command {
     /// Show Windows Terminal protocol connection info
     Info,
 
-    /// Test pipe connection to Windows Terminal
+    /// Test protocol connection to Windows Terminal
     TestPipe,
 
     /// List all Windows Terminal windows
@@ -169,18 +162,6 @@ enum Command {
         command: Option<String>,
     },
 
-    /// Send keys to a pane (like tmux send-keys)
-    #[command(alias = "send")]
-    SendKeys {
-        /// Target pane ID (defaults to active pane)
-        #[arg(short = 't', long)]
-        target: Option<String>,
-
-        /// Keys to send (supports Enter, Space, C-c, Escape, Tab, BSpace, C-{letter})
-        #[arg(required = true, trailing_var_arg = true)]
-        keys: Vec<String>,
-    },
-
     /// Capture pane output (like tmux capture-pane -p)
     #[command(alias = "capturep")]
     CapturePane {
@@ -231,10 +212,10 @@ enum Command {
         timeout: u64,
     },
 
-    /// Discover and print the Windows Terminal pipe name and token
+    /// Discover and print the WT COM CLSID used for protocol routing
     PipeId,
 
-    /// Print shell commands to set WT_PIPE_NAME/WT_MCP_TOKEN environment variables
+    /// Print shell commands to set WT_COM_CLSID
     #[command(alias = "setenv")]
     SetEnv {
         /// Shell syntax: bash (default), powershell, cmd
@@ -271,21 +252,6 @@ enum Command {
         /// Working directory for the delegate agent tab
         #[arg(long)]
         cwd: Option<String>,
-    },
-
-    /// Show a quick-pick dialog in Windows Terminal and print the user's selection
-    QuickPick {
-        /// Choices to present (1 or more, all positional args)
-        #[arg(required = true)]
-        choices: Vec<String>,
-
-        /// Title/question shown above the choices
-        #[arg(long, default_value = "Select an option")]
-        title: String,
-
-        /// Allow freeform text input in addition to choices
-        #[arg(long)]
-        free_input: bool,
     },
 
     /// Manage the wt-agent-hooks bridge for supported CLI agents
@@ -344,34 +310,28 @@ impl HooksCliFilter {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Extract global pipe overrides for all code paths
-    let pipe_override = PipeOverride {
-        pipe_name: cli.pipe_name.clone(),
-        pipe_token: cli.pipe_token.clone(),
-    };
-
     // Legacy flags first (backward compat)
     if cli.test_pipe {
-        return run_test_pipe(&pipe_override).await;
+        return run_test_pipe().await;
     }
     if cli.info {
-        return run_info_mode(&pipe_override).await;
+        return run_info_mode().await;
     }
     let json_mode = cli.json;
 
     match cli.command {
         // Subcommand aliases for legacy modes
-        Some(Command::Info) => run_info_mode(&pipe_override).await,
-        Some(Command::TestPipe) => run_test_pipe(&pipe_override).await,
+        Some(Command::Info) => run_info_mode().await,
+        Some(Command::TestPipe) => run_test_pipe().await,
 
         // ── List commands ──
         Some(Command::ListWindows) => {
-            let result = wt_call(&pipe_override, "list_windows", json!({})).await?;
+            let result = wt_call("list_windows", json!({})).await?;
             print_output(&result, json_mode, format_windows_human);
             Ok(())
         }
         Some(Command::ListTabs { window_id }) => {
-            let channel = connect_channel(&pipe_override).await?;
+            let channel = connect_channel().await?;
             let wid = match window_id {
                 Some(id) => id,
                 None => get_first_window_id(&channel).await?,
@@ -386,7 +346,7 @@ async fn main() -> Result<()> {
             tab_id,
             window_id,
         }) => {
-            let channel = connect_channel(&pipe_override).await?;
+            let channel = connect_channel().await?;
             let tid = match tab_id {
                 Some(id) => id,
                 None => {
@@ -420,7 +380,7 @@ async fn main() -> Result<()> {
             if let Some(t) = title {
                 params["title"] = json!(t);
             }
-            let result = wt_call(&pipe_override, "create_tab", params).await?;
+            let result = wt_call("create_tab", params).await?;
             print_output(&result, json_mode, format_created_tab);
             Ok(())
         }
@@ -431,7 +391,7 @@ async fn main() -> Result<()> {
             size,
             command,
         }) => {
-            let channel = connect_channel(&pipe_override).await?;
+            let channel = connect_channel().await?;
             let pane_id = resolve_pane_id(&channel, &target).await?;
             let split_dir = if horizontal {
                 "horizontal"
@@ -455,20 +415,9 @@ async fn main() -> Result<()> {
             Ok(())
         }
 
-        // ── Send keys ──
-        Some(Command::SendKeys { target, keys }) => {
-            let channel = connect_channel(&pipe_override).await?;
-            let pane_id = resolve_pane_id(&channel, &target).await?;
-            let text = translate_keys(&keys);
-            channel
-                .request("send_input", json!({ "session_id": pane_id, "text": text }))
-                .await?;
-            Ok(())
-        }
-
         // ── Capture pane ──
         Some(Command::CapturePane { target, max_lines, last_prompt }) => {
-            let channel = connect_channel(&pipe_override).await?;
+            let channel = connect_channel().await?;
             let pane_id = resolve_pane_id(&channel, &target).await?;
             let mut params = json!({ "session_id": pane_id });
             if let Some(n) = max_lines {
@@ -488,7 +437,7 @@ async fn main() -> Result<()> {
 
         // ── Kill pane ──
         Some(Command::KillPane { target }) => {
-            let channel = connect_channel(&pipe_override).await?;
+            let channel = connect_channel().await?;
             let pane_id = resolve_pane_id(&channel, &target).await?;
             channel
                 .request("close_pane", json!({ "session_id": pane_id }))
@@ -501,14 +450,14 @@ async fn main() -> Result<()> {
 
         // ── Active pane ──
         Some(Command::ActivePane) => {
-            let result = wt_call(&pipe_override, "get_active_pane", json!({})).await?;
+            let result = wt_call("get_active_pane", json!({})).await?;
             print_output(&result, json_mode, format_active_pane);
             Ok(())
         }
 
         // ── Pane status ──
         Some(Command::PaneStatus { target }) => {
-            let channel = connect_channel(&pipe_override).await?;
+            let channel = connect_channel().await?;
             let pane_id = resolve_pane_id(&channel, &target).await?;
             let result = channel
                 .request("get_process_status", json!({ "session_id": pane_id }))
@@ -560,14 +509,10 @@ async fn main() -> Result<()> {
         }
 
         // ── Pipe discovery ──
-        Some(Command::PipeId) => {
-            run_pipe_id(&pipe_override, json_mode)
-        }
+        Some(Command::PipeId) => run_pipe_id(json_mode),
 
         // ── Set environment variables ──
-        Some(Command::SetEnv { shell }) => {
-            run_set_env(&pipe_override, &shell)
-        }
+        Some(Command::SetEnv { shell }) => run_set_env(&shell),
 
         // ── Delegate prompt to new tab agent ──
         Some(Command::Delegate {
@@ -577,42 +522,11 @@ async fn main() -> Result<()> {
             delegate_model,
             cwd,
         }) => {
-            run_delegate(&pipe_override, &prompt, &agent, delegate_agent.as_deref(), delegate_model.as_deref(), cwd.as_deref()).await
-        }
-
-        // ── Quick pick ──
-        Some(Command::QuickPick {
-            title,
-            choices,
-            free_input,
-        }) => {
-            let channel = connect_channel(&pipe_override).await?;
-            let choices_json: Vec<serde_json::Value> =
-                choices.iter().map(|c| serde_json::Value::String(c.clone())).collect();
-            let result = channel
-                .request(
-                    "quick_pick",
-                    json!({
-                        "title": title,
-                        "choices": choices_json,
-                        "allow_free_input": free_input,
-                    }),
-                )
-                .await?;
-            let cancelled = result.get("cancelled").and_then(|v| v.as_bool()).unwrap_or(false);
-            if cancelled {
-                std::process::exit(1);
-            }
-            if let Some(selected) = result.get("selected").and_then(|v| v.as_str()) {
-                println!("{}", selected);
-            }
-            Ok(())
+            run_delegate(&prompt, &agent, delegate_agent.as_deref(), delegate_model.as_deref(), cwd.as_deref()).await
         }
 
         // ── Listen for events ──
-        Some(Command::Listen { target }) => {
-            run_listen(&pipe_override, target.as_deref()).await
-        }
+        Some(Command::Listen { target }) => run_listen(target.as_deref()).await,
 
         // ── Manage agent hooks (install/status/uninstall) ──
         Some(Command::Hooks { action }) => match action {
@@ -622,7 +536,7 @@ async fn main() -> Result<()> {
         },
 
         // ── No subcommand = ACP TUI mode (default) ──
-        None => run_default_tui(cli, pipe_override).await,
+        None => run_default_tui(cli).await,
     }
 }
 
@@ -682,15 +596,15 @@ fn format_hooks_status_human(r: &agent_hooks_installer::StatusReport) {
     println!();
     for c in &r.clis {
         let summary = if !c.binary_on_path {
-            "✗ CLI not on PATH".to_string()
+            "\u{2717} CLI not on PATH".to_string()
         } else if c.plugin_installed && c.plugin_enabled && c.marketplace_path_valid {
-            "✓ installed".to_string()
+            "\u{2713} installed".to_string()
         } else if c.plugin_installed && !c.marketplace_path_valid {
-            "⚠ marketplace path stale".to_string()
+            "\u{26a0} marketplace path stale".to_string()
         } else if c.plugin_installed {
-            "⚠ installed but disabled".to_string()
+            "\u{26a0} installed but disabled".to_string()
         } else {
-            "✗ not installed".to_string()
+            "\u{2717} not installed".to_string()
         };
         let detail = format!(
             "marketplace={}, path_valid={}, plugin={}, enabled={}{}",
@@ -731,7 +645,7 @@ fn format_hooks_uninstall_human(r: &agent_hooks_installer::UninstallReport) {
         };
         println!("  {:<10} {}", c.name, summary);
         for m in &c.messages {
-            println!("    · {}", m);
+            println!("    \u{00b7} {}", m);
         }
     }
 }
@@ -740,48 +654,19 @@ fn yn(b: bool) -> &'static str {
     if b { "yes" } else { "no" }
 }
 
-// ─── Pipe override (CLI --pipe-name / --pipe-token) ─────────────────────────
+// ─── Helper: connect to WT COM protocol (no debug channel, no ShellManager) ─────────
 
-#[derive(Debug, Clone)]
-struct PipeOverride {
-    pipe_name: Option<String>,
-    pipe_token: Option<String>,
-}
-
-/// Resolve pipe connection info. Priority: CLI args > VT discovery > env vars.
-fn resolve_pipe_info(po: &PipeOverride) -> Option<shell::wt_channel::ConnectionInfo> {
-    use shell::wt_channel::{ConnectionInfo, DiscoverySource, discover_connection_info};
-
-    // 1. CLI override — highest priority. Reuse ComClsid as the discovery
-    // tag for explicit overrides (the legacy EnvVar variant is gone).
-    if let Some(ref name) = po.pipe_name {
-        return Some(ConnectionInfo {
-            pipe_name: name.clone(),
-            token: po.pipe_token.clone().unwrap_or_default(),
-            source: DiscoverySource::ComClsid,
-        });
-    }
-
-    // 2. VT discovery + env var fallback
-    discover_connection_info()
-}
-
-// ─── Helper: connect to WT pipe (no debug channel, no ShellManager) ─────────
-
-async fn connect_channel(po: &PipeOverride) -> Result<CliChannel> {
-    if let Some(info) = resolve_pipe_info(po) {
-        return CliChannel::connect_with(&info.pipe_name, &info.token).await;
-    }
-    bail!("Cannot find Windows Terminal pipe. Use --pipe-name or set WT_PIPE_NAME.");
+async fn connect_channel() -> Result<CliChannel> {
+    CliChannel::connect().await
 }
 
 /// Single-shot: connect + call + return JSON
-async fn wt_call(po: &PipeOverride, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
-    let channel = connect_channel(po).await?;
+async fn wt_call(method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+    let channel = connect_channel().await?;
     channel.request(method, params).await
 }
 
-/// Resolve -t target: Some(id) → use it, None → get_active_pane fallback
+/// Resolve -t target: Some(id) -> use it, None -> get_active_pane fallback
 async fn resolve_pane_id(channel: &CliChannel, target: &Option<String>) -> Result<String> {
     match target {
         Some(id) => Ok(id.clone()),
@@ -828,45 +713,6 @@ async fn get_first_tab_id(channel: &CliChannel, window_id: &str) -> Result<Strin
             _ => None,
         })
         .ok_or_else(|| anyhow::anyhow!("No tabs found in window {}", window_id))
-}
-
-/// Translate tmux key names to actual characters.
-///
-/// Handles: Enter, Space, Escape, Tab, BSpace, C-c, C-d, C-{letter}
-/// Bare strings are passed through as-is (so "echo hello" Enter becomes "echo hello\r").
-fn translate_keys(keys: &[String]) -> String {
-    let mut out = String::new();
-    for key in keys {
-        match key.as_str() {
-            "Enter" | "CR" => out.push('\r'),
-            "Space" => out.push(' '),
-            "Escape" | "Esc" => out.push('\x1b'),
-            "Tab" => out.push('\t'),
-            "BSpace" | "Backspace" => out.push('\x08'),
-            "C-c" => out.push('\x03'),
-            "C-d" => out.push('\x04'),
-            "C-z" => out.push('\x1a'),
-            "C-l" => out.push('\x0c'),
-            "C-a" => out.push('\x01'),
-            "C-e" => out.push('\x05'),
-            "C-k" => out.push('\x0b'),
-            "C-u" => out.push('\x15'),
-            "C-w" => out.push('\x17'),
-            other => {
-                // Generic C-{letter} pattern
-                if other.len() == 3
-                    && other.starts_with("C-")
-                    && other.as_bytes()[2].is_ascii_alphabetic()
-                {
-                    let letter = other.as_bytes()[2].to_ascii_lowercase();
-                    out.push((letter & 0x1f) as char);
-                } else {
-                    out.push_str(other);
-                }
-            }
-        }
-    }
-    out
 }
 
 // ─── Output helpers ─────────────────────────────────────────────────────────
@@ -1033,61 +879,39 @@ fn json_str_or_num(val: &serde_json::Value, key: &str) -> String {
     }
 }
 
-// ─── pipe-id / set-env commands ─────────────────────────────────────────────
+// ─── pipe-id / set-env: surface the inherited WT_COM_CLSID env var ─────────
 
-fn run_pipe_id(po: &PipeOverride, json_mode: bool) -> Result<()> {
-    match resolve_pipe_info(po) {
-        Some(info) => {
-            if json_mode {
-                let val = json!({
-                    "pipe_name": info.pipe_name,
-                    "token_set": !info.token.is_empty(),
-                    "source": format!("{:?}", info.source),
-                });
-                println!("{}", serde_json::to_string_pretty(&val)?);
-            } else {
-                println!("{}", info.pipe_name);
-            }
-            Ok(())
-        }
-        None => {
-            bail!("Cannot discover pipe. Use --pipe-name or set WT_PIPE_NAME, or run inside Windows Terminal.");
-        }
+fn run_pipe_id(json_mode: bool) -> Result<()> {
+    let clsid = std::env::var("WT_COM_CLSID")
+        .map_err(|_| anyhow::anyhow!("WT_COM_CLSID not set. Run inside a Windows Terminal pane."))?;
+    if json_mode {
+        let val = json!({ "connection_id": clsid, "env": "WT_COM_CLSID" });
+        println!("{}", serde_json::to_string_pretty(&val)?);
+    } else {
+        println!("{}", clsid);
     }
+    Ok(())
 }
 
-fn run_set_env(po: &PipeOverride, shell_type: &str) -> Result<()> {
-    let info = resolve_pipe_info(po).ok_or_else(|| {
-        anyhow::anyhow!("Cannot discover pipe. Use --pipe-name or set WT_PIPE_NAME, or run inside Windows Terminal.")
-    })?;
+fn run_set_env(shell_type: &str) -> Result<()> {
+    let clsid = std::env::var("WT_COM_CLSID")
+        .map_err(|_| anyhow::anyhow!("WT_COM_CLSID not set. Run inside a Windows Terminal pane."))?;
 
     match shell_type {
         "bash" | "sh" | "zsh" => {
-            println!("export WT_PIPE_NAME='{}'", info.pipe_name);
-            if !info.token.is_empty() {
-                println!("export WT_MCP_TOKEN='{}'", info.token);
-            }
+            println!("export WT_COM_CLSID='{}'", clsid);
             eprintln!("# Run: eval \"$(wta set-env)\"");
         }
         "powershell" | "pwsh" | "ps" => {
-            println!("$env:WT_PIPE_NAME = '{}'", info.pipe_name);
-            if !info.token.is_empty() {
-                println!("$env:WT_MCP_TOKEN = '{}'", info.token);
-            }
+            println!("$env:WT_COM_CLSID = '{}'", clsid);
             eprintln!("# Run: wta set-env -s powershell | Invoke-Expression");
         }
         "cmd" => {
-            println!("set WT_PIPE_NAME={}", info.pipe_name);
-            if !info.token.is_empty() {
-                println!("set WT_MCP_TOKEN={}", info.token);
-            }
+            println!("set WT_COM_CLSID={}", clsid);
             eprintln!("REM Run in a for /f loop or copy-paste");
         }
         "fish" => {
-            println!("set -gx WT_PIPE_NAME '{}'", info.pipe_name);
-            if !info.token.is_empty() {
-                println!("set -gx WT_MCP_TOKEN '{}'", info.token);
-            }
+            println!("set -gx WT_COM_CLSID '{}'", clsid);
             eprintln!("# Run: wta set-env -s fish | source");
         }
         other => {
@@ -1100,8 +924,8 @@ fn run_set_env(po: &PipeOverride, shell_type: &str) -> Result<()> {
 
 // ─── Listen mode ────────────────────────────────────────────────────────────
 
-async fn run_listen(po: &PipeOverride, pane_filter: Option<&str>) -> Result<()> {
-    let channel = connect_channel(po).await?;
+async fn run_listen(pane_filter: Option<&str>) -> Result<()> {
+    let channel = connect_channel().await?;
     let arc_channel = std::sync::Arc::new(channel);
 
     // Subscribe to events and start the background reader.
@@ -1144,7 +968,6 @@ async fn run_listen(po: &PipeOverride, pane_filter: Option<&str>) -> Result<()> 
 // ─── Delegate prompt to new tab agent ────────────────────────────────────────
 
 async fn run_delegate(
-    po: &PipeOverride,
     prompt: &str,
     agent_cmd: &str,
     delegate_agent_cmd: Option<&str>,
@@ -1155,9 +978,9 @@ async fn run_delegate(
     tracing::info!(prompt, agent = agent_cmd, cwd, "run_delegate started");
 
     let (debug_tx, _) = tokio::sync::mpsc::unbounded_channel::<app::DebugMessage>();
-    let channel = match connect_to_wt_pipe(po, debug_tx).await {
-        Ok(ch) => { tracing::info!("pipe connected"); ch }
-        Err(e) => { tracing::warn!(error = %e, "pipe FAILED"); return Err(e); }
+    let channel = match connect_to_wt_protocol(debug_tx).await {
+        Ok(ch) => { tracing::info!("WT protocol connected"); ch }
+        Err(e) => { tracing::warn!(error = %e, "WT protocol connection FAILED"); return Err(e); }
     };
     let shell_mgr = ShellManager::new()
         .with_wt_channel(Arc::new(channel) as Arc<dyn shell::wt_channel::WtChannel>);
@@ -1232,24 +1055,24 @@ async fn delegate_with_context(
 
 // ─── Default ACP TUI mode ───────────────────────────────────────────────────
 
-async fn run_default_tui(cli: Cli, po: PipeOverride) -> Result<()> {
+async fn run_default_tui(cli: Cli) -> Result<()> {
     let _guard = logging::init("main");
     tracing::info!("=== run_default_tui started ===");
 
-    // Debug channel for TUI debug panel (pipe traffic viewer)
+    // Debug channel for TUI debug panel (WT protocol traffic viewer)
     let (debug_tx, debug_rx) = tokio::sync::mpsc::unbounded_channel::<app::DebugMessage>();
 
-    // Try to connect to the Windows Terminal pipe.
+    // Try to connect to the Windows Terminal protocol.
     let mut shell_mgr = ShellManager::new();
     let mut wt_event_rx = None;
-    let mut wt_pipe_channel: Option<Arc<CliChannel>> = None;
-    let wt_connected = match connect_to_wt_pipe(&po, debug_tx.clone()).await {
+    let mut wt_protocol_channel: Option<Arc<CliChannel>> = None;
+    let wt_connected = match connect_to_wt_protocol(debug_tx.clone()).await {
         Ok(channel) => {
-            tracing::info!("Connected to WT pipe OK — subscribing to events");
+            tracing::info!("Connected to WT COM protocol — subscribing to events");
             // Subscribe to push events before wrapping in Arc.
             wt_event_rx = Some(channel.subscribe_events());
             let cli_arc = Arc::new(channel);
-            wt_pipe_channel = Some(Arc::clone(&cli_arc));
+            wt_protocol_channel = Some(Arc::clone(&cli_arc));
 
             // If WT inherited a duplex pipe pair into our process via
             // STARTUPINFOEX HANDLE_LIST, prefer it for the methods it carries
@@ -1299,7 +1122,7 @@ async fn run_default_tui(cli: Cli, po: PipeOverride) -> Result<()> {
             true
         }
         Err(e) => {
-            tracing::warn!(error = %e, "NO WT pipe");
+            tracing::warn!(error = %e, "NO WT protocol connection");
             false
         }
     };
@@ -1312,7 +1135,7 @@ async fn run_default_tui(cli: Cli, po: PipeOverride) -> Result<()> {
         None
     };
 
-    run_acp_tui_mode(cli, shell_mgr, wt_connected, debug_rx, pane_identity, wt_event_rx, wt_pipe_channel).await
+    run_acp_tui_mode(cli, shell_mgr, wt_connected, debug_rx, pane_identity, wt_event_rx, wt_protocol_channel).await
 }
 
 // ─── Existing functions (preserved) ─────────────────────────────────────────
@@ -1362,20 +1185,31 @@ async fn run_acp_tui_mode(
     debug_rx: tokio::sync::mpsc::UnboundedReceiver<app::DebugMessage>,
     pane_identity: Option<(String, String, String)>,
     wt_event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>>,
-    wt_pipe_channel: Option<Arc<CliChannel>>,
+    wt_protocol_channel: Option<Arc<CliChannel>>,
 ) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     execute!(stdout, Print("\x1b]11;#0c0c0c\x07"))?;
+    // Steady block (DECSCUSR Ps=2): solid filled rectangle, no blink.
+    // Survives the alt-screen swap; restored on exit below.
+    execute!(stdout, SetCursorStyle::SteadyBlock)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result =
-        run_acp_app(&mut terminal, cli, shell_mgr, wt_connected, debug_rx, pane_identity, wt_event_rx, wt_pipe_channel).await;
+        run_acp_app(&mut terminal, cli, shell_mgr, wt_connected, debug_rx, pane_identity, wt_event_rx, wt_protocol_channel).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), Print("\x1b]111\x07"), DisableMouseCapture, LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        SetCursorStyle::DefaultUserShape,
+        // OSC 111: reset bg to terminal default so the host shell isn't
+        // left with our override.
+        Print("\x1b]111\x07"),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
 
     if let Err(e) = result {
@@ -1385,11 +1219,11 @@ async fn run_acp_tui_mode(
     Ok(())
 }
 
-async fn run_test_pipe(po: &PipeOverride) -> Result<()> {
+async fn run_test_pipe() -> Result<()> {
     use shell::wt_channel::WtChannel;
 
-    println!("Connecting to Windows Terminal pipe...");
-    let channel = connect_channel(po).await?;
+    println!("Connecting to Windows Terminal protocol...");
+    let channel = connect_channel().await?;
     println!("Connected and authenticated!\n");
 
     let result: serde_json::Value = channel
@@ -1407,58 +1241,36 @@ async fn run_test_pipe(po: &PipeOverride) -> Result<()> {
     Ok(())
 }
 
-/// Try to connect to the WT pipe using CLI override, VT discovery, or env var fallback.
-async fn connect_to_wt_pipe(
-    po: &PipeOverride,
+/// Try to connect to the WT protocol via the inherited WT_COM_CLSID env var.
+async fn connect_to_wt_protocol(
     debug_tx: tokio::sync::mpsc::UnboundedSender<app::DebugMessage>,
 ) -> Result<shell::wt_channel::CliChannel> {
     use shell::wt_channel::CliChannel;
-
-    if let Some(info) = resolve_pipe_info(po) {
-        eprintln!(
-            "[wta] Discovered pipe via {:?}: {}",
-            info.source, info.pipe_name
-        );
-        let channel = CliChannel::connect_with(&info.pipe_name, &info.token).await?;
-        return Ok(channel.with_debug_sender(debug_tx));
-    }
-
-    bail!("Cannot find Windows Terminal pipe. Use --pipe-name or set WT_PIPE_NAME.");
+    let channel = CliChannel::connect().await?;
+    Ok(channel.with_debug_sender(debug_tx))
 }
 
 /// Show Windows Terminal protocol connection info and pane identity.
-async fn run_info_mode(po: &PipeOverride) -> Result<()> {
-    use shell::wt_channel::{DiscoverySource, WtChannel};
+async fn run_info_mode() -> Result<()> {
+    use shell::wt_channel::WtChannel;
 
     println!("Windows Terminal Protocol Info");
     println!("========================================");
 
-    let info = match resolve_pipe_info(po) {
-        Some(info) => info,
-        None => {
+    let clsid = match std::env::var("WT_COM_CLSID") {
+        Ok(v) => v,
+        Err(_) => {
             println!("  Status: Not running inside Windows Terminal");
-            println!("  (No VT response, WT_PIPE_NAME not set, no --pipe-name)");
+            println!("  (WT_COM_CLSID not set)");
             return Ok(());
         }
     };
 
-    let source_str = match info.source {
-        DiscoverySource::VtOsc => "VT OSC discovery",
-        DiscoverySource::ComClsid => "WT_COM_CLSID env var",
-        DiscoverySource::InheritedPipe => "inherited pipe (WT_PROTOCOL_PIPE_R/W)",
-    };
-    let token_display = if info.token.is_empty() {
-        "(dev bypass)"
-    } else {
-        "(set)"
-    };
-
-    println!("  Pipe:   {}", info.pipe_name);
-    println!("  Token:  {}", token_display);
-    println!("  Source: {}", source_str);
+    println!("  COM CLSID: {}", clsid);
+    println!("  Source: WT_COM_CLSID env var");
     println!();
 
-    let channel = match CliChannel::connect_with(&info.pipe_name, &info.token).await {
+    let channel = match CliChannel::connect().await {
         Ok(ch) => ch,
         Err(e) => {
             println!("  Connection failed: {}", e);
@@ -1566,7 +1378,7 @@ async fn run_acp_app(
     mut debug_rx: tokio::sync::mpsc::UnboundedReceiver<app::DebugMessage>,
     pane_identity: Option<(String, String, String)>,
     wt_event_rx: Option<tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>>,
-    wt_pipe_channel: Option<Arc<CliChannel>>,
+    wt_protocol_channel: Option<Arc<CliChannel>>,
 ) -> Result<()> {
     let agent_cmd = cli.agent.clone();
 
@@ -1586,14 +1398,14 @@ async fn run_acp_app(
                 }
             });
 
-            // Start the background pipe reader and trigger lazy event registration.
-            // start_reader() splits the pipe and must complete before any requests.
+            // Start the background protocol reader and trigger lazy event registration.
+            // start_reader() claims stdout/stderr streams and must complete before any requests.
             // get_capabilities triggers _ensurePageEventsRegistered() on the WT server.
-            if let Some(ref pipe_ch) = wt_pipe_channel {
+            if let Some(ref protocol_ch) = wt_protocol_channel {
                 tracing::info!("start_reader: starting...");
-                pipe_ch.start_reader().await;
+                protocol_ch.start_reader().await;
                 tracing::info!("start_reader: done, sending get_capabilities...");
-                match pipe_ch.request("get_capabilities", serde_json::json!({})).await {
+                match protocol_ch.request("get_capabilities", serde_json::json!({})).await {
                     Ok(v) => tracing::info!(result = %v, "get_capabilities OK"),
                     Err(e) => tracing::warn!(error = %e, "get_capabilities FAILED"),
                 }
@@ -1601,7 +1413,7 @@ async fn run_acp_app(
                 tracing::warn!("no wt_pipe_channel — events won't work");
             }
 
-            // Background WT event reader: forwards push events from the pipe to the TUI.
+            // Background WT event reader: forwards push events from the protocol channel to the TUI.
             if let Some(mut wt_rx) = wt_event_rx {
                 tracing::info!("wt_event_rx: starting background reader task");
                 let wt_event_tx = event_tx.clone();
@@ -1748,13 +1560,18 @@ async fn run_acp_app(
             // ResumePaneAssigned) back into the event loop.
             app_state.set_agent_event_tx(event_tx.clone());
 
-            // ── seed Agents view from on-disk history ─────────────────────
-            // history_loader scans Claude/Copilot/Gemini per-CLI session
-            // dirs and returns historical AgentSession rows. merge_historical
-            // inserts only those whose key isn't already live.
-            app_state
-                .agent_sessions
-                .merge_historical(history_loader::load_all());
+            // NOTE: historical agent sessions used to be loaded here via
+            // `history_loader::load_all()` (later as a `spawn_blocking`).
+            // That work is now deferred — the registry is scanned lazily
+            // on the first F2 press via `App::ensure_history_loaded()`.
+            //
+            // Why: load_all() is hundreds of file opens (one per Copilot
+            // session-state dir, reading events.jsonl for the autofix
+            // fingerprint). On a populated machine it's ~10s of disk I/O.
+            // Every wta spawn — including every model switch in the agent
+            // pane — paid that cost, even though the data is only ever
+            // consumed by the Agents view. Lazy-loading on F2 keeps the
+            // model-switch path free of this overhead entirely.
 
             // Enter setup mode if --setup <reason> was passed.
             tracing::info!("cli.setup = {:?}", cli.setup);

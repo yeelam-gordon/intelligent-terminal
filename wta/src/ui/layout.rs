@@ -51,7 +51,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if app.current_tab().current_view == View::Agents {
         let tab_id = app.tab_id.as_deref().unwrap_or(DEFAULT_TAB_ID).to_string();
         let tab = app.tab_sessions.entry(tab_id).or_default();
-        agents_view::render(frame, area, &app.agent_sessions, &mut tab.agents_list_state);
+        agents_view::render(frame, area, &app.agent_sessions, &mut tab.agents_list_state, app.history_load_state);
         return;
     }
 
@@ -123,6 +123,17 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 pub fn input_cursor_position(app: &App, area: Rect) -> Option<Position> {
     // Agents view / Setup view: no input box, so no cursor.
     if app.current_tab().current_view == View::Agents || app.mode == AppMode::Setup {
+        return None;
+    }
+
+    // Placeholder state: the input box renders its own static white-bg /
+    // black-fg cell at the prompt position (see ui::input::render). Hide
+    // the real terminal cursor so WT doesn't overlay its focused-pane
+    // block on top — that block fully replaces the cell content and would
+    // hide the painted glyph (in unfocused panes WT draws a hollow outline
+    // and the cell shows through, which is what we already get for free
+    // by hiding the cursor in both focus states).
+    if app.current_tab().input.is_empty() {
         return None;
     }
 
