@@ -216,6 +216,9 @@ jobs:
 
       [source.crates-io]
       replace-with = "WindowsTerminalCargo"
+
+      [source.WindowsTerminalCargo]
+      registry = "sparse+https://pkgs.dev.azure.com/microsoft/Dart/_packaging/sudo_public_cargo/Cargo/index/"
       "@ | Set-Content "$configDir/config.toml" -Encoding utf8NoBOM
     displayName: Create Cargo registry config (CI only)
 
@@ -251,6 +254,19 @@ jobs:
       }
       if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
     displayName: Build wta (Cargo)
+
+  - pwsh: |-
+      $ErrorActionPreference = 'Stop'
+      $triple = switch ('$(BuildPlatform)') {
+        'x64'   { 'x86_64-pc-windows-msvc' }
+        'x86'   { 'i686-pc-windows-msvc' }
+        'arm64' { 'aarch64-pc-windows-msvc' }
+        default { 'x86_64-pc-windows-msvc' }
+      }
+      Write-Host "Running wta unit tests for $triple"
+      cargo test --manifest-path wta/Cargo.toml --target $triple --frozen
+      if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
+    displayName: Test wta (Cargo)
 
   - template: .\steps-install-vcpkg.yml
 
