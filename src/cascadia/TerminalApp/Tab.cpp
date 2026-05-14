@@ -9,6 +9,7 @@
 #include "Utils.h"
 #include "AppLogic.h"
 #include "../../types/inc/ColorFix.hpp"
+#include "../../types/inc/utils.hpp"
 
 using namespace winrt;
 using namespace winrt::Windows::UI::Xaml;
@@ -34,6 +35,8 @@ namespace winrt::TerminalApp::implementation
     {
         _rootPane = rootPane;
         _activePane = nullptr;
+
+        _stableId = winrt::hstring{ ::Microsoft::Console::Utils::GuidToString(::Microsoft::Console::Utils::CreateGuid()) };
 
         _closePaneMenuItem.Visibility(WUX::Visibility::Collapsed);
 

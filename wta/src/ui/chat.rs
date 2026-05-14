@@ -34,8 +34,21 @@ const MAX_RENDER_LINE_CHARS: usize = 4096;
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let render_started = std::time::Instant::now();
+
+    // Pin the activity indicator to a dedicated bottom row when active so a
+    // long user prompt that wraps past the chat height can never push it
+    // off-screen. The remaining rows scroll normally.
+    let activity_line = build_activity_line(app);
+    let (chat_area, activity_area) = match (&activity_line, area.height) {
+        (Some(_), h) if h > 0 => (
+            Rect { height: h - 1, ..area },
+            Some(Rect { x: area.x, y: area.y + h - 1, width: area.width, height: 1 }),
+        ),
+        _ => (area, None),
+    };
+
     let inner = Block::default().borders(Borders::NONE);
-    let inner_area = inner.inner(area);
+    let inner_area = inner.inner(chat_area);
     let visible_height = inner_area.height as usize;
     let wrap_width = inner_area.width as usize;
     let requested_lines = visible_height
@@ -43,10 +56,6 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         .saturating_add(32);
 
     let mut reversed_lines: Vec<Line> = Vec::new();
-
-    if let Some(activity_line) = build_activity_line(app) {
-        reversed_lines.push(activity_line);
-    }
 
     let mut pending_lines = build_pending_stream_lines(app);
     reversed_lines.extend(pending_lines.drain(..).rev());
@@ -86,7 +95,11 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         .wrap(Wrap { trim: false })
         .scroll((scroll as u16, 0));
 
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, chat_area);
+
+    if let (Some(line), Some(act_area)) = (activity_line, activity_area) {
+        frame.render_widget(Paragraph::new(line), act_area);
+    }
 
     // Update the scroll bound only when the build saw all of history;
     // otherwise the true max is still unknown and the stored value (possibly

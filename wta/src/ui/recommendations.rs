@@ -10,10 +10,14 @@ use crate::theme;
 /// when we paint.
 ///
 /// Cards are positioned in a virtual canvas (stacked top-to-bottom by their
-/// natural heights), then shifted up by `rec_scroll`. We don't render partial
-/// cards: a card is drawn iff its top has scrolled into view AND its full
-/// body fits above the hint line. The hint always occupies the panel's last
-/// row.
+/// natural heights), then shifted up by `rec_scroll`. The hint always
+/// occupies the panel's last row.
+///
+/// Cards taller than the remaining cards region render **truncated** at the
+/// height that fits — `render_card` lets cassowary squash the inner content
+/// area, so the user keeps the border, button, and as many content rows as
+/// fit. This avoids the previous "tall card in squashed pane → nothing
+/// renders" failure mode.
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let Some(recs) = app.current_tab().recommendations.as_ref() else { return };
     if area.width == 0 || area.height == 0 {
@@ -27,16 +31,18 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     for (idx, choice) in recs.choices.iter().enumerate() {
         let h = rec_card_height(choice, area.width);
         if canvas_top >= rec_scroll {
-            let card_h = h.saturating_sub(1) as u16; // last row is inter-card gap
+            let card_h = h.saturating_sub(1) as u16; // last canvas row is inter-card gap
             let y = area.y + (canvas_top - rec_scroll) as u16;
-            if y + card_h > cards_bottom {
-                break; // would overlap the hint row
+            let available = cards_bottom.saturating_sub(y);
+            if available < 4 {
+                break; // render_card bails below 4 — nothing useful to draw
             }
+            let render_h = card_h.min(available);
             let card_area = Rect {
                 x: area.x.saturating_add(2),
                 y,
                 width: area.width.saturating_sub(4),
-                height: card_h,
+                height: render_h,
             };
             render_card(frame, app, card_area, choice, idx);
         }

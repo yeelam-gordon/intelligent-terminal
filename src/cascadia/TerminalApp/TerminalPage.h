@@ -378,7 +378,13 @@ namespace winrt::TerminalApp::implementation
         // (autofix triggers, prompt deliveries, ...) to the right TabSession.
         // Deduped against _lastNotifiedAgentTabId so we only emit on change.
         void _NotifyAgentTabChanged(const winrt::com_ptr<Tab>& targetTab);
-        std::optional<uint32_t> _lastNotifiedAgentTabId{};
+        // Tells wta that a tab is being destroyed so it can drop the matching
+        // TabSession and any session_to_tab entries pointing at it. Without
+        // this, the per-tab conversation history would leak across newly
+        // created tabs that reuse the closed tab's stable id (it doesn't, but
+        // the registry would still grow unboundedly).
+        void _NotifyAgentTabClosed(const winrt::hstring& tabId);
+        std::optional<winrt::hstring> _lastNotifiedAgentTabId{};
 
         // Tracks whether the agent pane is currently displaying its Agents
         // (session list) view. Drives Ctrl+Shift+/ toggle semantics: when

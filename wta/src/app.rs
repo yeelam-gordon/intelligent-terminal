@@ -2785,6 +2785,17 @@ impl App {
                     return;
                 }
 
+                if method == "tab_closed" {
+                    if let Some(closed_tab_id) =
+                        params.get("tab_id").and_then(|v| v.as_str())
+                    {
+                        self.drop_tab_session(closed_tab_id);
+                    } else {
+                        tracing::warn!(target: "tab_session", "tab_closed: missing tab_id in params");
+                    }
+                    return;
+                }
+
                 // set_view: WT broadcasts this from Ctrl+Shift+/ (or any
                 // future "open agent pane in <view>" action) to switch the
                 // active TabSession's TUI view. Absolute (not toggle).
@@ -3876,25 +3887,16 @@ impl App {
 
     /// Height of the recommendations panel — grows to fit content, capped so
     /// input (3) and chat (≥3) still have room, but floored at
-    /// `recommended_card_h + 1` so the recommended card is always fully
-    /// renderable (`render_card` bails when raw height < 4). The floor wins
-    /// when the cap would otherwise hide every card.
+    /// `tallest_card_h + 1` so any card is fully renderable when scrolled to.
+    /// Using the tallest (not just the recommended) means Down/Up navigation
+    /// never lands on a card too tall for the panel. The floor wins when the
+    /// cap would otherwise hide a card.
     pub fn rec_panel_height(&self) -> u16 {
         let Some(recs) = self.current_tab().recommendations.as_ref() else { return 0 };
         let w = self.terminal_cols;
-        let total: u16 = recs
-            .choices
-            .iter()
-            .map(|c| rec_card_height(c, w) as u16)
-            .sum::<u16>()
-            .saturating_add(1); // hint line
-        let rec_idx = crate::coordinator::recommended_choice_index(recs);
-        let floor = recs
-            .choices
-            .get(rec_idx)
-            .map(|c| rec_card_height(c, w) as u16)
-            .unwrap_or(7)
-            .saturating_add(1); // + hint
+        let card_heights = recs.choices.iter().map(|c| rec_card_height(c, w) as u16);
+        let total = card_heights.clone().sum::<u16>().saturating_add(1); // + hint
+        let floor = card_heights.max().unwrap_or(7).saturating_add(1); // + hint
         let ceiling = self.terminal_rows.saturating_sub(6);
         total.min(ceiling).max(floor)
     }
@@ -3946,6 +3948,24 @@ impl App {
     /// stays exactly where it was.
     fn switch_tab_session(&mut self, new_tab_id: String) {
         let old_tab = self.tab_id.clone();
+
+        // First-ever tab_changed since process start: WT now sends a stable
+        // GUID, but the App seeded `DEFAULT_TAB_ID` ("0") and AgentConnected
+        // already wired session_to_tab → "0". Without migration, the GUID
+        // would get a fresh empty TabSession while chunks still routed into
+        // "0", and the chat area would render blank. Move the implicit
+        // default-tab state under the GUID key once we know what to call it.
+        if old_tab.is_none() && new_tab_id != DEFAULT_TAB_ID {
+            if let Some(default_session) = self.tab_sessions.remove(DEFAULT_TAB_ID) {
+                self.tab_sessions.insert(new_tab_id.clone(), default_session);
+            }
+            for tab in self.session_to_tab.values_mut() {
+                if tab == DEFAULT_TAB_ID {
+                    *tab = new_tab_id.clone();
+                }
+            }
+        }
+
         let entry = self.tab_sessions.entry(new_tab_id.clone()).or_default();
         tracing::info!(
             target: "tab_session",
@@ -3956,6 +3976,43 @@ impl App {
             "switch_tab_session"
         );
         self.tab_id = Some(new_tab_id);
+    }
+
+    /// Drop the per-tab state for a tab that WT has just destroyed. Removes
+    /// the matching `TabSession` and prunes any `session_to_tab` entries
+    /// that pointed at it (so a future SessionId reuse can't route into the
+    /// dead tab's slot). Refuses to drop `DEFAULT_TAB_ID` since the App
+    /// always needs at least one materialized tab to render.
+    fn drop_tab_session(&mut self, closed_tab_id: &str) {
+        if closed_tab_id == DEFAULT_TAB_ID {
+            tracing::warn!(
+                target: "tab_session",
+                "tab_closed: refusing to drop default tab"
+            );
+            return;
+        }
+        let removed = self.tab_sessions.remove(closed_tab_id);
+        self.session_to_tab.retain(|_, tab| tab != closed_tab_id);
+        if self.tab_id.as_deref() == Some(closed_tab_id) {
+            // Active tab is gone; the next focused tab's tab_changed will
+            // arrive imminently, but in the meantime `current_tab()` must
+            // not panic. `active_tab_key()` falls back to DEFAULT_TAB_ID
+            // when tab_id is None, so re-materialize that slot — the
+            // initial migration in `switch_tab_session` may have removed
+            // it. The fallback session is empty by design; renders during
+            // the gap just show nothing.
+            self.tab_id = None;
+            self.tab_sessions
+                .entry(DEFAULT_TAB_ID.to_string())
+                .or_default();
+        }
+        tracing::info!(
+            target: "tab_session",
+            tab_id = closed_tab_id,
+            had_session = removed.is_some(),
+            remaining_tabs = self.tab_sessions.len(),
+            "drop_tab_session"
+        );
     }
 
 

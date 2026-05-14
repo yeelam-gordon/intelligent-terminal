@@ -549,9 +549,20 @@ namespace winrt::TerminalApp::implementation
 
         const auto focusedTabIndex{ _GetFocusedTabIndex() };
 
+        // Capture the stable id before Shutdown clears state, then tell wta
+        // to drop the matching TabSession so a future tab that reuses any
+        // index slot starts with a clean conversation.
+        winrt::hstring closedTabStableId{};
+        if (const auto tabImpl = _GetTabImpl(tab))
+        {
+            closedTabStableId = tabImpl->StableId();
+        }
+
         // Removing the tab from the collection should destroy its control and disconnect its connection,
         // but it doesn't always do so. The UI tree may still be holding the control and preventing its destruction.
         tab.Shutdown();
+
+        _NotifyAgentTabClosed(closedTabStableId);
 
         uint32_t mruIndex{};
         if (_mruTabs.IndexOf(tab, mruIndex))

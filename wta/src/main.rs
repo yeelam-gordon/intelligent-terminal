@@ -1704,9 +1704,16 @@ async fn run_acp_app(
                 );
             }
 
-            if let Some((pane_id, tab_id, window_id)) = pane_identity {
+            if let Some((pane_id, _tab_id, window_id)) = pane_identity {
                 app_state.pane_id = Some(pane_id);
-                app_state.tab_id = Some(tab_id);
+                // Intentionally NOT seeding app_state.tab_id from
+                // discover_pane_identity: ListTabs still returns the (unstable)
+                // index-based tab id, while WT's tab_changed event now carries
+                // the stable per-tab GUID. Mixing them would leave us looking
+                // up `tab_sessions["0"]` while the first tab_changed creates a
+                // fresh entry under the GUID. Leave tab_id None until the
+                // first tab_changed arrives; `switch_tab_session` then migrates
+                // the default-tab state under the GUID key.
                 app_state.window_id = Some(window_id);
             }
 

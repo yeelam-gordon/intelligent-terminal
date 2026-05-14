@@ -1433,12 +1433,12 @@ namespace winrt::TerminalApp::implementation
             // either, so when a pane spawns later we will fire a fresh event).
             return;
         }
-        const auto newTabIdx = _GetTabIndex(*targetTab);
-        if (!newTabIdx)
+        const auto newTabId = targetTab->StableId();
+        if (newTabId.empty())
         {
             return;
         }
-        if (_lastNotifiedAgentTabId == newTabIdx)
+        if (_lastNotifiedAgentTabId.has_value() && _lastNotifiedAgentTabId.value() == newTabId)
         {
             return;
         }
@@ -1447,10 +1447,10 @@ namespace winrt::TerminalApp::implementation
         tabEvt["type"] = "event";
         tabEvt["method"] = "tab_changed";
         Json::Value tabParams;
-        tabParams["tab_id"] = std::to_string(newTabIdx.value());
+        tabParams["tab_id"] = winrt::to_string(newTabId);
         if (_lastNotifiedAgentTabId.has_value())
         {
-            tabParams["from_tab_id"] = std::to_string(_lastNotifiedAgentTabId.value());
+            tabParams["from_tab_id"] = winrt::to_string(_lastNotifiedAgentTabId.value());
         }
         tabEvt["params"] = tabParams;
         Json::StreamWriterBuilder wb;
@@ -1459,7 +1459,42 @@ namespace winrt::TerminalApp::implementation
             *this,
             winrt::to_hstring(Json::writeString(wb, tabEvt)));
 
-        _lastNotifiedAgentTabId = newTabIdx;
+        _lastNotifiedAgentTabId = newTabId;
+    }
+
+    // Tells wta that a tab has been destroyed so it can drop the per-tab
+    // TabSession (conversation history, scroll state, pending turns, etc.)
+    // and any session_to_tab routing keyed to it. No-op if there's no agent
+    // pane to talk to or the id is empty.
+    void TerminalPage::_NotifyAgentTabClosed(const winrt::hstring& tabId)
+    {
+        if (tabId.empty())
+        {
+            return;
+        }
+        if (!_agentPane.lock())
+        {
+            return;
+        }
+
+        Json::Value tabEvt;
+        tabEvt["type"] = "event";
+        tabEvt["method"] = "tab_closed";
+        Json::Value tabParams;
+        tabParams["tab_id"] = winrt::to_string(tabId);
+        tabEvt["params"] = tabParams;
+        Json::StreamWriterBuilder wb;
+        wb["indentation"] = "";
+        ProtocolVtSequenceReceived.raise(
+            *this,
+            winrt::to_hstring(Json::writeString(wb, tabEvt)));
+
+        // If this was the tab we last told wta about, drop the dedupe so the
+        // next active-tab change always re-emits tab_changed.
+        if (_lastNotifiedAgentTabId.has_value() && _lastNotifiedAgentTabId.value() == tabId)
+        {
+            _lastNotifiedAgentTabId.reset();
+        }
     }
 
     // Broadcast a `set_view` event to wta so it switches its TUI view

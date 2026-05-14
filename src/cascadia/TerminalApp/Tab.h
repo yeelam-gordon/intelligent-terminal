@@ -109,6 +109,12 @@ namespace winrt::TerminalApp::implementation
         bool AgentPaneOpen() const noexcept { return _agentPaneOpen; }
         void AgentPaneOpen(bool value) noexcept { _agentPaneOpen = value; }
 
+        // Stable per-tab identifier (GUID string). Survives tab reordering
+        // and is unique across the window's lifetime, unlike the index in
+        // _tabs which is reused when tabs close. Used as the tab_id for
+        // wta's per-tab TabSession routing.
+        const winrt::hstring& StableId() const noexcept { return _stableId; }
+
         winrt::TerminalApp::TerminalTabStatus TabStatus()
         {
             return _tabStatus;
@@ -222,6 +228,8 @@ namespace winrt::TerminalApp::implementation
         bool _iconHidden{ false };
         bool _changingActivePane{ false };
         bool _agentPaneOpen{ false };
+
+        winrt::hstring _stableId{};
 
         winrt::hstring _runtimeTabText{};
         bool _inRename{ false };
