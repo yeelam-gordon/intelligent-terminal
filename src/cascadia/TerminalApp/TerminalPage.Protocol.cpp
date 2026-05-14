@@ -152,7 +152,7 @@ namespace winrt::TerminalApp::implementation
 
         if (const auto termControl = effectivePane->GetTerminalControl())
         {
-            result.Cwd = termControl.CurrentWorkingDirectory();
+            result.Cwd = termControl.WorkingDirectory();
         }
 
         result.Pid = _getPidFromPane(effectivePane);
@@ -255,7 +255,7 @@ namespace winrt::TerminalApp::implementation
                     {
                         info.Rows = termControl.ViewHeight();
                         info.Columns = 0;
-                        info.Cwd = termControl.CurrentWorkingDirectory();
+                        info.Cwd = termControl.WorkingDirectory();
                     }
                 }
 
