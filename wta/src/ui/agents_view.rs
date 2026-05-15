@@ -10,6 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::agent_sessions::{AgentSession, AgentSessionRegistry, AgentStatus, CliSource};
 use crate::app::HistoryLoadState;
+use crate::ui::shimmer;
 
 // Figma palette — keep these in one place so the row renderer and any
 // future status indicators stay in sync with the design tokens.
@@ -26,6 +27,7 @@ pub fn render(
     reg:  &AgentSessionRegistry,
     list_state: &mut ListState,
     history_load_state: HistoryLoadState,
+    activity_frame: usize,
 ) {
     // No in-TUI header: the "Agent sessions" title lives in the C++ agent
     // bar above this pane (AgentPaneContent::SetSessionsView), so we render
@@ -49,14 +51,13 @@ pub fn render(
     );
 
     // While the lazy history scan is in flight, replace the whole list
-    // with a single high-visibility loading row. Showing live rows alongside
+    // with a single shimmer-styled loading row. Showing live rows alongside
     // a dim "loading…" hint led users to think the list was complete (only
     // the 1 live session) and dismiss the view before the scan finished.
     if history_load_state == HistoryLoadState::Loading {
-        let loading = Paragraph::new(Line::from(Span::styled(
-            "  Loading historical sessions… (first open scans ~hundreds of files)",
-            Style::default().fg(ACCENT_YELLOW).add_modifier(Modifier::BOLD),
-        )));
+        let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+        spans.extend(shimmer::shimmer_spans("Loading", activity_frame));
+        let loading = Paragraph::new(Line::from(spans));
         f.render_widget(loading, list_area);
         return;
     }

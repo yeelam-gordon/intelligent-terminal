@@ -10,8 +10,9 @@ use crate::theme;
 /// when we paint.
 ///
 /// Cards are positioned in a virtual canvas (stacked top-to-bottom by their
-/// natural heights), then shifted up by `rec_scroll`. The hint always
-/// occupies the panel's last row.
+/// natural heights), then shifted up by `rec_scroll`. The navigation hint is
+/// rendered separately by `render_hint` so it can sit directly above the
+/// input box (see `layout.rs`).
 ///
 /// Cards taller than the remaining cards region render **truncated** at the
 /// height that fits — `render_card` lets cassowary squash the inner content
@@ -25,7 +26,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let rec_scroll = app.current_tab().rec_scroll.offset;
-    let cards_bottom = area.y.saturating_add(area.height.saturating_sub(1));
+    let cards_bottom = area.y.saturating_add(area.height);
 
     let mut canvas_top = 0usize;
     for (idx, choice) in recs.choices.iter().enumerate() {
@@ -48,13 +49,20 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         }
         canvas_top += h;
     }
+}
 
-    let hint_area = Rect { x: area.x, y: cards_bottom, width: area.width, height: 1 };
+/// Render the recommendations navigation hint. Called by `layout.rs` to
+/// place this row directly above the input box, regardless of how tall the
+/// rec panel is.
+pub fn render_hint(frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
     let hint = Paragraph::new(Line::from(Span::styled(
-        "Enter: activate | Esc: dismiss",
+        "(↑ ↓ to navigate • Enter to select • Esc to cancel)",
         theme::DIM,
     )));
-    frame.render_widget(hint, hint_area);
+    frame.render_widget(hint, area);
 }
 
 fn render_card(

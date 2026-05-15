@@ -2372,9 +2372,10 @@ impl App {
                 // it drives `chat_scroll` (bottom-anchored: wheel up shows
                 // higher content = increase offset, so we negate delta).
                 let in_recs = self.current_tab().recommendations.is_some() && {
+                    // 3 input + 1 nav hint row above the input.
                     let recs_top = self
                         .terminal_rows
-                        .saturating_sub(3 + self.rec_panel_height());
+                        .saturating_sub(4 + self.rec_panel_height());
                     row >= recs_top
                 };
                 let d = delta as isize;
@@ -2400,7 +2401,12 @@ impl App {
                 }
                 // Setup-mode spinner: ticks while we're showing the wizard
                 // (e.g. spinning during a `winget install` background job).
-                if self.mode == AppMode::Setup || self.mode == AppMode::Auth {
+                // Also advance while the agents-view history scan is in
+                // flight so the "Loading" shimmer keeps animating.
+                if self.mode == AppMode::Setup
+                    || self.mode == AppMode::Auth
+                    || self.history_load_state == HistoryLoadState::Loading
+                {
                     self.activity_frame = self.activity_frame.wrapping_add(1);
                 }
                 // Age and auto-dismiss notifications
@@ -3795,6 +3801,9 @@ impl App {
         if self.mode == AppMode::Setup || self.mode == AppMode::Auth {
             return true; // spinner always ticks in setup/auth mode
         }
+        if self.history_load_state == HistoryLoadState::Loading {
+            return true; // agents-view "Loading" shimmer
+        }
         let tab = self.current_tab();
         tab.prompt_in_flight || tab.agent_streaming || tab.progress_status.is_some()
     }
@@ -3981,9 +3990,11 @@ impl App {
         let Some(recs) = self.current_tab().recommendations.as_ref() else { return 0 };
         let w = self.terminal_cols;
         let card_heights = recs.choices.iter().map(|c| rec_card_height(c, w) as u16);
-        let total = card_heights.clone().sum::<u16>().saturating_add(1); // + hint
-        let floor = card_heights.max().unwrap_or(7).saturating_add(1); // + hint
-        let ceiling = self.terminal_rows.saturating_sub(6);
+        let total = card_heights.clone().sum::<u16>();
+        let floor = card_heights.max().unwrap_or(7);
+        // 6 = input (3) + chat min (3); +1 reserves the row layout.rs adds
+        // for the nav hint just above the input.
+        let ceiling = self.terminal_rows.saturating_sub(7);
         total.min(ceiling).max(floor)
     }
 
@@ -3998,7 +4009,7 @@ impl App {
     /// "rearranges" the panel without needing a manual scroll.
     pub fn sync_rec_scroll_max(&mut self) {
         let w = self.terminal_cols;
-        let panel_cards_h = (self.rec_panel_height() as usize).saturating_sub(1);
+        let panel_cards_h = self.rec_panel_height() as usize;
         let Some(recs) = self.current_tab().recommendations.as_ref() else { return };
         let total: usize = recs.choices.iter().map(|c| rec_card_height(c, w)).sum();
         self.current_tab_mut().rec_scroll.set_max(total.saturating_sub(panel_cards_h));

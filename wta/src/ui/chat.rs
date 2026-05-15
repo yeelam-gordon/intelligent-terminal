@@ -5,29 +5,10 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::app::{App, ChatMessage, CompletedTurn, PlanEntryStatus};
 use crate::theme;
+use crate::ui::shimmer;
 use crate::ui_trace;
 
 const ACTIVITY_LABEL: &str = "Thinking…";
-
-// Soft white "shimmer" sweeps left→right across the label, matching the
-// CSS `linear-gradient(90deg, …) + background-position` animation used by
-// the web chat UI. The web version runs at 1.6s/cycle on a 60FPS canvas;
-// we run on the TUI Tick (120ms ≈ 8FPS). At 18 ticks across the padded
-// 15-cell span (9 label + 2×3 padding) each frame moves ~0.83 cells —
-// still under one cell so the band reads as "sweeping" rather than
-// "stepping", and the cycle finishes in ~2.16s.
-pub const ACTIVITY_CYCLE_FRAMES: usize = 18;
-
-// Padding on both sides lets the highlight enter from off-screen-right and
-// exit off-screen-left instead of clamping at the label edges.
-const SHIMMER_PAD: f32 = 3.0;
-// Half-width of the cosine falloff, in cells. ≥2σ from the center → fully dim.
-const SHIMMER_SIGMA: f32 = 1.8;
-// White composited on the default dark Terminal background at ~25% / ~85%
-// opacity — matches the CSS gradient's two stops. (Terminal cells have no
-// real alpha, so the values are pre-multiplied against an assumed dark bg.)
-const SHIMMER_DIM_RGB: (u8, u8, u8) = (64, 64, 64);
-const SHIMMER_BRIGHT_RGB: (u8, u8, u8) = (217, 217, 217);
 
 const ACTIVITY_PREVIEW_MAX_CHARS: usize = 180;
 const MAX_RENDER_LINE_CHARS: usize = 4096;
@@ -234,7 +215,7 @@ fn build_activity_line(app: &App) -> Option<Line<'static>> {
         return None;
     }
 
-    let mut spans = shimmer_label(app.current_tab().activity_frame);
+    let mut spans = shimmer::shimmer_spans(ACTIVITY_LABEL, app.current_tab().activity_frame);
 
     if let Some((preview, style)) = activity_preview(app) {
         spans.push(Span::styled(" ", theme::DIM));
@@ -242,38 +223,6 @@ fn build_activity_line(app: &App) -> Option<Line<'static>> {
     }
 
     Some(Line::from(spans))
-}
-
-fn shimmer_label(frame: usize) -> Vec<Span<'static>> {
-    let chars: Vec<char> = ACTIVITY_LABEL.chars().collect();
-    let n = chars.len() as f32;
-    let span = n + 2.0 * SHIMMER_PAD;
-    let phase = (frame % ACTIVITY_CYCLE_FRAMES) as f32 / ACTIVITY_CYCLE_FRAMES as f32;
-    // Center starts at -pad, off the left edge, and walks up to
-    // (n + pad) at phase=1 — i.e. left→right across the padded span.
-    let center = -SHIMMER_PAD + phase * span;
-
-    chars
-        .into_iter()
-        .enumerate()
-        .map(|(i, ch)| {
-            let d = (i as f32 + 0.5) - center;
-            let w = if d.abs() >= 2.0 * SHIMMER_SIGMA {
-                0.0
-            } else {
-                0.5 * (1.0 + (std::f32::consts::PI * d / (2.0 * SHIMMER_SIGMA)).cos())
-            };
-            let r = lerp_u8(SHIMMER_DIM_RGB.0, SHIMMER_BRIGHT_RGB.0, w);
-            let g = lerp_u8(SHIMMER_DIM_RGB.1, SHIMMER_BRIGHT_RGB.1, w);
-            let b = lerp_u8(SHIMMER_DIM_RGB.2, SHIMMER_BRIGHT_RGB.2, w);
-            Span::styled(ch.to_string(), Style::new().fg(Color::Rgb(r, g, b)))
-        })
-        .collect()
-}
-
-fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
-    let t = t.clamp(0.0, 1.0);
-    (a as f32 + (b as f32 - a as f32) * t).round() as u8
 }
 
 fn activity_preview(app: &App) -> Option<(String, Style)> {
