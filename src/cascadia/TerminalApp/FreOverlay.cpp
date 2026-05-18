@@ -7,7 +7,6 @@
 #include "FreOverlay.g.cpp"
 
 #include "../inc/AgentRegistry.h"
-#include "../inc/AgentHooksStatus.h"
 #include "../inc/WtaProcess.h"
 
 using namespace winrt::Windows::Foundation;
@@ -179,41 +178,13 @@ namespace winrt::TerminalApp::implementation
         co_return exitCode == 0;
     }
 
-    // ── Hooks status check ────────────────────────────────────────────
-
-    IAsyncOperation<bool> FreOverlay::_CheckHooksNeededAsync(winrt::hstring agentId)
-    {
-        auto id = winrt::to_string(agentId);
-
-        co_await winrt::resume_background();
-
-        namespace Wta = ::Microsoft::Terminal::WtaProcess;
-        namespace Hooks = ::Microsoft::Terminal::AgentHooks;
-
-        const auto wtaPath = Wta::ResolveWtaExePath();
-        const auto stdoutText = Wta::RunWtaCaptureStdout(wtaPath, L"hooks status --json", 30'000);
-        auto report = Hooks::ParseStatusJson(stdoutText);
-
-        if (!report.has_value())
-        {
-            co_return true; // can't determine — assume needed
-        }
-
-        for (const auto& cli : report->clis)
-        {
-            if (cli.name == id)
-            {
-                co_return !(cli.pluginInstalled && cli.pluginEnabled);
-            }
-        }
-
-        co_return true; // agent not in report — needs install
-    }
 
     // ── Hooks install helper ────────────────────────────────────────────
 
-    IAsyncAction FreOverlay::_InstallHooksAsync()
+    IAsyncAction FreOverlay::_InstallHooksAsync(winrt::hstring agentId)
     {
+        auto id = std::wstring{ agentId };
+
         co_await winrt::resume_background();
 
         namespace Wta = ::Microsoft::Terminal::WtaProcess;
@@ -222,7 +193,8 @@ namespace winrt::TerminalApp::implementation
         // Extend PATH so freshly-installed CLIs (e.g. copilot via winget)
         // are discoverable by the hooks installer.
         auto envBlock = Wta::BuildExtendedPathEnvBlock();
-        Wta::RunWtaAndWait(wtaPath, L"hooks install", 60'000,
+        auto args = L"hooks install --cli " + id;
+        Wta::RunWtaAndWait(wtaPath, args, 60'000,
                            envBlock.empty() ? nullptr : envBlock.data());
     }
 
@@ -275,16 +247,12 @@ namespace winrt::TerminalApp::implementation
             co_await _WingetInstallAsync(L"OpenJS.NodeJS.LTS");
         }
 
-        // 4. Install hooks if needed
+        // 4. Install hooks (idempotent, --cli scoped to selected agent)
         {
             auto self = weak.get();
             if (!self) co_return;
 
-            const bool hooksNeeded = co_await _CheckHooksNeededAsync(agentId);
-            if (hooksNeeded)
-            {
-                co_await _InstallHooksAsync();
-            }
+            co_await _InstallHooksAsync(agentId);
         }
 
         // 5. Back on UI thread — complete

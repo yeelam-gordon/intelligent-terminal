@@ -470,11 +470,24 @@ mod bundle {
 /// failure: if a CLI isn't installed, we skip it; if its settings.json is
 /// malformed, we leave it alone.
 pub fn ensure_installed() {
+    ensure_installed_scoped(CliScope::All);
+}
+
+/// Install hooks for the specified scope (all CLIs or a single one).
+pub fn ensure_installed_scoped(scope: CliScope) {
     let Some(home) = home_dir() else {
         tracing::debug!(target: "agent_hooks", "no HOME/USERPROFILE; skipping");
         return;
     };
-    ensure_installed_in(&home);
+    if scope.includes(CliKind::Claude) {
+        install_for_claude(&home);
+    }
+    if scope.includes(CliKind::Copilot) {
+        install_for_copilot(&home);
+    }
+    if scope.includes(CliKind::Gemini) {
+        install_for_gemini(&home);
+    }
 }
 
 /// Run the installer against a specific home directory. Split out from

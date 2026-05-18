@@ -266,8 +266,13 @@ enum Command {
 /// Subcommands for `wta hooks`.
 #[derive(Subcommand, Debug)]
 enum HooksAction {
-    /// (Re-)install the wt-agent-hooks bridge for every supported CLI.
-    Install,
+    /// (Re-)install the wt-agent-hooks bridge. Installs for all supported
+    /// CLIs by default, or a single CLI with `--cli`.
+    Install {
+        /// Which CLI to install for. Default: `all`.
+        #[arg(long, value_enum, default_value_t = HooksCliFilter::All)]
+        cli: HooksCliFilter,
+    },
 
     /// Print per-CLI install state. Returns JSON with `--json`,
     /// or a human-readable table by default.
@@ -530,7 +535,7 @@ async fn main() -> Result<()> {
 
         // ── Manage agent hooks (install/status/uninstall) ──
         Some(Command::Hooks { action }) => match action {
-            HooksAction::Install => run_hooks_install(),
+            HooksAction::Install { cli } => run_hooks_install(cli),
             HooksAction::Status => run_hooks_status(json_mode),
             HooksAction::Uninstall { cli } => run_hooks_uninstall(cli, json_mode),
         },
@@ -542,11 +547,11 @@ async fn main() -> Result<()> {
 
 // ─── Hooks subcommand handlers ──────────────────────────────────────────────
 
-fn run_hooks_install() -> Result<()> {
+fn run_hooks_install(cli: HooksCliFilter) -> Result<()> {
     // Initialize logging so the install attempt is observable in
     // %LOCALAPPDATA%\IntelligentTerminal\logs\wta-install-hooks.log.
     let _guard = logging::init("install-hooks");
-    agent_hooks_installer::ensure_installed();
+    agent_hooks_installer::ensure_installed_scoped(cli.into_scope());
     println!(
         "wt-agent-hooks install attempted (idempotent). \
          Run `wta hooks status` to inspect the result. \

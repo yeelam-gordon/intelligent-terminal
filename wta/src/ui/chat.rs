@@ -69,9 +69,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    // First-run welcome: shown when chat is empty and connected
-    if app.current_tab().completed_turns.is_empty()
-        && app.current_tab().messages.is_empty()
+    // First-run welcome: shown once until user sends first message
+    if app.show_welcome_hint
         && app.state == crate::app::ConnectionState::Connected
     {
         let mut welcome_lines = vec![

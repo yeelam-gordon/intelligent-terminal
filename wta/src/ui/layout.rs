@@ -75,9 +75,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         input::input_height(&tab.input, tab.cursor_pos, main_area.width)
     };
 
-    // Show shortcut hint above input when chat is empty (first-run welcome)
-    let show_hint = app.current_tab().completed_turns.is_empty()
-        && app.current_tab().messages.is_empty()
+    // Show shortcut hint above input (first-run welcome, cleared after first message)
+    let show_hint = app.show_welcome_hint
         && app.state == crate::app::ConnectionState::Connected;
     let hint_height = if show_hint { Constraint::Length(1) } else { Constraint::Length(0) };
 

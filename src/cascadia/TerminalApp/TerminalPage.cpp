@@ -899,6 +899,7 @@ namespace winrt::TerminalApp::implementation
         {
             _AutoCreateHiddenAgentPane(tab);
             _OpenOrReuseAgentPane(L"");
+            // Focus is set in the Initialized callback once the pane is ready.
         }
     }
 
@@ -1809,6 +1810,14 @@ namespace winrt::TerminalApp::implementation
                 {
                     _agentPaneLog("_AutoCreateHiddenAgentPane: TermControl Initialized -- user already opened pane, skipping hide");
                     self->_UpdateBottomBarState();
+                    // Focus agent pane (e.g. after FRE completes)
+                    if (auto pane = weakNewPane.lock())
+                    {
+                        if (const auto& content = pane->GetContent())
+                        {
+                            content.Focus(winrt::Windows::UI::Xaml::FocusState::Programmatic);
+                        }
+                    }
                     return;
                 }
                 _agentPaneLog("_AutoCreateHiddenAgentPane: TermControl Initialized -- hiding pane now");

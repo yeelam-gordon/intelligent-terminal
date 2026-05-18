@@ -1073,6 +1073,8 @@ pub struct App {
     pub pending_acp_start: bool,
     /// Agent ID selected by user (FRE/preflight) — sent to C++ once connected.
     pending_agent_selection: Option<String>,
+    /// Show first-run welcome hint until user sends first message.
+    pub show_welcome_hint: bool,
     deferred_acp: Option<DeferredAcpParams>,
     pub state: ConnectionState,
     /// The agent ID we're trying to connect to (set at preflight/FRE time).
@@ -1242,6 +1244,7 @@ impl App {
             event_tx: None,
             pending_acp_start: false,
             pending_agent_selection: None,
+            show_welcome_hint: false,
             deferred_acp: None,
             state: ConnectionState::Connecting("Starting agent...".to_string()),
             current_agent_id: String::new(),
@@ -2386,6 +2389,10 @@ impl App {
                 self.available_models = available_models.clone();
                 self.current_model_id = current_model_id.clone();
                 self.state = ConnectionState::Connected;
+                // Show welcome hint on first-ever connect (persisted in state.json)
+                if !welcome_shown_in_state() {
+                    self.show_welcome_hint = true;
+                }
                 // Bind the startup session to the implicit tab "0" — the
                 // ACP client lazy-creates a session per-tab, but the
                 // initial one is for tab "0" by convention.
@@ -3640,6 +3647,10 @@ impl App {
                         "ui_submit",
                         &format!("preview={:?}", prompt.preview()),
                     );
+                    if self.show_welcome_hint {
+                        self.show_welcome_hint = false;
+                        set_welcome_shown_in_state();
+                    }
                     let _ = self.prompt_tx.send(prompt);
                 }
             }
@@ -4633,6 +4644,54 @@ fn resolve_agent_cmd(cmd: &str) -> String {
 
     // Fallback: return as-is
     cmd.to_string()
+}
+
+/// Read `agentWelcomeShown` from the packaged app's state.json.
+fn welcome_shown_in_state() -> bool {
+    find_state_json()
+        .and_then(|path| std::fs::read_to_string(&path).ok())
+        .map(|content| content.contains("\"agentWelcomeShown\" : true") || content.contains("\"agentWelcomeShown\":true"))
+        .unwrap_or(false)
+}
+
+/// Set `agentWelcomeShown` to true in state.json using string replacement
+/// to preserve formatting and other fields.
+fn set_welcome_shown_in_state() {
+    let Some(path) = find_state_json() else { return };
+    let Ok(content) = std::fs::read_to_string(&path) else { return };
+
+    let updated = if content.contains("\"agentWelcomeShown\"") {
+        // Replace existing value
+        content
+            .replace("\"agentWelcomeShown\" : false", "\"agentWelcomeShown\" : true")
+            .replace("\"agentWelcomeShown\":false", "\"agentWelcomeShown\" : true")
+    } else if let Some(pos) = content.find('{') {
+        // Insert after opening brace
+        let (before, after) = content.split_at(pos + 1);
+        format!("{}\n\t\"agentWelcomeShown\" : true,{}", before, after)
+    } else {
+        return;
+    };
+    let _ = std::fs::write(&path, &updated);
+}
+
+/// Find the packaged app's state.json.
+fn find_state_json() -> Option<std::path::PathBuf> {
+    let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
+    let packages_dir = std::path::Path::new(&local_app_data).join("Packages");
+    if let Ok(entries) = std::fs::read_dir(&packages_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("IntelligentTerminal_") {
+                let candidate = entry.path().join("LocalState").join("state.json");
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn truncate(s: &str, max: usize) -> String {
