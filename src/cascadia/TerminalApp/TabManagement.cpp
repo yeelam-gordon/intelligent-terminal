@@ -14,7 +14,10 @@
 #include "../../types/inc/utils.hpp"
 #include "../../inc/til/string.h"
 #include <til/io.h>
+#include <json/json.h>
 
+#include "AgentPaneContent.h"
+#include "AgentPaneLog.h"
 #include "TabRowControl.h"
 #include "DebugTapConnection.h"
 #include "DesktopNotification.h"
@@ -219,23 +222,111 @@ namespace winrt::TerminalApp::implementation
             _tabContent.Children().Append(content);
         }
 
-        // Auto-start the single shared wta pane (hidden) the first time a
-        // terminal tab is created in this window.
+        // Per-tab model: no auto-create-on-tab-creation. Users open an
+        // agent pane on demand per tab via the keybinding / toolbar.
+
+        // Cross-window agent-pane drag — finalize the rename and re-wire
+        // bottom-bar events for any agent pane that arrived via the drag-in
+        // path. `_MakeTerminalPane` re-wraps the ContentId-reattached pane
+        // into AgentPaneContent and stashes the source StableId.
         //
-        // Previously we deferred this via Dispatcher().RunAsync() to avoid
-        // interfering with COM callers, but both Low and Normal priorities
-        // were observed to be starved during WT startup — wta would not
-        // actually spawn until the user pressed Ctrl+Shift+. (which drained
-        // the dispatcher queue). That defeats the purpose of pre-warming.
+        // CRITICAL: the agent pane is added to the Tab via a SUBSEQUENT
+        // SplitPane action (cross-window drag serializes as NewTab + one
+        // SplitPane per extra pane). At the moment _InitializeTab runs, the
+        // Tab contains only the first pane — the agent pane SplitPane hasn't
+        // executed yet. A synchronous walk here would miss the agent pane
+        // entirely, `tab_renamed` would never fire, and the helper would keep
+        // owning the old (now-gone) tab id; C++ would then immediately stash
+        // the just-arrived agent pane based on the helper's stale
+        // pane_open=false state, and the user sees "agent pane gone after
+        // drag".
         //
-        // _InitializeTab itself already runs on the UI thread dispatcher,
-        // and _AutoCreateHiddenAgentPane only does local work (filesystem
-        // path detection + creating + hiding a child pane), so it is safe
-        // to call synchronously here.
-        // Skip agent pane creation during FRE — _OnFreCompleted handles it.
-        if (!_agentPane.lock() && !_IsFreRequired())
+        // Defer the walk to a low-priority dispatcher tick so subsequent
+        // SplitPane actions land first. Idempotent: a regular new tab (no
+        // agent pane) just no-ops here.
+        if (auto dispatcher = winrt::Windows::System::DispatcherQueue::GetForCurrentThread())
         {
-            _AutoCreateHiddenAgentPane(newTabImpl);
+            auto weakSelf = get_weak();
+            auto weakTab = make_weak(newTabImpl);
+            dispatcher.TryEnqueue(winrt::Windows::System::DispatcherQueuePriority::Low, [weakSelf, weakTab]() {
+                const auto self = weakSelf.get();
+                const auto tabImplCom = weakTab.get();
+                if (!self || !tabImplCom)
+                {
+                    return;
+                }
+                const auto rootPane = tabImplCom->GetRootPane();
+                if (!rootPane)
+                {
+                    return;
+                }
+                const auto newTabId = tabImplCom->StableId();
+                int agentLeavesSeen = 0;
+                int isAgentPaneLeaves = 0;
+                rootPane->WalkTree([self, &tabImplCom, &newTabId, &agentLeavesSeen, &isAgentPaneLeaves](const std::shared_ptr<Pane>& p) -> void {
+                    if (!p)
+                    {
+                        return;
+                    }
+                    if (p->IsAgentPane())
+                    {
+                        ++isAgentPaneLeaves;
+                    }
+                    if (p->GetContent() && p->GetContent().try_as<winrt::TerminalApp::AgentPaneContent>())
+                    {
+                        ++agentLeavesSeen;
+                    }
+                    if (!p->IsAgentPane())
+                    {
+                        return;
+                    }
+                    const auto content = p->GetContent().try_as<winrt::TerminalApp::AgentPaneContent>();
+                    if (!content)
+                    {
+                        return;
+                    }
+                    const auto impl = winrt::get_self<winrt::TerminalApp::implementation::AgentPaneContent>(content);
+                    if (!impl)
+                    {
+                        return;
+                    }
+                    self->_WireAgentPaneEvents(content, tabImplCom);
+
+                    const auto oldTabId = impl->TakePendingRenameFromTabId();
+                    if (oldTabId.empty() || oldTabId == newTabId)
+                    {
+                        _agentPaneLog(
+                            std::string{ "_InitializeTab(deferred): agent pane found but skipping tab_renamed (oldEmpty=" } +
+                            (oldTabId.empty() ? "true" : "false") + " sameAsNew=" +
+                            (oldTabId == newTabId ? "true" : "false") + " new=" +
+                            winrt::to_string(newTabId) + ")");
+                        return;
+                    }
+
+                    Json::Value evt;
+                    evt["type"] = "event";
+                    evt["method"] = "tab_renamed";
+                    Json::Value params;
+                    params["old_tab_id"] = winrt::to_string(oldTabId);
+                    params["new_tab_id"] = winrt::to_string(newTabId);
+                    // Dest window id — helper updates stale self.window_id
+                    // when rekeying (see app.rs tab_renamed handler).
+                    params["window_id"] = std::to_string(self->_WindowProperties.WindowId());
+                    evt["params"] = params;
+                    Json::StreamWriterBuilder wb;
+                    wb["indentation"] = "";
+                    const auto payload = winrt::to_hstring(Json::writeString(wb, evt));
+                    _agentPaneLog(
+                        std::string{ "_InitializeTab(deferred): emitting tab_renamed old=" } +
+                        winrt::to_string(oldTabId) + " new=" + winrt::to_string(newTabId));
+                    self->ProtocolVtSequenceReceived.raise(*self, payload);
+                });
+                _agentPaneLog(
+                    std::string{ "_InitializeTab(deferred): post-walk summary new=" } +
+                    winrt::to_string(newTabId) +
+                    " isAgentPaneLeaves=" + std::to_string(isAgentPaneLeaves) +
+                    " agentLeavesSeen=" + std::to_string(agentLeavesSeen));
+            });
         }
     }
 
@@ -487,56 +578,23 @@ namespace winrt::TerminalApp::implementation
         auto actions = t->BuildStartupActions(BuildStartupKind::None);
         _AddPreviouslyClosedPaneOrTab(std::move(actions));
 
-        // If this tab contains the agent pane, rescue it to another tab before
-        // closing so the wta process keeps running.
-        const auto agentTab = _FindTabContainingAgentPane();
-        if (agentTab && agentTab.get() == t)
-        {
-            const auto existingPane = _FindAgentPane();
-            const auto agentTabRoot = agentTab->GetRootPane();
-            // Only rescue if the agent pane is not the sole content of the tab
-            // (if it is, DetachPane would leave nothing behind — let it close).
-            if (existingPane && agentTabRoot && agentTabRoot != existingPane)
-            {
-                winrt::com_ptr<Tab> rescueTab;
-                for (const auto& candidate : _tabs)
-                {
-                    if (auto impl = _GetTabImpl(candidate))
-                    {
-                        if (impl.get() != t)
-                        {
-                            rescueTab = impl;
-                            break;
-                        }
-                    }
-                }
-                if (rescueTab)
-                {
-                    agentTabRoot->DetachPane(existingPane);
-                    const auto splitDir = _AgentPanePositionToSplitDirection(
-                        _settings.GlobalSettings().AgentPanePosition());
-                    rescueTab->SplitPaneAtRoot(splitDir, existingPane);
-                    // Visibility is decided by `_ReconcileAgentPaneForActiveTab`
-                    // after the rescue tab becomes active: if the rescue tab
-                    // happens to be the new active tab AND wants the pane
-                    // (`Tab.AgentPaneOpen()` mirror == true, set by wta's
-                    // last projection for that tab), reconcile restores the
-                    // pane to visible. If it doesn't want the pane, reconcile
-                    // hides it. Pre-hiding here was wrong: when the rescue
-                    // tab was the user's "originally pane-open" tab, the
-                    // hide stuck because the subsequent reconcile path was
-                    // missing (closed-active-tab flow doesn't go through
-                    // `_OnTabSelectionChanged`).
-                }
-            }
-        }
+        // Per-tab model: each tab owns its own agent pane. Closing a tab
+        // takes its agent pane with it — no rescue needed.
 
         tab.Close();
     }
 
     // Removes the tab (both TerminalControl and XAML).
     // NOTE: Don't call this directly, but rather `tab.Close()`.
-    void TerminalPage::_RemoveTab(const winrt::TerminalApp::Tab& tab)
+    // - movingAway: true when this _RemoveTab is the tail of a cross-window
+    //   move (the tab's content is being reattached in another window via
+    //   ContentId). In that case we MUST NOT fire `tab_closed` to wta —
+    //   doing so would drop the helper's TabSession (messages + ACP session
+    //   id) before the target window has a chance to emit `tab_renamed`,
+    //   leaving the dragged agent pane with a fresh session and no history.
+    //   The target window's `_InitializeTab` will broadcast `tab_renamed`,
+    //   which rekeys the helper-side state under the new StableId.
+    void TerminalPage::_RemoveTab(const winrt::TerminalApp::Tab& tab, bool movingAway)
     {
         uint32_t tabIndex{};
         if (!_tabs.IndexOf(tab, tabIndex))
@@ -565,7 +623,10 @@ namespace winrt::TerminalApp::implementation
         // but it doesn't always do so. The UI tree may still be holding the control and preventing its destruction.
         tab.Shutdown();
 
-        _NotifyAgentTabClosed(closedTabStableId);
+        if (!movingAway)
+        {
+            _NotifyAgentTabClosed(closedTabStableId);
+        }
 
         uint32_t mruIndex{};
         if (_mruTabs.IndexOf(tab, mruIndex))
@@ -638,39 +699,10 @@ namespace winrt::TerminalApp::implementation
                 _tabView.SelectedItem(newSelectedTab.TabViewItem());
             }
 
-            // `_OnTabSelectionChanged` is suppressed while `_removing`
-            // is true, so the agent-pane reconcile + `tab_changed`
-            // notification that normally runs through that path
-            // never fires for the auto-selected new active tab.
-            // Run the reconcile chain explicitly here so:
-            //
-            //   * wta learns about the new active tab. Without this,
-            //     wta's `tab_id` stays at the None state set by
-            //     `tab_closed`, and `current_tab()` silently falls
-            //     back to the empty `DEFAULT_TAB_ID` slot — the
-            //     user sees per-tab UI state (e.g. an open
-            //     session-list view) vanish after closing some
-            //     other tab. The previous tab's `TabSession` is
-            //     still in wta's `tab_sessions` map but
-            //     inaccessible until a manual re-click on the tab
-            //     provokes a fresh SelectionChanged.
-            //
-            //   * The rescued (hidden) agent pane gets restored to
-            //     visible on the new active tab when that tab wants
-            //     it. `_ReconcileAgentPaneForActiveTab` internally
-            //     calls `_NotifyAgentTabChanged(activeTab)` (deduped
-            //     via `_lastNotifiedAgentTabId`), which makes wta
-            //     switch its active TabSession and emit an
-            //     `agent_state_changed` snapshot for the new tab.
-            //     `OnAgentStateChanged` then mirrors the new
-            //     `pane_open` onto `Tab.AgentPaneOpen` and reconciles
-            //     again. Without this chain, closing the active tab
-            //     left wta routed at DEFAULT_TAB_ID and the rescued
-            //     pane hidden on the new active tab, with no event
-            //     sequence to wake the C++ side up until the user's
-            //     next manual tab switch.
+            // Flush any deferred agent settings rebuild now that a
+            // terminal tab is active. Per-tab model — no shared pane
+            // reconciliation needed.
             _FlushPendingAgentRebuild();
-            _ReconcileAgentPaneForActiveTab();
         }
 
         // GH#5559 - If we were in the middle of a drag/drop, end it by clearing
@@ -682,10 +714,6 @@ namespace winrt::TerminalApp::implementation
             _rearrangeTo = std::nullopt;
         }
 
-        // The _removing guard on _OnTabSelectionChanged suppresses the bottom-bar
-        // refresh during tab removal. Ensure it runs here so the bar's visibility
-        // matches the newly-focused tab (e.g. shows again after closing Settings).
-        _UpdateBottomBarState();
     }
 
     // Method Description:
@@ -1243,6 +1271,18 @@ namespace winrt::TerminalApp::implementation
                 _UpdateBackground(profile);
             }
 
+            // Bottom-bar refresh is now driven by wta — fire `tab_changed`
+            // so wta re-projects this tab's authoritative agent-pane state
+            // (`project_active_tab_state` → `agent_state_changed`).
+            // `OnAgentStateChanged` applies the snapshot to the local
+            // AgentPaneContent mirror and refreshes the bottom bar. Avoids
+            // the stale-mirror race that bit after cross-window drag
+            // (helper state diverged from local cache).
+            if (auto tabImplForNotify = _GetTabImpl(tab))
+            {
+                _NotifyAgentTabChanged(tabImplForNotify->StableId());
+            }
+
             _adjustProcessPriorityThrottled->Run();
         }
         CATCH_LOG();
@@ -1273,10 +1313,10 @@ namespace winrt::TerminalApp::implementation
                 const auto tab{ _tabs.GetAt(selectedIndex) };
                 _UpdatedSelectedTab(tab);
             }
-            // Flush any deferred agent-stack rebuild before reconciling
-            // so the freshly-created pane participates in the reconcile.
+            // Flush any deferred agent-stack rebuild now that a real
+            // terminal tab is active. Per-tab model — no shared pane
+            // reconciliation needed.
             _FlushPendingAgentRebuild();
-            _ReconcileAgentPaneForActiveTab();
         }
     }
 

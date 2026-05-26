@@ -19,6 +19,8 @@ struct DeferredAcpParams {
     new_session_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::NewSessionForTab>>,
     load_session_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::LoadSessionForTab>>,
     drop_session_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::DropSessionRequest>>,
+    rename_session_rx:
+        Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::RenameSessionRequest>>,
     restart_rx: Option<mpsc::UnboundedReceiver<crate::protocol::acp::client::RestartRequest>>,
     shell_mgr: Arc<crate::shell::ShellManager>,
     wt_connected: bool,
@@ -38,7 +40,7 @@ use crate::pane_context::PaneContext;
 
 use crate::protocol::acp::client::{
     prompt_timing_log, CancelRequest, DropSessionRequest, LoadSessionForTab, NewSessionForTab,
-    PromptSubmission, RestartRequest,
+    PromptSubmission, RenameSessionRequest, RestartRequest,
 };
 use crate::ui;
 use crate::ui_trace;
@@ -844,6 +846,23 @@ pub enum AppEvent {
     AgentBusy {
         tab_id: String,
     },
+    /// WT-side `tab_renamed` event: the user dragged a tab out into a new
+    /// window (or otherwise caused the tab's StableId to change). The
+    /// underlying helper process survives the drag (conpty + TermControl
+    /// are reattached via WT's ContentId mechanism), but the tab key WT
+    /// uses to address us has changed. Without rekeying, autofix /
+    /// per-tab state events targeting the new id wouldn't match any
+    /// entry in `tab_sessions`.
+    TabRenamed {
+        old_tab_id: String,
+        new_tab_id: String,
+        /// Dest window id (from WT's `tab_renamed` payload). When this
+        /// helper rekeys onto the new id, it also updates `self.window_id`
+        /// to this value so subsequent `set_agent_state` / `tab_changed`
+        /// events from the new window pass the per-window filter. `None`
+        /// for direct AppEvent dispatches that don't carry it (tests).
+        new_window_id: Option<String>,
+    },
     ExecutionInfo(String),
     AgentThoughtChunk {
         session_id: String,
@@ -1393,6 +1412,7 @@ pub struct App {
     new_session_tx: mpsc::UnboundedSender<NewSessionForTab>,
     load_session_tx: mpsc::UnboundedSender<LoadSessionForTab>,
     drop_session_tx: mpsc::UnboundedSender<DropSessionRequest>,
+    rename_session_tx: mpsc::UnboundedSender<RenameSessionRequest>,
     restart_tx: mpsc::UnboundedSender<RestartRequest>,
     debug_capture_enabled: Arc<AtomicBool>,
     // Slash-command UI state. The /help overlay is global — it covers
@@ -1407,6 +1427,14 @@ pub struct App {
     // Pane identity (populated via VT channel)
     pub pane_id: Option<String>,
     pub tab_id: Option<String>,
+    // The tab id this helper's agent pane was spawned to own. Unlike
+    // `tab_id` (which floats with `tab_changed` to track WT's currently-
+    // focused tab), this is anchored to the helper's owning pane and
+    // follows only `tab_renamed` events (cross-window drag). Used as the
+    // `tab_id` field on outbound `agent_status` and `autofix_state` events
+    // so the C++ side can route per-pane state to the right
+    // AgentPaneContent / bottom bar window without fan-out.
+    pub owner_tab_id: Option<String>,
     pub window_id: Option<String>,
     // WT event notifications (global — affects bottom-bar / banner across tabs)
     pub wt_notifications: std::collections::VecDeque<WtNotification>,
@@ -1540,6 +1568,7 @@ impl App {
         new_session_tx: mpsc::UnboundedSender<NewSessionForTab>,
         load_session_tx: mpsc::UnboundedSender<LoadSessionForTab>,
         drop_session_tx: mpsc::UnboundedSender<DropSessionRequest>,
+        rename_session_tx: mpsc::UnboundedSender<RenameSessionRequest>,
         restart_tx: mpsc::UnboundedSender<RestartRequest>,
         debug_capture_enabled: Arc<AtomicBool>,
         wt_connected: bool,
@@ -1577,6 +1606,7 @@ impl App {
             new_session_tx,
             load_session_tx,
             drop_session_tx,
+            rename_session_tx,
             restart_tx,
             debug_capture_enabled,
             help_overlay_visible: false,
@@ -1585,6 +1615,7 @@ impl App {
             debug_scroll: 0,
             pane_id: None,
             tab_id: None,
+            owner_tab_id: None,
             window_id: None,
             wt_notifications: VecDeque::new(),
             show_notification_banner: false,
@@ -1617,6 +1648,9 @@ impl App {
         new_session_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::NewSessionForTab>,
         load_session_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::LoadSessionForTab>,
         drop_session_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::DropSessionRequest>,
+        rename_session_rx: mpsc::UnboundedReceiver<
+            crate::protocol::acp::client::RenameSessionRequest,
+        >,
         restart_rx: mpsc::UnboundedReceiver<crate::protocol::acp::client::RestartRequest>,
         shell_mgr: Arc<crate::shell::ShellManager>,
         wt_connected: bool,
@@ -1629,6 +1663,7 @@ impl App {
             new_session_rx: Some(new_session_rx),
             load_session_rx: Some(load_session_rx),
             drop_session_rx: Some(drop_session_rx),
+            rename_session_rx: Some(rename_session_rx),
             restart_rx: Some(restart_rx),
             shell_mgr,
             wt_connected,
@@ -1653,6 +1688,7 @@ impl App {
                 let (_ntx, nrx) = mpsc::unbounded_channel();
                 let (_ltx, lrx) = mpsc::unbounded_channel();
                 let (_dtx, drx) = mpsc::unbounded_channel();
+                let (_rntx, rnrx) = mpsc::unbounded_channel();
                 let (_rtx, rrx) = mpsc::unbounded_channel();
                 self.prompt_tx = ptx;
                 params.prompt_rx = Some(prx);
@@ -1660,6 +1696,7 @@ impl App {
                 params.new_session_rx = Some(nrx);
                 params.load_session_rx = Some(lrx);
                 params.drop_session_rx = Some(drx);
+                params.rename_session_rx = Some(rnrx);
                 params.restart_rx = Some(rrx);
             }
 
@@ -1669,6 +1706,7 @@ impl App {
                 Some(new_session_rx),
                 Some(load_session_rx),
                 Some(drop_session_rx),
+                Some(rename_session_rx),
                 Some(restart_rx),
             ) = (
                 params.prompt_rx.take(),
@@ -1676,6 +1714,7 @@ impl App {
                 params.new_session_rx.take(),
                 params.load_session_rx.take(),
                 params.drop_session_rx.take(),
+                params.rename_session_rx.take(),
                 params.restart_rx.take(),
             ) {
                 // Resolve the agent executable path (bare "copilot" may not
@@ -1697,6 +1736,7 @@ impl App {
                     new_session_rx,
                     load_session_rx,
                     drop_session_rx,
+                    rename_session_rx,
                     restart_rx,
                     shell_mgr,
                     wt_connected,
@@ -2873,6 +2913,7 @@ impl App {
             AppEvent::PromptTemplateLoaded { .. } => "prompt_template_loaded",
             AppEvent::AgentError { .. } => "agent_error",
             AppEvent::AgentBusy { .. } => "agent_busy",
+            AppEvent::TabRenamed { .. } => "tab_renamed",
             AppEvent::ExecutionInfo(_) => "execution_info",
             AppEvent::AgentThoughtChunk { .. } => "agent_thought_chunk",
             AppEvent::AgentMessageChunk { .. } => "agent_message_chunk",
@@ -3087,6 +3128,9 @@ impl App {
                         .to_string(),
                 ));
                 tab.scroll_to_bottom();
+            }
+            AppEvent::TabRenamed { old_tab_id, new_tab_id, new_window_id } => {
+                self.rename_tab_session(&old_tab_id, &new_tab_id, new_window_id.as_deref());
             }
             AppEvent::AgentError { session_id, message } => {
                 // Optimistic-connect fallback: if we have stashed auth info
@@ -3487,6 +3531,31 @@ impl App {
                 }
 
                 if method == "tab_changed" {
+                    // Window-scoped: WT broadcasts via shared COM, so every
+                    // helper (across every window) receives every tab_changed.
+                    // Without this filter, helper-A in window 1 would call
+                    // switch_tab_session on a window-2 tab_id and start
+                    // rendering tab_sessions[<window-2 tab>] in its TUI —
+                    // detaching the agent pane content from its owner tab.
+                    // Same shape as the `set_agent_state` window filter below:
+                    // skip only when both ids are non-empty and differ.
+                    let target_window = params
+                        .get("window_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let our_window = self.window_id.as_deref().unwrap_or("");
+                    if !target_window.is_empty()
+                        && !our_window.is_empty()
+                        && target_window != our_window
+                    {
+                        tracing::debug!(
+                            target: "tab_session",
+                            target_window,
+                            our_window,
+                            "ignoring tab_changed for different window"
+                        );
+                        return;
+                    }
                     tracing::info!(
                         target: "tab_session",
                         raw_params = %params,
@@ -3505,6 +3574,28 @@ impl App {
                 }
 
                 if method == "tab_closed" {
+                    // Same window filter as tab_changed — drop_tab_session
+                    // removes from `tab_sessions` and nulls `self.tab_id`
+                    // when the closed tab is the active one, so a cross-
+                    // window leak would wipe per-tab state of a tab the
+                    // helper doesn't even own.
+                    let target_window = params
+                        .get("window_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let our_window = self.window_id.as_deref().unwrap_or("");
+                    if !target_window.is_empty()
+                        && !our_window.is_empty()
+                        && target_window != our_window
+                    {
+                        tracing::debug!(
+                            target: "tab_session",
+                            target_window,
+                            our_window,
+                            "ignoring tab_closed for different window"
+                        );
+                        return;
+                    }
                     if let Some(closed_tab_id) =
                         params.get("tab_id").and_then(|v| v.as_str())
                     {
@@ -3512,6 +3603,45 @@ impl App {
                     } else {
                         tracing::warn!(target: "tab_session", "tab_closed: missing tab_id in params");
                     }
+                    return;
+                }
+
+                if method == "tab_renamed" {
+                    // Tab-drag rename: the user dragged this tab into
+                    // another window so WT minted a fresh StableId. The
+                    // helper process survives the drag; we just need to
+                    // rekey our per-tab maps so events with the new id
+                    // route to this tab's existing state. Route through
+                    // the AppEvent::TabRenamed handler so the WtEvent
+                    // inline path and any direct AppEvent posts share
+                    // one implementation.
+                    let old_tab_id = params
+                        .get("old_tab_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let new_tab_id = params
+                        .get("new_tab_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if old_tab_id.is_empty() || new_tab_id.is_empty() {
+                        tracing::warn!(
+                            target: "tab_session",
+                            old_tab_id,
+                            new_tab_id,
+                            "tab_renamed: missing old_tab_id or new_tab_id in params"
+                        );
+                        return;
+                    }
+                    let new_window_id = params
+                        .get("window_id")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
+                    self.handle_event(AppEvent::TabRenamed {
+                        old_tab_id: old_tab_id.to_string(),
+                        new_tab_id: new_tab_id.to_string(),
+                        new_window_id,
+                    });
                     return;
                 }
 
@@ -3738,20 +3868,11 @@ impl App {
                         self.tab_mut(&target_tab).pane_open = open;
                     }
 
-                    // Only project when the mutation landed on the active
-                    // tab — C++'s mirrors are global per-pane, so a
-                    // non-active mutation has no effect there until the
-                    // next `tab_changed` projects the (now-updated) tab.
-                    if target_tab == self.active_tab_key() {
-                        self.project_active_tab_state();
-                    } else {
-                        tracing::debug!(
-                            target: "set_agent_state",
-                            target = %target_tab,
-                            active = %self.active_tab_key(),
-                            "applied to non-active tab; deferring projection to next tab_changed"
-                        );
-                    }
+                    // Always echo the mutation back — C++ routes
+                    // `agent_state_changed` by `tab_id`, so per-tab state
+                    // updates apply to the right AgentPaneContent
+                    // regardless of which tab is currently focused.
+                    self.project_tab_state(&target_tab);
                     return;
                 }
 
@@ -4128,6 +4249,7 @@ impl App {
                 }
             }
         }
+
     }
 
     fn event_requires_redraw(&self, event: &AppEvent) -> bool {
@@ -5074,7 +5196,32 @@ impl App {
     /// this does is materialize the destination entry (if missing) and
     /// update `tab_id`. No swapping or copying — the previous tab's state
     /// stays exactly where it was.
+    ///
+    /// Owner-lock: when `self.owner_tab_id` is set (i.e. this is a per-tab
+    /// helper spawned for a specific agent pane), `tab_changed` events for
+    /// a *different* tab are no-ops. The helper's TUI / per-tab state /
+    /// autofix bar are anchored to the owner tab; without this guard, two
+    /// helpers in the same window both process every tab switch and the
+    /// non-owner's stale `tab_sessions[<other tab>]` default snapshot
+    /// (created via `.or_default()` below) clobbers the owner's real
+    /// snapshot when both call `project_active_tab_state` — the pane
+    /// appears to "disappear" on tab switch because the loser emits
+    /// `pane_open=false` after the winner emitted `pane_open=true`.
+    /// Helpers without an owner (delegate path, legacy `wta` runs) still
+    /// follow the active tab.
     fn switch_tab_session(&mut self, new_tab_id: String) {
+        if let Some(owner) = self.owner_tab_id.as_deref() {
+            if owner != new_tab_id {
+                tracing::debug!(
+                    target: "tab_session",
+                    owner,
+                    new_tab_id = %new_tab_id,
+                    "switch_tab_session: ignoring tab_changed for non-owner tab"
+                );
+                return;
+            }
+        }
+
         let old_tab = self.tab_id.clone();
         let entry = self.tab_sessions.entry(new_tab_id.clone()).or_default();
         tracing::info!(
@@ -5141,6 +5288,160 @@ impl App {
             remaining_tabs = self.tab_sessions.len(),
             "drop_tab_session"
         );
+    }
+
+    /// Rekey per-tab state after a tab-drag rename. WT mints a fresh
+    /// StableId when the user drags a tab into another window; the
+    /// underlying helper process survives the drag (conpty + TermControl
+    /// reattach via WT's ContentId mechanism) but the tab key WT uses to
+    /// address us has changed. Without this, autofix / set_agent_state /
+    /// any other event WT broadcasts with the new id would miss every
+    /// entry keyed under the old id.
+    ///
+    /// Concretely re-keys: `self.tab_id`, `self.tab_sessions` (HashMap key),
+    /// `self.session_to_tab` (values), and any cached
+    /// `wt_notifications.tab_id` matching the old id. Triggers a
+    /// re-projection so the bottom-bar autofix snapshot, agent-pane view,
+    /// and pane_open flag are republished under the new identity.
+    ///
+    /// No-op when `new_tab_id == old_tab_id`. If the old tab id is unknown,
+    /// still updates `self.tab_id` when it pointed there — this defends
+    /// against a missed `tab_changed` race where WTA's view of the active
+    /// tab and tab_sessions disagree.
+    fn rename_tab_session(
+        &mut self,
+        old_tab_id: &str,
+        new_tab_id: &str,
+        new_window_id: Option<&str>,
+    ) {
+        if old_tab_id == new_tab_id {
+            tracing::debug!(
+                target: "helper",
+                old_tab_id,
+                new_tab_id,
+                "tab_renamed no-op: ids identical"
+            );
+            return;
+        }
+        let had_session = if let Some(mut entry) = self.tab_sessions.remove(old_tab_id) {
+            // Preserve target slot's TabSession if one was lazily
+            // created under the new id before this event arrived — but
+            // in normal flow that shouldn't happen (WT mints the new
+            // id atomically with the drag). Defensive only: prefer the
+            // entry that already has conversation state.
+            if let Some(existing) = self.tab_sessions.remove(new_tab_id) {
+                if !existing.messages.is_empty() && entry.messages.is_empty() {
+                    entry = existing;
+                }
+            }
+            self.tab_sessions.insert(new_tab_id.to_string(), entry);
+            true
+        } else {
+            false
+        };
+
+        if self.tab_id.as_deref() == Some(old_tab_id) {
+            self.tab_id = Some(new_tab_id.to_string());
+        }
+        // owner_tab_id is the helper's anchor for outbound per-pane events
+        // (agent_status / autofix_state). Follow the rename so subsequent
+        // events route to the new tab id on the C++ side. Without this,
+        // a cross-window drag leaves the helper publishing tab_id=old —
+        // C++'s _FindTabByStableId(old) misses (old tab is gone from the
+        // source window, new id is in target), drops the event, and the
+        // title bar / bottom bar never picks up the helper's state.
+        let owner_matched = self.owner_tab_id.as_deref() == Some(old_tab_id);
+        if owner_matched {
+            self.owner_tab_id = Some(new_tab_id.to_string());
+            // This helper owns the dragged tab. The conpty/TermControl
+            // moved to the dest window — point `self.window_id` at it so
+            // subsequent set_agent_state / tab_changed events from the new
+            // window pass the per-window filter. Without this, the helper
+            // stays bound to the source window's id and ignores its own
+            // tab's events in the new window.
+            if let Some(wid) = new_window_id {
+                let old = self.window_id.clone();
+                self.window_id = Some(wid.to_string());
+                tracing::info!(
+                    target: "helper",
+                    old_window_id = ?old,
+                    new_window_id = wid,
+                    "tab_renamed: updated self.window_id (dragged helper)"
+                );
+            }
+        }
+
+        // session_to_tab values point at tab ids — rewrite any that
+        // matched. Iterating + collecting keys to avoid holding the
+        // borrow while we mutate.
+        let mut rebound_sessions = 0usize;
+        for tab in self.session_to_tab.values_mut() {
+            if tab == old_tab_id {
+                *tab = new_tab_id.to_string();
+                rebound_sessions += 1;
+            }
+        }
+
+        // wt_notifications carry the originating tab id so a later
+        // dismiss / re-emit targets the right tab. Rewrite cached ones.
+        let mut rebound_notifications = 0usize;
+        for n in self.wt_notifications.iter_mut() {
+            if n.tab_id.as_deref() == Some(old_tab_id) {
+                n.tab_id = Some(new_tab_id.to_string());
+                rebound_notifications += 1;
+            }
+        }
+
+        tracing::info!(
+            target: "helper",
+            old_tab_id,
+            new_tab_id,
+            had_session,
+            rebound_sessions,
+            rebound_notifications,
+            "tab renamed via drag"
+        );
+
+        // Re-publish the (now-renamed) active tab so the bottom-bar
+        // autofix snapshot, agent-pane view, and pane_open flag are
+        // republished under the new identity. Without this, C++'s
+        // mirrored state would still be tagged with the old id on the
+        // next event round-trip.
+        if self.tab_id.as_deref() == Some(new_tab_id) {
+            self.project_active_tab_state();
+        }
+
+        // Cross-window drag rebuilds the target window's AgentPaneContent
+        // from scratch — `_agentName/_agentVersion/_agentModel` all start
+        // empty, and nothing on the C++ side re-requests them. Re-emit
+        // `agent_status` tagged with the new tab id so the new
+        // AgentPaneContent's `UpdateAgentStatus` fires and the XAML bar
+        // (label + logo) repopulates. Only the owning helper has
+        // meaningful state to publish — other helpers' status events
+        // for the dragged tab id would be wrong.
+        if owner_matched {
+            self.publish_agent_status();
+        }
+
+        // Tell the ACP client task to rekey its tab→SessionId map so the
+        // next prompt on this tab finds the existing ACP session instead
+        // of falling through to the lazy-create branch. The map lives
+        // behind `Arc<Mutex<…>>` in the ACP task and can't be touched
+        // from `&mut App` directly — mirror the DropSessionRequest plumb.
+        // Send-failure means the ACP task is gone; logged for traces but
+        // not actionable.
+        if let Err(e) = self.rename_session_tx.send(RenameSessionRequest {
+            old_tab_id: old_tab_id.to_string(),
+            new_tab_id: new_tab_id.to_string(),
+        }) {
+            tracing::warn!(
+                target: "helper",
+                old_tab_id,
+                new_tab_id,
+                error = ?e,
+                "rename_session_tx send failed (ACP client task closed?)"
+            );
+        }
     }
 
     /// Wipe per-tab state in place while keeping the `TabSession` slot
@@ -5626,7 +5927,7 @@ impl App {
     fn set_bar_snapshot(&mut self, target_tab_id: &str, snapshot: AutofixBarSnapshot) {
         self.tab_mut(target_tab_id).autofix.bar_snapshot = snapshot.clone();
         if target_tab_id == self.active_tab_key() {
-            send_bar_event(&snapshot);
+            send_bar_event(&snapshot, Some(target_tab_id));
         }
     }
 
@@ -6576,6 +6877,7 @@ pub fn armed_fix_preview(rec: &crate::coordinator::RecommendationSet) -> String 
 }
 
 impl App {
+
     /// Push the current agent status (name / version / model / connection state)
     /// to the host so a XAML-rendered agent bar can update itself. The COM
     /// server special-cases `method == "agent_status"` and dispatches it
@@ -6607,6 +6909,14 @@ impl App {
         });
         if let Some(agent_id) = selected {
             params["selected_agent"] = serde_json::Value::String(agent_id);
+        }
+        // Tag with the helper's owned tab so C++ routes the title-bar
+        // update to the right AgentPaneContent. Without this, OnAgentStatusChanged
+        // fans the event out to every agent pane in every window — fine
+        // for single-pane setups, broken once multiple helpers each
+        // publish their own status (cross-tab title-bar clobber).
+        if let Some(ref tab) = self.owner_tab_id {
+            params["tab_id"] = serde_json::Value::String(tab.clone());
         }
         let evt = serde_json::json!({
             "type": "event",
@@ -6658,7 +6968,24 @@ impl App {
     ///
     /// Idempotent — safe to call multiple times in a row.
     pub fn project_active_tab_state(&self) {
-        let tab = self.current_tab();
+        let active = self.active_tab_key().to_string();
+        self.project_tab_state(&active);
+    }
+
+    /// Project the given tab's state to C++ regardless of whether it is the
+    /// active tab. Used by `set_agent_state` so a mutation targeting a
+    /// non-active tab still echoes back — under per-tab routing C++ can
+    /// apply state changes to any tab, not just the focused one, so
+    /// the old "defer until next tab_changed" gate was wrong.
+    pub fn project_tab_state(&self, target_tab: &str) {
+        let Some(tab) = self.tab_sessions.get(target_tab) else {
+            tracing::warn!(
+                target: "project_tab_state",
+                tab_id = %target_tab,
+                "no tab_session for target — skipping echo"
+            );
+            return;
+        };
         let view = match tab.current_view {
             View::Agents => "sessions",
             View::Chat => "chat",
@@ -6667,16 +6994,19 @@ impl App {
             "type": "event",
             "method": "agent_state_changed",
             "params": {
+                "tab_id":    target_tab,
                 "view":      view,
                 "pane_open": tab.pane_open,
             }
         });
         send_wt_protocol_event(evt.to_string());
 
-        // Autofix bar — different domain (bottom bar), kept on its own
-        // route. Re-emitted here so a `tab_changed` projects both halves
-        // of the per-tab → C++ surface in one call.
-        send_bar_event(&tab.autofix.bar_snapshot);
+        // Autofix bar is window-level (single bottom bar reflecting the
+        // active tab), so only re-emit when we're projecting the active
+        // tab. A non-active mutation does not change the visible bar.
+        if target_tab == self.active_tab_key() {
+            send_bar_event(&tab.autofix.bar_snapshot, Some(target_tab));
+        }
     }
 }
 
@@ -6698,8 +7028,8 @@ pub fn send_wt_protocol_event(json_payload: String) {
 /// snapshot. Used by both fresh state transitions (active tab) and the
 /// tab_changed re-emit path. Field shape mirrors what C++
 /// `OnAutofixStateChanged` consumes.
-fn send_bar_event(snapshot: &AutofixBarSnapshot) {
-    let evt = match snapshot {
+fn send_bar_event(snapshot: &AutofixBarSnapshot, tab_id: Option<&str>) {
+    let mut evt = match snapshot {
         AutofixBarSnapshot::Idle => serde_json::json!({
             "type": "event",
             "method": "autofix_state",
@@ -6744,6 +7074,18 @@ fn send_bar_event(snapshot: &AutofixBarSnapshot) {
             }
         }),
     };
+    // Tag with tab_id so C++ routes the bottom-bar update to the right
+    // tab's AgentPaneContent (window-level bar reflects active tab's
+    // autofix state). Without this, the event fans out and a non-active
+    // tab's autofix would clobber the bar.
+    if let Some(t) = tab_id {
+        if let Some(params) = evt.get_mut("params").and_then(|v| v.as_object_mut()) {
+            params.insert(
+                "tab_id".to_string(),
+                serde_json::Value::String(t.to_string()),
+            );
+        }
+    }
     send_wt_protocol_event(evt.to_string());
 }
 
@@ -6888,7 +7230,6 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max]) }
 }
 
-
 fn now_unix_s() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -6998,10 +7339,12 @@ mod tests {
         let (new_session_tx, _new_session_rx) = tokio::sync::mpsc::unbounded_channel();
         let (load_session_tx, _load_session_rx) = tokio::sync::mpsc::unbounded_channel();
         let (drop_session_tx, _drop_session_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (rename_session_tx, _rename_session_rx) = tokio::sync::mpsc::unbounded_channel();
         let (restart_tx, _restart_rx) = tokio::sync::mpsc::unbounded_channel();
         let debug_capture = Arc::new(AtomicBool::new(false));
-        App::new(prompt_tx, recommendation_tx, permission_tx, cancel_tx, new_session_tx, load_session_tx, drop_session_tx, restart_tx, debug_capture, true, false)
+        App::new(prompt_tx, recommendation_tx, permission_tx, cancel_tx, new_session_tx, load_session_tx, drop_session_tx, rename_session_tx, restart_tx, debug_capture, true, false)
     }
+
 
     // ─── word boundary helpers ──────────────────────────────────────────────
 
@@ -7135,6 +7478,188 @@ mod tests {
         let params = json!({"session_id": "1"});
         let n = classify_wt_event("something_new", "1", None, &params);
         assert_eq!(n.severity, WtEventSeverity::Informational);
+    }
+
+    // ─── tab_renamed (tab-drag rekeying) ────────────────────────────────────
+
+    #[test]
+    fn tab_renamed_rekeys_active_tab_and_session_map() {
+        let mut app = test_app();
+        // Seed: active tab is AAAA with a bound ACP session.
+        app.tab_id = Some("AAAA".to_string());
+        app.tab_sessions
+            .insert("AAAA".to_string(), TabSession::default());
+        app.session_to_tab
+            .insert("sess-1".to_string(), "AAAA".to_string());
+
+        // Drive the rename via the WtEvent dispatch path — same code path
+        // a real broadcast from the COM server takes.
+        app.handle_event(AppEvent::WtEvent {
+            method: "tab_renamed".to_string(),
+            pane_id: String::new(),
+            tab_id: None,
+            params: json!({"old_tab_id": "AAAA", "new_tab_id": "BBBB"}),
+        });
+
+        assert_eq!(app.tab_id.as_deref(), Some("BBBB"),
+            "active tab id must follow the rename");
+        assert!(app.tab_sessions.contains_key("BBBB"),
+            "tab_sessions must contain the new key after rename");
+        assert!(!app.tab_sessions.contains_key("AAAA"),
+            "tab_sessions must no longer contain the old key");
+        assert_eq!(app.session_to_tab.get("sess-1").map(String::as_str),
+            Some("BBBB"),
+            "session_to_tab values pointing at the old id must be rewritten");
+    }
+
+    #[test]
+    fn tab_renamed_appevent_variant_drives_same_handler() {
+        // Direct AppEvent::TabRenamed dispatch — used by callers that
+        // already deserialized the params (mirrors the WtEvent inline
+        // path).
+        let mut app = test_app();
+        app.tab_id = Some("AAAA".to_string());
+        app.tab_sessions
+            .insert("AAAA".to_string(), TabSession::default());
+
+        app.handle_event(AppEvent::TabRenamed {
+            old_tab_id: "AAAA".to_string(),
+            new_tab_id: "CCCC".to_string(),
+            new_window_id: None,
+        });
+
+        assert_eq!(app.tab_id.as_deref(), Some("CCCC"));
+        assert!(app.tab_sessions.contains_key("CCCC"));
+        assert!(!app.tab_sessions.contains_key("AAAA"));
+    }
+
+    #[test]
+    fn tab_renamed_sends_rename_session_request_to_acp_client() {
+        // The chat-history side rekeys in-process, but tab_to_session
+        // lives in the ACP client task — it has to be told to rekey via
+        // the rename_session_tx channel. Without this signal, the next
+        // prompt on the dragged tab can't find the old SessionId.
+        let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (recommendation_tx, _recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (permission_tx, _permission_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (cancel_tx, _cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (new_session_tx, _new_session_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (load_session_tx, _load_session_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (drop_session_tx, _drop_session_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (rename_session_tx, mut rename_session_rx) =
+            tokio::sync::mpsc::unbounded_channel();
+        let (restart_tx, _restart_rx) = tokio::sync::mpsc::unbounded_channel();
+        let debug_capture = Arc::new(AtomicBool::new(false));
+        let mut app = App::new(
+            prompt_tx,
+            recommendation_tx,
+            permission_tx,
+            cancel_tx,
+            new_session_tx,
+            load_session_tx,
+            drop_session_tx,
+            rename_session_tx,
+            restart_tx,
+            debug_capture,
+            true,
+            false,
+        );
+
+        app.tab_id = Some("AAAA".to_string());
+        app.tab_sessions
+            .insert("AAAA".to_string(), TabSession::default());
+
+        app.handle_event(AppEvent::TabRenamed {
+            old_tab_id: "AAAA".to_string(),
+            new_tab_id: "BBBB".to_string(),
+            new_window_id: None,
+        });
+
+        // The ACP client task should have received exactly one
+        // RenameSessionRequest with the old/new ids — that's what makes
+        // the dragged tab's chat history line up with the agent's turn
+        // context after the drag.
+        let req = rename_session_rx
+            .try_recv()
+            .expect("rename_session_tx must have received a request");
+        assert_eq!(req.old_tab_id, "AAAA");
+        assert_eq!(req.new_tab_id, "BBBB");
+        assert!(rename_session_rx.try_recv().is_err(),
+            "exactly one request should have been sent");
+    }
+
+    #[test]
+    fn tab_renamed_noop_does_not_send_rename_session_request() {
+        // A no-op rename (old == new) must not bother the ACP client —
+        // there's nothing to rekey, and a spurious request would
+        // needlessly grab the tab_to_session lock.
+        let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (recommendation_tx, _recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (permission_tx, _permission_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (cancel_tx, _cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (new_session_tx, _new_session_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (load_session_tx, _load_session_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (drop_session_tx, _drop_session_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (rename_session_tx, mut rename_session_rx) =
+            tokio::sync::mpsc::unbounded_channel();
+        let (restart_tx, _restart_rx) = tokio::sync::mpsc::unbounded_channel();
+        let debug_capture = Arc::new(AtomicBool::new(false));
+        let mut app = App::new(
+            prompt_tx,
+            recommendation_tx,
+            permission_tx,
+            cancel_tx,
+            new_session_tx,
+            load_session_tx,
+            drop_session_tx,
+            rename_session_tx,
+            restart_tx,
+            debug_capture,
+            true,
+            false,
+        );
+
+        app.tab_id = Some("AAAA".to_string());
+        app.tab_sessions
+            .insert("AAAA".to_string(), TabSession::default());
+
+        app.handle_event(AppEvent::TabRenamed {
+            old_tab_id: "AAAA".to_string(),
+            new_tab_id: "AAAA".to_string(),
+            new_window_id: None,
+        });
+
+        assert!(rename_session_rx.try_recv().is_err(),
+            "no-op rename must not send a RenameSessionRequest");
+    }
+
+    #[test]
+    fn tab_renamed_with_missing_fields_is_dropped() {
+        let mut app = test_app();
+        app.tab_id = Some("AAAA".to_string());
+        app.tab_sessions
+            .insert("AAAA".to_string(), TabSession::default());
+
+        // Empty new_tab_id — must not corrupt state.
+        app.handle_event(AppEvent::WtEvent {
+            method: "tab_renamed".to_string(),
+            pane_id: String::new(),
+            tab_id: None,
+            params: json!({"old_tab_id": "AAAA", "new_tab_id": ""}),
+        });
+        assert_eq!(app.tab_id.as_deref(), Some("AAAA"),
+            "rename with empty new_tab_id must be dropped, leaving state untouched");
+        assert!(app.tab_sessions.contains_key("AAAA"));
+
+        // Missing field entirely — must not corrupt state.
+        app.handle_event(AppEvent::WtEvent {
+            method: "tab_renamed".to_string(),
+            pane_id: String::new(),
+            tab_id: None,
+            params: json!({"old_tab_id": "AAAA"}),
+        });
+        assert_eq!(app.tab_id.as_deref(), Some("AAAA"));
+        assert!(app.tab_sessions.contains_key("AAAA"));
     }
 
     // ─── WtNotification auto-dismiss ────────────────────────────────────────
