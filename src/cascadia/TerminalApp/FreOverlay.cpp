@@ -561,6 +561,15 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
+        // After installing prerequisites, refresh the current process's
+        // PATH from the Windows registry so SearchPathW (used by
+        // _DetectAgentCli, Settings UI, etc.) can find freshly-installed
+        // CLIs without restarting Terminal.
+        if (needsCopilot || needsNode)
+        {
+            ::Microsoft::Terminal::WtaProcess::RefreshProcessPath();
+        }
+
         // 4+5. Install hooks and shell integration. Run both, collect any
         // failures, then surface only the highest-priority one (see
         // _ShowProblem). Lower-priority failures are left enabled so the next

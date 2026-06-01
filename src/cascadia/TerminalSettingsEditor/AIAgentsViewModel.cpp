@@ -110,6 +110,10 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     {
         namespace Reg = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
 
+        // Refresh PATH from the Windows registry so SearchPathW can find
+        // CLIs installed after Terminal launched (e.g. WinGet\Links).
+        ::Microsoft::Terminal::WtaProcess::RefreshProcessPath();
+
         // ACP-capable agents — use GPO-filtered list so only policy-allowed
         // agents appear in the dropdown. Also skip agents whose CLI isn't
         // installed — the dropdown only offers choices the user can actually
