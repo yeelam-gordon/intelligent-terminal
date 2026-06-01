@@ -455,7 +455,7 @@ namespace winrt::TerminalApp::implementation
         {
         case FreProblemKind::CopilotInstall:
             ErrorText().Text(RS_(L"FreOverlay_InstallErrorCopilot"));
-            url += L"#3-github-copilot-cli";
+            url += L"#31-github-copilot-cli";
             break;
         case FreProblemKind::NodeInstall:
             ErrorText().Text(RS_(L"FreOverlay_InstallErrorNode"));
@@ -463,7 +463,7 @@ namespace winrt::TerminalApp::implementation
             break;
         case FreProblemKind::ShellIntegration:
             ErrorText().Text(RS_(L"FreOverlay_InstallErrorShellIntegration"));
-            url += L"#8-powershell-shell-integration";
+            url += L"#4-powershell-shell-integration";
             // Remediation: turn off error detection (and its dependent
             // suggestion) so the user can save and continue without it.
             AutoDetectToggle().IsOn(false);
