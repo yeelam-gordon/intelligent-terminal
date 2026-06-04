@@ -29,7 +29,7 @@ function Read-State {
     if (-not (Test-Path $p)) {
         throw "state.json not found at $p. Run scripts/00-bootstrap.ps1 first — see references/bootstrap.md."
     }
-    return Get-Content -Raw -LiteralPath $p | ConvertFrom-Json -AsHashtable
+    return Get-Content -Raw -LiteralPath $p | ConvertFrom-Json
 }
 
 function Write-State {

@@ -26,9 +26,7 @@ param(
 . "$PSScriptRoot/Common.ps1"
 
 # Prepend the squash-warning banner to the report so it lands as the
-# first thing reviewers see in the PR body. The same banner is also
-# rendered into the report file in scripts/05-write-report.ps1 — keep
-# both consistent.
+# first thing reviewers see in the PR body.
 $banner = @"
 > ⚠️ **DO NOT squash-merge this PR.** Squashing collapses every cherry-picked
 > upstream commit into one, destroying per-commit attribution, original
