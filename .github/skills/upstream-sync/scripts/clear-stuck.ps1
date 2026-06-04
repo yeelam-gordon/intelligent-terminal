@@ -48,8 +48,8 @@ if ($LASTEXITCODE -ne 0) { throw "git fetch upstream main failed; refusing to cl
 
 git switch main | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "git switch main failed; refusing to clear stuck-lock from the wrong branch." }
-git pull --ff-only | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only failed; refusing to clear stuck-lock until main is current." }
+git pull --ff-only origin main | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only origin main failed; refusing to clear stuck-lock until main is current." }
 
 if ($tier3) {
     if (-not $ResolvedThroughSha) {

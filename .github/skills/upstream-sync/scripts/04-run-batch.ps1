@@ -128,8 +128,8 @@ try {
     Assert-CleanWorktree
     git switch main 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) { Exit-Hard "git switch main failed." }
-    git pull --ff-only 2>&1 | Out-Host
-    if ($LASTEXITCODE -ne 0) { Exit-Hard "git pull --ff-only main failed." }
+    git pull --ff-only origin main 2>&1 | Out-Host
+    if ($LASTEXITCODE -ne 0) { Exit-Hard "git pull --ff-only origin main failed." }
 
     # --- 1. Fetch upstream ---
     $toSha = (& "$PSScriptRoot/01-fetch-upstream.ps1").Trim()
