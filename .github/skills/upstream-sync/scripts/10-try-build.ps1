@@ -79,9 +79,13 @@ try {
 
     if (-not $exited) {
         try { $proc.Kill($true) } catch { }
+        $proc.WaitForExit()
         $kind     = 'build-inconclusive'
         $exitCode = -1
     } else {
+        # WaitForExit(timeout) can return before async output callbacks drain.
+        # The parameterless wait completes only after redirected output events finish.
+        $proc.WaitForExit()
         $exitCode = $proc.ExitCode
         $kind     = if ($exitCode -eq 0) { 'build-ok' } else { 'build-failed' }
     }

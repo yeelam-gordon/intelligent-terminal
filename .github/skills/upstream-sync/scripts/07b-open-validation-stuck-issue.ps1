@@ -112,6 +112,7 @@ $Ctx.StuckValidation = $validation
 
 # Write the lock onto origin/main.
 git switch main | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Could not switch to main before writing stuck-lock. Resolve manually and re-run." }
 git pull --ff-only origin main | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "Could not fast-forward main before writing stuck-lock. Resolve manually and re-run." }
 

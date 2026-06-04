@@ -60,6 +60,7 @@ $Ctx.IssueUrl = $issueUrl.Trim()
 
 # Set the stuck-lock on main (direct push — the lock is the gate; PR path is blocked).
 git switch main | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Could not switch to main before writing stuck-lock. Resolve manually and re-run; the stuck branch + issue are already in place." }
 git pull --ff-only origin main | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "Could not fast-forward main before writing stuck-lock. Resolve manually and re-run; the stuck branch + issue are already in place." }
 

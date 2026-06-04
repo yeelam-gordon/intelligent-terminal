@@ -49,6 +49,7 @@ $state = @{
     stuck_branch             = $null
     stuck_at                 = $null
     stuck_issue_url          = $null
+    stuck_validation         = $null
     last_run                 = $null
     history                  = @()
 }
@@ -57,7 +58,10 @@ Write-State $state
 # Stage and commit on a dedicated branch so the human can open the PR.
 $branch = 'chore/upstream-sync-bootstrap'
 git switch -c $branch 2>$null
-if ($LASTEXITCODE -ne 0) { git switch $branch | Out-Null }
+if ($LASTEXITCODE -ne 0) {
+    git switch $branch | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not create or switch to bootstrap branch '$branch'. Refusing to commit state.json on the current HEAD." }
+}
 
 git add -- (Get-StatePath)
 if ($LASTEXITCODE -ne 0) { throw "git add of state.json failed." }
