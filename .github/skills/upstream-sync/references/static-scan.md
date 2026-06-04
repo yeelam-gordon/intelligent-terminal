@@ -34,6 +34,28 @@ Severity:
 - `critical` — any new duplicate key introduced by the pick range.
 - `info`     — pre-existing duplicates carried forward.
 
+> **Implementation note (PR #220 follow-up).** Both `Get-FileTextAtRef`
+> and `Get-FileTextOnDisk` MUST use absolute paths when calling
+> `[System.IO.File]::ReadAllText`. .NET resolves relative paths against
+> `[System.Environment]::CurrentDirectory`, NOT PowerShell's `$PWD`, so
+> a relative path silently reads from a different worktree. PR #220's
+> first dedup pass returned `blocking=false` while the build was still
+> broken because of this exact bug — the scan was reading the dup-free
+> `intelligent-terminal` main worktree instead of the dup-laden sync
+> worktree. Same caveat for `git show` — capture via `cmd /c "git show
+> ref:path > tmp 2>nul"` instead of PowerShell-pipeline join, otherwise
+> high-Unicode (pseudo-locale) bytes get truncated by the PSObject
+> formatter.
+
+> **Operator note: manual dedup regex.** When fixing duplicates by hand
+> (the orchestrator does NOT auto-dedup), the matching regex must be
+> CRLF-agnostic: `(?s)([ \t]*)<data\s+name="([^"]+)"[^>]*>.*?</data>(\r?\n)?`.
+> A `</data>\r?\n`-anchored regex misses inline-concatenated entries
+> (`</data><data ...>...</data><data ...>...</data>`) that the loc-bot
+> commits as a single appended line for fork-only keys in
+> `qps-ploc/qps-ploca/qps-plocm` — exactly the second failure mode that
+> blocked PR #220 build retry #4.
+
 ### 2. Fork invariants (regex must-match)
 
 Reads `references/fork-invariants.json`. For each entry:

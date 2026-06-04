@@ -52,15 +52,32 @@ function Get-ChangedReswFiles {
 
 function Get-FileTextAtRef {
     param([string] $Ref, [string] $Path)
-    $text = git show "${Ref}:$Path" 2>$null
-    if ($LASTEXITCODE -ne 0) { return $null }   # file didn't exist at that ref
-    return ($text -join "`n")
+    # Capture via a temp file to avoid PowerShell mangling binary-ish output
+    # (UTF-8 BOM, mixed CRLF/LF, high-Unicode pseudo-locale glyphs) when the
+    # subprocess's stdout is bound to a PSObject pipeline.
+    $tmp = [System.IO.Path]::GetTempFileName()
+    try {
+        & cmd /c "git show ""${Ref}:$Path"" > ""$tmp"" 2>nul"
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return [System.IO.File]::ReadAllText($tmp)
+    } finally {
+        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-FileTextOnDisk {
     param([string] $Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    return [System.IO.File]::ReadAllText($Path)
+    # IMPORTANT: [System.IO.File]::* APIs resolve relative paths against
+    # [Environment]::CurrentDirectory, NOT PowerShell's $PWD. Any relative
+    # path passed in here would silently read from the wrong worktree (the
+    # PR #220 audit miss). Resolve to absolute against the repo root.
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        $abs = $Path
+    } else {
+        $abs = Join-Path (Get-RepoRoot) $Path
+    }
+    if (-not (Test-Path -LiteralPath $abs)) { return $null }
+    return [System.IO.File]::ReadAllText($abs)
 }
 
 function Scan-ReswDuplicates {
