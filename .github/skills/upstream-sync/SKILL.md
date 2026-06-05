@@ -27,7 +27,7 @@ conflict appears.
 
 ## Prerequisites
 
-- `git` 2.30+ and `gh` CLI authenticated against `microsoft/intelligent-terminal`.
+- `git` 2.38+ (needed for `git cherry-pick --keep-redundant-commits`, used by `scripts/03-cherry-pick-one.ps1`) and `gh` CLI authenticated against `microsoft/intelligent-terminal`.
 - PowerShell 7+ (`pwsh`) on PATH.
 - Windows build host with Visual Studio 2022, Windows SDK, `vswhere`, and the repo's `tools\razzle.cmd`/`bz` build environment for the default validation gates (or use `-SkipBuild` only for explicit dev/debug runs).
 - Remote named `upstream` pointing at `https://github.com/microsoft/terminal.git`
