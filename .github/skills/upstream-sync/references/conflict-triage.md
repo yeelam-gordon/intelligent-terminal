@@ -152,8 +152,13 @@ re-normalize before staging:
 ```pwsh
 # Inside Tier-2, after writing the resolved content:
 $bytes = [System.IO.File]::ReadAllBytes($p)
-$text  = [System.Text.Encoding]::UTF8.GetString($bytes) -replace "`r?`n", "`r`n"
-[System.IO.File]::WriteAllText($p, $text, (New-Object System.Text.UTF8Encoding($true))) # BOM
+# Preserve the file's original BOM presence — UTF-8-with-BOM is right
+# for .resw / .csproj on this repo, but UTF-8-without-BOM is right for
+# many .yml / .md files. Adding a BOM where one wasn't there before
+# introduces unrelated encoding diffs and can break tooling.
+$hasBom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+$text   = [System.Text.Encoding]::UTF8.GetString($bytes) -replace "`r?`n", "`r`n"
+[System.IO.File]::WriteAllText($p, $text, (New-Object System.Text.UTF8Encoding($hasBom)))
 ```
 
 (Skipping this is how the winget-pkgs submission broke last time —
