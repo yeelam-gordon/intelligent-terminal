@@ -138,7 +138,7 @@ $reportName   = Split-Path -Leaf $ReportPath
 $reportOnMain = Join-Path (Get-ReportsDir) $reportName
 if ($ReportPath -ne $reportOnMain) { Copy-Item -LiteralPath $ReportPath -Destination $reportOnMain -Force }
 
-git add -- (Get-StatePath) $reportOnMain | Out-Null
+git add -- (ConvertTo-RepoRelativePath (Get-StatePath)) (ConvertTo-RepoRelativePath $reportOnMain) | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "git add failed for Tier-4 stuck state." }
 
 $msgIssueRef = if ($validation.issue_url) { " (#$($validation.issue_url -replace '.*/',''))" } else { ' (no issue — infra)' }

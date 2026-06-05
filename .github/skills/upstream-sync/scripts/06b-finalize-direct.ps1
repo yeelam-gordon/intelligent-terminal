@@ -59,7 +59,7 @@ $state.last_run = $runSummary
 $state.history  = @($runSummary) + @($state.history) | Select-Object -First 20
 Write-State $state
 
-git add -- (Get-StatePath) $ReportPath
+git add -- (ConvertTo-RepoRelativePath (Get-StatePath)) (ConvertTo-RepoRelativePath $ReportPath)
 if ($LASTEXITCODE -ne 0) { throw "git add of state.json + report failed." }
 git commit -m "chore(upstream-sync): advance baseline to $shortTo" | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "git commit of state-update failed; aborting before touching main." }
@@ -96,7 +96,7 @@ if ($state.last_run -and $state.history -and $state.history.Count -gt 0) {
     $state.last_run.main_head_sha = $mainHead
     $state.history[0].main_head_sha = $mainHead
     Write-State $state
-    git add -- (Get-StatePath) | Out-Null
+    git add -- (ConvertTo-RepoRelativePath (Get-StatePath)) | Out-Null
     git commit -m "chore(upstream-sync): record main head $($mainHead.Substring(0,9))" | Out-Host
     if ($LASTEXITCODE -eq 0) {
         git push origin main | Out-Host

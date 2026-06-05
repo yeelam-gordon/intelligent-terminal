@@ -25,6 +25,20 @@ param(
 
 . "$PSScriptRoot/Common.ps1"
 
+# Safety: a bootstrap PR must contain *only* state.json. Refuse if the
+# worktree is dirty or HEAD isn't main, otherwise unrelated diffs (or a
+# feature branch's tip) could ride along on the bootstrap commit/PR.
+$currentBranch = (git rev-parse --abbrev-ref HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { throw "git rev-parse failed (is this a git repo?)." }
+if ($currentBranch -ne 'main') {
+    throw "Bootstrap must be run from 'main'. Currently on '$currentBranch'. git switch main first."
+}
+$dirty = git status --porcelain
+if ($LASTEXITCODE -ne 0) { throw "git status failed." }
+if ($dirty) { throw "Worktree is dirty. Bootstrap refuses to commit on a dirty tree:`n$dirty" }
+git pull --ff-only origin main | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only origin main failed. Resolve and retry." }
+
 Ensure-UpstreamRemote
 git fetch upstream main --no-tags | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "git fetch upstream main failed." }
@@ -64,7 +78,7 @@ if ($LASTEXITCODE -ne 0) {
     if ($LASTEXITCODE -ne 0) { throw "Could not create or switch to bootstrap branch '$branch'. Refusing to commit state.json on the current HEAD." }
 }
 
-git add -- (Get-StatePath)
+git add -- (ConvertTo-RepoRelativePath (Get-StatePath))
 if ($LASTEXITCODE -ne 0) { throw "git add of state.json failed." }
 
 git commit -m "chore(upstream-sync): bootstrap baseline at $($BaselineSha.Substring(0,9))" | Out-Host

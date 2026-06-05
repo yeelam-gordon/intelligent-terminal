@@ -89,7 +89,7 @@ if ($ReportPath -ne $reportOnMain) {
     Copy-Item -LiteralPath $ReportPath -Destination $reportOnMain -Force
 }
 
-git add -- (Get-StatePath) $reportOnMain
+git add -- (ConvertTo-RepoRelativePath (Get-StatePath)) (ConvertTo-RepoRelativePath $reportOnMain)
 if ($LASTEXITCODE -ne 0) { throw "git add of stuck state failed." }
 git commit -m "chore(upstream-sync): stuck at $shortSha (#$($Ctx.IssueUrl -replace '.*/',''))" | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "git commit of stuck-lock failed — lock NOT set on origin/main. The next scheduled run will not see the lock; resolve manually." }

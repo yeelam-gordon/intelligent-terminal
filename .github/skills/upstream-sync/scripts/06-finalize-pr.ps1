@@ -71,7 +71,7 @@ $state.last_run = $runSummary
 $state.history  = @($runSummary) + @($state.history) | Select-Object -First 20
 Write-State $state
 
-git add -- (Get-StatePath) $ReportPath
+git add -- (ConvertTo-RepoRelativePath (Get-StatePath)) (ConvertTo-RepoRelativePath $ReportPath)
 if ($LASTEXITCODE -ne 0) { throw "git add of state.json + report failed." }
 git commit -m "chore(upstream-sync): advance baseline to $shortTo" | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "git commit of state-update failed; aborting without push so baseline is not lost." }
@@ -127,7 +127,7 @@ if ($state.history -and $state.history.Count -gt 0) {
     $state.history[0].pr_url = $Ctx.PrUrl
 }
 Write-State $state
-git add -- (Get-StatePath) | Out-Null
+git add -- (ConvertTo-RepoRelativePath (Get-StatePath)) | Out-Null
 git commit -m "chore(upstream-sync): record PR url" | Out-Host
 if ($LASTEXITCODE -eq 0) {
     git push origin $branch | Out-Host

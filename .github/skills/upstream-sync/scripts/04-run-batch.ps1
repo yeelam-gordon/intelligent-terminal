@@ -135,7 +135,10 @@ try {
     # NEW PR with identical content. Bail early with a no-op report
     # instead, unless -Force is given.
     if (-not $Force) {
-        $existingJson = gh pr list --repo microsoft/intelligent-terminal --state open --search 'head:upstream-sync/' --json number,headRefName,url 2>$null
+        # --limit 200: `gh pr list` defaults to 30. If a repo somehow has
+        # 30+ open PRs and the upstream-sync one is older, the default
+        # would miss it and we'd duplicate the branch / PR.
+        $existingJson = gh pr list --repo microsoft/intelligent-terminal --state open --search 'head:upstream-sync/' --limit 200 --json number,headRefName,url 2>$null
         if ($LASTEXITCODE -eq 0 -and $existingJson) {
             $existing = @($existingJson | ConvertFrom-Json) | Where-Object { $_.headRefName -like 'upstream-sync/*' }
             if ($existing.Count -gt 0) {

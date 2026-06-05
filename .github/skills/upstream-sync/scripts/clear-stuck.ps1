@@ -96,7 +96,7 @@ $entry = [ordered] @{
 $state.history = @($entry) + @($state.history) | Select-Object -First 20
 Write-State $state
 
-git add -- (Get-StatePath) | Out-Null
+git add -- (ConvertTo-RepoRelativePath (Get-StatePath)) | Out-Null
 $shortLabel = if ($resolvedFullSha) { $resolvedFullSha.Substring(0,9) } else { 'no-advance' }
 git commit -m "chore(upstream-sync): clear stuck-lock ($shortLabel)" | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "git commit failed (state unchanged?); lock is NOT cleared on origin/main." }
