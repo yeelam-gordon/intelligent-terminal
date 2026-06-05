@@ -57,7 +57,7 @@ function Get-LastSyncedUpstreamSha {
         # single string so [regex]::Matches doesn't coerce the array to
         # the literal "System.String[]".
         $body = (git log -1 --format='%B' $c 2>$null) -join "`n"
-        $allMatches = [regex]::Matches($body, '\(cherry picked from commit ([0-9a-f]{7,40})\)')
+        $allMatches = [regex]::Matches($body, '\(cherry picked from commit ([0-9a-fA-F]{7,40})\)')
         if ($allMatches.Count -eq 0) { continue }
         # Walk trailers bottom-up (newest-first within the same commit).
         for ($i = $allMatches.Count - 1; $i -ge 0; $i--) {
@@ -78,12 +78,20 @@ function Get-PendingUpstreamShas {
     param([string] $Since)
     $out = @(git log --cherry-pick --right-only --no-merges --format='%H' --reverse 'origin/main...upstream/main' 2>$null)
     if ($LASTEXITCODE -ne 0) { throw "git log --cherry-pick failed while computing pending list." }
-    $shas = @($out | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[0-9a-f]{40}$' })
+    $shas = @($out | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[0-9a-fA-F]{40}$' })
     if ($Since) {
         $filtered = New-Object 'System.Collections.Generic.List[string]'
         foreach ($sha in $shas) {
+            # git merge-base --is-ancestor:
+            #   exit 0  = ancestor (already on origin/main, drop it)
+            #   exit 1  = not an ancestor (keep)
+            #   exit >1 = real error (bad object, missing ref, shallow clone)
             $null = git merge-base --is-ancestor $sha $Since 2>$null
-            if ($LASTEXITCODE -ne 0) { [void] $filtered.Add($sha) }
+            switch ($LASTEXITCODE) {
+                0       { }                       # ancestor, drop
+                1       { [void] $filtered.Add($sha) }
+                default { throw "git merge-base --is-ancestor failed (exit $LASTEXITCODE) on $sha vs $Since; pending list cannot be trusted." }
+            }
         }
         $shas = @($filtered)
     }
