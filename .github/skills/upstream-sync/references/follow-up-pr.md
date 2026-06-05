@@ -50,7 +50,7 @@ clean:
 $syncPr      = 220
 $syncBranch  = 'upstream-sync/2026-06-04-091512-a3f1'   # the sync PR's head — copy the exact name from the PR, branches are date+UTC-HHmmss+random-hex per run
 $fixBranch   = "dev/$env:USERNAME/sync-$syncPr-review-fixes"
-$fixWorktree = "..\it-$syncPr`fix"
+$fixWorktree = "..\it-$syncPr-fix"
 
 # Sync branch tip must be local for the worktree to land at the right base
 git fetch origin $syncBranch

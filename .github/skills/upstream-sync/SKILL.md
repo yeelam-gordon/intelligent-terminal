@@ -102,17 +102,17 @@ The fresh suffix means re-runs never collide with stale local branches.
 ### 3. Fetch upstream
 
 ```pwsh
-if (-not (git remote get-url upstream 2>$null)) {
-    git remote add upstream https://github.com/microsoft/terminal.git
+$expectedUpstream = 'https://github.com/microsoft/terminal.git'
+$existing = git remote get-url upstream 2>$null
+if (-not $existing) {
+    git remote add upstream $expectedUpstream
+} elseif ($existing.Trim().TrimEnd('/') -ne $expectedUpstream.TrimEnd('/')) {
+    throw "Remote 'upstream' points at '$existing' but this skill requires '$expectedUpstream'. Aborting so we don't silently sync from the wrong fork."
 }
 git fetch upstream main --no-tags 2>&1 | ForEach-Object { [Console]::Error.WriteLine($_) }
 if ($LASTEXITCODE -ne 0) { throw "git fetch upstream main failed." }
 $upstreamSha = (git rev-parse upstream/main).Trim()
 ```
-
-If `upstream` already exists with a different URL (someone configured it
-to a private mirror, etc.), surface that to the operator and exit — don't
-silently rewrite it.
 
 ### 4. Compute pending
 
@@ -187,13 +187,17 @@ $(if ($pick.error) { "**Error:** ``$($pick.error)``" })
 See [references/03-conflict-triage.md](https://github.com/microsoft/intelligent-terminal/blob/main/.github/skills/upstream-sync/references/03-conflict-triage.md) for the resolution rubric.
 "@
 
-$body | Set-Content -Encoding utf8 .issuebody
-$issueUrl = gh issue create -R microsoft/intelligent-terminal `
-    --title "Upstream sync stuck at $shortSha" `
-    --label upstream-sync-stuck `
-    --body-file .issuebody
-if ($LASTEXITCODE -ne 0) { throw "gh issue create failed." }
-Remove-Item .issuebody
+$bodyFile = New-TemporaryFile
+try {
+    Set-Content -Encoding utf8 -Path $bodyFile -Value $body
+    $issueUrl = gh issue create -R microsoft/intelligent-terminal `
+        --title "Upstream sync stuck at $shortSha" `
+        --label upstream-sync-stuck `
+        --body-file $bodyFile
+    if ($LASTEXITCODE -ne 0) { throw "gh issue create failed." }
+} finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue $bodyFile
+}
 ```
 
 Surface `$issueUrl` and `$branch` to the operator. The human is expected to
