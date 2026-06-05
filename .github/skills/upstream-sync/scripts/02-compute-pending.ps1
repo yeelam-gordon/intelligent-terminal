@@ -82,13 +82,17 @@ function Get-PendingUpstreamShas {
     if ($Since) {
         $filtered = New-Object 'System.Collections.Generic.List[string]'
         foreach ($sha in $shas) {
-            # git merge-base --is-ancestor:
-            #   exit 0  = ancestor (already on origin/main, drop it)
-            #   exit 1  = not an ancestor (keep)
-            #   exit >1 = real error (bad object, missing ref, shallow clone)
+            # git merge-base --is-ancestor $sha $Since:
+            #   exit 0  = $sha is reachable from $Since (the watermark) —
+            #             i.e. it was already cherry-picked at or before
+            #             the trailer we read; drop it.
+            #   exit 1  = $sha is NOT reachable from $Since — it is newer
+            #             than the watermark; keep it for picking.
+            #   exit >1 = real error (bad object, missing ref, shallow
+            #             clone — pending list cannot be trusted).
             $null = git merge-base --is-ancestor $sha $Since 2>$null
             switch ($LASTEXITCODE) {
-                0       { }                       # ancestor, drop
+                0       { }                       # at/before watermark, drop
                 1       { [void] $filtered.Add($sha) }
                 default { throw "git merge-base --is-ancestor failed (exit $LASTEXITCODE) on $sha vs $Since; pending list cannot be trusted." }
             }
