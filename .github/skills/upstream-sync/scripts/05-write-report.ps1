@@ -215,7 +215,7 @@ if ($Status -like 'stuck-*') {
     }
     $lines.Add("**Pickup branch:** ``$($Ctx.Branch)`` (pushed to origin)")
     $lines.Add("")
-    if ($Kind -eq 'toolchain-missing') {
+    if ($kind -eq 'toolchain-missing') {
         $lines.Add("**How to resume (infra-only — no PR needed):**")
         $lines.Add("")
         $lines.Add("1. Provision the host with the missing toolset(s) above, **or** rerun the sync from a correctly provisioned host.")

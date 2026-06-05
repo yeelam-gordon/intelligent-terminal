@@ -102,6 +102,29 @@ $Ctx.PrUrl = $prUrl.Trim()
 
 Remove-Item -LiteralPath $bodyPath -Force -ErrorAction SilentlyContinue
 
+# Backfill PR URL into state.last_run AND state.history[0] (best-effort
+# follow-up commit) BEFORE arming auto-merge. If auto-merge is already
+# satisfied (all checks green, approvals in place) it can merge and delete
+# the remote branch immediately, after which `git push origin $branch`
+# would recreate a deleted upstream-sync/<date> branch as an orphan with
+# the pr_url commit on top. Keeping the same run summary object in
+# last_run and history[0] in sync so 'sessions' reports and bug-reports
+# can find the PR link from either field. If this push fails the PR is
+# still open and the baseline is still advanced on the branch — the only
+# loss is the pr_url field in state, which is recoverable from the PR
+# itself.
+$state.last_run.pr_url = $Ctx.PrUrl
+if ($state.history -and $state.history.Count -gt 0) {
+    $state.history[0].pr_url = $Ctx.PrUrl
+}
+Write-State $state
+git add -- (ConvertTo-RepoRelativePath (Get-StatePath)) | Out-Null
+git commit -m "chore(upstream-sync): record PR url" | Out-Host
+if ($LASTEXITCODE -eq 0) {
+    git push origin $branch | Out-Host
+    if ($LASTEXITCODE -ne 0) { Write-Warning "Could not push pr_url backfill; PR is still open at $($Ctx.PrUrl)." }
+}
+
 # Optional: arm GitHub auto-merge with the strategy that preserves per-commit
 # history. 'rebase' is the recommended default when auto-merge is enabled —
 # it lands all N commits flatly on main once CI + approvals pass.
@@ -113,25 +136,6 @@ if ($AutoMergeStrategy -ne 'none') {
     } else {
         Write-Host "Auto-merge armed with strategy: $AutoMergeStrategy" -ForegroundColor Green
     }
-}
-
-# Backfill PR URL into state.last_run AND state.history[0] (best-effort
-# follow-up commit). The same run summary object was prepended to history
-# earlier in this script — keep both views in sync so 'sessions' reports
-# and bug-reports can find the PR link from either field. If this push
-# fails the PR is still open and the baseline is still advanced on the
-# branch — the only loss is the pr_url field in state, which is
-# recoverable from the PR itself.
-$state.last_run.pr_url = $Ctx.PrUrl
-if ($state.history -and $state.history.Count -gt 0) {
-    $state.history[0].pr_url = $Ctx.PrUrl
-}
-Write-State $state
-git add -- (ConvertTo-RepoRelativePath (Get-StatePath)) | Out-Null
-git commit -m "chore(upstream-sync): record PR url" | Out-Host
-if ($LASTEXITCODE -eq 0) {
-    git push origin $branch | Out-Host
-    if ($LASTEXITCODE -ne 0) { Write-Warning "Could not push pr_url backfill; PR is still open at $($Ctx.PrUrl)." }
 }
 
 return $Ctx.PrUrl
