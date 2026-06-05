@@ -15,7 +15,7 @@
   accidentally rewinding the baseline.
 
 .EXAMPLE
-  pwsh scripts/00-bootstrap.ps1 -BaselineSha 93bdbfaa3d62304f4b50b4ca4484da4dd08e4a1f
+  pwsh .github/skills/upstream-sync/scripts/00-bootstrap.ps1 -BaselineSha 93bdbfaa3d62304f4b50b4ca4484da4dd08e4a1f
 #>
 [CmdletBinding()]
 param(

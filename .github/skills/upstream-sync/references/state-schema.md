@@ -50,7 +50,12 @@ Path: `.github/upstream-sync/state.json` (committed on `main`).
     "picked_count": 7,
     "dropped_pair_count": 1,
     "empty_count": 2,
-    "tier0_resolutions": 1
+    "tier0_resolutions": 1,
+
+    // OPTIONAL — only set by the -PushDirectToMain code path
+    // (06b-finalize-direct.ps1). Omitted on normal PR runs.
+    "merge_mode":    "direct-push",                // "pr" (default, implicit) | "direct-push"
+    "main_head_sha": "1234567890abcdef..."         // SHA of origin/main after the direct push
   },
 
   // Rolling history — keep last 20 runs. Only `ok` and `stuck*` runs
