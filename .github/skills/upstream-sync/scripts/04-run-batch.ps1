@@ -239,8 +239,14 @@ try {
             'stuck' {
                 $ctx.StuckSha   = $sha
                 $ctx.StuckPaths = @($res.conflict_paths)
+                $ctx.StuckError = if ($res.PSObject.Properties.Name -contains 'error') { [string]$res.error } else { $null }
                 $ctx.Status     = 'stuck'
-                Write-Warning "Stuck at $sha on paths: $($res.conflict_paths -join ', ')"
+                $errSuffix = if ($ctx.StuckError) { " (error: $($ctx.StuckError))" } else { '' }
+                if ($ctx.StuckPaths.Count -gt 0) {
+                    Write-Warning "Stuck at $sha on paths: $($ctx.StuckPaths -join ', ')$errSuffix"
+                } else {
+                    Write-Warning "Stuck at $sha — no conflict paths reported$errSuffix"
+                }
                 break
             }
             default { Exit-Hard "Unknown cherry-pick-one status: $($res.status)" }

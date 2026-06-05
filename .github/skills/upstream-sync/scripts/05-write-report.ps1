@@ -137,10 +137,23 @@ if ($Status -eq 'stuck' -and $Ctx.StuckSha) {
     $lines.Add("**Conflicting commit:** [`$($Ctx.StuckSha)`](https://github.com/microsoft/terminal/commit/$($Ctx.StuckSha)) — $stuckSubj  ")
     $lines.Add("**Author:** $stuckAuthor")
     $lines.Add("")
-    $lines.Add("**Files in conflict:**")
-    $lines.Add("")
-    foreach ($p in $Ctx.StuckPaths) { $lines.Add("- ``$p``") }
-    $lines.Add("")
+    $stuckError = if ($Ctx.PSObject.Properties.Name -contains 'StuckError') { $Ctx.StuckError } else { $null }
+    if ($Ctx.StuckPaths -and $Ctx.StuckPaths.Count -gt 0) {
+        $lines.Add("**Files in conflict:**")
+        $lines.Add("")
+        foreach ($p in $Ctx.StuckPaths) { $lines.Add("- ``$p``") }
+        $lines.Add("")
+    } else {
+        # Non-conflict cherry-pick failure (e.g. merge commit picked without -m,
+        # hook failure). The resume guidance below still applies after the human
+        # addresses the underlying error.
+        $lines.Add("**No unmerged paths** — ``git cherry-pick`` failed for a reason other than a merge conflict (e.g. attempting to pick a merge commit without ``-m``, hook failure, or another non-conflict error).")
+        if ($stuckError) {
+            $lines.Add("")
+            $lines.Add("**Reported error:** ``$stuckError``")
+        }
+        $lines.Add("")
+    }
     $lines.Add("**Pickup branch:** ``$($Ctx.Branch)`` (pushed to origin)")
     $lines.Add("")
     $lines.Add("**How to resume:**")

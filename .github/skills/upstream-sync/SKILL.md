@@ -27,7 +27,7 @@ conflict appears.
 
 ## Prerequisites
 
-- `git` 2.38+ (needed for `git cherry-pick --keep-redundant-commits`, used by `scripts/03-cherry-pick-one.ps1`) and `gh` CLI authenticated against `microsoft/intelligent-terminal`.
+- `git` 2.38+ (needed for `git cherry-pick --keep-redundant-commits`, used by `scripts/03-cherry-pick-one.ps1`) and `gh` CLI authenticated against `microsoft/intelligent-terminal`. The credential **must also be able to push directly to `main`** (i.e. bypass branch protection if the branch is protected): `07-open-stuck-issue.ps1`, `07b-open-validation-stuck-issue.ps1`, and `clear-stuck.ps1` write the stuck-lock + report into `state.json` on `main` via a direct push. Without that permission, unattended runs will fail mid-stuck-handling with a generic git push error.
 - PowerShell 7+ (`pwsh`) on PATH.
 - Windows build host with Visual Studio 2022, Windows SDK, `vswhere`, and the repo's `tools\razzle.cmd`/`bz` build environment for the default validation gates (or use `-SkipBuild` only for explicit dev/debug runs).
 - Remote named `upstream` pointing at `https://github.com/microsoft/terminal.git`
