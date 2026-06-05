@@ -122,6 +122,13 @@ if ($LASTEXITCODE -ne 0) { throw "Could not fast-forward main before writing stu
 
 $state = Read-State
 $state.stuck_validation = $validation
+# Single active lock: clear the Tier-3 fields when setting a Tier-4 lock so
+# state.json reflects one stuck reason, not two stale ones.
+foreach ($f in 'stuck_on_sha','stuck_branch','stuck_at','stuck_issue_url') {
+    if ($state.PSObject.Properties.Name -contains $f) {
+        $state.$f = $null
+    }
+}
 $runSummary = [ordered] @{
     at             = Format-Iso8601 $Ctx.StartedAt
     host           = $Ctx.Host

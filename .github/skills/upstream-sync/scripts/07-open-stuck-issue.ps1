@@ -69,6 +69,11 @@ $state.stuck_on_sha    = $Ctx.StuckSha
 $state.stuck_branch    = $Ctx.Branch
 $state.stuck_at        = Format-Iso8601 $Ctx.StartedAt
 $state.stuck_issue_url = $Ctx.IssueUrl
+# Single active lock: clear the Tier-4 fields when promoting a Tier-3 lock so
+# the scheduler and humans see one stuck reason, not two.
+if ($state.PSObject.Properties.Name -contains 'stuck_validation') {
+    $state.stuck_validation = $null
+}
 $runSummary = [ordered] @{
     at                 = Format-Iso8601 $Ctx.StartedAt
     host               = $Ctx.Host
