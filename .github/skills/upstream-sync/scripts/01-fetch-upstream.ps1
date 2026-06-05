@@ -12,12 +12,29 @@ param(
 . "$PSScriptRoot/Common.ps1"
 
 # Ensure-UpstreamRemote (inlined — single-use). Adds the `upstream` remote
-# if missing; bails if it points somewhere unexpected.
+# if missing; bails if it points somewhere unexpected. Normalizes common URL
+# variants (https vs ssh, with/without trailing `.git`, with/without trailing
+# slash) so the same logical repo configured under any of those forms is
+# accepted.
+function _NormalizeRemoteUrl {
+    param([string] $Url)
+    $u = $Url.Trim().TrimEnd('/').ToLowerInvariant()
+    # git@github.com:owner/repo(.git)? -> github.com/owner/repo
+    if ($u -match '^git@([^:]+):(.+?)(\.git)?$') {
+        $u = "$($Matches[1])/$($Matches[2])"
+    }
+    # https://host/owner/repo(.git)? -> host/owner/repo
+    elseif ($u -match '^https?://([^/]+)/(.+?)(\.git)?$') {
+        $u = "$($Matches[1])/$($Matches[2])"
+    }
+    return $u
+}
+
 $existing = git remote get-url upstream 2>$null
 if ($LASTEXITCODE -ne 0) {
     git remote add upstream $UpstreamUrl | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to add 'upstream' remote." }
-} elseif ($existing.Trim() -ne $UpstreamUrl) {
+} elseif ((_NormalizeRemoteUrl $existing) -ne (_NormalizeRemoteUrl $UpstreamUrl)) {
     throw "Remote 'upstream' points at '$($existing.Trim())' (expected '$UpstreamUrl'). Fix the remote before running upstream-sync."
 }
 

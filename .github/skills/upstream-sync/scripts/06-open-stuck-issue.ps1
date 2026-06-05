@@ -46,8 +46,19 @@ git push -u origin $Branch 2>&1 | Out-Host
 if ($LASTEXITCODE -ne 0) { Write-Warning "Could not push stuck branch — issue still being filed for visibility." }
 
 $shortSha    = $StuckSha.Substring(0,9)
-$subj        = (git log -1 --format='%s' $StuckSha).Trim()
-$author      = (git log -1 --format='%an <%ae>' $StuckSha).Trim()
+
+$subj = (git log -1 --format='%s' $StuckSha 2>$null)
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($subj)) {
+    throw "git log failed for stuck SHA '$StuckSha' (exit $LASTEXITCODE). Refusing to file an issue with a missing subject."
+}
+$subj = $subj.Trim()
+
+$author = (git log -1 --format='%an <%ae>' $StuckSha 2>$null)
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($author)) {
+    throw "git log failed to resolve author for stuck SHA '$StuckSha' (exit $LASTEXITCODE)."
+}
+$author = $author.Trim()
+
 $upstreamUrl = "https://github.com/microsoft/terminal/commit/$StuckSha"
 $title       = "Upstream sync stuck at ${shortSha}: $subj"
 

@@ -69,7 +69,6 @@ foob
 fooba
 footgun
 formedness
-forwardable
 FTCS
 gantt
 gfm
@@ -86,7 +85,6 @@ greppable
 haikus
 handover
 hashtable
-hashtables
 historicals
 hstrings
 https
@@ -236,7 +234,6 @@ tokio
 tombstoned
 toolpath
 toolset
-toolsets
 trn
 TUs
 txs

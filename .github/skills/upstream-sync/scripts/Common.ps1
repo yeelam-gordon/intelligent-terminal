@@ -16,9 +16,11 @@ $script:WtaStateFence = '# wta-state'
 
 function Format-StuckYamlBlock {
     # Fenced ```yaml ... # wta-state ... ``` block embedded in stuck-issue
-    # bodies. Values are single-quoted with `'` -> `''` escaping so colons,
-    # newlines, leading dashes round-trip through the issue body. Used by
-    # 06-open-stuck-issue.ps1 and 06b-open-build-stuck-issue.ps1.
+    # bodies. Values are single-quoted with `'` -> `''` escaping so colons
+    # and leading dashes round-trip through the issue body. Newlines in
+    # values are folded to a single space (multi-line values are not
+    # preserved). Used by 06-open-stuck-issue.ps1 and
+    # 06b-open-build-stuck-issue.ps1.
     param([Parameter(Mandatory)] [hashtable] $Fields)
     $lines = @('```yaml', $script:WtaStateFence)
     foreach ($k in $Fields.Keys) {
