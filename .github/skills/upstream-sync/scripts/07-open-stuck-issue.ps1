@@ -54,10 +54,21 @@ $tmp  = New-TemporaryFile
 gh label create 'upstream-sync-stuck' --color 'B60205' --description 'Upstream sync blocked on a manual conflict' -R microsoft/intelligent-terminal 2>$null | Out-Null
 
 # -R is explicit because the `upstream` remote can make gh default to microsoft/terminal.
-$issueUrl = gh issue create -R microsoft/intelligent-terminal --title $title --label 'upstream-sync-stuck' --body-file $tmp 2>&1 | Select-Object -Last 1
-Remove-Item $tmp -Force
-if ($LASTEXITCODE -ne 0 -or $issueUrl -notmatch '^https://github.com/') {
-    throw "gh issue create failed: $issueUrl"
+# Capture stderr to a separate temp file so a `gh` warning on stderr (version notice etc.)
+# can't displace the URL as the "last line" of merged output.
+$errFile  = [System.IO.Path]::GetTempFileName()
+$errText  = ''
+try {
+    $issueUrl = gh issue create -R microsoft/intelligent-terminal --title $title --label 'upstream-sync-stuck' --body-file $tmp 2>$errFile | Select-Object -Last 1
+    $ghExit   = $LASTEXITCODE
+    if (Test-Path -LiteralPath $errFile) { $errText = (Get-Content -Raw -LiteralPath $errFile) }
+}
+finally {
+    Remove-Item $tmp     -Force -ErrorAction SilentlyContinue
+    Remove-Item $errFile -Force -ErrorAction SilentlyContinue
+}
+if ($ghExit -ne 0 -or $issueUrl -notmatch '^https://github.com/') {
+    throw "gh issue create failed (exit $ghExit): stdout='$issueUrl' stderr='$errText'"
 }
 $Ctx.IssueUrl = $issueUrl.Trim()
 

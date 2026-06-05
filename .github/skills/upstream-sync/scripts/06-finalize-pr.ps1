@@ -88,21 +88,32 @@ $title = "chore(upstream): sync microsoft/terminal up to $shortTo"
 # Retry up to 3 times with a short delay: `gh pr create` on Windows occasionally fails
 # with "Head sha can't be blank" right after a push (see SKILL.md gotcha).
 $prUrl = $null
+$errFile = [System.IO.Path]::GetTempFileName()
 try {
     for ($attempt = 1; $attempt -le 3; $attempt++) {
-        $prUrl = gh pr create -R microsoft/intelligent-terminal --base main --head $branch --title $title --body-file $bodyPath 2>&1 | Select-Object -Last 1
+        # Capture stderr separately: merging via `2>&1` can let a `gh` warning
+        # (version notice, deprecation, etc.) become the last line, after
+        # which `Select-Object -Last 1` returns the warning text and the URL
+        # match fails even though the PR was successfully created. The temp
+        # file is reused across retries (overwritten each call); cleanup runs
+        # in the outer finally.
+        Set-Content -LiteralPath $errFile -Value '' -NoNewline
+        $prUrl = gh pr create -R microsoft/intelligent-terminal --base main --head $branch --title $title --body-file $bodyPath 2>$errFile | Select-Object -Last 1
         if ($LASTEXITCODE -eq 0 -and $prUrl -match '^https://github.com/') { break }
-        Write-Warning "gh pr create attempt $attempt failed: $prUrl"
+        $errText = if (Test-Path -LiteralPath $errFile) { (Get-Content -Raw -LiteralPath $errFile) } else { '' }
+        Write-Warning "gh pr create attempt $attempt failed (exit $LASTEXITCODE): stdout='$prUrl' stderr='$errText'"
         Start-Sleep -Seconds 5
     }
     if ($LASTEXITCODE -ne 0 -or $prUrl -notmatch '^https://github.com/') {
-        throw "gh pr create did not return a PR URL after 3 attempts. Last output: $prUrl"
+        $errText = if (Test-Path -LiteralPath $errFile) { (Get-Content -Raw -LiteralPath $errFile) } else { '' }
+        throw "gh pr create did not return a PR URL after 3 attempts. Last stdout: '$prUrl'. Last stderr: '$errText'."
     }
 }
 finally {
-    # Always clean up the temp PR body file — even if `gh pr create` failed
-    # after all retries, the temp file should not leak in %TEMP%.
+    # Always clean up the temp PR body file and stderr-capture file — even if
+    # `gh pr create` failed after all retries, neither temp file should leak.
     Remove-Item -LiteralPath $bodyPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $errFile  -Force -ErrorAction SilentlyContinue
 }
 
 $Ctx.PrUrl = $prUrl.Trim()

@@ -117,10 +117,22 @@ Findings hash: ``$findingsHash`` (re-runs of the same broken batch will match).
     # microsoft/terminal).
     gh label create 'upstream-sync-stuck' --color 'B60205' --description 'Upstream sync blocked on a manual issue' -R microsoft/intelligent-terminal 2>$null | Out-Null
 
-    $issueUrl = gh issue create -R microsoft/intelligent-terminal --title $title --label 'upstream-sync-stuck' --body-file $tmp 2>&1 | Select-Object -Last 1
-    Remove-Item $tmp -Force
-    if ($LASTEXITCODE -ne 0 -or $issueUrl -notmatch '^https://github.com/') {
-        throw "gh issue create failed: $issueUrl"
+    # Capture stderr to a separate temp file so a `gh` warning on stderr (version
+    # notice etc.) can't displace the URL as the "last line" of merged output —
+    # `state.stuck_validation.issue_url` must always be either a real URL or unset.
+    $errFile = [System.IO.Path]::GetTempFileName()
+    $errText = ''
+    try {
+        $issueUrl = gh issue create -R microsoft/intelligent-terminal --title $title --label 'upstream-sync-stuck' --body-file $tmp 2>$errFile | Select-Object -Last 1
+        $ghExit   = $LASTEXITCODE
+        if (Test-Path -LiteralPath $errFile) { $errText = (Get-Content -Raw -LiteralPath $errFile) }
+    }
+    finally {
+        Remove-Item $tmp     -Force -ErrorAction SilentlyContinue
+        Remove-Item $errFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($ghExit -ne 0 -or $issueUrl -notmatch '^https://github.com/') {
+        throw "gh issue create failed (exit $ghExit): stdout='$issueUrl' stderr='$errText'"
     }
     $validation.issue_url = $issueUrl.Trim()
     $Ctx.IssueUrl = $validation.issue_url
