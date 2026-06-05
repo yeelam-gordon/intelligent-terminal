@@ -71,35 +71,46 @@ try {
     $psi.CreateNoWindow         = $true
 
     $proc = [System.Diagnostics.Process]::Start($psi)
+    $baseWriter = $null
+    $writer     = $null
 
-    # Tee stdout/stderr into the log file as the build runs. The synchronized
-    # wrapper serializes concurrent stdout/stderr DataReceived callbacks.
-    $baseWriter = [System.IO.StreamWriter]::new($logPath, $false, [System.Text.UTF8Encoding]::new($false))
-    $writer = [System.IO.TextWriter]::Synchronized($baseWriter)
-    $proc.add_OutputDataReceived({ param($s,$e) if ($null -ne $e.Data) { $writer.WriteLine($e.Data) } })
-    $proc.add_ErrorDataReceived({  param($s,$e) if ($null -ne $e.Data) { $writer.WriteLine($e.Data) } })
-    $proc.BeginOutputReadLine()
-    $proc.BeginErrorReadLine()
+    try {
+        # Tee stdout/stderr into the log file as the build runs. The synchronized
+        # wrapper serializes concurrent stdout/stderr DataReceived callbacks.
+        $baseWriter = [System.IO.StreamWriter]::new($logPath, $false, [System.Text.UTF8Encoding]::new($false))
+        $writer = [System.IO.TextWriter]::Synchronized($baseWriter)
+        $proc.add_OutputDataReceived({ param($s,$e) if ($null -ne $e.Data) { $writer.WriteLine($e.Data) } })
+        $proc.add_ErrorDataReceived({  param($s,$e) if ($null -ne $e.Data) { $writer.WriteLine($e.Data) } })
+        $proc.BeginOutputReadLine()
+        $proc.BeginErrorReadLine()
 
-    $timeoutMs = $TimeoutMinutes * 60 * 1000
-    $exited    = $proc.WaitForExit($timeoutMs)
-    $kind      = $null
-    $exitCode  = $null
+        $timeoutMs = $TimeoutMinutes * 60 * 1000
+        $exited    = $proc.WaitForExit($timeoutMs)
+        $kind      = $null
+        $exitCode  = $null
 
-    if (-not $exited) {
-        try { $proc.Kill($true) } catch { }
-        $proc.WaitForExit()
-        $kind     = 'build-inconclusive'
-        $exitCode = -1
-    } else {
-        # WaitForExit(timeout) can return before async output callbacks drain.
-        # The parameterless wait completes only after redirected output events finish.
-        $proc.WaitForExit()
-        $exitCode = $proc.ExitCode
-        $kind     = if ($exitCode -eq 0) { 'build-ok' } else { 'build-failed' }
+        if (-not $exited) {
+            try { $proc.Kill($true) } catch { }
+            $proc.WaitForExit()
+            $kind     = 'build-inconclusive'
+            $exitCode = -1
+        } else {
+            # WaitForExit(timeout) can return before async output callbacks drain.
+            # The parameterless wait completes only after redirected output events finish.
+            $proc.WaitForExit()
+            $exitCode = $proc.ExitCode
+            $kind     = if ($exitCode -eq 0) { 'build-ok' } else { 'build-failed' }
+        }
+    }
+    finally {
+        # Always release the log file handle and process — scheduler runs are
+        # unattended and a leaked handle would jam the next run's log write.
+        if ($writer)     { try { $writer.Flush() }      catch {}
+                           try { $writer.Close() }      catch {} }
+        if ($baseWriter) { try { $baseWriter.Dispose() } catch {} }
+        if ($proc)       { try { $proc.Dispose() }      catch {} }
     }
 
-    $writer.Flush(); $writer.Close()
     $ended      = Get-Date
     $durationMs = [int]($ended - $started).TotalMilliseconds
 
