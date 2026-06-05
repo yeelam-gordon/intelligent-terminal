@@ -39,6 +39,13 @@ the operator can audit in your transcript.
 - PowerShell 7+ (`pwsh`) on PATH.
 - Windows build host with Visual Studio 2022, Windows SDK, `vswhere`, and the repo's `tools\razzle.cmd`/`bz` build environment (build is a hard gate before finalize — see [step 7](#7-build)).
 - Remote named `upstream` — the scripts create it if missing.
+- **Full git history on `origin/main`** (no shallow clone). Watermark
+  discovery scans up to 5000 commits on `origin/main` for `cherry picked
+  from commit <sha>` trailers and the pending walk does `merge-base
+  --is-ancestor` checks. A shallow clone (e.g. GitHub Actions default
+  `fetch-depth=1`) will produce wrong/empty results. If running in CI,
+  use `actions/checkout@v4` with `fetch-depth: 0` (or run `git fetch
+  --unshallow` before invoking the skill).
 - **No `state.json` to bootstrap.** Watermark comes from the
   `(cherry picked from commit <sha>)` trailers on `origin/main`. If
   the fork has never used `cherry-pick -x` (or trailers were stripped),
@@ -366,15 +373,19 @@ $title = "chore(upstream): sync microsoft/terminal up to $short"
 
 $prUrl = $null
 for ($attempt = 1; $attempt -le 3; $attempt++) {
-    $prUrl = gh pr create -R microsoft/intelligent-terminal `
-        --base main --head $branch --title $title --body-file $bodyFile 2>&1 |
-        Select-Object -Last 1
-    if ($LASTEXITCODE -eq 0 -and $prUrl -match '^https://github.com/') { break }
-    Write-Warning "gh pr create attempt $attempt failed: $prUrl"
+    $prOut = gh pr create -R microsoft/intelligent-terminal `
+        --base main --head $branch --title $title --body-file $bodyFile 2>&1
+    $prExit = $LASTEXITCODE
+    $prText = ($prOut | Out-String).Trim()
+    if ($prExit -eq 0) {
+        $urlLine = ($prOut | Where-Object { "$_" -match '^https://github.com/' } | Select-Object -Last 1)
+        if ($urlLine) { $prUrl = "$urlLine".Trim(); break }
+    }
+    Write-Warning "gh pr create attempt $attempt failed (exit $prExit). Full output:`n$prText"
     Start-Sleep -Seconds 5
 }
 Remove-Item -LiteralPath $bodyFile -Force
-if ($prUrl -notmatch '^https://github.com/') { throw "gh pr create did not return a URL after 3 attempts." }
+if (-not $prUrl) { throw "gh pr create did not return a URL after 3 attempts." }
 
 # Optional: arm GitHub auto-merge with rebase (NEVER squash).
 # Skip this if the operator wants to merge by hand.
