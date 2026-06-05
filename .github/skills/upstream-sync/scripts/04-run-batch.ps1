@@ -125,6 +125,29 @@ try {
         exit 0
     }
 
+    # --- Existing-PR gate ---
+    # Schedulers run unattended. If a prior run already opened an
+    # upstream-sync PR that hasn't merged yet, our baseline (origin/main)
+    # is unchanged, so we'd recompute the SAME pending range and then
+    # either (a) collide on branch creation or (b) 06-finalize-pr.ps1
+    # would fail because the PR already exists for that branch. Worse,
+    # under a per-day branch-name scheme the second run would open a
+    # NEW PR with identical content. Bail early with a no-op report
+    # instead, unless -Force is given.
+    if (-not $Force) {
+        $existingJson = gh pr list --repo microsoft/intelligent-terminal --state open --search 'head:upstream-sync/' --json number,headRefName,url 2>$null
+        if ($LASTEXITCODE -eq 0 -and $existingJson) {
+            $existing = @($existingJson | ConvertFrom-Json) | Where-Object { $_.headRefName -like 'upstream-sync/*' }
+            if ($existing.Count -gt 0) {
+                $first = $existing[0]
+                Write-Host "An upstream-sync PR is already open: #$($first.number) ($($first.headRefName)) -> $($first.url). Skipping until it merges or is closed (use -Force to override)." -ForegroundColor Yellow
+                $reportPath = & "$PSScriptRoot/05-write-report.ps1" -Ctx $ctx -From $state.last_synced_upstream_sha -To $state.last_synced_upstream_sha -Status 'skipped-pr-open'
+                Write-Host "Skip report: $reportPath"
+                exit 0
+            }
+        }
+    }
+
     Assert-CleanWorktree
     git switch main 2>&1 | Out-Host
     if ($LASTEXITCODE -ne 0) { Exit-Hard "git switch main failed." }

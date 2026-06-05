@@ -46,7 +46,12 @@ function Get-ReswDuplicateNames {
     $names = [System.Collections.Generic.List[string]]::new()
     $re = [regex]'<data\s+name="([^"]+)"'
     foreach ($m in $re.Matches($Text)) { $names.Add($m.Groups[1].Value) }
-    $dups = $names | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name }
+    # -CaseSensitive: .resw keys are case-sensitive (XAML resource lookups
+    # compare by exact name). Without it, "Foo" and "foo" would be grouped
+    # together and the duplicate would be invisible — or, worse, two keys
+    # that legitimately differ only by case would be flagged as a dup and
+    # Tier-4 stick the sync on a false positive.
+    $dups = $names | Group-Object -CaseSensitive | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name }
     return @($dups)
 }
 
