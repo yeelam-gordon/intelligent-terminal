@@ -44,13 +44,22 @@ function Get-LastSyncedUpstreamSha {
     # weekly-sync deployment. Resolves the trailer SHA to its full 40-char
     # form before the ancestry check so an abbreviated/ambiguous trailer
     # doesn't silently skip an otherwise-valid watermark candidate.
+    #
+    # A single commit body can carry multiple `(cherry picked from
+    # commit <sha>)` trailers (e.g. a squash-merge of several upstream
+    # picks). Git appends new trailers, so the LAST match in the body is
+    # the most-recent upstream commit — scan all matches and check them
+    # newest-first to avoid moving the watermark backward.
     $commits = @(git log origin/main --max-count=5000 --grep='cherry picked from commit' --format='%H' 2>$null)
     if ($LASTEXITCODE -ne 0) { throw "git log on origin/main failed while deriving last-synced SHA." }
     foreach ($c in $commits) {
         $body = git log -1 --format='%B' $c 2>$null
-        if ($body -match '\(cherry picked from commit ([0-9a-f]{7,40})\)') {
+        $allMatches = [regex]::Matches($body, '\(cherry picked from commit ([0-9a-f]{7,40})\)')
+        if ($allMatches.Count -eq 0) { continue }
+        # Walk trailers bottom-up (newest-first within the same commit).
+        for ($i = $allMatches.Count - 1; $i -ge 0; $i--) {
             $fullSha = $null
-            try { $fullSha = Resolve-FullCommitSha $matches[1] } catch { continue }
+            try { $fullSha = Resolve-FullCommitSha $allMatches[$i].Groups[1].Value } catch { continue }
             $null = git merge-base --is-ancestor $fullSha upstream/main 2>$null
             if ($LASTEXITCODE -eq 0) { return $fullSha }
         }
