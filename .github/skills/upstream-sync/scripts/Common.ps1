@@ -143,6 +143,11 @@ function Get-FindingsHash {
     # so repeat-runs of the same broken batch can be detected (and not re-issued).
     $norm = ($Findings | ConvertTo-Json -Depth 8 -Compress)
     $sha  = [System.Security.Cryptography.SHA256]::Create()
-    $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($norm))
-    return ([System.BitConverter]::ToString($hash) -replace '-','').ToLowerInvariant().Substring(0,16)
+    try {
+        $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($norm))
+        return ([System.BitConverter]::ToString($hash) -replace '-','').ToLowerInvariant().Substring(0,16)
+    }
+    finally {
+        $sha.Dispose()
+    }
 }
