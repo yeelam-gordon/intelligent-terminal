@@ -51,7 +51,7 @@ function Get-ConflictPaths {
     # path matching against 03-known-conflicts.md works without C-quoting.
     $u = git -c core.quotepath=off diff --name-only --diff-filter=U
     if (-not $u) { return @() }
-    return @($u -split "`n" | Where-Object { $_ })
+    return @($u -split "`n" | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_ })
 }
 
 $result = [ordered] @{

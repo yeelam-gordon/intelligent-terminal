@@ -78,7 +78,7 @@ function Get-PendingUpstreamShas {
     param([string] $Since)
     $out = @(git log --cherry-pick --right-only --no-merges --format='%H' --reverse 'origin/main...upstream/main' 2>$null)
     if ($LASTEXITCODE -ne 0) { throw "git log --cherry-pick failed while computing pending list." }
-    $shas = @($out | Where-Object { $_ -match '^[0-9a-f]{40}$' })
+    $shas = @($out | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[0-9a-f]{40}$' })
     if ($Since) {
         $filtered = New-Object 'System.Collections.Generic.List[string]'
         foreach ($sha in $shas) {

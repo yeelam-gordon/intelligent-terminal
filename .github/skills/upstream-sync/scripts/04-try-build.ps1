@@ -86,8 +86,14 @@ function ConvertTo-RepoRelativePath {
 # --- Main logic ------------------------------------------------------------
 
 try {
-    if (-not $LogDir) { $LogDir = Get-GeneratedDir -Sub 'build-logs' }
     $root = Get-RepoRoot
+    if (-not $LogDir) {
+        $LogDir = Get-GeneratedDir -Sub 'build-logs'
+    } elseif (-not [System.IO.Path]::IsPathRooted($LogDir)) {
+        # Treat caller-supplied relative paths as repo-relative so the
+        # later ConvertTo-RepoRelativePath call succeeds.
+        $LogDir = Join-Path $root $LogDir
+    }
     if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
     $stamp   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHHmmss.fff')
