@@ -46,15 +46,25 @@ run extends it. No script needed — the bootstrap is one
 
 ## Squash-merge recovery (don't do this, but if you did)
 
-The PR banner shouts "do not squash" and `-AutoMergeStrategy rebase`
-locks in the safe path. If a reviewer squash-merges anyway:
+The PR banner shouts "do not squash" and step 8 arms
+`gh pr merge --rebase --auto` (the merge strategy is ultimately a
+GitHub UI choice — there is no `-AutoMergeStrategy` flag). If a
+reviewer squash-merges anyway, the outcome depends on what GitHub
+preserved in the squash commit's body:
 
-- The squash commit's body usually concatenates every cherry-picked
-  message, so it contains MANY `(cherry picked from commit <sha>)`
-  trailers. The watermark resolver matches the FIRST one it sees,
-  which is the oldest cherry-pick in the squashed batch. That means
-  the watermark moves backward, and the next sync re-picks everything
-  between the oldest and newest commits of the squashed batch.
-- The recovery is the same as a first-time seed: commit an empty
-  watermark commit on `main` carrying the trailer for the upstream
-  HEAD that was actually merged, and push.
+- **Trailers preserved (common case).** The squash body concatenates
+  every cherry-picked message, so it contains MANY
+  `(cherry picked from commit <sha>)` trailers.
+  [`02-compute-pending.ps1`](../scripts/02-compute-pending.ps1) walks
+  these bottom-up (newest-first) so it picks the **last** trailer —
+  which corresponds to the newest upstream commit in the batch. The
+  watermark does NOT move backward, and **no recovery is needed**.
+  Per-commit attribution on `main` is gone (that's the squash cost),
+  but the next sync resumes correctly.
+- **Trailers stripped or newest trailer removed.** If the reviewer
+  hand-edited the squash body and dropped the newest trailer (or all
+  of them), the watermark will resolve to an older SHA and the next
+  sync re-picks the gap. To prevent that, do a one-time
+  `commit --allow-empty` on `main` carrying the trailer for the
+  upstream HEAD that was actually merged — same shape as the first-time
+  seed above.
