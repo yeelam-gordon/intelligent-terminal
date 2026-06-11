@@ -46,6 +46,7 @@ use std::sync::{Arc, OnceLock, Weak};
 /// helper sharing this master.
 const NOTIF_CHANNEL_CAPACITY: usize = 1024;
 const SESSION_NEW_TIMEOUT_SECS: u64 = 120;
+const MASTER_PIPE_DISCOVERY_FILE: &str = "master-pipe.txt";
 
 use acp::Agent as _;
 use acp::Client as _;
@@ -493,7 +494,6 @@ impl acp::Client for MasterClient {
             op = "write_text_file",
             helper_id = ?helper_id,
             session_id = ?sid,
-            path = ?args.path,
             "forwarding fs/write_text_file to helper"
         );
         forwarder.write_text_file(args).await
@@ -511,7 +511,6 @@ impl acp::Client for MasterClient {
             op = "read_text_file",
             helper_id = ?helper_id,
             session_id = ?sid,
-            path = ?args.path,
             "forwarding fs/read_text_file to helper"
         );
         forwarder.read_text_file(args).await
@@ -531,14 +530,6 @@ impl acp::Client for MasterClient {
             session_id = ?sid,
             args_len = args.args.len(),
             "forwarding terminal/create to helper"
-        );
-        // Command line can carry user/file content — trace only.
-        tracing::trace!(
-            target: "master.content",
-            session_id = ?sid,
-            command = %args.command,
-            args = ?args.args,
-            "create_terminal command"
         );
         forwarder.create_terminal(args).await
     }
@@ -800,7 +791,6 @@ impl acp::Agent for HelperHandler {
             step = "helper→agent",
             op = "new_session",
             helper_id = ?self.helper_id,
-            cwd = ?args.cwd,
             mcp_servers = args.mcp_servers.len(),
             pane_session_id = ?wta_meta.pane_session_id,
             "forwarding new_session"
@@ -1312,7 +1302,8 @@ impl MasterPipeDiscoveryGuard {
                 if let Err(err) = std::fs::create_dir_all(parent) {
                     tracing::warn!(
                         target: "master",
-                        path = %path.display(),
+                        discovery_file = MASTER_PIPE_DISCOVERY_FILE,
+                        pipe_name = %pipe_name,
                         error = %err,
                         "failed to create master pipe discovery directory"
                     );
@@ -1325,14 +1316,15 @@ impl MasterPipeDiscoveryGuard {
             match std::fs::write(path, pipe_name) {
                 Ok(()) => tracing::info!(
                     target: "master",
-                    path = %path.display(),
+                    discovery_file = MASTER_PIPE_DISCOVERY_FILE,
                     pipe_name = %pipe_name,
                     "master pipe discovery file written"
                 ),
                 Err(err) => {
                     tracing::warn!(
                         target: "master",
-                        path = %path.display(),
+                        discovery_file = MASTER_PIPE_DISCOVERY_FILE,
+                        pipe_name = %pipe_name,
                         error = %err,
                         "failed to write master pipe discovery file"
                     );
@@ -1362,7 +1354,8 @@ impl Drop for MasterPipeDiscoveryGuard {
             if let Err(err) = std::fs::remove_file(path) {
                 tracing::warn!(
                     target: "master",
-                    path = %path.display(),
+                    discovery_file = MASTER_PIPE_DISCOVERY_FILE,
+                    pipe_name = %self.pipe_name,
                     error = %err,
                     "failed to remove master pipe discovery file"
                 );
@@ -2312,7 +2305,7 @@ where
         tracing::info!(
             target: "session_hook",
             session_id = %sid.0,
-            new_title = %disk_title,
+            title_len = disk_title.chars().count(),
             "upgraded synthetic title from on-disk session artefacts",
         );
     }

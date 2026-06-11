@@ -1617,7 +1617,7 @@ async fn run_delegate(
     cwd: Option<&str>,
 ) -> Result<()> {
     // Log the prompt length, not the text — the prompt is user content.
-    tracing::info!(prompt_chars = prompt.map(|p| p.chars().count()), agent = agent_cmd, cwd, "run_delegate started");
+    tracing::info!(prompt_chars = prompt.map(|p| p.chars().count()), agent = agent_cmd, "run_delegate started");
     tracing::trace!(target: "delegate.content", prompt = ?prompt, "run_delegate prompt");
 
     let (debug_tx, _) = tokio::sync::mpsc::unbounded_channel::<app::DebugMessage>();
@@ -1718,8 +1718,8 @@ async fn delegate_with_context(
 
     // The commandline bakes in the user prompt (`-i "<prompt>"`); keep it out
     // of the debug log and only emit it at trace.
-    tracing::debug!(cwd, "delegate_with_context: launching");
-    tracing::trace!(target: "delegate.content", commandline, cwd, "delegate_with_context commandline");
+    tracing::debug!("delegate_with_context: launching");
+    tracing::trace!(target: "delegate.content", commandline, "delegate_with_context commandline");
 
     shell_mgr
         .wt_create_tab(Some(&commandline), cwd, None)
@@ -2567,7 +2567,6 @@ async fn run_acp_app(
                                     if v.is_none() {
                                         tracing::warn!(
                                             target: "acp_load_session",
-                                            cwd = %s,
                                             "--initial-load-cwd refers to a missing directory; dropping from load_session params",
                                         );
                                     }
@@ -2577,7 +2576,6 @@ async fn run_acp_app(
                                 target: "acp_load_session",
                                 session_id = sid,
                                 tab_id = %tab_id,
-                                cwd = ?cwd,
                                 "queueing boot-time initial load_session via AppEvent::WtEvent"
                             );
                             let mut params = serde_json::Map::new();
