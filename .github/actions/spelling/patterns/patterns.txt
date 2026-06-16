@@ -331,6 +331,9 @@ env_remove\("[A-Z_]+"\)
 # test fixture in ShellIntegrationTests.cpp — synthetic exe leaf used to test lookalike-rejection (pwsh + 'ell' suffix)
 \bpwshell\b
 
+# npm scoped package for the Claude ACP adapter (renamed from @zed-industries/claude-code-acp; see issue #257)
+@agentclientprotocol/claude-agent-acp
+
 # tools/wta/src/proc_bind.rs - Win32 process FFI: Toolhelp32 snapshot APIs, Restart
 # Manager (rstrtmgr.dll), RTL_USER_PROCESS_PARAMETERS (RUPP) PEB offset constants, the
 # TH32CS_* snapshot flags, and the PROCESS_BASIC_INFORMATION local (pbi).
