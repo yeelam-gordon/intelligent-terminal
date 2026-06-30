@@ -646,6 +646,18 @@ async fn main() -> Result<()> {
     // is held in a global and flushed via `logging::shutdown_flush()` on every
     // exit path (see the calls below and before each `process::exit`).
     logging::init(&process_label(&cli));
+    // Log + flush on console teardown signals (pane/tab/window close, logoff,
+    // shutdown) so a torn-down helper isn't a silent disappearance. Installed
+    // process-wide; see `install_ctrl_handler` for coverage limits — notably
+    // the master is job-killed (KILL_ON_JOB_CLOSE) and won't observe these, so
+    // *this handler* doesn't trace routine master teardown. That teardown is
+    // still logged, just by the C++ parent: `SharedWta` records both the
+    // deliberate job-close and an unexpected exit to terminal-agent-pane.log.
+    logging::install_ctrl_handler();
+    // Record panics to disk (+ a synchronous wta-panic.log backstop) so a
+    // panic isn't a silent death — stderr is invisible for a ConPTY helper /
+    // CREATE_NO_WINDOW master. Chains the default hook; semantics unchanged.
+    logging::install_panic_hook();
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "=== wta starting ===");
 
     let locale = cli
