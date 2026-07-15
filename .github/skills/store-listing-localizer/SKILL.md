@@ -36,8 +36,10 @@ without manually logging into and clicking through the Partner Center web UI.
   into Partner Center once in the launched Edge window. Full setup + gotchas:
   [partner-center-mcp-workflow.md](./references/partner-center-mcp-workflow.md).
 - **Node.js** (uses only built-ins; `scripts/` has no npm dependencies).
-- **AppName table**: `intelligent-terminal-translations.md` (per-locale product
-  names). Pass its path to `apply.mjs --appnames`.
+- **AppName table** — the per-locale product names ship with the skill at
+  [`references/intelligent-terminal-translations.md`](./references/intelligent-terminal-translations.md),
+  and `apply.mjs` defaults to it. Override with `--appnames <path>` only if you
+  maintain a newer copy elsewhere.
 
 ## Workflow
 
@@ -55,8 +57,9 @@ Track progress with a TODO list; each step links to its reference.
    breadth + a reviewer pass. Emit `translations.json` keyed
    `{ "<locale>": { "<Field>": "<text>" } }`.
 4. **Merge**: `node scripts/apply.mjs --csv <export.csv>
-   --appnames <translations.md> --translations translations.json
+   [--appnames <translations.md>] --translations translations.json
    [--enus overrides.json] [--changed-fields ReleaseNotes] --out <stem>-localized.csv`.
+   (`--appnames` defaults to the bundled `references/intelligent-terminal-translations.md`.)
 5. **Verify** the output (cols/rows unchanged, spot-check locales), then
    **import** `<stem>-localized.csv` —
    [partner-center-mcp-workflow.md#import](./references/partner-center-mcp-workflow.md).
@@ -90,10 +93,14 @@ Run any script with `--help` for its options.
 ## Gotchas
 
 - **Stale translations are the #1 risk.** When an en-US field changes, every
-  locale still holds the *previous version's* text. Always pass `--enus` (or
-  `--changed-fields`) for changed fields so `apply.mjs` re-translates them
-  instead of keeping stale content. Verified: without this, a German release
-  note kept `v0.1.1531` while en-US moved to `v0.1.1600`.
+  locale still holds the *previous version's* text. `apply.mjs` has an
+  **automatic version-drift safety net**: for any field whose en-US value
+  carries a `v<x.y.z>` token (e.g. ReleaseNotes), a locale whose existing text
+  has a *different* token is treated as stale and refreshed to the new en-US —
+  even if you forget `--changed-fields`. Still pass `--enus` (or
+  `--changed-fields`) for changed fields to be explicit; the guard is a backstop.
+  Verified: without any flag, a German release note that kept `v0.1.1531` while
+  en-US moved to `v0.1.1600` is now auto-refreshed.
 - **The Playwright MCP needs a CLI restart** to load, and a **dedicated** Edge
   profile dir (never the live `Edge\User Data`, which is locked while Edge runs).
 - **Import ≠ publish.** Importing stages the draft listing; the submission must

@@ -27,6 +27,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { readCsv, writeCsv, indexListing } from './csvlib.mjs';
 import { classifyField, parseAppNames, appNameFor } from './fields.mjs';
 
@@ -35,10 +36,16 @@ function arg(name, def) {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : def;
 }
 
-if (process.argv.includes('--help') || !arg('--csv') || !arg('--appnames')) {
-  console.log('Usage: node apply.mjs --csv <export.csv> --appnames <translations.md> ' +
+// The AppName table ships with the skill; default to the bundled copy so the
+// script is runnable without an external file. Override with --appnames.
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const defaultAppNames = path.join(scriptDir, '..', 'references', 'intelligent-terminal-translations.md');
+
+if (process.argv.includes('--help') || !arg('--csv')) {
+  console.log('Usage: node apply.mjs --csv <export.csv> [--appnames <translations.md>] ' +
               '[--translations <translations.json>] [--enus <overrides.json>] ' +
               '[--changed-fields <Field1,Field2>] [--no-localize-product-name] [--out <out.csv>]');
+  console.log('  --appnames defaults to the bundled references/intelligent-terminal-translations.md');
   process.exit(process.argv.includes('--help') ? 0 : 1);
 }
 
@@ -46,11 +53,25 @@ const csvPath = arg('--csv');
 const outPath = arg('--out') ||
   path.join(path.dirname(csvPath), path.basename(csvPath, '.csv') + '-localized.csv');
 
+const appNamesPath = arg('--appnames', defaultAppNames);
+if (!fs.existsSync(appNamesPath)) {
+  throw new Error(`AppName table not found: ${appNamesPath}. Pass --appnames <translations.md> ` +
+                  `or restore references/intelligent-terminal-translations.md.`);
+}
+
 const records = readCsv(csvPath);
 const { localeCols, fieldRows } = indexListing(records);
-const appNames = parseAppNames(fs.readFileSync(arg('--appnames'), 'utf8'));
+const appNames = parseAppNames(fs.readFileSync(appNamesPath, 'utf8'));
 const translations = arg('--translations') ? JSON.parse(fs.readFileSync(arg('--translations'), 'utf8')) : {};
 const enusOverrides = arg('--enus') ? JSON.parse(fs.readFileSync(arg('--enus'), 'utf8')) : {};
+
+// Extract a version token like "v0.1.1841" regardless of the (possibly
+// localized) leading word — "Version", "版本", "バージョン", etc. Used for the
+// automatic ReleaseNotes stale-version safety net below.
+function versionToken(s) {
+  const m = (s || '').match(/v\d+(?:\.\d+)+/i);
+  return m ? m[0].toLowerCase() : '';
+}
 
 // "Changed" fields: their en-US text was updated, so existing per-locale values
 // are stale and must NOT be preserved. Any field given an en-US override is
@@ -92,7 +113,7 @@ function transFor(locale, field) {
   return undefined;
 }
 
-const stats = { appname: 0, translate: 0, verbatim: 0, enusOverridden: 0, cellsWritten: 0 };
+const stats = { appname: 0, translate: 0, verbatim: 0, enusOverridden: 0, cellsWritten: 0, versionDrift: 0 };
 
 // Product-name localization: inside translatable text the product name should
 // read as the locale's AppName (matching the localized Title), e.g. de-DE
@@ -123,6 +144,10 @@ for (const [field, row] of Object.entries(fieldRows)) {
     stats.enusOverridden++;
   }
   const enUs = records[row][enCol] || '';
+  // Automatic stale-version safety net (ReleaseNotes and any versioned field):
+  // if en-US carries a version token, a locale whose existing value has a
+  // DIFFERENT token is stale even when the operator forgot --changed-fields.
+  const enVer = versionToken(enUs);
 
   for (const loc of targetLocales) {
     const col = localeCols[loc];
@@ -132,9 +157,11 @@ for (const [field, row] of Object.entries(fieldRows)) {
     if (kind === 'appname') {
       next = appNameFor(appNames, loc) || enUs;
     } else if (kind === 'translate') {
+      const versionDrift = enVer && versionToken(before) !== enVer;
       const t = transFor(loc, field);
       if (t !== undefined) next = t;                 // use provided translation
-      else if (changedFields.has(field)) next = enUs; // changed: never keep stale → new en-US
+      else if (changedFields.has(field)) next = enUs; // marked changed: never keep stale → new en-US
+      else if (versionDrift) { next = enUs; stats.versionDrift++; } // auto: stale version → new en-US
       else if (before.trim()) next = before;          // unchanged: keep existing translation
       else next = enUs;                              // empty: fall back to en-US
       next = applyProductName(next, loc);            // localize product name in body text
@@ -151,6 +178,9 @@ writeCsv(outPath, records);
 console.log(`Wrote ${outPath}`);
 console.log(`Fields: ${stats.appname} appname, ${stats.translate} translate, ${stats.verbatim} verbatim`);
 console.log(`en-US overrides applied: ${stats.enusOverridden}; locale cells written: ${stats.cellsWritten}`);
+if (stats.versionDrift) {
+  console.log(`Auto version-drift: ${stats.versionDrift} stale-version locale cell(s) refreshed to the new en-US text.`);
+}
 
 // Length guard: Microsoft Store hard-rejects ReleaseNotes/Description over
 // their per-locale character limits (ReleaseNotes: 1500, Description: 10000).
