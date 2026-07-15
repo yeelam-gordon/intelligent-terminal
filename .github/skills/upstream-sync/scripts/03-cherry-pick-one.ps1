@@ -77,6 +77,17 @@ $result = [ordered] @{
 # unsigned" is acceptable.
 $fullSha = (git rev-parse $Sha).Trim()
 if ($LASTEXITCODE -ne 0) { throw "Could not resolve upstream commit $Sha." }
+
+# Refuse to run against a dirty working tree. This script can hard-reset
+# and `cherry-pick --abort` (empty picks / stuck conflicts), which would
+# discard or partially revert an operator's uncommitted tracked changes.
+# Untracked files are left out of the check — cherry-pick won't touch them.
+$dirty = @(git status --porcelain --untracked-files=no)
+if ($LASTEXITCODE -ne 0) { throw "Could not check working-tree status before cherry-picking $Sha." }
+if ($dirty.Count -gt 0) {
+    throw "Refusing to cherry-pick $Sha with a dirty working tree ($($dirty.Count) tracked change(s)). Commit or stash them first:`n$($dirty -join "`n")"
+}
+
 $prePickHead = (git rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw "Could not record pre-pick HEAD before cherry-picking $Sha." }
 

@@ -2,7 +2,7 @@
 .SYNOPSIS
   Try-build. Runs the configured build command in a razzle environment and
   captures the result. Default `-BuildCommand`: `tools\razzle.cmd && bz no_clean`
-  (the script wraps it with `cmd /c "..."` internally — pass only the
+  (the script runs it via `cmd /c <BuildCommand>` internally — pass only the
   cmd.exe command string, not the wrapper).
 
 .DESCRIPTION
