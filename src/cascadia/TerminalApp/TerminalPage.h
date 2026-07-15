@@ -252,6 +252,7 @@ namespace winrt::TerminalApp::implementation
         Windows::Foundation::IAsyncOperation<bool> FocusProtocolPane(winrt::guid sessionId);
         void OnAutofixStateChanged(hstring eventJson);
         void OnAgentStatusChanged(hstring eventJson);
+        void OnAgentSwitchRequested(hstring eventJson);
         void OnCloseAgentPaneRequested(hstring eventJson);
         void OnAgentStateChanged(hstring eventJson);
         void OnResumeInNewAgentTabRequested(hstring eventJson);
@@ -519,6 +520,9 @@ namespace winrt::TerminalApp::implementation
         void _RaiseProtocolEvent(std::string_view method, const Json::Value& params);
         void _TeardownAgentPane(const winrt::com_ptr<Tab>& tab, bool suppressMasterRestart = true);
         void _RebuildAgentStack();
+        // Scoped per-tab rebuild after a tab's agent override changes
+        // (agent-bar chip flyout). Does not restart the shared master.
+        void _RebuildAgentPaneForTab(const winrt::com_ptr<Tab>& tab);
         void _FlushPendingAgentRebuild();
         // Build the per-process flag/value pairs that the wta-master
         // inherits at spawn time (--agent, --agent-id, --no-autofix,
@@ -576,8 +580,6 @@ namespace winrt::TerminalApp::implementation
         void _NotifyAgentTabChanged(const winrt::hstring& tabId);
         // Look up a tab by its StableId; returns nullptr if unknown.
         winrt::com_ptr<Tab> _FindTabByStableId(const winrt::hstring& stableId) const;
-        // Look up a tab by the AgentPaneContent instance hosted in it.
-        winrt::com_ptr<Tab> _FindTabHostingAgentPaneContent(const winrt::TerminalApp::AgentPaneContent& content) const;
 
         winrt::Windows::UI::Xaml::Controls::TextBox::LayoutUpdated_revoker _renamerLayoutUpdatedRevoker;
         int _renamerLayoutCount{ 0 };
