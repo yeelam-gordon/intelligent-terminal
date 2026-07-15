@@ -121,12 +121,12 @@ the lock-clear signal; nothing parses the body back.
 
 The cherry-picks all applied cleanly, but [`scripts/04-try-build.ps1`](../scripts/04-try-build.ps1)
 said NO before the PR could be finalized. The build runs before finalize
-on purpose — see [`SKILL.md` step 7](../SKILL.md#7-build) for the
+on purpose — see [`run-a-sync.md` step 7](run-a-sync.md#7-build) for the
 build-then-finalize ordering and the one-focused-fix-commit rule.
 
 | Sub-kind | Trigger | Action |
 |---|---|---|
-| **build-failed** | `bz no_clean` exited non-zero within timeout | Try ONE focused build-fix commit per [SKILL.md step 7](../SKILL.md#7-build). If that fails or scope is too large → surface the failure to the operator and exit (no issue is filed). |
+| **build-failed** | `bz no_clean` exited non-zero within timeout | Try ONE focused build-fix commit per [run-a-sync.md step 7](run-a-sync.md#7-build). If that fails or scope is too large → surface the failure to the operator and exit (no issue is filed). |
 | **build-inconclusive** | Wall-clock cap (default 45 min) hit | Surface the timeout to the operator and exit (don't guess at fixing a hang). |
 
 No stuck issue is filed for build failures. The operator either fixes
