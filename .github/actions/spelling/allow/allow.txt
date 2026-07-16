@@ -273,7 +273,6 @@ wezterm
 workarounds
 WSLs
 XBox
-Xbox
 YBox
 yeelam
 ymdhms
@@ -282,14 +281,3 @@ zzzzz
 axum
 dispatchable
 slowloris
-appnames
-csvlib
-enus
-Intelligentes
-kok
-msstore
-NMQC
-quz
-SSJX
-subtag
-Weergawe
