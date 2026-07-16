@@ -42,8 +42,8 @@ fewer)").
 > en-US ReleaseNotes yielded 1680-char translations that failed import. **Keep
 > en-US ReleaseNotes ≤ ~1100 chars**, and instruct translation sub-agents to
 > cap output at ≤1400 (condensing wording, never dropping a bullet).
-> `apply.mjs` runs a length guard and exits non-zero listing any over-limit
-> locale — treat that as a hard stop before importing.
+> `apply.mjs` runs the length guard **before writing** and refuses to emit an
+> over-limit CSV (exits non-zero, no output file) — a hard stop before importing.
 
 ## The stale-translation trap (most important)
 

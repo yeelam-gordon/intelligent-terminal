@@ -130,8 +130,8 @@ Run any script with `--help` for its options.
   that **failed the whole import mid-run** ("Processing failed" → View errors →
   "ReleaseNotes is too long"). Keep en-US ReleaseNotes ≤ ~1100 chars and tell
   the translation sub-agents the ≤1400 target explicitly. `apply.mjs` now
-  runs a length guard and exits non-zero listing any over-limit locale — never
-  import a CSV that failed that check.
+  runs the length guard **before writing** and refuses to emit an over-limit
+  CSV (exits non-zero, no output file) — so a known-bad file can't be imported.
 
 ## Troubleshooting
 

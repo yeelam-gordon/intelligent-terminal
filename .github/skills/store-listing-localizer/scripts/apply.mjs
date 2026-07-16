@@ -177,7 +177,10 @@ for (const [field, row] of Object.entries(fieldRows)) {
     if (kind === 'appname') {
       next = appNameFor(appNames, loc) || enUs;
     } else if (kind === 'translate') {
-      const versionDrift = enVer && versionToken(before) !== enVer;
+      // Drift only applies to an EXISTING non-empty locale value with a
+      // different version token; an empty cell is a separate "fall back to
+      // en-US" case, not drift (kept out of the drift stat).
+      const versionDrift = enVer && before.trim() && versionToken(before) !== enVer;
       const t = transFor(loc, field);
       if (t !== undefined) next = t;                 // use provided translation
       else if (changedFields.has(field)) next = enUs; // marked changed: never keep stale → new en-US
@@ -194,18 +197,10 @@ for (const [field, row] of Object.entries(fieldRows)) {
   stats[kind]++;
 }
 
-writeCsv(outPath, records);
-console.log(`Wrote ${outPath}`);
-console.log(`Fields: ${stats.appname} appname, ${stats.translate} translate, ${stats.verbatim} verbatim`);
-console.log(`en-US overrides applied: ${stats.enusOverridden}; locale cells written: ${stats.cellsWritten}`);
-if (stats.versionDrift) {
-  console.log(`Auto version-drift: ${stats.versionDrift} stale-version locale cell(s) refreshed to the new en-US text.`);
-}
-
-// Length guard: Microsoft Store hard-rejects ReleaseNotes/Description over
-// their per-locale character limits (ReleaseNotes: 1500, Description: 10000).
-// A too-long localized value fails the WHOLE import mid-run, so flag it here
-// BEFORE the operator uploads. Exit non-zero if any field is over its limit.
+// Length guard (runs BEFORE writing so a known-bad CSV never lands on disk —
+// this file is the one the operator uploads). Microsoft Store hard-rejects
+// ReleaseNotes/Description/ShortDescription over their per-locale character
+// limits, failing the WHOLE import mid-run, so refuse to emit an over-limit CSV.
 const LIMITS = { ReleaseNotes: 1500, Description: 10000, ShortDescription: 1000 };
 const violations = [];
 for (const [field, limit] of Object.entries(LIMITS)) {
@@ -217,12 +212,19 @@ for (const [field, limit] of Object.entries(LIMITS)) {
   }
 }
 if (violations.length) {
-  console.error(`\n❌ LENGTH LIMIT EXCEEDED — these will fail Partner Center import:`);
+  console.error(`\n❌ LENGTH LIMIT EXCEEDED — refusing to write ${outPath} (would fail Partner Center import):`);
   for (const v of violations.sort((a, b) => b.len - a.len)) {
     console.error(`   ${v.field} [${v.loc}]: ${v.len} > ${v.limit}`);
   }
-  console.error(`Shorten these locales' translations (or the en-US source) and re-run before importing.`);
-  process.exitCode = 2;
-} else {
-  console.log(`Length check: all ReleaseNotes/Description/ShortDescription within Store limits.`);
+  console.error(`Shorten these locales' translations (or the en-US source) and re-run.`);
+  process.exit(2);
 }
+
+writeCsv(outPath, records);
+console.log(`Wrote ${outPath}`);
+console.log(`Fields: ${stats.appname} appname, ${stats.translate} translate, ${stats.verbatim} verbatim`);
+console.log(`en-US overrides applied: ${stats.enusOverridden}; locale cells written: ${stats.cellsWritten}`);
+if (stats.versionDrift) {
+  console.log(`Auto version-drift: ${stats.versionDrift} stale-version locale cell(s) refreshed to the new en-US text.`);
+}
+console.log(`Length check: all ReleaseNotes/Description/ShortDescription within Store limits.`);
