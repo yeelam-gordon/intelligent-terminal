@@ -26,9 +26,9 @@ later run reuses the cookies. There is no password or secret in this skill.
 
 `--output-dir` is a **single static root** set at MCP launch, so every Playwright
 purpose would otherwise dump files into the same flat folder. Keep runs isolated
-by passing a **relative subpath** in the `filename` argument of `browser_*` save
-tools (`browser_pdf_save`, `browser_take_screenshot`, …) — the MCP resolves it
-under the root and creates subdirectories as needed. Convention:
+by passing a **relative subpath** in the `filename` argument of the Playwright
+MCP (`playwright/*`) save tools (e.g. the PDF-save / screenshot tools) — the MCP
+resolves it under the root and creates subdirectories as needed. Convention:
 
 ```
 <output-dir>/<skill-name>/<YYYY-MM-DD>/<file>
@@ -42,7 +42,8 @@ gitignored `Generated Files\playwright-mcp` root.
 ## Gotchas
 
 - **Restart required.** Adding/editing the MCP entry does nothing until Copilot
-  CLI restarts. If the `browser_*` tools aren't listed, the MCP isn't loaded.
+  CLI restarts. If the Playwright (`playwright/*`) tools aren't listed, the MCP
+  isn't loaded.
 - **Dedicated profile dir.** Pointing `--user-data-dir` at the live Edge profile
   (`...\Edge\User Data`) fails with a profile-lock error whenever Edge is open.
 - **Session expiry.** Corp SSO cookies expire (often daily). When a run lands on
@@ -59,14 +60,13 @@ gitignored `Generated Files\playwright-mcp` root.
   as a success signal for the *submission* — importing only stages the listing,
   it does not publish.
 
-## Workflow (agent-driven, using `browser_*` MCP tools)
+## Workflow (agent-driven, using the Playwright MCP `playwright/*` tools)
 
 ### Export
-1. `browser_navigate` →
+1. Navigate (Playwright MCP) to
    `https://partner.microsoft.com/en-us/dashboard/products/9NMQC2SSJX24/overview`
    (Store ID `9NMQC2SSJX24`). If redirected to login, complete it interactively.
-2. Locate the **Store listings** section and click **Export listings**
-   (`browser_click` on the link with that text).
+2. Locate the **Store listings** section and click the **Export listings** link.
 3. Wait for the `.csv` to finish downloading (under the `--output-dir` root, e.g.
    `<repo>\Generated Files\playwright-mcp\`).
 4. Copy the newest `listingData-9NMQC2SSJX24-*.csv` into a working dir for

@@ -137,7 +137,7 @@ Run any script with `--help` for its options.
 
 | Issue | Solution |
 |-------|----------|
-| `browser_*` MCP tools not available | The Playwright MCP didn't load — restart Copilot CLI; confirm the `playwright` entry in `~/.copilot/mcp-config.json`. |
+| Playwright (`playwright/*`) MCP tools not available | The Playwright MCP didn't load — restart Copilot CLI; confirm the `playwright` entry in `~/.copilot/mcp-config.json`. |
 | Export lands on a login page | Corp SSO session expired — complete the interactive Microsoft login + MFA in the Edge window, then retry. |
 | Profile-lock / "browser in use" error | `--user-data-dir` points at the live Edge profile; use the dedicated `msstore-playwright-profile` dir. |
 | Import rejected / mojibake | Output must be UTF-8 **BOM** + CRLF with unchanged col/row counts — `apply.mjs` does this; don't re-save the CSV in another editor. |

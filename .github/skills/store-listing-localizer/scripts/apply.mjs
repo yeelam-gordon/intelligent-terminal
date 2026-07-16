@@ -132,7 +132,12 @@ const stats = { appname: 0, translate: 0, verbatim: 0, enusOverridden: 0, cellsW
 // uses "intelligent-terminal" (hyphenated, lowercase), so the URL is never
 // touched. Disable with --no-localize-product-name.
 const localizeProductName = !process.argv.includes('--no-localize-product-name');
-const enUsProductName = (records[fieldRows['Title']] ? records[fieldRows['Title']][enCol] : '') || '';
+// Use the --enus Title override when present (it's the source of truth); fall
+// back to the CSV's en-US Title. Computed here from enusOverrides directly since
+// the override isn't written into `records` until the main loop runs.
+const enUsProductName = ('Title' in enusOverrides
+  ? enusOverrides['Title']
+  : (records[fieldRows['Title']] ? records[fieldRows['Title']][enCol] : '')) || '';
 // Precompute the matcher once (it depends only on the constant en-US product
 // name): matches the standalone spaced/capitalized "Intelligent Terminal", not
 // the hyphenated URL form. null when there's no product name to localize.
