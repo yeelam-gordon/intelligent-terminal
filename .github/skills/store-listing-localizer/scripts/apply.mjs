@@ -16,11 +16,12 @@
 // en-US listing and the per-locale fallbacks.
 //
 // Usage:
-//   node apply.mjs --csv <export.csv> --appnames <translations.md> \
+//   node apply.mjs --csv <export.csv> [--appnames <translations.md>] \
 //       [--translations <translations.json>] [--enus <overrides.json>] \
 //       [--changed-fields <Field1,Field2>] [--no-localize-product-name] \
 //       [--out <out.csv>]
 //
+// --appnames defaults to the bundled references/intelligent-terminal-translations.md.
 // Output defaults to "<export-stem>-localized.csv" next to the source.
 // Exits non-zero if any ReleaseNotes/Description/ShortDescription exceeds the
 // Store's per-locale character limit (see the length guard at the end).
