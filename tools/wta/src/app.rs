@@ -89,7 +89,9 @@ pub fn resolve_sessions_origin_filter() -> crate::agent_sessions::OriginFilter {
     }
 }
 
-use crate::commands::{self, CommandKind, CommandSpec, ParseOutcome, ParsedCommand};
+use crate::commands::{
+    self, CommandKind, CommandSpec, MovePositionSpec, ParseOutcome, ParsedCommand,
+};
 use crate::coordinator::{
     parse_autofix_response, parse_recommendation_set, recommended_choice_index,
     validate_recommendation_set_for_coordinator_target, AutofixDecision, RecommendationChoice,
@@ -396,9 +398,6 @@ pub enum ConnectionState {
 pub enum ChatMessage {
     User(String),
     Agent(String),
-    /// App-generated agent-style text that should stay literal (for example
-    /// parsed recommendation summaries containing command strings).
-    AgentLiteral(String),
     System(String),
     ToolCall {
         id: String,
@@ -1345,6 +1344,9 @@ pub enum AppEvent {
     AgentsSnapshotFailed {
         request_id: u64,
     },
+    RegisterBornBoundSession {
+        event: crate::agent_sessions::SessionEvent,
+    },
     MasterMutationCompleted {
         request_id: u64,
     },
@@ -1510,8 +1512,11 @@ pub struct TabSession {
     /// command-prefix mode. The popup renderer treats an empty Vec as
     /// "do not render".
     pub command_popup_candidates: Vec<&'static CommandSpec>,
-    /// Index into [`Self::command_popup_candidates`]. Clamped on every
-    /// mutation that could shrink the list.
+    /// Position candidates shown after `/move `. Kept separate from command
+    /// candidates so the existing command registry remains strongly typed.
+    pub move_position_candidates: Vec<&'static MovePositionSpec>,
+    /// Index into whichever popup candidate list is active: commands or
+    /// `/move` positions. Clamped whenever either list can shrink.
     pub command_popup_selected: usize,
 
     // Filled in Milestone 2 once each tab has its own ACP SessionId.
@@ -1557,6 +1562,9 @@ pub struct TabSession {
     // C++-originated `set_agent_state` requests (hotkey/button toggles)
     // and by wta-internal events like Ctrl+C×2 reset.
     pub pane_open: bool,
+    /// Transient position override for this tab's agent pane. `None` follows
+    /// the global `agentPanePosition` setting; `/move` sets a canonical value.
+    pub agent_pane_position: Option<&'static str>,
 
     // Pre-entry pane visibility, remembered when the user opens the
     // session-management (Agents) view so Esc can restore *that* state rather
@@ -1875,25 +1883,32 @@ impl TabSession {
     /// input. Called after every input mutation. Clamps the selected
     /// index so it stays valid when the candidate list shrinks.
     pub fn refresh_command_popup(&mut self) {
-        if commands::is_command_prefix(&self.input) {
+        if let Some(prefix) = commands::move_position_prefix(&self.input) {
+            self.command_popup_candidates.clear();
+            self.move_position_candidates = commands::match_move_positions(prefix);
+        } else if commands::is_command_prefix(&self.input) {
             // Strip leading whitespace + the `/` to get the user's
             // partial name. `is_command_prefix` already guarantees the
             // shape, so the unwrap is safe.
             let trimmed = self.input.trim_start();
             let name = trimmed.strip_prefix('/').unwrap_or("");
             self.command_popup_candidates = commands::matches(name);
+            self.move_position_candidates.clear();
         } else {
             self.command_popup_candidates.clear();
+            self.move_position_candidates.clear();
         }
-        if self.command_popup_candidates.is_empty() {
+        let candidate_count =
+            self.command_popup_candidates.len() + self.move_position_candidates.len();
+        if candidate_count == 0 {
             self.command_popup_selected = 0;
-        } else if self.command_popup_selected >= self.command_popup_candidates.len() {
-            self.command_popup_selected = self.command_popup_candidates.len() - 1;
+        } else if self.command_popup_selected >= candidate_count {
+            self.command_popup_selected = candidate_count - 1;
         }
     }
 
     pub fn command_popup_visible(&self) -> bool {
-        !self.command_popup_candidates.is_empty()
+        !self.command_popup_candidates.is_empty() || !self.move_position_candidates.is_empty()
     }
 
     pub fn command_popup_up(&mut self) {
@@ -1903,7 +1918,9 @@ impl TabSession {
     }
 
     pub fn command_popup_down(&mut self) {
-        if self.command_popup_selected + 1 < self.command_popup_candidates.len() {
+        let candidate_count =
+            self.command_popup_candidates.len() + self.move_position_candidates.len();
+        if self.command_popup_selected + 1 < candidate_count {
             self.command_popup_selected += 1;
         }
     }
@@ -1914,12 +1931,22 @@ impl TabSession {
             .copied()
     }
 
+    pub fn selected_move_position(&self) -> Option<&'static MovePositionSpec> {
+        self.move_position_candidates
+            .get(self.command_popup_selected)
+            .copied()
+    }
+
     /// Tab-completion: replace the input buffer with `/<name> ` (with a
     /// trailing space if the command takes args; otherwise just the
     /// name) and reset the cursor to the end. Triggered by Tab when the
     /// popup is visible.
     pub fn accept_command_popup_completion(&mut self) {
-        if let Some(spec) = self.selected_command_spec() {
+        if let Some(position) = self.selected_move_position() {
+            self.input = format!("/move {}", position.name);
+            self.cursor_pos = self.input.len();
+            self.refresh_command_popup();
+        } else if let Some(spec) = self.selected_command_spec() {
             self.input = if spec.takes_args {
                 format!("/{} ", spec.name)
             } else {
@@ -2177,6 +2204,8 @@ impl Default for View {
 pub struct AgentsViewState {
     pub snapshot: Option<Vec<crate::session_registry::SessionInfo>>,
     pub focused_sid: Option<agent_client_protocol::schema::v1::SessionId>,
+    pub search_query: String,
+    pub search_focused: bool,
     pub refetch_in_flight: bool,
     pub dirty: bool,
     pub next_request_id: u64,
@@ -2210,6 +2239,7 @@ pub(crate) fn known_cli_id(src: &crate::agent_sessions::CliSource) -> Option<&'s
         CliSource::Codex   => Some("codex"),
         CliSource::Copilot => Some("copilot"),
         CliSource::Gemini  => Some("gemini"),
+        CliSource::OpenCode => Some("opencode"),
         CliSource::Unknown(_) => None,
     }
 }
@@ -3014,9 +3044,9 @@ impl App {
     /// Filter to apply to the session management view based on which
     /// agent CLI the WTA agent pane is currently driving. Returns
     /// `Some(CliSource::*)` when `current_agent_id` resolves to a tracked
-    /// CLI (copilot / claude / gemini) so only matching rows are listed.
-    /// Returns `None` when no agent has been selected yet or the agent is
-    /// not one the session registry tracks (codex / unknown) — in that
+    /// CLI so only matching rows are listed. Returns `None` when no agent
+    /// has been selected yet or the agent is not one the session registry
+    /// tracks (custom / unknown) — in that
     /// case the view falls back to showing every row so the user can still
     /// see and resume their history.
     pub fn current_cli_filter(&self) -> Option<crate::agent_sessions::CliSource> {
@@ -3094,7 +3124,7 @@ impl App {
         let shift = shift && !s.location.is_wsl();
         // Ambient: load_session capability is set during ACP init;
         // resume-flag support is a per-CLI profile constant — true for
-        // Claude / Codex / Copilot / Gemini (all four CLIs accept some
+        // Claude / Codex / Copilot / Gemini / OpenCode (all five CLIs accept some
         // form of `--resume`/`resume <id>` re-attach surface).
         let cli_supports_resume_flag = match known_cli_id(&s.cli_source) {
             Some(id) => !crate::agent_registry::lookup_profile_by_id(id)
@@ -3407,6 +3437,10 @@ impl App {
             "-c".to_string(),
             launch_commandline.clone(),
         ];
+        if !s.title.is_empty() {
+            argv.push("--title".to_string());
+            argv.push(s.title.clone());
+        }
         if let Some(ref cwd) = valid_cwd {
             argv.push("-d".to_string());
             argv.push(cwd.clone());
@@ -3640,6 +3674,11 @@ impl App {
     }
 
     pub(crate) fn open_agents_view_for_tab(&mut self, tab_id: String) {
+        {
+            let tab = self.tab_mut(&tab_id);
+            tab.agents_view.search_query.clear();
+            tab.agents_view.search_focused = false;
+        }
         let rows_available = !self.agents_rows_for_tab(&tab_id).is_empty();
         {
             let tab = self.tab_mut(&tab_id);
@@ -3669,6 +3708,8 @@ impl App {
         tab.agents_view.focused_sid = None;
         tab.agents_view.pending_rescan = false;
         tab.agents_view.rescan_in_flight = false;
+        tab.agents_view.search_query.clear();
+        tab.agents_view.search_focused = false;
         tab.agents_view_prev_pane_open = None;
     }
 
@@ -3816,9 +3857,24 @@ impl App {
         self.tab_mut(tab_id).agents_view.focused_sid = focused;
     }
 
+    fn reset_agents_search_selection(&mut self, tab_id: &str) {
+        {
+            let tab = self.tab_mut(tab_id);
+            tab.agents_list_state.select(None);
+            tab.agents_view.focused_sid = None;
+        }
+        self.restore_agents_selection(tab_id, 0);
+    }
+
     fn agents_rows_for_tab(&self, tab_id: &str) -> Vec<crate::agent_sessions::AgentSession> {
         let filter = self.current_cli_filter();
         let origin = self.sessions_origin_filter;
+        let query = self
+            .tab_sessions
+            .get(tab_id)
+            .map(|tab| tab.agents_view.search_query.as_str())
+            .unwrap_or_default();
+        let folded_query = query.to_lowercase();
         if let Some(snapshot) = self
             .tab_sessions
             .get(tab_id)
@@ -3836,13 +3892,17 @@ impl App {
             // `matches(&s.origin)` is sufficient and stays consistent
             // with the registry branch below.
             rows.retain(|s| origin.matches(&s.origin));
+            rows.retain(|s| crate::ui::agents_view::matches_folded_query(s, &folded_query));
             rows
         } else {
-            self.agent_sessions
+            let mut rows: Vec<_> = self
+                .agent_sessions
                 .iter_sorted_with_filters(filter.as_ref(), origin)
                 .into_iter()
                 .cloned()
-                .collect()
+                .collect();
+            rows.retain(|s| crate::ui::agents_view::matches_folded_query(s, &folded_query));
+            rows
         }
     }
 
@@ -4527,6 +4587,7 @@ impl App {
             AppEvent::SessionsChanged => "sessions_changed",
             AppEvent::AgentsSnapshotLoaded { .. } => "agents_snapshot_loaded",
             AppEvent::AgentsSnapshotFailed { .. } => "agents_snapshot_failed",
+            AppEvent::RegisterBornBoundSession { .. } => "register_born_bound_session",
             AppEvent::MasterMutationCompleted { .. } => "master_mutation_completed",
             AppEvent::RevealTick => "reveal_tick",
         }
@@ -5579,6 +5640,22 @@ impl App {
             }
             AppEvent::AgentsSnapshotFailed { request_id } => {
                 self.handle_agents_snapshot_failed(request_id);
+            }
+            AppEvent::RegisterBornBoundSession { event } => {
+                if self
+                    .master_request_tx
+                    .send(
+                        crate::protocol::acp::client::MasterExtRequest::SessionBornBound {
+                            event,
+                        },
+                    )
+                    .is_err()
+                {
+                    tracing::warn!(
+                        target: "coordinator",
+                        "born-bound registration queue is unavailable",
+                    );
+                }
             }
             AppEvent::MasterMutationCompleted { request_id } => {
                 tracing::debug!(target: "agents_view", request_id, "master mutation completed; refetching open views");
@@ -6880,6 +6957,38 @@ impl App {
         // keeps its own picker state across switches.
         if self.current_tab().current_view == View::Agents {
             let tab_id = self.active_tab_key().to_string();
+
+            if self.current_tab().agents_view.search_focused {
+                match &key.code {
+                    KeyCode::Esc => {
+                        let tab = self.current_tab_mut();
+                        tab.agents_view.search_query.clear();
+                        tab.agents_view.search_focused = false;
+                        self.reset_agents_search_selection(&tab_id);
+                        return;
+                    }
+                    KeyCode::Backspace => {
+                        self.current_tab_mut().agents_view.search_query.pop();
+                        self.reset_agents_search_selection(&tab_id);
+                        return;
+                    }
+                    KeyCode::Char(character)
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        self.current_tab_mut().agents_view.search_query.push(*character);
+                        self.reset_agents_search_selection(&tab_id);
+                        return;
+                    }
+                    KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Enter
+                    | KeyCode::F(5) => {}
+                    _ => return,
+                }
+            }
+
             let rows = self.agents_rows_for_tab(&tab_id);
             let count = rows.len();
             match key.code {
@@ -6916,39 +7025,9 @@ impl App {
                         }
                     }
                 }
-                KeyCode::Delete => {
-                    if self.current_tab().agents_view.snapshot.is_some() {
-                        return;
-                    }
-                    if let Some(idx) = self.current_tab().agents_list_state.selected() {
-                        let target = rows.get(idx).map(|s| (s.key.clone(), s.status.clone()));
-                        if let Some((key, status)) = target {
-                            use crate::agent_sessions::AgentStatus::*;
-                            // Evicting a live session would orphan its pane,
-                            // so restrict Delete to terminal states. Live
-                            // rows transition to Ended via SessionStopped.
-                            if matches!(status, Ended | Historical) {
-                                self.agent_sessions.remove(&key);
-                                // Keep the cursor in-bounds after eviction.
-                                // Re-query through the same filters so the
-                                // selection clamp matches the rendered list
-                                // (both cli + MVP origin filter).
-                                let new_count = self
-                                    .agent_sessions
-                                    .iter_sorted_with_filters(
-                                        self.current_cli_filter().as_ref(),
-                                        self.sessions_origin_filter,
-                                    )
-                                    .len();
-                                let tab = self.current_tab_mut();
-                                if new_count == 0 {
-                                    tab.agents_list_state.select(None);
-                                } else if idx >= new_count {
-                                    tab.agents_list_state.select(Some(new_count - 1));
-                                }
-                            }
-                        }
-                    }
+                KeyCode::Esc if !self.current_tab().agents_view.search_query.is_empty() => {
+                    self.current_tab_mut().agents_view.search_query.clear();
+                    self.reset_agents_search_selection(&tab_id);
                 }
                 KeyCode::Esc => {
                     let tab_id = self.active_tab_key().to_string();
@@ -6977,9 +7056,18 @@ impl App {
                         // self-heals to chat on the next chat-toggle open.
                         let tab = self.tab_mut(&tab_id);
                         tab.pane_open = false;
+                        tab.agents_view.search_query.clear();
+                        tab.agents_view.search_focused = false;
                         tab.agents_view_prev_pane_open = None;
                     }
                     self.project_active_tab_state();
+                }
+                KeyCode::Char('/')
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.current_tab_mut().agents_view.search_focused = true;
                 }
                 KeyCode::F(5) => {
                     // Refresh: ask master to re-scan the on-disk historical
@@ -7624,7 +7712,7 @@ impl App {
     /// popup should not be drawn this frame. Reads from the active tab.
     pub fn command_popup_state(&self) -> Option<crate::ui::PopupState<'_>> {
         let tab = self.current_tab();
-        if tab.command_popup_candidates.is_empty() {
+        if !tab.command_popup_visible() {
             return None;
         }
         // When the transport to master is lost, only /restart can run — so the
@@ -7634,24 +7722,28 @@ impl App {
         // it, e.g. "/new"), and the Enter handler surfaces the reconnect hint.
         // Normal path borrows the tab's list (no per-frame allocation on the
         // render hot path); only the degraded filter allocates.
-        let candidates: std::borrow::Cow<'_, [&'static crate::commands::CommandSpec]> =
-            if self.transport_lost {
-                let filtered: Vec<&'static crate::commands::CommandSpec> = tab
-                    .command_popup_candidates
-                    .iter()
-                    .copied()
-                    .filter(|s| s.kind == crate::commands::CommandKind::Restart)
-                    .collect();
-                if filtered.is_empty() {
-                    return None;
-                }
-                std::borrow::Cow::Owned(filtered)
-            } else {
-                std::borrow::Cow::Borrowed(tab.command_popup_candidates.as_slice())
-            };
+        let candidates = if self.transport_lost {
+            let filtered: Vec<&'static crate::commands::CommandSpec> = tab
+                .command_popup_candidates
+                .iter()
+                .copied()
+                .filter(|s| s.kind == crate::commands::CommandKind::Restart)
+                .collect();
+            if filtered.is_empty() {
+                return None;
+            }
+            crate::ui::PopupCandidates::Commands(std::borrow::Cow::Owned(filtered))
+        } else if !tab.move_position_candidates.is_empty() {
+            crate::ui::PopupCandidates::MovePositions(tab.move_position_candidates.as_slice())
+        } else {
+            crate::ui::PopupCandidates::Commands(std::borrow::Cow::Borrowed(
+                tab.command_popup_candidates.as_slice(),
+            ))
+        };
         Some(crate::ui::PopupState {
             candidates,
             selected: tab.command_popup_selected,
+            pane_focused: self.pane_focused,
             current_model: self.current_model_display(),
         })
     }
@@ -7725,6 +7817,7 @@ impl App {
         Some(crate::ui::ModelPopupState {
             models: &self.available_models,
             selected: tab.model_picker_selected,
+            pane_focused: self.pane_focused,
             current_id,
         })
     }
@@ -7737,6 +7830,7 @@ impl App {
         Some(crate::ui::AgentPopupState {
             agents: &self.available_agents,
             selected: tab.agent_picker_selected,
+            pane_focused: self.pane_focused,
             current_id: &self.current_agent_id,
         })
     }
@@ -7763,6 +7857,20 @@ impl App {
             // (everything else would hit the dead pipe). Pick the /restart
             // spec if it's in the filtered candidate list; otherwise there's
             // nothing to run, so consume Enter and show the reconnect hint.
+            if !self.transport_lost {
+                if let Some(position) = self.current_tab().selected_move_position() {
+                    let spec = commands::lookup("move").expect("/move is registered");
+                    let parsed = ParsedCommand {
+                        kind: CommandKind::Move,
+                        spec,
+                        rest: position.name.to_string(),
+                    };
+                    self.current_tab_mut().clear_input();
+                    self.handle_slash_command(parsed);
+                    return true;
+                }
+            }
+
             let spec = if self.transport_lost {
                 self.current_tab()
                     .command_popup_candidates
@@ -7865,6 +7973,7 @@ impl App {
             CommandKind::Restart => self.cmd_restart(),
             CommandKind::Agent => self.cmd_agent(cmd.rest),
             CommandKind::Model => self.cmd_model(cmd.rest),
+            CommandKind::Move => self.cmd_move(cmd.rest),
         }
     }
 
@@ -8061,6 +8170,22 @@ impl App {
         // Per-tab — only flips the active tab's view state.
         let tab_id = self.active_tab_key().to_string();
         self.open_agents_view_for_tab(tab_id);
+        self.project_active_tab_state();
+    }
+
+    /// `/move <position>` — move only this tab's agent pane. Positions accept
+    /// full names (`left`, `right`, `up`, `down`) or `l/r/u/d`. Bare or
+    /// invalid input reopens the position completion popup.
+    fn cmd_move(&mut self, position: String) {
+        let Some(position) = commands::lookup_move_position(&position) else {
+            let tab = self.current_tab_mut();
+            tab.input = "/move ".to_string();
+            tab.cursor_pos = tab.input.len();
+            tab.refresh_command_popup();
+            return;
+        };
+
+        self.current_tab_mut().agent_pane_position = Some(position.pane_position);
         self.project_active_tab_state();
     }
 
@@ -9291,7 +9416,7 @@ impl App {
         let tab = self.session_tab_mut(session_id);
         let prompt = tab.turn.prompt().cloned().expect("prompt set");
         let mut details = tab.current_turn_details();
-        details.push(ChatMessage::AgentLiteral(summary));
+        details.push(ChatMessage::Agent(summary));
         tab.completed_turns.push(CompletedTurn {
             prompt: prompt.text.clone(),
             details,
@@ -9373,7 +9498,7 @@ impl App {
         let tab = self.session_tab_mut(session_id);
         let prompt = tab.turn.prompt().cloned().expect("prompt set");
         let mut details = tab.current_turn_details();
-        details.push(ChatMessage::AgentLiteral(summary));
+        details.push(ChatMessage::Agent(summary));
         tab.completed_turns.push(CompletedTurn {
             prompt: turn_prompt_label,
             details,
@@ -9704,7 +9829,8 @@ impl App {
     ///   "method": "agent_state_changed",
     ///   "params": {
     ///     "view":      "chat" | "sessions",
-    ///     "pane_open": true | false
+    ///     "pane_open": true | false,
+    ///     "pane_position": "left" | "right" | "up" | "bottom" | null
     ///   }
     /// }
     /// ```
@@ -9758,6 +9884,7 @@ impl App {
                 "tab_id":    target_tab,
                 "view":      view,
                 "pane_open": tab.pane_open,
+                "pane_position": tab.agent_pane_position,
             }
         });
         send_wt_protocol_event(evt.to_string());
@@ -11986,6 +12113,35 @@ mod tests {
     }
 
     #[test]
+    fn born_bound_registration_uses_current_master_request_sender() {
+        let (mut app, mut old_master_rx) = test_app_with_master_rx();
+        let (new_master_tx, mut new_master_rx) = tokio::sync::mpsc::unbounded_channel();
+        app.master_request_tx = new_master_tx;
+        let event = crate::agent_sessions::SessionEvent::SessionStarted {
+            key: "sid".to_string(),
+            cli_source: crate::agent_sessions::CliSource::Copilot,
+            pane_session_id: "pane".to_string(),
+            cwd: std::path::PathBuf::from("C:\\repo"),
+            title: String::new(),
+        };
+
+        app.handle_event(AppEvent::RegisterBornBoundSession {
+            event: event.clone(),
+        });
+
+        assert!(old_master_rx.try_recv().is_err());
+        match new_master_rx
+            .try_recv()
+            .expect("registration should use the replacement sender")
+        {
+            crate::protocol::acp::client::MasterExtRequest::SessionBornBound {
+                event: actual,
+            } => assert_eq!(actual, event),
+            other => panic!("expected SessionBornBound, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn sessions_changed_with_open_agents_view_schedules_refetch() {
         let (mut app, mut master_rx) = test_app_with_master_rx();
         app.current_tab_mut().current_view = View::Agents;
@@ -12646,6 +12802,8 @@ mod tests {
         }
         // Clear the in-flight flag so the F5 refetch dispatches fresh.
         app.current_tab_mut().agents_view.refetch_in_flight = false;
+        app.current_tab_mut().agents_view.search_query = "active search".into();
+        app.current_tab_mut().agents_view.search_focused = true;
 
         app.handle_key(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
 
@@ -12655,6 +12813,107 @@ mod tests {
             }
             other => panic!("expected SessionsList, got {other:?}"),
         }
+        assert_eq!(app.current_tab().agents_view.search_query, "active search");
+        assert!(app.current_tab().agents_view.search_focused);
+    }
+
+    #[test]
+    fn session_search_filters_navigation_and_enter_dispatch() {
+        use crate::agent_sessions::SessionOrigin;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = test_app();
+        app.current_tab_mut().current_view = View::Agents;
+
+        let mut title_match = session_info_for_test("title-match");
+        title_match.title = Some("PowerShell repair".into());
+        title_match.cwd = std::path::PathBuf::from(r"C:\Windows");
+        title_match.pane_session_id =
+            Some("00000000-0000-0000-0000-0000000000a1".into());
+        title_match.origin = Some(SessionOrigin::Unknown);
+        title_match.last_activity_at_ms = Some(300);
+
+        let mut unrelated = session_info_for_test("unrelated");
+        unrelated.title = Some("fix the build".into());
+        unrelated.cwd = std::path::PathBuf::from(r"C:\Windows");
+        unrelated.pane_session_id =
+            Some("00000000-0000-0000-0000-0000000000b2".into());
+        unrelated.origin = Some(SessionOrigin::Unknown);
+        unrelated.last_activity_at_ms = Some(200);
+
+        let mut second_title_match = session_info_for_test("second-title-match");
+        second_title_match.title = Some("portal review".into());
+        second_title_match.cwd = std::path::PathBuf::from(r"C:\repos\portal");
+        second_title_match.pane_session_id =
+            Some("00000000-0000-0000-0000-0000000000c3".into());
+        second_title_match.origin = Some(SessionOrigin::Unknown);
+        second_title_match.last_activity_at_ms = Some(100);
+
+        app.current_tab_mut().agents_view.snapshot =
+            Some(vec![title_match, unrelated, second_title_match]);
+        app.current_tab_mut().agents_list_state.select(Some(0));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        assert!(app.current_tab().agents_view.search_focused);
+        app.handle_key(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT));
+        app.handle_key(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::SHIFT));
+
+        assert_eq!(app.current_tab().agents_view.search_query, "PO");
+        assert_eq!(
+            app.agents_rows_for_tab(DEFAULT_TAB_ID)
+                .iter()
+                .map(|row| row.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["title-match", "second-title-match"]
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.current_tab().agents_list_state.selected(), Some(1));
+        assert!(
+            app.current_tab().agents_view.search_focused,
+            "arrow navigation must keep the search input active"
+        );
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let cmd = app
+            .last_dispatched_command_for_test()
+            .expect("the selected filtered row must dispatch");
+        assert_eq!(cmd.kind, DispatchedCommandKind::FocusPane);
+        assert_eq!(cmd.session_id.as_deref(), Some("second-title-match"));
+    }
+
+    #[test]
+    fn session_search_is_hidden_until_slash_and_escape_clears_it() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = test_app();
+        app.current_tab_mut().current_view = View::Agents;
+        app.current_tab_mut().agents_view.snapshot =
+            Some(vec![session_info_for_test("visible-session")]);
+
+        let before = render_to_text(&mut app, 80, 24);
+        assert!(
+            !before.contains('▏'),
+            "the search cursor must be hidden before / is pressed; rendered:\n{before}"
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        let active = render_to_text(&mut app, 80, 24);
+        assert!(
+            active.contains('▏'),
+            "pressing / must reveal the search input; rendered:\n{active}"
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.current_tab().agents_view.search_query.is_empty());
+        assert!(!app.current_tab().agents_view.search_focused);
+        assert_eq!(
+            app.current_tab().current_view,
+            View::Agents,
+            "the first Esc dismisses search instead of closing session management"
+        );
+
     }
 
     // Esc out of the session-management (Agents) view restores the pane
@@ -12809,7 +13068,7 @@ mod tests {
             cli_source: CliSource::Claude,
             pane_session_id: "p".into(),
             cwd: real_cwd.clone(),
-            title: "t".into(),
+            title: "Fix the build".into(),
         });
         app.agent_sessions.apply(SessionEvent::SessionStopped {
             key: "abc-123".into(),
@@ -12833,6 +13092,11 @@ mod tests {
             !argv.contains("split-pane"),
             "argv must NOT use split-pane: {}",
             argv
+        );
+        assert!(
+            cmd.argv.windows(2).any(|args| args == ["--title", "Fix the build"]),
+            "resume tab must use the session title: {:?}",
+            cmd.argv
         );
         // The CLI invocation is still wrapped in `cmd /c` so .cmd shims
         // resolve via PATHEXT, but the legacy `cd /d` prefix is gone —
@@ -13279,50 +13543,6 @@ mod tests {
             .last_dispatched_command_for_test()
             .expect("a command was dispatched");
         assert_eq!(cmd.kind, DispatchedCommandKind::FocusPane);
-    }
-
-    #[test]
-    fn delete_on_history_row_removes_session_from_registry() {
-        use crate::agent_sessions::{CliSource, SessionEvent};
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        use std::path::PathBuf;
-        let mut app = test_app();
-        app.agent_sessions.apply(SessionEvent::SessionStarted {
-            key: "k".into(),
-            cli_source: CliSource::Claude,
-            pane_session_id: "p".into(),
-            cwd: PathBuf::from("/x"),
-            title: "t".into(),
-        });
-        app.agent_sessions.apply(SessionEvent::SessionStopped {
-            key: "k".into(),
-            reason: "".into(),
-        });
-        app.current_tab_mut().current_view = View::Agents;
-        app.current_tab_mut().agents_list_state.select(Some(0));
-
-        app.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-        assert!(!app.agent_sessions.has_session(&"k".to_string()));
-    }
-
-    #[test]
-    fn delete_on_live_row_is_noop() {
-        use crate::agent_sessions::{CliSource, SessionEvent};
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        use std::path::PathBuf;
-        let mut app = test_app();
-        app.agent_sessions.apply(SessionEvent::SessionStarted {
-            key: "k".into(),
-            cli_source: CliSource::Claude,
-            pane_session_id: "p".into(),
-            cwd: PathBuf::from("/x"),
-            title: "t".into(),
-        });
-        app.current_tab_mut().current_view = View::Agents;
-        app.current_tab_mut().agents_list_state.select(Some(0));
-
-        app.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-        assert!(app.agent_sessions.has_session(&"k".to_string()));
     }
 
     // ─── Phantom-session prune ───────────────────────────────────────
@@ -14677,6 +14897,66 @@ mod tests {
         };
         assert_eq!(perm.allow_index(), Some(0));
         assert_eq!(perm.reject_index(), Some(1));
+    }
+
+    /// Regression (issue #189): while the agent has queued a permission request
+    /// but `AgentMessageEnd` has not yet arrived (turn is
+    /// `Surfaced{end_pending:true}`), the thinking/activity indicator must
+    /// remain visible. Previously `spinner_label()` returned `None` for any
+    /// `Surfaced` variant, making the pane look frozen between the eager surface
+    /// and the permission card appearing.
+    #[test]
+    fn thinking_indicator_visible_while_permission_pending_and_end_pending() {
+        let mut app = test_app();
+
+        // Put the tab in `Surfaced{end_pending:true}` — the state that exists
+        // between an eager surface (recommendation / chat turn visible) and the
+        // `AgentMessageEnd` event that releases the UI gate. A permission
+        // request can arrive in this window.
+        let prompt = SubmittedPrompt {
+            id: 1,
+            text: "test".into(),
+            submitted_at_unix_s: 0.0,
+            autofix: None,
+        };
+        app.tab_mut(DEFAULT_TAB_ID).turn = TurnState::Surfaced {
+            prompt,
+            outcome: TurnOutcome::Empty,
+            end_pending: true,
+        };
+
+        // The spinner must be active while end_pending=true.
+        assert!(
+            app.current_tab().turn.spinner_label().is_some(),
+            "spinner_label must be Some while Surfaced{{end_pending:true}} (issue #189)"
+        );
+        assert!(
+            app.has_activity_indicator(),
+            "has_activity_indicator must be true while Surfaced{{end_pending:true}} (issue #189)"
+        );
+
+        // Simulate the PermissionRequest arriving in this window.
+        app.tab_mut(DEFAULT_TAB_ID)
+            .permission
+            .push_back(PermissionState {
+                description: "Allow tool X?".into(),
+                options: vec![
+                    PermOption { id: "allow-once".into(), name: "Allow".into(), kind: "AllowOnce".into() },
+                    PermOption { id: "reject-once".into(), name: "Deny".into(), kind: "RejectOnce".into() },
+                ],
+                selected: 0,
+                responder: None,
+            });
+
+        // With a queued permission AND end_pending=true the spinner must still be on.
+        assert!(
+            app.current_tab().turn.spinner_label().is_some(),
+            "spinner_label must remain Some after PermissionRequest queued while end_pending=true"
+        );
+        assert!(
+            app.has_activity_indicator(),
+            "has_activity_indicator must remain true after PermissionRequest queued"
+        );
     }
 
     /// Tool-call card: when the mock proposes a command (a `ToolCall`
@@ -16916,6 +17196,7 @@ mod tests {
         assert_eq!(known_cli_id(&CliSource::Codex),   Some("codex"));
         assert_eq!(known_cli_id(&CliSource::Copilot), Some("copilot"));
         assert_eq!(known_cli_id(&CliSource::Gemini),  Some("gemini"));
+        assert_eq!(known_cli_id(&CliSource::OpenCode), Some("opencode"));
     }
 
     #[test]

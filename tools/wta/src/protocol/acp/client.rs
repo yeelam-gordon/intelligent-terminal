@@ -178,6 +178,9 @@ pub enum MasterExtRequest {
         /// returning the cached registry snapshot.
         rescan: bool,
     },
+    SessionBornBound {
+        event: crate::agent_sessions::SessionEvent,
+    },
     SessionResumeDispatched {
         request_id: u64,
         sid: acp::schema::v1::SessionId,
@@ -988,6 +991,35 @@ async fn read_pane_last_message(
     }
 
     result
+}
+
+/// Resolve the user's active (source) pane cwd for seeding a bootstrap agent
+/// session — e.g. a WSL pane reporting `/home/yeelam` via shell integration.
+/// Returns `None` when WT isn't connected, the active pane query fails, or the
+/// active pane IS an agent pane (in which case there's no meaningful user cwd
+/// to inherit and the caller falls back to the process cwd). Master converts
+/// the returned path into the agent's namespace and applies its own fallback
+/// ladder if it's unusable (see `cwd_format`).
+async fn resolve_active_pane_cwd(
+    shell_mgr: &ShellManager,
+    wt_connected: bool,
+) -> Option<std::path::PathBuf> {
+    if !wt_connected {
+        return None;
+    }
+    let active = shell_mgr.wt_get_active_pane().await.ok()?;
+    let is_agent = active
+        .get("is_agent_pane")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if is_agent {
+        return None;
+    }
+    active
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
 }
 
 /// Best-effort canonical shell executable for a pid — e.g. `pwsh.exe`,
@@ -1937,21 +1969,6 @@ fn elapsed_ms_since(start: std::time::Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
 
-/// Inject WTA's shared MCP server (resolve_command, …) into a `session/new`
-/// request so the agent can pull tools. Only when the agent advertises HTTP MCP
-/// support and master published an endpoint; otherwise the agent gets no MCP
-/// server and autofix's in-process path is unaffected.
-fn inject_wta_mcp_servers(req: &mut acp::schema::v1::NewSessionRequest, http_supported: bool) {
-    if !http_supported {
-        return;
-    }
-    if let Some(url) = crate::mcp::published_url() {
-        req.mcp_servers
-            .push(acp::schema::v1::McpServer::Http(acp::schema::v1::McpServerHttp::new("wta", url)));
-        tracing::info!(target: "acp", "injected wta MCP http server into session/new");
-    }
-}
-
 fn acp_result_failure_fields<T>(result: &acp::Result<T>) -> (&'static str, i32) {
     match result {
         Ok(_) => ("", 0),
@@ -2511,7 +2528,17 @@ pub async fn run_acp_client_over_pipe(
     // bug: master used to register both the bootstrap and the loaded
     // sid (both bound to the same WT pane) and the session management view showed two
     // Live rows for the same agent pane.
-    let cwd = std::env::current_dir().unwrap_or_default();
+    // Seed the bootstrap session's cwd from the user's active (source) pane
+    // — e.g. a WSL pane reporting `/home/yeelam` via shell integration — so
+    // the agent starts where the user is, not in the helper's own process
+    // dir (`std::env::current_dir()` = `C:\WINDOWS\system32` for the packaged
+    // helper). Master converts this into the agent's namespace and falls
+    // back if it's unusable (see `cwd_format`). `None` (e.g. the active pane
+    // is the agent pane itself) falls through to the process cwd, which
+    // master then normalizes to `%USERPROFILE%`.
+    let cwd = resolve_active_pane_cwd(&shell_mgr, wt_connected)
+        .await
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let (session_id, available_models, current_model_id, has_bootstrap) =
         if let Some(load_sid) = initial_load_session_id.as_deref() {
             // No bootstrap. AgentConnected fires with the to-be-loaded
@@ -2542,10 +2569,6 @@ pub async fn run_acp_client_over_pipe(
             startup_probe.log("Creating session (over pipe)");
             let mut new_session_req = acp::schema::v1::NewSessionRequest::new(cwd.clone());
             inject_wta_pane_meta(&mut new_session_req.meta);
-            inject_wta_mcp_servers(
-                &mut new_session_req,
-                init_resp.agent_capabilities.mcp_capabilities.http,
-            );
             let new_session_started = std::time::Instant::now();
             let new_session_result = conn.new_session(new_session_req).await;
             log_acp_new_session_result(
@@ -2923,6 +2946,31 @@ fn dispatch_master_ext_request(
                         );
                         let _ = event_tx.send(AppEvent::AgentsSnapshotFailed { request_id });
                     }
+                }
+            }
+            MasterExtRequest::SessionBornBound { event } => {
+                const BORN_BOUND_TIMEOUT: std::time::Duration =
+                    std::time::Duration::from_secs(8);
+                let wire = crate::session_registry::build_born_bound_request(&event);
+                match tokio::time::timeout(BORN_BOUND_TIMEOUT, conn.ext_method(wire)).await {
+                    Ok(Ok(response)) => tracing::debug!(
+                        target: "session_hook",
+                        event = ?event,
+                        response = %response.0.get(),
+                        "born-bound registration sent to master"
+                    ),
+                    Ok(Err(err)) => tracing::warn!(
+                        target: "session_hook",
+                        event = ?event,
+                        error = ?err,
+                        "born-bound registration ext-request failed"
+                    ),
+                    Err(_) => tracing::warn!(
+                        target: "session_hook",
+                        event = ?event,
+                        timeout_secs = BORN_BOUND_TIMEOUT.as_secs(),
+                        "born-bound registration timed out"
+                    ),
                 }
             }
             MasterExtRequest::SessionResumeDispatched { request_id, sid } => {

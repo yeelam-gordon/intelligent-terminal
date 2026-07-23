@@ -1079,7 +1079,11 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         }
         if (lower == "codex")
         {
-            return L"npx -y @zed-industries/codex-acp";
+            return L"npx -y @agentclientprotocol/codex-acp@1.1.0";
+        }
+        if (lower == "opencode")
+        {
+            return L"opencode acp";
         }
 
         std::wstring cmd{ acpAgent };

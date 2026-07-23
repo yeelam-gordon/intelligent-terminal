@@ -335,7 +335,15 @@ pub async fn run_recommendation_executor(
 ) {
     while let Some(exec) = rx.recv().await {
         let delegate_agents = delegate_agents.lock().unwrap().clone();
-        match execute_choice(&exec.choice, exec.insert_only, &shell_mgr, &delegate_agents, &event_tx).await {
+        match execute_choice(
+            &exec.choice,
+            exec.insert_only,
+            &shell_mgr,
+            &delegate_agents,
+            &event_tx,
+        )
+        .await
+        {
             Ok(()) => {}
             Err(err) => {
                 let err_str = format!("{:#}", err);
@@ -448,8 +456,24 @@ async fn execute_choice(
                     Some(name) => format!("Opening {} for {}.", target_label, name),
                     None => format!("Opening {}.", target_label),
                 }));
+                let pinned_session_id = runtime.and_then(|runtime| {
+                    pinned_session_id_for_runtime(
+                        runtime,
+                        delegate_command_launchable(&runtime.commandline),
+                    )
+                });
+                coordinator_log(&format!(
+                    "open_and_send pin decision agent={:?} pinned_session_id={:?}",
+                    agent, pinned_session_id
+                ));
                 let commandline = runtime
-                    .map(|runtime| build_delegate_launch_commandline(runtime, Some(input), None))
+                    .map(|runtime| {
+                        build_delegate_launch_commandline(
+                            runtime,
+                            Some(input),
+                            pinned_session_id.as_deref(),
+                        )
+                    })
                     .transpose()?;
                 let pane_id = match target {
                     OpenTarget::Tab => {
@@ -499,6 +523,37 @@ async fn execute_choice(
                     "Opened {} pane {}.",
                     target_label, pane_id
                 )));
+                if let (Some(session_id), Some(runtime)) =
+                    (pinned_session_id.as_deref(), runtime)
+                {
+                    let event = crate::agent_sessions::SessionEvent::SessionStarted {
+                        key: session_id.to_string(),
+                        cli_source: crate::agent_sessions::CliSource::from(
+                            crate::session_registry::SessionHookCliSource::Known(
+                                runtime.id.clone(),
+                            ),
+                        ),
+                        pane_session_id: pane_id.clone(),
+                        cwd: cwd
+                            .as_deref()
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_default(),
+                        title: String::new(),
+                    };
+                    coordinator_log(&format!(
+                        "open_and_send born-bound registering session_id={} pane={} cli={}",
+                        session_id, pane_id, runtime.id
+                    ));
+                    if event_tx
+                        .send(AppEvent::RegisterBornBoundSession { event })
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            target: "coordinator",
+                            "born-bound registration event queue is unavailable",
+                        );
+                    }
+                }
                 if matches!(delivery_mode, DelegatePromptDelivery::LaunchThenSend) {
                     send_input_to_new_pane(shell_mgr, &pane_id, input, event_tx).await?;
                 } else {
@@ -680,6 +735,21 @@ fn lookup_delegate_agent<'a>(
         .ok_or_else(|| anyhow!("no delegate agent configured"))
 }
 
+fn pinned_session_id_for_runtime(
+    runtime: &DelegateAgentRuntime,
+    launchable: bool,
+) -> Option<String> {
+    if !launchable {
+        return None;
+    }
+
+    agent_registry::lookup_profile_by_id(agent_registry::resolve_agent_id_from_cmd(
+        &runtime.commandline,
+    ))
+    .new_session_id_flag
+    .map(|_| uuid::Uuid::new_v4().to_string())
+}
+
 /// Build the delegate launch command line, optionally pinning a session id.
 /// When `session_id` is `Some` and the resolved agent advertises
 /// `new_session_id_flag`, append `<flag> <session_id>` so WTA controls the id
@@ -700,6 +770,9 @@ fn build_delegate_launch_commandline(
     let commandline = runtime.commandline.trim();
     if commandline.is_empty() {
         bail!("delegate agent runtime commandline is empty");
+    }
+    if split_windows_commandline(commandline).is_empty() {
+        bail!("delegate agent runtime commandline has no executable");
     }
     // Resolve bare names (e.g. "claude" → "claude.exe") at launch time so we
     // always see the current PATH, not a stale snapshot from process startup.
@@ -1217,7 +1290,7 @@ pub(crate) fn build_wsl_delegate_commandline(
     // single-quoted for the inner bash.
     let mut parts: Vec<String> = split_windows_commandline(agent_cmd)
         .into_iter()
-        .map(|t| sh_quote(&t))
+        .map(|token| sh_quote(&token))
         .collect();
     if parts.is_empty() {
         bail!("delegate agent runtime commandline is empty");
@@ -1588,9 +1661,10 @@ mod tests {
         build_windows_powershell_base64_launch, build_wsl_delegate_commandline,
         default_delegate_agent_runtimes, escape_for_intermediate_shell,
         is_direct_known_agent_command, parse_autofix_response, parse_recommendation_set,
-        pwsh_available, resolve_agent_profile, resolve_created_pane_id, sanitize_windows_agent_cwd,
-        validate_recommendation_set_for_coordinator_target, AutofixDecision, DelegateAgentRuntime,
-        DelegatePromptDelivery, OpenTarget, RecommendedAction,
+        pinned_session_id_for_runtime, pwsh_available, resolve_agent_profile,
+        resolve_created_pane_id, sanitize_windows_agent_cwd,
+        validate_recommendation_set_for_coordinator_target, AutofixDecision,
+        DelegateAgentRuntime, DelegatePromptDelivery, OpenTarget, RecommendedAction,
     };
     use serde_json::json;
     use std::os::windows::process::CommandExt;
@@ -1845,6 +1919,64 @@ mod tests {
             build_delegate_launch_commandline_with_session(&runtime, Some("hi"), None).unwrap();
 
         assert!(!commandline.contains("--session-id"));
+    }
+
+    #[test]
+    fn recommendation_launch_generates_session_id_for_copilot() {
+        let runtime = DelegateAgentRuntime {
+            id: "copilot".to_string(),
+            name: "Copilot".to_string(),
+            description: String::new(),
+            commandline: "copilot".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        let session_id = pinned_session_id_for_runtime(&runtime, true)
+            .expect("copilot should support pinning");
+        assert!(uuid::Uuid::parse_str(&session_id).is_ok());
+    }
+
+    #[test]
+    fn recommendation_launch_skips_session_id_for_codex() {
+        let runtime = DelegateAgentRuntime {
+            id: "codex".to_string(),
+            name: "Codex".to_string(),
+            description: String::new(),
+            commandline: "codex".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        assert!(pinned_session_id_for_runtime(&runtime, true).is_none());
+    }
+
+    #[test]
+    fn recommendation_launch_resolves_adapter_before_pinning() {
+        let runtime = DelegateAgentRuntime {
+            id: "claude".to_string(),
+            name: "Claude".to_string(),
+            description: String::new(),
+            commandline: "npx -y @agentclientprotocol/claude-agent-acp".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        assert!(pinned_session_id_for_runtime(&runtime, true).is_some());
+    }
+
+    #[test]
+    fn recommendation_launch_skips_session_id_when_agent_is_unavailable() {
+        let runtime = DelegateAgentRuntime {
+            id: "copilot".to_string(),
+            name: "Copilot".to_string(),
+            description: String::new(),
+            commandline: "copilot".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        assert!(pinned_session_id_for_runtime(&runtime, false).is_none());
     }
 
     #[test]
@@ -2643,6 +2775,69 @@ mod tests {
     }
 
     #[test]
+    fn opencode_delegate_uses_interactive_prompt_flag() {
+        let mut runtime = base64_runtime("opencode");
+        runtime.model = Some("anthropic/claude-sonnet-4-5".to_string());
+        let cmd = build_wsl_delegate_commandline(&runtime, Some("hi\nthere"), None).expect("cmd");
+        assert!(
+            cmd.contains(
+                "'opencode' '--model' 'anthropic/claude-sonnet-4-5' '--prompt' \"\\$prompt\""
+            ),
+            "OpenCode delegate form: {cmd}"
+        );
+
+        let profile = crate::agent_registry::lookup_profile_by_id("opencode");
+        let cmd = build_pwsh_base64_launch(
+            "opencode",
+            profile,
+            Some("anthropic/claude-sonnet-4-5"),
+            None,
+            "hi\nthere",
+        );
+        assert!(
+            cmd.contains(
+                "& 'opencode' '--model' 'anthropic/claude-sonnet-4-5' '--prompt' $p; exit $LASTEXITCODE"
+            ),
+            "OpenCode PowerShell delegate form: {cmd}"
+        );
+
+        let cmd = build_windows_powershell_base64_launch(
+            "opencode",
+            profile,
+            Some("anthropic/claude-sonnet-4-5"),
+            None,
+            "hi\nthere",
+        );
+        assert!(
+            cmd.contains(
+                "& 'opencode' '--model' 'anthropic/claude-sonnet-4-5' '--prompt' $p;exit $LASTEXITCODE"
+            ),
+            "OpenCode Windows PowerShell delegate form: {cmd}"
+        );
+
+        runtime.commandline = r"C:\tools\opencode.exe".to_string();
+        let cmd = build_delegate_launch_commandline(&runtime, Some("hi there"), None)
+            .expect("OpenCode direct command");
+        assert_eq!(
+            cmd,
+            r#"C:\tools\opencode.exe --model anthropic/claude-sonnet-4-5 --prompt "hi there""#
+        );
+    }
+
+    #[test]
+    fn delegate_launch_rejects_commandline_without_executable() {
+        let mut runtime = base64_runtime("opencode");
+        runtime.commandline = "\"\"".to_string();
+
+        let error = build_delegate_launch_commandline(&runtime, Some("hi"), None)
+            .expect_err("quote-only commandline should be rejected");
+        assert!(
+            error.to_string().contains("has no executable"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
     fn wsl_delegate_interactive_has_no_base64() {
         let runtime = base64_runtime("claude");
         let cmd = build_wsl_delegate_commandline(&runtime, None, None).expect("cmd");
@@ -2983,7 +3178,7 @@ mod tests {
             r#""C:\npm tools\codex.cmd" --search"#
         ));
         assert!(!is_direct_known_agent_command(
-            "npx -y @zed-industries/codex-acp"
+            "npx -y @agentclientprotocol/codex-acp@1.1.0"
         ));
     }
 

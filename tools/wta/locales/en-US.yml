@@ -91,6 +91,7 @@ commands.stop.summary: "Cancel the in-flight prompt"
 commands.sessions.summary: "Open the historical sessions picker (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
 commands.agent.summary: "Pick the agent for this tab (/agent <id> to switch directly)"  # {Locked="/agent","<id>"}
 commands.model.summary: "Pick the model for this pane (/model <id> to switch directly)"  # {Locked="/model","<id>"}
+commands.move.summary: "Move this tab's agent pane (/move <position>)"  # {Locked="/move","<position>"}
 
 # ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
 # {Locked="↑","↓","Enter","Esc"} - key names, do not translate
@@ -158,8 +159,8 @@ agent.custom.auth_hint: "Make sure %{name} is installed and on your PATH."  # {L
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Loading..."
-# {Locked="Enter","Esc","F5","↑","↓"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ to navigate • Enter to launch session • Esc to exit • F5 to refresh)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ to navigate • Enter to launch session • Esc to exit • F5 to refresh • / to search)"
 # Status badge when agent session is actively processing
 agents.status.active: "Active"
 agents.status.waiting_for_input: "Waiting for input"

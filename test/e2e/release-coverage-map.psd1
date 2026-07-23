@@ -106,8 +106,8 @@
     'Bug report zip includes agent logs' = 'Bug report zip includes agent logs'
     # §10 diagnostics — hook trace log (Feature.HookTrace). A hooked copilot prompt is traced.
     'Hook trace log is written'         = 'Hook trace log is written'
-    # §2 agent pane paste (Feature.Paste) — clipboard text pasted with Ctrl+V lands in the input.
-    'Paste works'                       = 'Paste works'
+    # §2 agent pane paste (Feature.Paste) — only the multiline case satisfies C065.
+    'Paste works'                       = 'Paste works \(multiline clipboard text stays in one agent draft without submitting\)'
     # §7 multi-window (Feature.MultiWindow) — move an agent tab to a new window via the command
     # palette (moveTab window:new), assert chat preserved + closing the source window is safe.
     'Move tab to new window preserves chat' = 'Move tab to new window preserves chat'
@@ -204,6 +204,11 @@
     'Delegate provider is correct'      = 'Delegate provider is correct'
     'Delegate with Copilot works'       = 'Delegate with Copilot works'
     'Delegate errors are actionable'    = 'Delegate errors are actionable'
+    # C229 (#400): the delegate must not surface its baked `## Terminal Context (pane …)` first
+    # message as a session/list title (no injected pane-context/GUID leak). The E2E case is
+    # OPPORTUNISTIC — the echo only appears in a timing window — so the item's deterministic
+    # backing is the Rust UT session_registry::title_is_injected_context_echo_detects_delegate_marker_only.
+    'Delegate session title is clean'   = 'Delegate session title does not leak the injected terminal-context echo'
     # §5 non-Copilot delegate (Feature.DelegateNonCopilot) — claude/gemini delegate tab launches.
     'Delegate with non-Copilot agents works' = 'Delegate with non-Copilot agents works'
 }

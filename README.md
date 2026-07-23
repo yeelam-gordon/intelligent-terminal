@@ -80,9 +80,9 @@ winget install --id Microsoft.IntelligentTerminal -e
 
 ## Get Started
 
-1. On first launch, choose your agent. Intelligent Terminal auto-detects several [ACP-compatible](https://agentclientprotocol.com/get-started/agents) agent CLIs on your machine (Copilot/Claude/Codex/Gemini). If none are found, it defaults to GitHub Copilot CLI and installs it for you via WinGet.
-3. If you aren't already authenticated, the agent pane walks you through sign-in.
-4. Start asking questions and using the agent pane for assistance. The agent has context on your shell output, no copy-pasting needed.
+1. On first launch, choose your agent. Intelligent Terminal auto-detects several [ACP-compatible](https://agentclientprotocol.com/get-started/agents) agent CLIs on your machine (Copilot/Claude/Codex/Gemini/OpenCode). If none are found, it defaults to GitHub Copilot CLI and installs it for you via WinGet.
+2. If you aren't already authenticated, the agent pane walks you through sign-in.
+3. Start asking questions and using the agent pane for assistance. The agent has context on your shell output, no copy-pasting needed.
 
 > [!TIP]
 > If you see "running scripts is disabled on this system" or an `UnauthorizedAccess` error in PowerShell, your execution policy is blocking your profile and Intelligent Terminal can't initialize shell integration. Run:
@@ -256,6 +256,9 @@ Intelligent Terminal ships as a separate app and installs next to your existing 
 We are excited to work alongside you, our amazing community, to build and enhance Intelligent Terminal!
 
 **Before you start work on a feature/fix**, please read & follow the [Windows Terminal Contributor's Guide](https://github.com/microsoft/terminal/blob/main/CONTRIBUTING.md). The contribution process is the same.
+
+For local dev/build of this repo, see:
+[quick-start-local-dev](doc/quick-start-local-dev.md)
 
 ---
 

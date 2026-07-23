@@ -101,8 +101,8 @@ agent.custom.auth_hint: "Asegúrese de que %{name} esté instalado y en el PATH.
 
 # ── Vista de agentes (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Cargando..."
-# {Locked="Enter","Esc","F5","↑","↓"} - combinaciones de teclas, no traducir
-agents.footer_hint: "(↑ ↓ navegar • Enter iniciar sesión • Esc salir • F5 actualizar)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - combinaciones de teclas, no traducir
+agents.footer_hint: "(↑ ↓ navegar • Enter iniciar sesión • Esc salir • F5 actualizar • / buscar)"
 agents.status.active: "Activo"
 agents.status.waiting_for_input: "Esperando entrada"
 agents.status.error: "Error"
@@ -213,6 +213,7 @@ system.agent_switch_unavailable: "El cambio de agente no está disponible fuera 
 
 # ── Model picker (/model) ───────────────────────────────────────────────────
 commands.model.summary: "Elija el modelo para este panel (/model <id> para cambiar directamente)"  # {Locked="/model","<id>"}
+commands.move.summary: "Mover el panel del agente de esta pestaña (/move <position>)"  # {Locked="/move","<position>"}
 model_picker.title: "Seleccionar modelo (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
 system.no_models: "El agente conectado no anunció ningún modelo seleccionable."
 system.model_set: "El modelo para este panel se ha establecido en %{model}."  # {Locked="%{model}"}

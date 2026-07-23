@@ -48,6 +48,9 @@ pub struct AgentProfile {
     /// `"npx -y @agentclientprotocol/claude-agent-acp"` for an adapter package).
     /// When empty, `build_acp_command` falls back to `id + acp_flags`.
     pub acp_launch_command: &'static str,
+    /// Model flags accepted by the ACP server command. This may differ from
+    /// `model_flags` when ACP model selection is protocol-only.
+    pub acp_model_flags: &'static [&'static str],
     /// Authentication flow required for ACP sessions.
     pub acp_auth_flow: AcpAuthFlow,
 
@@ -86,6 +89,7 @@ pub const KNOWN_AGENTS: &[AgentProfile] = &[
         exe_search_order: &[".exe", ".cmd"],
         acp_flags: &["--acp", "--stdio"],
         acp_launch_command: "",
+        acp_model_flags: &["--model", "-m"],
         acp_auth_flow: AcpAuthFlow::External,
         delegate_prompt_flag: PromptFlag::Flag("-i"),
         model_flags: &["--model", "-m"],
@@ -107,6 +111,7 @@ pub const KNOWN_AGENTS: &[AgentProfile] = &[
         // delegate mode does. (Renamed from the deprecated
         // `@zed-industries/claude-code-acp`; see issue #257.)
         acp_launch_command: "npx -y @agentclientprotocol/claude-agent-acp",
+        acp_model_flags: &[],
         acp_auth_flow: AcpAuthFlow::External,
         delegate_prompt_flag: PromptFlag::Positional,
         model_flags: &[],
@@ -122,8 +127,10 @@ pub const KNOWN_AGENTS: &[AgentProfile] = &[
         display_name: "Codex",
         exe_search_order: &[".exe", ".cmd"],
         acp_flags: &[],
-        // Codex CLI itself doesn't speak ACP. Same npx-adapter pattern as Claude.
-        acp_launch_command: "npx -y @zed-industries/codex-acp",
+        // Codex CLI itself doesn't speak ACP. Use the ACP-project-maintained
+        // adapter, pinned so a future npm release cannot silently break startup.
+        acp_launch_command: "npx -y @agentclientprotocol/codex-acp@1.1.0",
+        acp_model_flags: &[],
         acp_auth_flow: AcpAuthFlow::External,
         delegate_prompt_flag: PromptFlag::Positional,
         model_flags: &[],
@@ -143,6 +150,7 @@ pub const KNOWN_AGENTS: &[AgentProfile] = &[
         exe_search_order: &[".exe", ".cmd"],
         acp_flags: &["--experimental-acp"],
         acp_launch_command: "",
+        acp_model_flags: &["--model", "-m"],
         acp_auth_flow: AcpAuthFlow::InProtocol,
         delegate_prompt_flag: PromptFlag::Positional,
         model_flags: &["--model", "-m"],
@@ -153,6 +161,25 @@ pub const KNOWN_AGENTS: &[AgentProfile] = &[
         resume_flag: "--resume",
         new_session_id_flag: Some("--session-id"),
     },
+    AgentProfile {
+        id: "opencode",
+        display_name: "OpenCode",
+        exe_search_order: &[".exe", ".cmd"],
+        acp_flags: &["acp"],
+        acp_launch_command: "",
+        // `opencode acp` accepts model changes through ACP, while the
+        // interactive TUI accepts `--model` and an initial `--prompt`.
+        acp_model_flags: &[],
+        acp_auth_flow: AcpAuthFlow::External,
+        delegate_prompt_flag: PromptFlag::Flag("--prompt"),
+        model_flags: &["--model", "-m"],
+        install_hint: "npm install -g opencode-ai",
+        install_url: "https://opencode.ai/docs/",
+        auth_check_command: "",
+        auth_hint: "Run: opencode auth login",
+        resume_flag: "--session",
+        new_session_id_flag: None,
+    },
 ];
 
 pub const DEFAULT_PROFILE: AgentProfile = AgentProfile {
@@ -161,6 +188,7 @@ pub const DEFAULT_PROFILE: AgentProfile = AgentProfile {
     exe_search_order: &[".exe", ".cmd"],
     acp_flags: &[],
     acp_launch_command: "",
+    acp_model_flags: &[],
     acp_auth_flow: AcpAuthFlow::None,
     delegate_prompt_flag: PromptFlag::Flag("-i"),
     model_flags: &["--model", "-m"],
@@ -204,8 +232,35 @@ pub fn lookup_profile_by_id(id: &str) -> &'static AgentProfile {
         .unwrap_or(&DEFAULT_PROFILE)
 }
 
+// Identification-only aliases. The registry command remains the pinned launch
+// command used for new Codex sessions.
+const ACP_LAUNCH_COMMAND_ALIASES: &[(&str, &str)] = &[
+    ("npx -y @agentclientprotocol/codex-acp", "codex"),
+    ("npx -y @zed-industries/codex-acp", "codex"),
+];
+
+fn adapter_profile_from_tokens(tokens: &[String]) -> Option<&'static AgentProfile> {
+    let matches_command = |command: &str| {
+        let command_tokens = crate::coordinator::split_windows_commandline(command);
+        tokens.starts_with(&command_tokens)
+    };
+
+    KNOWN_AGENTS
+        .iter()
+        .find(|profile| {
+            !profile.acp_launch_command.is_empty() && matches_command(profile.acp_launch_command)
+        })
+        .or_else(|| {
+            ACP_LAUNCH_COMMAND_ALIASES
+                .iter()
+                .find(|(command, _)| matches_command(command))
+                .map(|(_, id)| lookup_profile_by_id(id))
+        })
+}
+
 /// Returns `true` iff `id` is a real, selectable agent id present in
-/// [`KNOWN_AGENTS`] (`"copilot"`, `"claude"`, `"codex"`, `"gemini"`).
+/// [`KNOWN_AGENTS`] (`"copilot"`, `"claude"`, `"codex"`, `"gemini"`,
+/// `"opencode"`).
 ///
 /// Prefer this over `lookup_profile_by_id(id).id != DEFAULT_PROFILE.id` when
 /// distinguishing a known agent from the unknown/custom fallback: this checks
@@ -219,7 +274,7 @@ pub fn is_known_id(id: &str) -> bool {
 
 /// Resolve a full agent command line (e.g. the value of `--agent`) into the
 /// canonical agent id known to [`KNOWN_AGENTS`] — `"copilot"`, `"claude"`,
-/// `"codex"`, `"gemini"` — or `"unknown"` if nothing matches.
+/// `"codex"`, `"gemini"`, `"opencode"` — or `"unknown"` if nothing matches.
 ///
 /// This is the right thing to use whenever we need to *identify* the agent
 /// from a launch command rather than execute it. It handles three input
@@ -239,23 +294,17 @@ pub fn resolve_agent_id_from_cmd(agent_cmd: &str) -> &'static str {
         return DEFAULT_PROFILE.id;
     }
 
-    // Adapter-style: the whole command equals a known profile's
-    // `acp_launch_command` (e.g. `"npx -y @agentclientprotocol/claude-agent-acp"`).
-    // Match exact first; fall back to prefix match so trailing flags don't
-    // hide the adapter (e.g. someone appending `--debug`).
-    if let Some(profile) = KNOWN_AGENTS
-        .iter()
-        .find(|p| !p.acp_launch_command.is_empty()
-                  && (p.acp_launch_command == trimmed
-                      || trimmed.starts_with(&format!("{} ", p.acp_launch_command))))
-    {
+    let tokens = crate::coordinator::split_windows_commandline(trimmed);
+
+    // Match complete command tokens so compatibility aliases cannot identify
+    // unrelated packages whose names merely contain an adapter package name.
+    if let Some(profile) = adapter_profile_from_tokens(&tokens) {
         return profile.id;
     }
 
     // Bare / path form: parse the first Windows commandline token so a quoted
     // executable path containing spaces stays intact, then let `lookup_profile`
     // strip path and extension before matching.
-    let tokens = crate::coordinator::split_windows_commandline(trimmed);
     tokens
         .first()
         .map(|first| lookup_profile(first).id)
@@ -285,7 +334,7 @@ pub fn build_acp_command(agent_id: &str, model: Option<&str>) -> String {
         parts.push(flag.to_string());
     }
     if let Some(model) = model {
-        if let Some(flag) = profile.model_flags.first() {
+        if let Some(flag) = profile.acp_model_flags.first() {
             parts.push(flag.to_string());
             parts.push(model.to_string());
         }
@@ -306,13 +355,10 @@ pub fn strip_acp_flags_for_delegate(agent_cmd: &str) -> Option<String> {
     let tokens = crate::coordinator::split_windows_commandline(agent_cmd);
     let command = tokens.first()?;
 
-    // Adapter-style: input is something like "npx -y @zed/claude-code-acp".
+    // Adapter-style: input is something like
+    // "npx -y @agentclientprotocol/claude-agent-acp".
     // Find which agent owns this launch command and return its bare id.
-    let trimmed = agent_cmd.trim();
-    if let Some(profile) = KNOWN_AGENTS
-        .iter()
-        .find(|p| !p.acp_launch_command.is_empty() && p.acp_launch_command == trimmed)
-    {
+    if let Some(profile) = adapter_profile_from_tokens(&tokens) {
         return Some(profile.id.to_string());
     }
 
@@ -463,6 +509,7 @@ mod tests {
     fn resolve_agent_id_from_cmd_recognises_bare_names_with_flags() {
         assert_eq!(resolve_agent_id_from_cmd("copilot --acp --stdio"), "copilot");
         assert_eq!(resolve_agent_id_from_cmd("gemini --experimental-acp"), "gemini");
+        assert_eq!(resolve_agent_id_from_cmd("opencode acp"), "opencode");
         assert_eq!(resolve_agent_id_from_cmd("claude --resume foo"), "claude");
     }
 
@@ -474,6 +521,14 @@ mod tests {
             "claude",
         );
         assert_eq!(
+            resolve_agent_id_from_cmd("npx -y @agentclientprotocol/codex-acp@1.1.0"),
+            "codex",
+        );
+        assert_eq!(
+            resolve_agent_id_from_cmd("npx -y @agentclientprotocol/codex-acp"),
+            "codex",
+        );
+        assert_eq!(
             resolve_agent_id_from_cmd("npx -y @zed-industries/codex-acp"),
             "codex",
         );
@@ -482,6 +537,63 @@ mod tests {
             resolve_agent_id_from_cmd("npx -y @agentclientprotocol/claude-agent-acp --debug"),
             "claude",
         );
+        assert_eq!(
+            resolve_agent_id_from_cmd("npx -y @zed-industries/codex-acp --debug"),
+            "codex",
+        );
+    }
+
+    #[test]
+    fn codex_adapter_recognition_requires_complete_command_tokens() {
+        for command in [
+            "npx -y @agentclientprotocol/codex-acp-extra",
+            "npx -y prefix-@agentclientprotocol/codex-acp",
+            "echo npx -y @agentclientprotocol/codex-acp",
+        ] {
+            assert_eq!(resolve_agent_id_from_cmd(command), "unknown");
+            assert_eq!(strip_acp_flags_for_delegate(command), None);
+        }
+    }
+
+    #[test]
+    fn strip_acp_flags_recognises_codex_adapter_compatibility_commands() {
+        for command in [
+            "npx -y @agentclientprotocol/codex-acp@1.1.0",
+            "npx -y @agentclientprotocol/codex-acp",
+            "npx -y @zed-industries/codex-acp",
+            "npx -y @zed-industries/codex-acp --debug",
+        ] {
+            assert_eq!(
+                strip_acp_flags_for_delegate(command),
+                Some("codex".to_string()),
+            );
+        }
+    }
+
+    #[test]
+    fn codex_acp_launch_command_stays_pinned() {
+        assert_eq!(
+            build_acp_command("codex", None),
+            "npx -y @agentclientprotocol/codex-acp@1.1.0",
+        );
+    }
+
+    #[test]
+    fn opencode_builds_native_acp_and_delegate_commands() {
+        assert_eq!(build_acp_command("opencode", None), "opencode acp");
+        assert_eq!(
+            build_acp_command("opencode", Some("anthropic/claude-sonnet-4-5")),
+            "opencode acp",
+            "OpenCode model selection is sent through ACP"
+        );
+        assert_eq!(
+            strip_acp_flags_for_delegate("opencode acp"),
+            Some("opencode".to_string())
+        );
+        let profile = lookup_profile_by_id("opencode");
+        assert_eq!(profile.delegate_prompt_flag, PromptFlag::Flag("--prompt"));
+        assert_eq!(profile.model_flags, &["--model", "-m"]);
+        assert_eq!(profile.resume_flag, "--session");
     }
 
     #[test]

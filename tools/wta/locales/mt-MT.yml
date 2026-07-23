@@ -101,8 +101,8 @@ agent.custom.auth_hint: "Kun żgur li %{name} huwa installat u fuq il-PATH tieg�
 
 # ── Vista tal-aġenti (src/ui/agents_view.rs) ─────────────────────────────────
 agents.loading: "Qed jitgħabba..."
-# {Locked="Enter","Esc","F5","↑","↓"} - kombinazzjonijiet taċ-ċwievet, tittradux
-agents.footer_hint: "(↑ ↓ biex tinnaviga • Enter biex tniedi sessjoni • Esc biex toħroġ • F5 biex taġġorna)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - kombinazzjonijiet taċ-ċwievet, tittradux
+agents.footer_hint: "(↑ ↓ biex tinnaviga • Enter biex tniedi sessjoni • Esc biex toħroġ • F5 biex taġġorna • / biex tfittex)"
 agents.status.active: "Attiv"
 agents.status.waiting_for_input: "Qed jistenna input"
 agents.status.error: "Żball"
@@ -212,6 +212,7 @@ system.agent_switch_unavailable: "L-iswiċċjar tal-aġent mhuwiex disponibbli b
 
 # ── Model picker (/model) ───────────────────────────────────────────────────
 commands.model.summary: "Agħżel il-mudell għal dan il-pannell (/model <id> biex tibdel direttament)"  # {Locked="/model","<id>"}
+commands.move.summary: "Mexxi l-pannell tal-aġent ta' dan it-tab (/move <position>)"  # {Locked="/move","<position>"}
 model_picker.title: "Agħżel mudell (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
 system.no_models: "L-aġent konness ma rreklama l-ebda mudell li jista' jintgħażel."
 system.model_set: "Il-mudell għal dan il-pannell ġie ssettjat għal %{model}."  # {Locked="%{model}"}

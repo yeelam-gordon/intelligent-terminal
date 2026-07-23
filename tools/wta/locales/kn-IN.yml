@@ -114,8 +114,8 @@ agent.custom.auth_hint: "%{name} ಇನ್‌ಸ್ಟಾಲ್ ಆಗಿದೆ 
 
 # ── ಏಜೆಂಟ್‌ಗಳ ವೀಕ್ಷಣೆ (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "ಲೋಡ್ ಆಗುತ್ತಿದೆ..."
-# {Locked="Enter","Esc","F5","↑","↓"} - ಕೀ ಸಂಯೋಜನೆಗಳು, ಅನುವಾದಿಸಬೇಡಿ
-agents.footer_hint: "(↑ ↓ ನ್ಯಾವಿಗೇಟ್ ಮಾಡಿ • Enter ಸೆಶನ್ ಪ್ರಾರಂಭಿಸಿ • Esc ನಿರ್ಗಮಿಸಿ • F5 ರಿಫ್ರೆಶ್ ಮಾಡಿ)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - ಕೀ ಸಂಯೋಜನೆಗಳು, ಅನುವಾದಿಸಬೇಡಿ
+agents.footer_hint: "(↑ ↓ ನ್ಯಾವಿಗೇಟ್ ಮಾಡಿ • Enter ಸೆಶನ್ ಪ್ರಾರಂಭಿಸಿ • Esc ನಿರ್ಗಮಿಸಿ • F5 ರಿಫ್ರೆಶ್ ಮಾಡಿ • / ಹುಡುಕಿ)"
 agents.status.active: "ಸಕ್ರಿಯ"
 agents.status.waiting_for_input: "ಇನ್‌ಪುಟ್‌ಗಾಗಿ ಕಾಯಲಾಗುತ್ತಿದೆ"
 agents.status.error: "ದೋಷ"
@@ -214,6 +214,7 @@ system.agent_switch_unavailable: "ವಿಂಡೋಸ್ ಟರ್ಮಿನಲ್
 
 # ── Model picker (/model) ───────────────────────────────────────────────────
 commands.model.summary: "ಈ ಪೇನ್‌ಗಾಗಿ ಮಾದರಿಯನ್ನು ಆಯ್ಕೆಮಾಡಿ (ನೇರವಾಗಿ ಬದಲಾಯಿಸಲು /model <id>)"  # {Locked="/model","<id>"}
+commands.move.summary: "ಈ ಟ್ಯಾಬ್‌ನ ಏಜೆಂ트 ಪೇನ್ ಅನ್ನು ಸರಿಸಿ (/move <position>)"  # {Locked="/move","<position>"}
 model_picker.title: "ಮಾದರಿ ಆಯ್ಕೆಮಾಡಿ (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
 system.no_models: "ಸಂಪರ್ಕಿತ ಏಜೆಂಟ್ ಯಾವುದೇ ಆಯ್ಕೆ ಮಾಡಬಹುದಾದ ಮಾದರಿಗಳನ್ನು ಪ್ರಕಟಿಸಲಿಲ್ಲ."
 system.model_set: "ಈ ಪೇನ್‌ಗಾಗಿ ಮಾದರಿಯನ್ನು %{model} ಗೆ ಹೊಂದಿಸಲಾಗಿದೆ."  # {Locked="%{model}"}

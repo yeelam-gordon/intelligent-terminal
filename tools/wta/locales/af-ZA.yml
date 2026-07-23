@@ -102,8 +102,8 @@ agent.custom.auth_hint: "Maak seker %{name} is geïnstalleer en op jou PATH."  #
 
 # ── Agenteaansig (src/ui/agents_view.rs) ─────────────────────────────────
 agents.loading: "Laai tans..."
-# {Locked="Enter","Esc","F5","↑","↓"} - sleutelkombinasies, moenie vertaal nie
-agents.footer_hint: "(↑ ↓ om te navigeer • Enter om sessie te begin • Esc om te verlaat • F5 om te verfris)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - sleutelkombinasies, moenie vertaal nie
+agents.footer_hint: "(↑ ↓ om te navigeer • Enter om sessie te begin • Esc om te verlaat • F5 om te verfris • / om te soek)"
 agents.status.active: "Aktief"
 agents.status.waiting_for_input: "Wag vir invoer"
 agents.status.error: "Fout"
@@ -214,6 +214,7 @@ system.agent_switch_unavailable: "Agent-oorskakeling is nie beskikbaar buite 'n 
 
 # ── Model picker (/model) ───────────────────────────────────────────────────
 commands.model.summary: "Kies die model vir hierdie paneel (/model <id> om direk oor te skakel)"  # {Locked="/model","<id>"}
+commands.move.summary: "Skuif hierdie oortjie se agentpaneel (/move <position>)"  # {Locked="/move","<position>"}
 model_picker.title: "Kies model (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
 system.no_models: "Die gekoppelde agent het geen kiesbare modelle aangekondig nie."
 system.model_set: "Model vir hierdie paneel gestel op %{model}."  # {Locked="%{model}"}

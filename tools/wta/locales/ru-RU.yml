@@ -110,8 +110,8 @@ agent.custom.auth_hint: "Убедитесь, что %{name} установлен
 
 # ── Представление агентов (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Загрузка..."
-# {Locked="Enter","Esc","F5","↑","↓"} - комбинации клавиш, не переводить
-agents.footer_hint: "(↑ ↓ навигация • Enter запустить сеанс • Esc выход • F5 обновить)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - комбинации клавиш, не переводить
+agents.footer_hint: "(↑ ↓ навигация • Enter запустить сеанс • Esc выход • F5 обновить • / поиск)"
 agents.status.active: "Активен"
 agents.status.waiting_for_input: "Ожидание ввода"
 agents.status.error: "Ошибка"
@@ -213,6 +213,7 @@ system.agent_switch_unavailable: "Переключение агентов нед
 
 # ── Model picker (/model) ───────────────────────────────────────────────────
 commands.model.summary: "Выберите модель для этой панели (/model <id> для прямого переключения)"  # {Locked="/model","<id>"}
+commands.move.summary: "Переместить панель агента этой вкладки (/move <position>)"  # {Locked="/move","<position>"}
 model_picker.title: "Выбор модели (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
 system.no_models: "Подключённый агент не объявил ни одной доступной для выбора модели."
 system.model_set: "Модель для этой панели установлена на %{model}."  # {Locked="%{model}"}

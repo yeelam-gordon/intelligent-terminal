@@ -101,8 +101,8 @@ agent.custom.auth_hint: "Suergt dofir datt %{name} installéiert ass an op Ärem
 
 # ── Agenten-Vue (src/ui/agents_view.rs) ─────────────────────────────────
 agents.loading: "Gëtt gelueden..."
-# {Locked="Enter","Esc","F5","↑","↓"} - Tast-Kombinatiounen, net iwwersetzen
-agents.footer_hint: "(↑ ↓ fir ze navigéieren • Enter fir d'Sëtzung ze starten • Esc fir eraus • F5 fir z'aktualiséieren)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - Tast-Kombinatiounen, net iwwersetzen
+agents.footer_hint: "(↑ ↓ fir ze navigéieren • Enter fir d'Sëtzung ze starten • Esc fir eraus • F5 fir z'aktualiséieren • / fir ze sichen)"
 agents.status.active: "Aktiv"
 agents.status.waiting_for_input: "Waart op Input"
 agents.status.error: "Feeler"
@@ -213,6 +213,7 @@ system.agent_switch_unavailable: "D'Agenten-Umschalten ass ausserhalb vun engem 
 
 # ── Model picker (/model) ───────────────────────────────────────────────────
 commands.model.summary: "Wielt de Modell fir dës Panell (/model <id> fir direkt ze wiesselen)"  # {Locked="/model","<id>"}
+commands.move.summary: "Deen Agent-Panell vun dësem Tab réckelen (/move <position>)"  # {Locked="/move","<position>"}
 model_picker.title: "Modell auswielen (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
 system.no_models: "Den ugeschlossenen Agent huet keng auswielbar Modeller ugekënnegt."
 system.model_set: "De Modell fir dës Panell gouf op %{model} gesat."  # {Locked="%{model}"}

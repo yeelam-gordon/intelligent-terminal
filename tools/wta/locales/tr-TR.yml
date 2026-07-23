@@ -114,8 +114,8 @@ agent.custom.auth_hint: "%{name} yüklü olduğundan ve PATH'te bulunduğundan e
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Yükleniyor..."
-# {Locked="Enter","Esc","F5","↑","↓"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ gezinmek için • Enter oturum açmak için • Esc çıkmak için • F5 yenilemek için)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ gezinmek için • Enter oturum açmak için • Esc çıkmak için • F5 yenilemek için • / aramak için)"
 agents.status.active: "Aktif"
 agents.status.waiting_for_input: "Giriş bekleniyor"
 agents.status.error: "Hata"
@@ -213,6 +213,7 @@ system.agent_switch_unavailable: "Aracı geçişi, bir Windows Terminal sekmesin
 
 # ── Model picker (/model) ───────────────────────────────────────────────────
 commands.model.summary: "Bu panel için modeli seçin (doğrudan geçmek için /model <id>)"  # {Locked="/model","<id>"}
+commands.move.summary: "Bu sekmenin aracı panelini taşı (/move <position>)"  # {Locked="/move","<position>"}
 model_picker.title: "Model seçin (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
 system.no_models: "Bağlı aracı seçilebilir hiçbir model duyurmadı."
 system.model_set: "Bu panel için model %{model} olarak ayarlandı."  # {Locked="%{model}"}

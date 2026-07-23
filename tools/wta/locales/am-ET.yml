@@ -102,8 +102,8 @@ agent.custom.auth_hint: "Make sure %{name} is installed and on your PATH."  # {L
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Loading..."
-# {Locked="Enter","Esc","F5","↑","↓"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ to navigate • Enter to launch session • Esc to exit • F5 to refresh)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ to navigate • Enter to launch session • Esc to exit • F5 to refresh • / to search)"
 agents.status.active: "Active"
 agents.status.waiting_for_input: "Waiting for input"
 agents.status.error: "Error"
@@ -214,6 +214,7 @@ system.agent_switch_unavailable: "የኤጅንት መቀያየር ከWindows Ter
 
 # ── Model picker (/model) ───────────────────────────────────────────────────
 commands.model.summary: "ለዚህ ፓነል ሞዴሉን ይምረጡ (በቀጥታ ለመቀየር /model <id>)"  # {Locked="/model","<id>"}
+commands.move.summary: "የዚህን ትር ኤጅንት ገጽታ ያንቀሳቅሱ (/move <position>)"  # {Locked="/move","<position>"}
 model_picker.title: "ሞዴል ይምረጡ (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
 system.no_models: "የተገናኘው ኤጅንት ምንም ሊመረጥ የሚችል ሞዴል አላስታወቀም።"
 system.model_set: "የዚህ ፓነል ሞዴል ወደ %{model} ተቀናብሯል።"  # {Locked="%{model}"}

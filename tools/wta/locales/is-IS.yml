@@ -101,8 +101,8 @@ agent.custom.auth_hint: "Gakktu úr skugga um að %{name} sé uppsett og á PATH
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Hleð..."
-# {Locked="Enter","Esc","F5","↑","↓"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ til að fletta • Enter til að hefja lotu • Esc til að hætta • F5 til að endurnýja)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ til að fletta • Enter til að hefja lotu • Esc til að hætta • F5 til að endurnýja • / til að leita)"
 agents.status.active: "Virk"
 agents.status.waiting_for_input: "Bíður eftir inntaki"
 agents.status.error: "Villa"
@@ -213,6 +213,7 @@ system.agent_switch_unavailable: "Ekki er hægt að skipta um fulltrúa utan Win
 
 # ── Model picker (/model) ───────────────────────────────────────────────────
 commands.model.summary: "Veldu líkanið fyrir þetta spjald (/model <id> til að skipta beint)"  # {Locked="/model","<id>"}
+commands.move.summary: "Færa agentspjald þessa flipa (/move <position>)"  # {Locked="/move","<position>"}
 model_picker.title: "Veldu líkan (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
 system.no_models: "Tengdi agentinn auglýsti engin valanleg líkön."
 system.model_set: "Líkan fyrir þetta spjald stillt á %{model}."  # {Locked="%{model}"}

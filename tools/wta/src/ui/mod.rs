@@ -7,7 +7,6 @@ mod command_popup;
 mod debug_panel;
 mod input;
 mod layout;
-pub(crate) mod markdown;
 mod model_popup;
 mod permission;
 mod popup;
@@ -16,7 +15,7 @@ pub mod setup;
 pub mod shimmer;
 
 pub use agent_popup::AgentPopupState;
-pub use command_popup::PopupState;
+pub use command_popup::{PopupCandidates, PopupState};
 pub use layout::render;
 pub use model_popup::ModelPopupState;
 pub use shimmer::CYCLE_FRAMES as ACTIVITY_CYCLE_FRAMES;

@@ -20,10 +20,10 @@ mod logging;
 #[path = "locale_parity_tests.rs"]
 mod locale_parity_tests;
 mod master;
-mod mcp;
 mod osc52;
 mod pane_context;
 mod protocol;
+mod resolve_command;
 mod rtl;
 mod runtime_paths;
 mod session_history;
@@ -144,7 +144,7 @@ struct Cli {
     agent: String,
 
     /// Canonical agent identifier (`copilot` / `claude` / `codex` / `gemini`
-    /// / `custom:<name>`). When the host (Windows Terminal) launches wta it
+    /// / `opencode` / `custom:<name>`). When the host (Windows Terminal) launches wta it
     /// already knows which entry the user picked in settings, so it passes
     /// the original `acpAgent` value through here. wta uses this id as the
     /// authoritative identity for `current_agent_id` — driving the session-
@@ -185,7 +185,7 @@ struct Cli {
     /// Model override for the ACP agent. Sent via ACP setSessionModel after
     /// handshake. Used by adapter-style launches (claude, codex via npx)
     /// where the model can't be passed on the command line; native ACP
-    /// agents (copilot, gemini) use their own --model flag in `agent`.
+    /// agents may use their own --model flag in `agent`.
     #[arg(long)]
     acp_model: Option<String>,
 
@@ -345,6 +345,21 @@ enum Command {
         /// Window ID (used with tab_id)
         #[arg(short = 'w', long)]
         window_id: Option<String>,
+    },
+
+    /// Identify a command using the user's PowerShell profile
+    ResolveCommand {
+        /// Command name to identify (without arguments or a path)
+        #[arg(value_parser = resolve_command::parse_non_empty)]
+        token: String,
+
+        /// PowerShell executable to use
+        #[arg(
+            long,
+            default_value = "pwsh.exe",
+            value_parser = resolve_command::parse_non_empty
+        )]
+        shell: String,
     },
 
     /// Create a new tab
@@ -756,6 +771,17 @@ async fn main() -> Result<()> {
                 .request("list_panes", json!({ "tab_id": tid }))
                 .await?;
             print_output(&result, json_mode, format_panes_human);
+            Ok(())
+        }
+
+        // ── Profile-aware command resolution ──
+        Some(Command::ResolveCommand { token, shell }) => {
+            let result = resolve_command::resolve(&token, &shell).await;
+            if json_mode {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("{}", resolve_command::format_human(&result));
+            }
             Ok(())
         }
 
@@ -1212,12 +1238,13 @@ async fn run_probe_wsl_sessions(cli: Option<&str>) -> Result<()> {
         Some("claude") => Some(CliSource::Claude),
         Some("codex") => Some(CliSource::Codex),
         Some("gemini") => Some(CliSource::Gemini),
+        Some("opencode") => Some(CliSource::OpenCode),
         Some(other) => {
             // Reject unknown values rather than silently widening to "scan all"
             // (Unknown → clis_to_scan → every built-in), which would make the
             // diagnostic's output contradict the requested restriction.
             anyhow::bail!(
-                "unknown --cli value {other:?}; expected one of: copilot, claude, codex, gemini"
+                "unknown --cli value {other:?}; expected one of: copilot, claude, codex, gemini, opencode"
             );
         }
     };
@@ -1711,6 +1738,7 @@ fn cli_source_label(source: Option<&agent_sessions::CliSource>) -> String {
         Some(agent_sessions::CliSource::Codex)   => "Codex".to_string(),
         Some(agent_sessions::CliSource::Copilot) => "Copilot".to_string(),
         Some(agent_sessions::CliSource::Gemini)  => "Gemini".to_string(),
+        Some(agent_sessions::CliSource::OpenCode) => "OpenCode".to_string(),
         Some(agent_sessions::CliSource::Unknown(s)) if !s.is_empty() => s.clone(),
         _ => "-".to_string(),
     }

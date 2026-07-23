@@ -110,8 +110,8 @@ agent.custom.auth_hint: "Uistite sa, že %{name} je nainštalovaný a je v PATH.
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Načítava sa..."
-# {Locked="Enter","Esc","F5","↑","↓"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ na navigáciu • Enter na spustenie relácie • Esc na ukončenie • F5 na obnovenie)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ na navigáciu • Enter na spustenie relácie • Esc na ukončenie • F5 na obnovenie • / na vyhľadávanie)"
 agents.status.active: "Aktívny"
 agents.status.waiting_for_input: "Čaká na vstup"
 agents.status.error: "Chyba"
@@ -213,6 +213,7 @@ system.agent_switch_unavailable: "Prepínanie agentov nie je k dispozícii mimo 
 
 # ── Model picker (/model) ───────────────────────────────────────────────────
 commands.model.summary: "Vyberte model pre túto tablu (/model <id> na priame prepnutie)"  # {Locked="/model","<id>"}
+commands.move.summary: "Presunúť panel agenta pre túto kartu (/move <position>)"  # {Locked="/move","<position>"}
 model_picker.title: "Vybrať model (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
 system.no_models: "Pripojený agent neohlásil žiadne vybrateľné modely."
 system.model_set: "Model pre túto tablu je nastavený na %{model}."  # {Locked="%{model}"}

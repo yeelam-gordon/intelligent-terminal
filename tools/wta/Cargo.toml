@@ -10,7 +10,7 @@ name = "wta"
 path = "src/main.rs"
 
 [dependencies]
-agent-client-protocol = { version = "1.0" }
+agent-client-protocol = { version = "1.2.0" }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 async-trait = "0.1"
@@ -23,9 +23,6 @@ notify = "6"
 futures = "0.3"
 unicode-width = "0.2"
 textwrap = "0.16"
-# CommonMark parser used only at render time for agent-pane Markdown replies;
-# WTA owns the terminal layout/wrapping so markers and hanging indents stay stable.
-pulldown-cmark = { version = "0.10", default-features = false }
 serde = { version = "1", features = ["derive"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
