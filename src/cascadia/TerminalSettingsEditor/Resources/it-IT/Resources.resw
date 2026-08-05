@@ -573,6 +573,14 @@
     <value>Consenti OSC 52 (Manipulate Selection Data) di scrivere negli Appunti</value>
     <comment>{Locked="OSC 52"}{Locked="Manipulate Selection Data"}Header for a control to toggle support for applications to change the contents of the Windows system clipboard.</comment>
   </data>
+  <data name="Profile_AllowOscNotifications.Header" xml:space="preserve">
+    <value>Consenti a OSC 777 (Desktop Notification) di mostrare gli avvisi popup</value>
+    <comment>{Locked="OSC 777"}{Locked="Desktop Notification"}Header for a control to toggle support for applications to display desktop toast notifications via the OSC 777 escape sequence.</comment>
+  </data>
+  <data name="Profile_AllowOscNotifications.HelpText" xml:space="preserve">
+    <value>Se questa opzione è abilitata, le applicazioni possono inviare la sequenza di escape OSC 777 per attivare una notifica desktop con un titolo e un corpo personalizzati.</value>
+    <comment>{Locked="OSC 777"}Help text for the OSC 777 desktop notification toggle.</comment>
+  </data>
   <data name="Globals_AllowHeadless.Header" xml:space="preserve">
     <value>Consenti l'esecuzione di Terminale Intelligente in background</value>
     <comment>Header for a control to toggle support for Intelligent Terminal to run in the background.</comment>
@@ -668,6 +676,14 @@
   <data name="Nav_Launch.Content" xml:space="preserve">
     <value>Avvio</value>
     <comment>Header for the "startup" menu item. This navigates to a page that lets you see and modify settings related to the app's launch experience (i.e. screen position, mode, etc.)</comment>
+  </data>
+  <data name="Nav_PaneOpenedAnnouncement" xml:space="preserve">
+    <value>Riquadro di spostamento aperto</value>
+    <comment>Screen reader announcement made when the user activates the toggle button that opens the settings navigation pane.</comment>
+  </data>
+  <data name="Nav_PaneClosedAnnouncement" xml:space="preserve">
+    <value>Riquadro di spostamento chiuso</value>
+    <comment>Screen reader announcement made when the user activates the toggle button that closes the settings navigation pane.</comment>
   </data>
   <data name="Nav_OpenJSON.Content" xml:space="preserve">
     <value>Apri file Json</value>
@@ -1221,6 +1237,30 @@
     <value>Se questa opzione è abilitata, questo profilo verrà generato nella directory da cui è stato avviato Il terminale.</value>
     <comment>A description for what the supplementary "use parent process directory" setting does. Presented near "Profile_StartingDirectoryUseParentCheckbox".</comment>
   </data>
+  <data name="Profile_AgentPaneBackend.Header" xml:space="preserve">
+    <value>Agente per il riquadro agente</value>
+    <comment>Header for choosing which AI agent backend is used by this profile.</comment>
+  </data>
+  <data name="Profile_AgentPaneBackend.HelpText" xml:space="preserve">
+    <value>Scegli l’agente compatibile con ACP da usare nel riquadro agente. Per questo profilo, questa selezione ha la precedenza sulla selezione globale del riquadro agente.</value>
+    <comment>{Locked="ACP"} Description for the per-profile AI agent setting.</comment>
+  </data>
+  <data name="Profile_CommandPaletteAgent.Header" xml:space="preserve">
+    <value>Agente del riquadro comandi</value>
+    <comment>Header for choosing which AI agent handles command palette delegation for this profile.</comment>
+  </data>
+  <data name="Profile_CommandPaletteAgent.HelpText" xml:space="preserve">
+    <value>Scegli l'agente usato per la delega dal riquadro comandi in questo profilo. Questa selezione ha la precedenza sull'impostazione globale dell'agente delegato.</value>
+    <comment>Description for the per-profile command palette agent setting. Here “agent” means an AI agent, not a proxy or human agent.</comment>
+  </data>
+  <data name="Profile_AgentPaneBackend_AgentFormat" xml:space="preserve">
+    <value>{0} · {1}</value>
+    <comment>{Locked="{0}","{1}"} Agent display name replaces {0}; Windows or a WSL distro name replaces {1}.</comment>
+  </data>
+  <data name="Profile_AgentPaneBackend_UnavailableSuffix" xml:space="preserve">
+    <value> (non disponibile)</value>
+    <comment>Suffix for a saved per-profile agent backend that is no longer installed.</comment>
+  </data>
   <data name="Profile_SuppressApplicationTitle.Header" xml:space="preserve">
     <value>Elimina le modifiche del titolo</value>
     <comment>Header for a control to toggle changes in the app title.</comment>
@@ -1552,6 +1592,10 @@
   <data name="Profile_BellStyleWindow.Content" xml:space="preserve">
     <value>Finestra di Flash</value>
     <comment>An option to choose from for the "bell style" setting. When selected, a visual notification is used to notify the user. In this case, the window is flashed.</comment>
+  </data>
+  <data name="Profile_BellStyleNotification.Content" xml:space="preserve">
+    <value>Notifica desktop</value>
+    <comment>An option to choose from for the "bell style" setting. When selected, a Windows desktop notification (toast) is sent to notify the user.</comment>
   </data>
   <data name="ColorScheme_AddNewButton.Text" xml:space="preserve">
     <value>Aggiungi nuovo</value>
@@ -2197,6 +2241,26 @@
     <value>Avvisa in caso di chiusura di più schede</value>
     <comment>Header for a control to toggle whether to show a confirm dialog box when closing the application with multiple tabs open.</comment>
   </data>
+  <data name="Globals_ConfirmOnClose.Header" xml:space="preserve">
+    <value>Avvisa in caso di chiusura</value>
+    <comment>Header for a dropdown controlling when to show a confirmation dialog before closing.</comment>
+  </data>
+  <data name="Globals_ConfirmOnClose.HelpText" xml:space="preserve">
+    <value>Controlla quando viene visualizzata una finestra di dialogo di conferma prima di chiudere schede o finestre. "Sempre" visualizza la finestra di dialogo quando si chiude un riquadro.</value>
+    <comment>Help text associated with Globals_ConfirmOnClose. "Always" refers to Globals_ConfirmOnCloseAlways.Content.</comment>
+  </data>
+  <data name="Globals_ConfirmOnCloseNever.Content" xml:space="preserve">
+    <value>Mai</value>
+    <comment>Option associated with Globals_ConfirmOnClose. "Never" means that the system will never display a warning when closing.</comment>
+  </data>
+  <data name="Globals_ConfirmOnCloseAlways.Content" xml:space="preserve">
+    <value>Sempre</value>
+    <comment>Option associated with Globals_ConfirmOnClose. "Always" means that the system will always display a warning when closing.</comment>
+  </data>
+  <data name="Globals_ConfirmOnCloseAutomatic.Content" xml:space="preserve">
+    <value>Più schede o pannelli</value>
+    <comment>Option associated with Globals_ConfirmOnClose. The system will display a warning when multiple tabs or panes are present.</comment>
+  </data>
   <data name="Globals_InputServiceWarning.Header" xml:space="preserve">
     <value>Avvisa quando il servizio "Tastiera virtuale e pannello per la grafia" è disabilitato</value>
   </data>
@@ -2370,8 +2434,8 @@
     <comment>Accessible name for a control allowing the user to select the icon from a list of built in icons.</comment>
   </data>
   <data name="Nav_NewTabMenu.Content" xml:space="preserve">
-    <value>Menu Nuova scheda</value>
-    <comment>Header for the "new tab menu" menu item. This navigates to a page that lets you see and modify settings related to the app's new tab menu (i.e. profile ordering, nested folders, dividers, etc.)</comment>
+    <value>Menu a discesa</value>
+    <comment>Header for the "dropdown menu" menu item (formerly "new tab menu"). This navigates to a page that lets you see and modify settings related to the app's dropdown menu (i.e. profile ordering, nested folders, dividers, etc.)</comment>
   </data>
   <data name="NewTabMenuEntry_Separator.Text" xml:space="preserve">
     <value>&lt;Separator&gt;</value>
@@ -2754,32 +2818,115 @@
   </data>
   <data name="Nav_AIAgents.Content" xml:space="preserve"><value>Agenti AI</value></data>
   <data name="AIAgents_PageSubtitle.Text" xml:space="preserve"><value>Configura il funzionamento degli agenti nel terminale</value></data>
+  <data name="AIAgents_PageSubtitlePrefix" xml:space="preserve">
+    <value>Configura il funzionamento degli agenti nel terminale.</value>
+    <comment>Subtitle shown beneath the page title on the AI Agents settings page. The hyperlink in AIAgents_PageSubtitlePrivacyLink follows this sentence inline; the trailing period belongs to this prefix.</comment>
+  </data>
+  <data name="AIAgents_PageSubtitlePrivacyLink" xml:space="preserve">
+    <value>Scopri come vengono utilizzati i dati.</value>
+    <comment>Inline hyperlink text that follows the AI Agents page subtitle and navigates to the privacy policy page. Includes a trailing period.</comment>
+  </data>
   <data name="AIAgents_AcpGroupHeader.Text" xml:space="preserve"><value>Riquadro agente</value></data>
   <data name="AIAgents_DelegateGroupHeader.Text" xml:space="preserve"><value>Riquadro comandi</value></data>
   <data name="AIAgents_AcpAgent.Header" xml:space="preserve"><value>Agente</value></data>
-  <data name="AIAgents_AcpAgent.HelpText" xml:space="preserve"><value>Scegli la CLI dell'agente usata nel riquadro agente. Verrà rilevata qualsiasi CLI ACP compatibile.</value><comment>{Locked="ACP","CLI"}</comment></data>
+  <data name="AIAgents_AcpAgent.HelpText" xml:space="preserve"><value>Scegli l'agente usato nel riquadro agente. Verrà rilevato qualsiasi agente ACP compatibile.</value><comment>Supplementary description for the agent pane agent setting. {Locked="ACP"}</comment></data>
   <data name="AIAgents_AcpModel.Header" xml:space="preserve"><value>Modello</value></data>
   <data name="AIAgents_AcpModel.HelpText" xml:space="preserve"><value>Scegli il modello usato da questo agente.</value></data>
   <data name="AIAgents_DelegateAgent.Header" xml:space="preserve"><value>Agente</value></data>
   <data name="AIAgents_DelegateAgent.HelpText" xml:space="preserve"><value>Scegli l'agente usato per le azioni rapide nel riquadro comandi.</value></data>
   <data name="AIAgents_AutoFix.Header" xml:space="preserve"><value>Suggerisci automaticamente correzioni per i comandi non riusciti</value></data>
   <data name="AIAgents_AutoFix.HelpText" xml:space="preserve"><value>Se abilitato, l'agente IA analizza automaticamente i comandi non riusciti e propone una correzione. Se disabilitato, i comandi non riusciti mostrano un suggerimento selezionabile nella barra di stato — premi Ctrl+Alt+. o fai clic sul suggerimento per richiedere una correzione.</value></data>
+  <data name="AIAgents_ShowTokenUsageAndCost.Header" xml:space="preserve"><value>Mostra l'utilizzo del contesto e il costo della sessione</value><comment>Header for a setting that shows available context-window usage and session cost in the terminal bottom bar. Session cost is reported for the active AI session. Keep 'session cost' generic and do not add a specific unit. Either value may be unavailable.</comment></data>
+  <data name="AIAgents_ShowTokenUsageAndCost.HelpText" xml:space="preserve"><value>Se disponibile, mostra l'utilizzo della finestra di contesto e il costo della sessione nella barra inferiore del terminale.</value><comment>Supplementary description for the usage visibility setting. Session cost is reported for the active AI session. Keep 'session cost' generic and do not add a specific unit. Either value may be unavailable.</comment></data>
   <data name="AIAgents_PanePosition.Header" xml:space="preserve"><value>Posizione del riquadro</value></data>
   <data name="AIAgents_PanePosition.HelpText" xml:space="preserve"><value>Specifica dove si apre il riquadro agente rispetto al terminale.</value></data>
+  <data name="AIAgents_PanePosition_Bottom" xml:space="preserve">
+    <value>In basso</value>
+    <comment>Value shown in the agent pane position dropdown (selects which side of the terminal the agent pane opens on). Translation should match the existing FreOverlay_PanePositionBottom string used in the first-run experience.</comment>
+  </data>
+  <data name="AIAgents_PanePosition_Right" xml:space="preserve">
+    <value>Destra</value>
+    <comment>Value shown in the agent pane position dropdown (selects which side of the terminal the agent pane opens on). Translation should match the existing FreOverlay_PanePositionRight string used in the first-run experience.</comment>
+  </data>
+  <data name="AIAgents_PanePosition_Top" xml:space="preserve">
+    <value>In alto</value>
+    <comment>Value shown in the agent pane position dropdown (selects which side of the terminal the agent pane opens on). Translation should match the existing FreOverlay_PanePositionTop string used in the first-run experience.</comment>
+  </data>
+  <data name="AIAgents_PanePosition_Left" xml:space="preserve">
+    <value>Sinistra</value>
+    <comment>Value shown in the agent pane position dropdown (selects which side of the terminal the agent pane opens on). Translation should match the existing FreOverlay_PanePositionLeft string used in the first-run experience.</comment>
+  </data>
   <data name="AIAgents_HooksGroupHeader.Text" xml:space="preserve"><value>Hook degli agenti</value></data>
   <data name="AIAgents_HooksInstall.Header" xml:space="preserve"><value>Installa gli script hook degli agenti</value></data>
-  <data name="AIAgents_HooksInstall.HelpText" xml:space="preserve"><value>Necessario per la gestione delle sessioni degli agenti. Installa gli hook in ogni CLI rilevata (Copilot, Claude, Gemini) in modo che segnali sessioni e stato al riquadro agente. Riavvia tutte le CLI degli agenti aperte dopo l'installazione.</value><comment>{Locked="CLI","CLIs","Copilot","Claude","Gemini"}</comment></data>
+  <data name="AIAgents_HooksInstall.HelpText" xml:space="preserve"><value>Monitora le sessioni tra agenti. Necessario per la gestione delle sessioni degli agenti.</value><comment>Description for the Agent Hooks install section.</comment></data>
   <data name="AIAgents_HooksInstallButton.Content" xml:space="preserve"><value>Installa hook</value></data>
   <data name="AIAgents_HooksRefreshButton.Content" xml:space="preserve"><value>Aggiorna</value></data>
-  <data name="Globals_ConfirmOnClose.Header" xml:space="preserve"><value>Avvisa in caso di chiusura</value></data>
-  <data name="Globals_ConfirmOnClose.HelpText" xml:space="preserve"><value>Controlla quando viene visualizzata una finestra di conferma prima di chiudere schede o finestre. "Sempre" mostra la finestra di dialogo anche quando si chiude un solo riquadro.</value></data>
-  <data name="Globals_ConfirmOnCloseNever.Content" xml:space="preserve"><value>Mai</value></data>
-  <data name="Globals_ConfirmOnCloseAlways.Content" xml:space="preserve"><value>Sempre</value></data>
-  <data name="Globals_ConfirmOnCloseAutomatic.Content" xml:space="preserve"><value>Più schede o riquadri</value></data>
-  <data name="Profile_BellStyleNotification.Content" xml:space="preserve"><value>Notifica desktop</value></data>
-  <data name="Settings_PortableModeInfoLink.NavigateUri" xml:space="preserve"><value>https://aka.ms/intelligentterminal/portable-mode</value><comment>{Locked}</comment></data>
+  <data name="Settings_PortableModeInfoLink.NavigateUri" xml:space="preserve"><value>https://go.microsoft.com/fwlink/?linkid=2229086</value><comment>{Locked}</comment></data>
   <data name="AIAgents_PolicyLocked.Text" xml:space="preserve">
     <value>Questa impostazione è gestita dalla tua organizzazione.</value>
     <comment>Text shown when Group Policy controls this feature. Standard Windows policy notice wording.</comment>
+  </data>
+  <data name="AIAgents_HooksInstallingSummary" xml:space="preserve">
+    <value>Installazione degli hooks...</value>
+    <comment>Status summary shown while installing agent session tracking hooks. {Locked="hooks"}</comment>
+  </data>
+  <data name="AIAgents_HooksRemovingCopilotSummary" xml:space="preserve">
+    <value>Rimozione degli hooks Copilot...</value>
+    <comment>Status summary shown while removing agent session tracking hooks for Copilot. {Locked="Copilot","hooks"}</comment>
+  </data>
+  <data name="AIAgents_HooksRemovingClaudeSummary" xml:space="preserve">
+    <value>Rimozione degli hooks Claude...</value>
+    <comment>Status summary shown while removing agent session tracking hooks for Claude. {Locked="Claude","hooks"}</comment>
+  </data>
+  <data name="AIAgents_HooksRemovingGeminiSummary" xml:space="preserve">
+    <value>Rimozione degli hooks Gemini...</value>
+    <comment>Status summary shown while removing agent session tracking hooks for Gemini. {Locked="Gemini","hooks"}</comment>
+  </data>
+  <data name="AIAgents_HooksRemovingCodexSummary" xml:space="preserve">
+    <value>Rimozione degli hooks Codex...</value>
+    <comment>Status summary shown while removing agent session tracking hooks for Codex. {Locked="Codex","hooks"}</comment>
+  </data>
+  <data name="AIAgents_HooksRemovingOpenCodeSummary" xml:space="preserve">
+    <value>Rimozione degli hooks OpenCode...</value>
+    <comment>Status summary shown while removing agent session tracking hooks for OpenCode. {Locked="OpenCode","hooks"}</comment>
+  </data>
+  <data name="AIAgents_CodexTrustHint.Text" xml:space="preserve">
+    <value>Dopo l'installazione, esegui /hooks in Codex e approva per considerare attendibili i nuovi gestori di eventi.</value>
+    <comment>One-line reminder shown under the Codex CLI row in the Agent Hooks section. Codex requires per-command trust before hook handlers run; users must execute /hooks inside Codex and approve. {Locked="/hooks","Codex"}</comment>
+  </data>
+  <data name="AIAgents_HooksLocateWtaFailedSummary" xml:space="preserve">
+    <value>Operazione non riuscita: impossibile trovare wta.exe</value>
+    <comment>Failure summary shown when the Settings UI cannot find the WTA helper executable. {Locked="wta.exe"}</comment>
+  </data>
+  <data name="AIAgents_HooksRemovedSummary" xml:space="preserve">
+    <value>Hooks rimossi. Riavviare tutti gli agenti aperti per eliminare gli hooks precedenti.</value>
+    <comment>Success summary shown after removing agent session tracking hooks. {Locked="Hooks","hooks"}</comment>
+  </data>
+  <data name="AIAgents_HooksInstalledSummary" xml:space="preserve">
+    <value>Hooks installati. Riavviare tutti gli agenti aperti per acquisire i nuovi hooks.</value>
+    <comment>Success summary shown after installing agent session tracking hooks. {Locked="Hooks","hooks"}</comment>
+  </data>
+  <data name="AIAgents_HooksRemovalFailedSummary" xml:space="preserve">
+    <value>Rimozione di Hook non riuscita. Controllare %LOCALAPPDATA%\IntelligentTerminal\logs\ per i dettagli.</value>
+    <comment>Failure summary shown when removing agent session tracking hooks fails. {Locked="Hook","%LOCALAPPDATA%","IntelligentTerminal","logs"}</comment>
+  </data>
+  <data name="AIAgents_HooksInstallationFailedSummary" xml:space="preserve">
+    <value>Installazione di Hooks non riuscita. Controllare %LOCALAPPDATA%\IntelligentTerminal\logs\wta-install-hooks.log per i dettagli.</value>
+    <comment>Failure summary shown when installing agent session tracking hooks fails. {Locked="Hooks","%LOCALAPPDATA%","IntelligentTerminal","logs","wta-install-hooks.log"}</comment>
+  </data>
+  <data name="AIAgents_AutoErrorDetectionTitle.Text" xml:space="preserve">
+    <value>Rilevamento automatico degli errori</value>
+  </data>
+  <data name="AIAgents_AutoErrorDetectionCaptionPrefix" xml:space="preserve">
+    <value>Consenti a Terminale Intelligente di accedere alla shell e rilevare automaticamente gli errori. Disponibile in PowerShell, bash e WSL bash. </value>
+  </data>
+  <data name="AIAgents_AutoErrorDetectionCaptionLink" xml:space="preserve">
+    <value>Visualizza tutte le shell supportate</value>
+  </data>
+  <data name="AIAgents_AutoErrorSuggestionTitle.Text" xml:space="preserve">
+    <value>Suggerimento automatico degli errori</value>
+  </data>
+  <data name="AIAgents_AutoErrorSuggestionCaption.Text" xml:space="preserve">
+    <value>Consenti a Terminale Intelligente di inviare gli errori all'agente per suggerire automaticamente le correzioni.</value>
   </data>
 </root>

@@ -7,10 +7,12 @@
 
 #include <algorithm>
 #include <cwctype>
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.UI.Xaml.Media.Imaging.h>
+#include <winrt/Windows.UI.Xaml.Media.h>
 
+using namespace winrt::Windows::UI;
 using namespace winrt::Windows::UI::Xaml;
+using namespace winrt::Windows::UI::Xaml::Controls;
+using namespace winrt::Windows::UI::Xaml::Media;
 using namespace winrt::Microsoft::Terminal::Control;
 using namespace winrt::Microsoft::Terminal::Settings::Model;
 
@@ -18,19 +20,29 @@ namespace winrt::TerminalApp::implementation
 {
     namespace
     {
-        // Map the agent's display name (case-insensitive substring) to the
-        // packaged white-filled SVG. Unknown agents fall back to Copilot.
-        std::wstring_view _logoFileForAgent(const winrt::hstring& name)
+        enum class AgentLogoKind
+        {
+            Copilot,
+            Claude,
+            Gemini,
+            Codex,
+            OpenCode,
+        };
+
+        // Map the agent's display name (case-insensitive substring) to its
+        // XAML path. Unknown agents fall back to Copilot.
+        AgentLogoKind _logoForAgent(const winrt::hstring& name)
         {
             std::wstring lower{ name };
             std::transform(lower.begin(), lower.end(), lower.begin(),
                            [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
-            if (lower.find(L"claude") != std::wstring::npos) return L"claude.svg";
-            if (lower.find(L"codex") != std::wstring::npos) return L"codex.svg";
-            if (lower.find(L"openai") != std::wstring::npos) return L"codex.svg";
-            if (lower.find(L"gpt") != std::wstring::npos) return L"codex.svg";
-            if (lower.find(L"gemini") != std::wstring::npos) return L"gemini.svg";
-            return L"copilot.svg";
+            if (lower.find(L"claude") != std::wstring::npos) return AgentLogoKind::Claude;
+            if (lower.find(L"codex") != std::wstring::npos) return AgentLogoKind::Codex;
+            if (lower.find(L"openai") != std::wstring::npos) return AgentLogoKind::Codex;
+            if (lower.find(L"gpt") != std::wstring::npos) return AgentLogoKind::Codex;
+            if (lower.find(L"gemini") != std::wstring::npos) return AgentLogoKind::Gemini;
+            if (lower.find(L"opencode") != std::wstring::npos) return AgentLogoKind::OpenCode;
+            return AgentLogoKind::Copilot;
         }
 
     }
@@ -71,23 +83,37 @@ namespace winrt::TerminalApp::implementation
     void AgentPaneContent::UpdateAgentStatus(const winrt::hstring& name,
                                              const winrt::hstring& version,
                                              const winrt::hstring& model,
-                                             const winrt::hstring& state)
+                                             const winrt::hstring& state,
+                                             const winrt::hstring& backend)
     {
         const bool nameChanged = _agentName != name;
         _agentName = name;
         _agentVersion = version;
         _agentModel = model;
         _agentState = state;
+        _agentBackend = backend;
         _refreshLabel();
         if (nameChanged)
         {
             _refreshLogo();
         }
+        // Match `SetSessionsView` and `ApplyAutofixState`: any bottom-bar-
+        // affecting state mutation on AgentPaneContent must raise
+        // `StateChanged` so subscribers (TerminalPage's bar-refresh
+        // handler) can pick up the change without polling. The bar does
+        // not currently render the agent name itself, but the cross-
+        // window-drag fix path in `TabManagement.cpp` relies on
+        // `_UpdateBottomBarState` running once after the wire-up to
+        // reflect any cached state the helper pushed before the wire
+        // was in place — without the raise here, that catch-up wouldn't
+        // observe agent_status arriving in the same race window. Also
+        // future-proofs the bar against ever displaying agent name.
+        StateChanged.raise(*this, nullptr);
     }
 
     // Swap the bar between two modes:
     //   * chat / connecting / etc. (active=false) — agent logo + "<name> <version>"
-    //   * session-management view  (active=true)  — no logo, "Agent sessions"
+    //   * session management view (active=true)  — no logo, "Agent sessions"
     // Idempotent so callers don't need to dedupe.
     void AgentPaneContent::SetSessionsView(bool active)
     {
@@ -98,35 +124,112 @@ namespace winrt::TerminalApp::implementation
         _isSessionsView = active;
         _refreshLabel();
         _refreshLogo();
+        StateChanged.raise(*this, nullptr);
+    }
+
+    void AgentPaneContent::ApplyAutofixState(AutofixState state,
+                                             const winrt::hstring& paneId,
+                                             const winrt::hstring& summary,
+                                             const winrt::hstring& fixPreview,
+                                             const winrt::hstring& hotkeyHint,
+                                             const winrt::hstring& suggestionTitle)
+    {
+        _autofixState = state;
+        if (state == AutofixState::Idle)
+        {
+            // Clear ALL cached fields on idle, including `_hotkeyHint`.
+            // The bottom bar reads these directly, so a leftover hint
+            // from a prior Detected/Pending transition would otherwise
+            // hang around after the bar should have gone quiet.
+            _lastErrorPaneId = {};
+            _fixPreview = {};
+            _suggestionTitle = {};
+            _detectedSummary = {};
+            _hotkeyHint = {};
+        }
+        else
+        {
+            if (!paneId.empty())
+            {
+                _lastErrorPaneId = paneId;
+            }
+            if (!summary.empty())
+            {
+                _detectedSummary = summary;
+            }
+            if (!fixPreview.empty())
+            {
+                _fixPreview = fixPreview;
+            }
+            if (!hotkeyHint.empty())
+            {
+                _hotkeyHint = hotkeyHint;
+            }
+            if (!suggestionTitle.empty())
+            {
+                _suggestionTitle = suggestionTitle;
+            }
+        }
+        StateChanged.raise(*this, nullptr);
+    }
+
+    bool AgentPaneContent::ApplyAgentUsage(const Json::Value& usage)
+    {
+        return ::TerminalApp::AgentUsage::TryUpdateCache(_agentUsage, usage);
+    }
+
+    void AgentPaneContent::SetAgentPanePosition(const winrt::hstring& position)
+    {
+        if (_agentPanePosition == position)
+        {
+            return;
+        }
+        _agentPanePosition = position;
+        StateChanged.raise(*this, nullptr);
+    }
+
+    // Apply the supplied colors to the agent-pane top bar (#348). The vector
+    // logo paths bind to the label's foreground, so both take the same tint.
+    // The 1px bottom hairline uses the foreground color at ~15% alpha, so it
+    // reads as a soft separator (like the original #26FFFFFF) — consistent
+    // with the text but not a hard full-white/black line.
+    void AgentPaneContent::ApplyThemeColors(const Media::Brush& background,
+                                            const Media::Brush& foreground)
+    {
+        if (const auto barRoot = AgentBarRoot())
+        {
+            barRoot.Background(background);
+            if (const auto fgSolid = foreground.try_as<Media::SolidColorBrush>())
+            {
+                auto c = fgSolid.Color();
+                c.A = 0x26;
+                barRoot.BorderBrush(Media::SolidColorBrush{ c });
+            }
+            else
+            {
+                barRoot.BorderBrush(foreground);
+            }
+        }
+        if (const auto label = AgentLabelText())
+        {
+            label.Foreground(foreground);
+        }
     }
 
     void AgentPaneContent::_refreshLabel()
     {
         // Session-management view takes over the bar — the wta TUI below no
         // longer renders its own "Agent sessions" header, so this is where
-        // that title lives. The session list is filtered by the current
-        // agent's CLI source (see App::current_cli_filter), so we suffix
-        // the bar with the agent's display name to make the scope explicit
-        // (e.g. "Agent sessions · GitHub Copilot"). We use _agentName verbatim
-        // — it already carries the canonical product casing from the ACP
-        // initialize response.
+        // that title lives.
         if (_isSessionsView)
         {
-            std::wstring text{ L"Agent sessions" };
-            if (!_agentName.empty())
-            {
-                text += L": ";
-                text += std::wstring{ _agentName };
-            }
+            const auto text = _agentName.empty() ?
+                                  std::wstring{ RS_(L"AgentPane_SessionsTitle") } :
+                                  RS_fmt(L"AgentPane_SessionsTitleFormat", std::wstring{ _agentName });
             AgentLabelText().Text(winrt::hstring{ text });
             return;
         }
 
-        // Composition rule:
-        //     "<name> <version>"   if version present (version may already include "v" prefix)
-        //     "<name> <model>"     else if model present
-        //     "<name>"             otherwise
-        //     "Agent"              if name absent
         std::wstring text;
         if (_agentName.empty())
         {
@@ -135,6 +238,11 @@ namespace winrt::TerminalApp::implementation
         else
         {
             text = std::wstring{ _agentName };
+            if (!_agentBackend.empty())
+            {
+                text += L" \u00B7 ";
+                text += _agentBackend;
+            }
             if (!_agentVersion.empty())
             {
                 text += L" ";
@@ -151,36 +259,24 @@ namespace winrt::TerminalApp::implementation
 
     void AgentPaneContent::_refreshLogo()
     {
-        // Sessions view: the bar shows only the "Agent sessions" title
-        // (Figma node 912:70364 — no per-agent logo on the session list).
-        // Collapse the logo so the title shifts left to where the logo
-        // would have been, but keep the bar's 10px left padding so the
-        // text doesn't butt against the edge.
         if (_isSessionsView)
         {
-            AgentLogo().Source(nullptr);
             AgentLogo().Visibility(Visibility::Collapsed);
             return;
         }
 
-        // No agent name yet → hide logo entirely (don't default to Copilot).
         if (_agentName.empty())
         {
-            AgentLogo().Source(nullptr);
             AgentLogo().Visibility(Visibility::Collapsed);
             return;
         }
 
-        std::wstring uri{ L"ms-appx:///AgentIcons/" };
-        uri.append(_logoFileForAgent(_agentName));
-        const winrt::Windows::Foundation::Uri parsed{ winrt::hstring{ uri } };
-        winrt::Windows::UI::Xaml::Media::Imaging::SvgImageSource source{ parsed };
-        // Without an explicit raster size, SvgImageSource can render to a
-        // tiny fallback bitmap that shows up as a fuzzy/grey square. The
-        // bar gives us a 14-DIP slot, so 28px @ 2x DPI is plenty.
-        source.RasterizePixelWidth(28.0);
-        source.RasterizePixelHeight(28.0);
-        AgentLogo().Source(source);
+        const auto logo = _logoForAgent(_agentName);
+        CopilotLogo().Visibility(logo == AgentLogoKind::Copilot ? Visibility::Visible : Visibility::Collapsed);
+        ClaudeLogo().Visibility(logo == AgentLogoKind::Claude ? Visibility::Visible : Visibility::Collapsed);
+        GeminiLogo().Visibility(logo == AgentLogoKind::Gemini ? Visibility::Visible : Visibility::Collapsed);
+        CodexLogo().Visibility(logo == AgentLogoKind::Codex ? Visibility::Visible : Visibility::Collapsed);
+        OpenCodeLogo().Visibility(logo == AgentLogoKind::OpenCode ? Visibility::Visible : Visibility::Collapsed);
         AgentLogo().Visibility(Visibility::Visible);
     }
 
@@ -196,17 +292,21 @@ namespace winrt::TerminalApp::implementation
         {
             impl->UpdateSettings(settings);
         }
+        // Re-pick up the pane position in case settings changed it.
+        SetAgentPanePosition(settings.GlobalSettings().AgentPanePosition());
     }
 
     winrt::Windows::Foundation::Size AgentPaneContent::MinimumSize()
     {
-        // Reserve 36px for the bar on top of the inner control's minimum.
+        // Reserve 36px (top bar) on top of the inner control's minimum.
+        // The bottom bar is window-level chrome now, so it isn't part of
+        // this pane's minimum size.
         if (const auto& impl = winrt::get_self<implementation::TerminalPaneContent>(_inner))
         {
             const auto inner = impl->MinimumSize();
             return { inner.Width, inner.Height + 36.0f };
         }
-        return { 1, 36 };
+        return { 1, 36.0f };
     }
 
     void AgentPaneContent::Focus(winrt::Windows::UI::Xaml::FocusState reason)

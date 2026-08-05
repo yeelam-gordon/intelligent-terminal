@@ -2,12 +2,14 @@ aalt
 abvm
 ACCEPTFILES
 ACCESSDENIED
+AGILEREFERENCE
 alignas
 alignof
 APPLYTOSUBMENUS
 appxrecipe
 bitfield
 bitfields
+BITMAPFILEHEADER
 BUILDBRANCH
 BUILDMSG
 BUILDNUMBER
@@ -19,6 +21,7 @@ colspan
 COMDLG
 commandlinetoargv
 COPYFROMRESOURCE
+CREDENTIALW
 cstdint
 CXICON
 CYICON
@@ -90,6 +93,7 @@ MENUITEMINFOW
 MINIMIZEBOX
 MOUSELEAVE
 mov
+MSSTORE
 MULTIPLEUSE
 NCHITTEST
 NCLBUTTONDBLCLK
@@ -123,12 +127,15 @@ overridable
 PAGESCROLL
 PALLOC
 PATINVERT
+Pels
+PHANDLER
 PICKFOLDERS
 PINPUT
 pmr
 QUERYENDSESSION
 rcx
 REGCLS
+remotesigned
 RETURNCMD
 rfind
 ROOTOWNER
@@ -188,8 +195,10 @@ USEROBJECTFLAGS
 Vcpp
 Viewbox
 virtualalloc
+wcsnicmp
 wcsnlen
 WDJ
+wingdi
 winhttp
 wininet
 winmain
@@ -198,6 +207,8 @@ winstamin
 wmemcmp
 wpc
 wtcli
+WSAHOST
+WSANO
 WSF
 WWH
 wwinmain
@@ -224,5 +235,6 @@ xtree
 xutility
 YIcon
 YMax
+YPels
 zstring
 zwstring

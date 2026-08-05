@@ -1,29 +1,23 @@
 # سیٹ اپ اسکرین عنوانات
-# {Locked="Intelligent Terminal"} - پروڈکٹ کا نام، ترجمہ نہ کریں
-setup.title.first_run: "Intelligent Terminal میں خوش آمدید!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "ایجنٹ نہیں ملا"
 setup.title.agent_error: "ایجنٹ کنیکشن ناکام"
-setup.title.switch_agent: "ایجنٹ تبدیل کریں"
 setup.title.not_available: "ایجنٹ دستیاب نہیں ہے"
 setup.title.sign_in: "سائن ان ضروری ہے"
 
 # %{agent} کو رن ٹائم پر ایجنٹ کے ڈسپلے نام سے بدل دیا جاتا ہے۔
-setup.subtitle.copilot_missing: "آپ کا ایجنٹ \"%{agent}\" انسٹال نہیں ہے۔ اسے انسٹال کرنے کے لیے نیچے دیے گئے اقدامات پر عمل کریں۔ ایجنٹ تبدیل کرنے کے لیے Settings پر جائیں۔"
-setup.subtitle.agent_missing: "آپ کا ایجنٹ \"%{agent}\" انسٹال نہیں ہے۔ براہ کرم اسے دستی طور پر دوبارہ انسٹال کریں، پھر دوبارہ کوشش کریں۔ ایجنٹ تبدیل کرنے کے لیے Settings پر جائیں۔"
-setup.subtitle.copilot_auth: "آپ کے ایجنٹ \"%{agent}\" کو تصدیق کی ضرورت ہے۔ سائن ان کرنے کے لیے نیچے دیے گئے اقدامات پر عمل کریں۔ ایجنٹ تبدیل کرنے کے لیے Settings پر جائیں۔"
-setup.subtitle.agent_auth: "آپ کے ایجنٹ \"%{agent}\" کو تصدیق کی ضرورت ہے۔ براہ کرم ایجنٹ CLI کے ذریعے سائن ان کریں، پھر دوبارہ کوشش کریں۔ ایجنٹ تبدیل کرنے کے لیے Settings پر جائیں۔"
+setup.subtitle.copilot_missing: "آپ کا ایجنٹ \"%{agent}\" انسٹال نہیں ہے۔ اسے انسٹال کرنے کے لیے نیچے دیے گئے اقدامات پر عمل کریں۔ ایجنٹ تبدیل کرنے کے لیے ذہین ٹرمینل Settings > Agent پر جائیں۔"
+setup.subtitle.agent_missing: "آپ کا ایجنٹ \"%{agent}\" انسٹال نہیں ہے۔ براہ کرم اسے دستی طور پر دوبارہ انسٹال کریں، پھر دوبارہ کوشش کریں۔ ایجنٹ تبدیل کرنے کے لیے ذہین ٹرمینل Settings > Agent پر جائیں۔"
+setup.subtitle.copilot_auth: "آپ کے ایجنٹ \"%{agent}\" کو تصدیق کی ضرورت ہے۔ سائن ان کرنے کے لیے نیچے دیے گئے اقدامات پر عمل کریں۔ ایجنٹ تبدیل کرنے کے لیے ذہین ٹرمینل Settings > Agent پر جائیں۔"
+setup.subtitle.agent_auth: "آپ کے ایجنٹ \"%{agent}\" کو تصدیق کی ضرورت ہے۔ براہ کرم ایجنٹ کے ذریعے سائن ان کریں، پھر نیچے \"میں نے سائن ان کر لیا\" منتخب کریں۔ ایجنٹ تبدیل کرنے کے لیے ذہین ٹرمینل Settings > Agent پر جائیں۔"
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "Intelligent Terminal میں استعمال کرنے کے لیے ڈیفالٹ ایجنٹ CLI منتخب کریں۔ آپ"
-setup.description.fre_line2: "اپنی ورک اسپیس کو ترتیب دینے اور سیٹ اپ کرنے کے لیے Settings پر جا سکتے ہیں۔"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "%{agent} دوبارہ انسٹال کریں"
-setup.option.reinstall_hint: "(خودکار طور پر انسٹال ہو جائے گا)"
+setup.option.install: "%{agent} انسٹال کریں"
+setup.option.install_hint: "(خودکار طور پر انسٹال ہو جائے گا)"
 setup.option.signin: "%{agent} میں سائن ان کریں"
-setup.option.retry_detection: "دوبارہ شناخت کریں"
-setup.option.retry_auth: "میں نے سائن ان کر لیا ہے — کنیکشن دوبارہ کوشش کریں"
-setup.option.retry_connection: "کنیکشن دوبارہ کوشش کریں"
-setup.option.switch_to: "%{agent} پر سوئچ کریں"
+setup.option.retry_detection: "دوبارہ کوشش کریں"
+setup.option.retry_auth: "میں نے سائن ان کر لیا — دوبارہ جوڑنے کی کوشش کریں"
 setup.status.installing: "انسٹال ہو رہا ہے..."
 setup.status.install_failed: "انسٹال ناکام: "
 setup.status.installing_winget: " winget کے ذریعے انسٹال ہو رہا ہے..."
@@ -35,25 +29,32 @@ auth.agent_selected_with_status: "ایجنٹ %{name} — "
 auth.checking_authentication: "  %{spinner} تصدیق کی جانچ ہو رہی ہے..."
 auth.waiting_for_authorization: "  %{spinner} اجازت کا انتظار ہے..."
 auth.code_copied_hint: "  کوڈ کلپ بورڈ پر کاپی ہو گیا — اسے اپنے براؤزر میں پیسٹ کریں۔"
-auth.sign_in_prompt: "اپنا ایجنٹ استعمال کرنے کے لیے سائن ان کریں:"
+auth.device_code_prompt: "%{url} پر جائیں اور کوڈ درج کریں: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  ایجنٹ کی خصوصیات فعال کرنے کے لیے %{name} کو جوڑیں"
-auth.button_sign_in_github: "[ GitHub سے سائن ان کریں ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ %{name} سے سائن ان کریں ]"
-auth.hint_footer: "  سائن ان کے لیے Enter دبائیں، واپس جانے کے لیے Esc دبائیں"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  سائن ان کرنے کے لیے Enter · GitHub Enterprise کے لیے E · واپس جانے کے لیے Esc"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  انٹرپرائز ڈومین: "
+auth.enterprise_hint_footer: "  سائن ان کرنے کے لیے Enter · github.com کے لیے Esc"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  دوبارہ کوشش کرنے کے لیے Enter دبائیں، یا github.com کے لیے Esc۔ عام وجوہات: غلط ٹائپ شدہ یا ناقابل رسائی ڈومین، میعاد ختم شدہ کوڈ، یا اس ہوسٹ پر Copilot تک رسائی نہ ہونا۔"  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  دوبارہ کوشش کرنے کے لیے Enter دبائیں، یا واپس جانے کے لیے Esc۔"  # {Locked="Enter","Esc"}
 
 # ── چیٹ منظر (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "سوچ رہا ہے…"
-# {Locked="Intelligent Terminal"} - پروڈکٹ کا نام، ترجمہ نہ کریں
-chat.welcome_title: "Intelligent Terminal میں خوش آمدید!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "ذہین ٹرمینل میں خوش آمدید!"
+chat.welcome_disclaimer: "ذہین ٹرمینل AI استعمال کرتا ہے۔ غلطیوں کی جانچ کریں۔"
 chat.plan_header: "منصوبہ:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "حالیہ کمانڈ کی ناکامی کا خودکار طور پر تشخیص کیا گیا"
+chat.turn_canceled: "(منسوخ)"
+chat.turn_executed: "→ پر عمل کر دیا گیا: %{title}"
 
 # ── ان پٹ پلیس ہولڈرز (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "کچھ بھی پوچھیں، / کمانڈز کے لیے.."  # {Locked="/"}
 input.placeholder.connecting: "جڑ رہا ہے..."
 input.placeholder.disconnected: "منقطع"
+input.image_attachments: "📎 تصاویر: %{items}"  # {Locked="📎","%{items}"}
 
 # ── زیر التوا پرامپٹ قطار (src/ui/queued_hint.rs, src/app.rs) ───────────────
 # ان پٹ باکس کے اوپر دکھایا جانے والا اشارہ جب ایک یا زیادہ پرامپٹس قطار میں ہوں
@@ -76,9 +77,22 @@ commands.help_header: "سلیش کمانڈز — ان پٹ باکس میں / ٹ�
 commands.help_escape_hint: "  //text     لفظی '/' بھیجیں (کمانڈ پارسر سے فرار)"  # {Locked="//text","/"}
 commands.help_close_hint: "  Esc        یہ مدد بند کریں"  # {Locked="Esc"}
 
+# Slash-command summaries shown in the popup and /help overlay.
+# Command names (/help, /clear, /new, /restart, /stop, /sessions) stay in
+# English. Only the descriptions are localized.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "یہ کمانڈ فہرست دکھائیں"
+commands.clear.summary: "چیٹ اسکرول بیک صاف کریں (سیشن برقرار رکھتا ہے)"
+commands.new.summary: "نیا ACP سیشن شروع کریں (ہسٹری حذف کرتا ہے)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "ایجنٹ کو دوبارہ شروع کریں"
+commands.stop.summary: "جاری پرامپٹ منسوخ کریں"
+commands.sessions.summary: "تاریخی سیشنز کا انتخاب کار کھولیں (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "اس ٹیب کے لیے ایجنٹ منتخب کریں (براہ راست تبدیل کرنے کے لیے /agent <id>)"  # {Locked="/agent","<id>"}
+
 # ── سفارشات پینل (src/ui/recommendations.rs) ───────────────────────────────
-# {Locked="Enter","Esc","↵"} - کلید کے نام اور Return-کلید گلف، ترجمہ نہ کریں
-recommendations.nav_hint: "(↑ ↓ نیویگیشن • Enter منتخب کریں • Esc منسوخ کریں)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - کلید کے نام اور Return-کلید گلف، ترجمہ نہ کریں
+recommendations.nav_hint: "(↑ ↓ نیویگیٹ کرنے کے لیے • ← → بٹن تبدیل کرنے کے لیے • Enter منتخب کرنے کے لیے • Esc منسوخ کرنے کے لیے)"
 recommendations.button_run_command: "[ کمانڈ چلائیں ]"
 recommendations.button_insert_in_terminal: "ٹرمینل میں داخل کریں"
 recommendations.button_open_in_new_tab: "نئی ٹیب میں کھولیں ↵"
@@ -102,9 +116,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N جواب دیں · مکمل کارڈ کے لیے سائز تبدیل کریں]"  # {Locked="Y/N"}
 
 # ── ایجنٹ حالت (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "انسٹال نہیں ہے — خودکار انسٹال کے لیے منتخب کریں"
 agent.status.not_found: "نہیں ملا"
-agent.status.detected: "شناخت ہو گئی"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - ٹول کے نام اور کمانڈ، بالکل ویسے ہی چلائیں
 agent.install.running_winget: "چل رہا ہے: winget install GitHub.Copilot"
 agent.install.launch_failed: "winget شروع کرنے میں ناکامی: %{error}"
@@ -115,25 +127,46 @@ agent.custom.auth_hint: "یقینی بنائیں کہ %{name} انسٹال ہے 
 
 # ── ایجنٹ منظر (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "لوڈ ہو رہا ہے..."
-# {Locked="Enter","Shift+enter","Esc"} - کلید کے مجموعے، ترجمہ نہ کریں
-agents.footer_hint: "(↑ ↓ نیویگیشن • Enter نئی ٹیب میں سیشن شروع کریں • Shift+enter ایجنٹ پین میں سیشن شروع کریں • Esc باہر نکلیں)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - کلید کے مجموعے، ترجمہ نہ کریں
+agents.footer_hint: "(↑ ↓ نیویگیشن • Enter سیشن شروع کریں • Esc باہر نکلیں • F5 ریفریش کریں • / تلاش کریں)"
 agents.status.active: "فعال"
 agents.status.waiting_for_input: "ان پٹ کا انتظار"
 agents.status.error: "خرابی"
 agents.status.idle: "غیر فعال"
 
 # ── لے آؤٹ خوش آمدید اشارہ (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. ایجنٹ پین دکھائیں/چھپائیں • Ctrl+Alt+/ ایجنٹ سیشن دکھائیں/چھپائیں)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. ایجنٹ پین دکھائیں/چھپائیں • Ctrl+Shift+/ ایجنٹ سیشن دکھائیں/چھپائیں)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── کنیکشن حالت ────────────────────────────────────────────────────────
 connection.starting: "ایجنٹ شروع ہو رہا ہے..."
 connection.reconnecting: "دوبارہ جڑ رہا ہے..."
+connection.connecting_activity: "ایجنٹ سے جڑ رہا ہے…"
+connection.lost: "ایجنٹ سے کنیکشن ختم ہو گیا۔ دوبارہ جڑنے کے لیے /restart ٹائپ کریں۔"  # {Locked="/restart"}
 
 # ── نظام پیغامات (src/app.rs) ────────────────────────────────────────────────
+system.close_pane_hint: "پین بند کرنے کے لیے Ctrl+C دوبارہ دبائیں۔"  # {Locked="Ctrl+C"}
+system.selection_copied: "کاپی ہو گیا"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "منسوخ کیا گیا۔"
 system.no_prompt_in_flight: "کوئی پرامپٹ زیر عمل نہیں ہے۔"
 system.authentication_failed: "تصدیق ناکام"
-system.command_copied_retry: "کمانڈ کاپی ہو گئی — اسے دوسرے ٹرمینل میں چلائیں، پھر دوبارہ کوشش کے لیے Enter دبائیں"  # {Locked="Enter"}
+system.stopped_max_tokens: "ماڈل کی آؤٹ پٹ حد تک پہنچنے کے بعد جواب کاٹ دیا گیا۔"
+system.stopped_max_turn_requests: "اس باری کے لیے اپنی درخواست کی حد تک پہنچنے کے بعد ایجنٹ رک گیا۔"
+system.stopped_refusal: "ایجنٹ نے اس درخواست کو جاری رکھنے سے انکار کر دیا۔"
+system.agent_busy: "اس ٹیب پر Agent مصروف ہے — موجودہ پرامپٹ ختم ہونے تک انتظار کریں۔"
+system.image_clipboard_empty: "پیسٹ کرنے کے لیے کلپ بورڈ پر کوئی تصویر نہیں ہے۔"
+system.image_not_supported: "یہ ایجنٹ تصویری ان پٹ کی معاونت نہیں کرتا۔"
+system.image_pasted: "تصویر منسلک ہو گئی (%{label})۔ بھیجنے کے لیے Enter دبائیں۔"  # {Locked="%{label}","Enter"}
+system.resuming_session: "سیشن %{session_id} دوبارہ شروع کیا جا رہا ہے..."
+system.unknown_command: "نامعلوم کمانڈ \"%{command}\" — پرامپٹ کے طور پر بھیجی گئی۔ فہرست کے لیے /help ٹائپ کریں۔"  # {Locked="/help"} — slash-command name.
+system.busy_use_stop: "موجودہ پرامپٹ ختم ہونے تک انتظار کریں، یا پہلے /stop کریں۔"  # {Locked="/stop"} — slash-command name.
+system.cannot_focus_session: "سیشن %{session_id} پر فوکس نہیں کیا جا سکتا: یہ live لگتا ہے مگر ابھی کوئی pane GUID باؤنڈ نہیں ہے۔ کچھ دیر بعد دوبارہ کوشش کریں۔"
+system.cannot_resume_no_load_session: "agent pane میں دوبارہ شروع نہیں کیا جا سکتا: %{agent} نے ACP `loadSession` صلاحیت کا اعلان نہیں کیا۔ اس کے بجائے نئے terminal pane میں دوبارہ شروع کرنے کے لیے Enter (Shift کے بغیر) دبائیں۔"  # {Locked="ACP","loadSession","Enter","Shift"} — protocol/UI terms.
+system.cannot_resume_no_resume_flag: "%{agent} سیشن دوبارہ شروع نہیں کیا جا سکتا: اس agent کے پاس `--resume` طرز کا flag نہیں ہے۔ اس کے بجائے ACP کے ذریعے agent pane کے اندر دوبارہ شروع کرنے کی کوشش کے لیے Shift+Enter دبائیں۔"  # {Locked="--resume","Shift","Enter","ACP"} — flag and UI terms.
+system.cannot_resume_unknown_agent: "سیشن %{session_id} دوبارہ شروع نہیں کیا جا سکتا: اس کا ماخذ agent اس WTA build کے لیے نامعلوم ہے۔"
+system.cannot_resume_phantom_via_flag: "%{agent} سیشن %{session_id} دوبارہ شروع نہیں کیا جا سکتا: یہ شروع ہوا تھا مگر اس میں کوئی گفتگو جمع نہیں ہوئی، اس لیے %{agent} خود resume کو مسترد کر دے گا۔ قطار ہٹائی جا رہی ہے۔"
+system.cannot_resume_phantom_via_load: "%{agent} سیشن %{session_id} دوبارہ شروع نہیں کیا جا سکتا: یہ شروع ہوا تھا مگر اس میں کوئی گفتگو جمع نہیں ہوئی، اس لیے %{agent} load کو مسترد کر دے گا۔ قطار ہٹائی جا رہی ہے۔"
+system.fallback.this_agent: "یہ agent"
+system.fallback.connected_agent: "منسلک agent"
 
 # ── رن ٹائم CLI آؤٹ پٹ (src/main.rs) ────────────────────────────────────────
 output.no_windows: "کوئی ونڈو نہیں ملی۔"
@@ -171,3 +204,33 @@ hooks.installed_but_disabled: "⚠ انسٹال ہے لیکن غیر فعال ہ
 hooks.not_installed: "✗ انسٹال نہیں ہے"
 hooks.uninstall_skipped: "چھوڑ دیا گیا (CLI PATH میں نہیں ہے)"
 hooks.install_attempted: "wt-agent-hooks انسٹال کی کوشش کی گئی (آئیڈمپوٹنٹ)۔ نتیجہ جانچنے کے لیے `wta hooks status` چلائیں۔ ٹریس لاگ: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+
+# ── Relative time and date formatting ─────────────────────────────────────
+time.just_now: "ابھی"
+time.minute_singular: "%{count} منٹ پہلے"
+time.minutes_other: "%{count} منٹ پہلے"
+time.hour_singular: "%{count} گھنٹہ پہلے"
+time.hours_other: "%{count} گھنٹے پہلے"
+time.day_singular: "%{count} دن پہلے"
+time.days_other: "%{count} دن پہلے"
+
+# ── سفارش پر عمل درآمد (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "انتخاب %{choice} ناکام ہو گیا: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "ایجنٹ منتخب کریں (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "اس مشین پر کوئی ایجنٹ CLI دستیاب نہیں ملا۔"  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "نامعلوم یا غیر دستیاب ایجنٹ %{agent} — دستیاب فہرست دیکھنے کے لیے /agent ٹائپ کریں۔"  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "ونڈوز ٹرمینل ٹیب سے باہر ایجنٹ کی تبدیلی دستیاب نہیں ہے۔"
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "اس پین کے لیے ماڈل منتخب کریں (براہ راست تبدیل کرنے کے لیے /model <id>)"  # {Locked="/model","<id>"}
+commands.move.summary: "اس ٹیب کے ایجنٹ پین کو منتقل کریں (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "ماڈل منتخب کریں (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "منسلک ایجنٹ نے کوئی قابلِ انتخاب ماڈل ظاہر نہیں کیا۔"
+system.model_set: "اس پین کے لیے ماڈل %{model} پر سیٹ کر دیا گیا۔"  # {Locked="%{model}"}
+system.model_unknown: "نامعلوم ماڈل %{model} — دستیاب فہرست دیکھنے کے لیے /model ٹائپ کریں۔"  # {Locked="%{model}","/model"}

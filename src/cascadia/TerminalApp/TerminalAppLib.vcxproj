@@ -106,6 +106,9 @@
       <SubType>Code</SubType>
     </ClInclude>
     <ClInclude Include="BasePaletteItem.h" />
+    <ClInclude Include="SharedWta.h" />
+    <ClInclude Include="AgentPaneDragStash.h" />
+    <ClInclude Include="AgentPaneLog.h" />
     <ClInclude Include="Tab.h">
       <DependentUpon>Tab.idl</DependentUpon>
     </ClInclude>
@@ -191,6 +194,7 @@
     <ClInclude Include="AgentPaneContent.h">
       <DependentUpon>AgentPaneContent.xaml</DependentUpon>
     </ClInclude>
+    <ClInclude Include="AgentUsage.h" />
     <ClInclude Include="FreOverlay.h">
       <DependentUpon>FreOverlay.xaml</DependentUpon>
     </ClInclude>
@@ -214,6 +218,7 @@
       <DependentUpon>PaletteItemTemplateSelector.idl</DependentUpon>
       <SubType>Code</SubType>
     </ClCompile>
+    <ClCompile Include="SharedWta.cpp" />
     <ClCompile Include="Tab.cpp">
       <DependentUpon>Tab.idl</DependentUpon>
     </ClCompile>
@@ -317,6 +322,7 @@
       <DependentUpon>AgentPaneContent.xaml</DependentUpon>
       <SubType>Code</SubType>
     </ClCompile>
+    <ClCompile Include="AgentUsage.cpp" />
     <ClCompile Include="FreOverlay.cpp">
       <DependentUpon>FreOverlay.xaml</DependentUpon>
       <SubType>Code</SubType>

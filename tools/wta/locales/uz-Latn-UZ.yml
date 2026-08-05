@@ -1,29 +1,23 @@
 # Setup screen titles
-# {Locked="Intelligent Terminal"} - product name, do not translate
-setup.title.first_run: "Intelligent Terminal-ga xush kelibsiz!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "Agent topilmadi"
 setup.title.agent_error: "Agentga ulanish amalga oshmadi"
-setup.title.switch_agent: "Agentni almashtirish"
 setup.title.not_available: "Agent mavjud emas"
 setup.title.sign_in: "Tizimga kirish talab qilinadi"
 
 # %{agent} is replaced with the agent display name at runtime.
-setup.subtitle.copilot_missing: "Agentingiz \"%{agent}\" oʻrnatilmagan. Oʻrnatish uchun quyidagi qadamlarni bajaring. Agentni almashtirish uchun Settings boʻlimiga oʻting."
-setup.subtitle.agent_missing: "Agentingiz \"%{agent}\" oʻrnatilmagan. Iltimos, qoʻlda qayta oʻrnating, keyin qayta urinib koʻring. Agentni almashtirish uchun Settings boʻlimiga oʻting."
-setup.subtitle.copilot_auth: "Agentingiz \"%{agent}\" autentifikatsiyani talab qiladi. Tizimga kirish uchun quyidagi qadamlarni bajaring. Agentni almashtirish uchun Settings boʻlimiga oʻting."
-setup.subtitle.agent_auth: "Agentingiz \"%{agent}\" autentifikatsiyani talab qiladi. Iltimos, agent CLI orqali tizimga kiring, keyin qayta urinib koʻring. Agentni almashtirish uchun Settings boʻlimiga oʻting."
+setup.subtitle.copilot_missing: "Agentingiz \"%{agent}\" oʻrnatilmagan. Oʻrnatish uchun quyidagi qadamlarni bajaring. Agentni almashtirish uchun Aqlli terminal Settings > Agent boʻlimiga oʻting."
+setup.subtitle.agent_missing: "Agentingiz \"%{agent}\" oʻrnatilmagan. Iltimos, qoʻlda qayta oʻrnating, keyin qayta urinib koʻring. Agentni almashtirish uchun Aqlli terminal Settings > Agent boʻlimiga oʻting."
+setup.subtitle.copilot_auth: "Agentingiz \"%{agent}\" autentifikatsiyani talab qiladi. Tizimga kirish uchun quyidagi qadamlarni bajaring. Agentni almashtirish uchun Aqlli terminal Settings > Agent boʻlimiga oʻting."
+setup.subtitle.agent_auth: "Agentingiz \"%{agent}\" autentifikatsiyani talab qiladi. Iltimos, agent orqali tizimga kiring, keyin pastda \"Men tizimga kirdim\" ni tanlang. Agentni almashtirish uchun Aqlli terminal Settings > Agent boʻlimiga oʻting."
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "Intelligent Terminal-da foydalanmoqchi boʻlgan standart agent CLI tanlang. Ish"
-setup.description.fre_line2: "muhitingizni sozlash va oʻrnatish uchun Settings boʻlimiga oʻtishingiz mumkin."
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "%{agent} qayta oʻrnatish"
-setup.option.reinstall_hint: "(Avtomatik oʻrnatiladi)"
+setup.option.install: "%{agent} qayta oʻrnatish"
+setup.option.install_hint: "(Avtomatik oʻrnatiladi)"
 setup.option.signin: "%{agent} tizimga kirish"
-setup.option.retry_detection: "Aniqlashni qayta sinash"
-setup.option.retry_auth: "Tizimga kirdim — ulanishni qayta sinash"
-setup.option.retry_connection: "Ulanishni qayta sinash"
-setup.option.switch_to: "%{agent} ga almashtirish"
+setup.option.retry_detection: "Qayta urinib koʻring"
+setup.option.retry_auth: "Men tizimga kirdim — qayta ulanib koʻring"
 setup.status.installing: "Oʻrnatilmoqda..."
 setup.status.install_failed: "Oʻrnatish amalga oshmadi: "
 setup.status.installing_winget: " winget orqali oʻrnatilmoqda..."
@@ -35,20 +29,26 @@ auth.agent_selected_with_status: "Agent %{name} — "
 auth.checking_authentication: "  %{spinner} Autentifikatsiya tekshirilmoqda..."
 auth.waiting_for_authorization: "  %{spinner} Avtorizatsiya kutilmoqda..."
 auth.code_copied_hint: "  Kod buferga nusxalandi — brauzeringizga joylang."
-auth.sign_in_prompt: "Agentingizdan foydalanish uchun tizimga kiring:"
+auth.device_code_prompt: "%{url} manziliga kiring va kodni kiriting: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  Agent xususiyatlarini yoqish uchun %{name} ulang"
-auth.button_sign_in_github: "[ GitHub orqali kirish ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ %{name} orqali kirish ]"
-auth.hint_footer: "  Tizimga kirish uchun Enter, orqaga qaytish uchun Esc bosing"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  Kirish uchun Enter · GitHub Enterprise uchun E · orqaga qaytish uchun Esc"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise domeni: "
+auth.enterprise_hint_footer: "  Kirish uchun Enter · github.com uchun Esc"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Qayta urinish uchun Enter tugmasini bosing yoki github.com uchun Esc. Keng tarqalgan sabablar: noto‘g‘ri yozilgan yoki ulanib bo‘lmaydigan domen, muddati tugagan kod yoki o‘sha hostda Copilot ruxsati yo‘q."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Qayta urinish uchun Enter tugmasini bosing yoki orqaga qaytish uchun Esc."  # {Locked="Enter","Esc"}
 
 # ── Chat view (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Oʻylayapman…"
-# {Locked="Intelligent Terminal"} - product name, do not translate
-chat.welcome_title: "Intelligent Terminal-ga xush kelibsiz!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "Aqlli terminal-ga xush kelibsiz!"
+chat.welcome_disclaimer: "Aqlli terminal AI-dan foydalanadi. Xatolarni tekshiring."
 chat.plan_header: "Reja:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "Yaqindagi buyruq xatosi avtomatik tarzda tashxis qilindi"
+chat.turn_canceled: "(bekor qilindi)"
+chat.turn_executed: "→ bajarildi: %{title}"
 
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "Istalgan narsa soʻrang, / buyruqlar uchun.."  # {Locked="/"}
@@ -66,7 +66,7 @@ input.queue.removed: "Navbatdagi xabar olib tashlandi: %{preview}"
 # queue is already at capacity (%{cap} entries). The user must wait for the
 # queue to drain or press Esc to remove queued items.
 input.queue.full: "Navbat toʻldi (%{cap}). Agentni kuting yoki navbatdagi elementlarni olib tashlash uchun Esc tugmasini bosing."  # {Locked="Esc"}
-
+input.image_attachments: "📎 Rasmlar: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Command popup (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - slash-command prefix, must remain ASCII
@@ -76,9 +76,22 @@ commands.help_header: "Slash buyruqlari — kiritish maydoniga / yozing."
 commands.help_escape_hint: "  //text     Toʻgʻridan-toʻgʻri '/' yuborish (buyruq tahlilchisini chetlab oʻtish)"  # {Locked="//text","/"}
 commands.help_close_hint: "  Esc        Bu yordamni yopish"  # {Locked="Esc"}
 
+# Slash-command summaries shown in the popup and /help overlay.
+# Command names (/help, /clear, /new, /restart, /stop, /sessions) stay in
+# English. Only the descriptions are localized.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "Bu buyruqlar roʻyxatini koʻrsat"
+commands.clear.summary: "Chat aylantirish tarixini tozalash (seansni saqlaydi)"
+commands.new.summary: "Yangi ACP seansini boshlash (tarixni oʻchiradi)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "Agentni qayta ishga tushiring"
+commands.stop.summary: "Bajarilayotgan soʻrovni bekor qilish"
+commands.sessions.summary: "Tarixiy seanslar tanlagichini ochish (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "Bu panel uchun agentni tanlang (toʻgʻridan-toʻgʻri almashtirish uchun /agent <id>)"  # {Locked="/agent","<id>"}
+
 # ── Recommendations panel (src/ui/recommendations.rs) ───────────────────────
-# {Locked="Enter","Esc","↵"} - key names and Return-key glyph, do not translate
-recommendations.nav_hint: "(↑ ↓ navigatsiya uchun • Enter tanlash uchun • Esc bekor qilish uchun)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - key names and Return-key glyph, do not translate
+recommendations.nav_hint: "(↑ ↓ navigatsiya uchun • ← → tugmalarni almashtirish uchun • Enter tanlash uchun • Esc bekor qilish uchun)"
 recommendations.button_run_command: "[ Buyruqni bajarish ]"
 recommendations.button_insert_in_terminal: "Terminal-ga kiritish"
 recommendations.button_open_in_new_tab: "Yangi varaqda ochish ↵"
@@ -102,9 +115,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N javob uchun · toʻliq karta uchun oʻlchamni oʻzgartiring]"  # {Locked="Y/N"}
 
 # ── Agent status (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "Oʻrnatilmagan — avtomatik oʻrnatish uchun tanlang"
 agent.status.not_found: "Topilmadi"
-agent.status.detected: "Aniqlandi"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - tool names and command, must run verbatim
 agent.install.running_winget: "Bajarilmoqda: winget install GitHub.Copilot"
 agent.install.launch_failed: "winget ishga tushmadi: %{error}"
@@ -115,25 +126,46 @@ agent.custom.auth_hint: "%{name} oʻrnatilganligiga va PATH-da ekanligiga ishonc
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Yuklanmoqda..."
-# {Locked="Enter","Shift+enter","Esc"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ navigatsiya uchun • Enter yangi varaqda seansni ochish uchun • Shift+enter agent panelida seansni ochish uchun • Esc chiqish uchun)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ navigatsiya uchun • Enter seansni ochish uchun • Esc chiqish uchun • F5 yangilash uchun • / qidirish uchun)"
 agents.status.active: "Faol"
 agents.status.waiting_for_input: "Kiritish kutilmoqda"
 agents.status.error: "Xatolik"
 agents.status.idle: "Boʻsh"
 
 # ── Layout welcome hint (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. agent panelini koʻrsatish/yashirish • Ctrl+Alt+/ agent seansini koʻrsatish/yashirish)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. agent panelini koʻrsatish/yashirish • Ctrl+Shift+/ agent seansini koʻrsatish/yashirish)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
 connection.starting: "Agent ishga tushirilmoqda..."
 connection.reconnecting: "Qayta ulanilmoqda..."
+connection.connecting_activity: "Agentga ulanilmoqda…"
+connection.lost: "Agent bilan ulanish uzildi. Qayta ulanish uchun /restart deb yozing."  # {Locked="/restart"}
 
 # ── System messages (src/app.rs) ────────────────────────────────────────────
+system.close_pane_hint: "Panelni yopish uchun Ctrl+C ni yana bosing."  # {Locked="Ctrl+C"}
+system.selection_copied: "Nusxalandi"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "Bekor qilindi."
 system.no_prompt_in_flight: "Bajarilayotgan soʻrov yoʻq."
 system.authentication_failed: "Autentifikatsiya amalga oshmadi"
-system.command_copied_retry: "Buyruq nusxalandi — boshqa terminalda bajaring, keyin qayta sinash uchun Enter bosing"  # {Locked="Enter"}
+system.stopped_max_tokens: "Javob model chiqish chegarasiga yetgach uzib qo'yildi."
+system.stopped_max_turn_requests: "Agent ushbu navbat uchun so'rov chegarasiga yetgach to'xtadi."
+system.stopped_refusal: "Agent ushbu so'rovni davom ettirishdan bosh tortdi."
+system.agent_busy: "Agent bu varaqda band — joriy soʻrov tugashini kuting."
+system.image_clipboard_empty: "Joylashtirish uchun buferda rasm yoʻq."
+system.image_not_supported: "Bu agent rasm kiritishni qoʻllab-quvvatlamaydi."
+system.image_pasted: "Rasm biriktirildi (%{label}). Yuborish uchun Enter bosing."  # {Locked="%{label}","Enter"}
+system.resuming_session: "%{session_id} seansi davom ettirilmoqda..."
+system.unknown_command: "Nomaʼlum buyruq \"%{command}\" — soʻrov sifatida yuborildi. Roʻyxat uchun /help yozing."  # {Locked="/help"}
+system.busy_use_stop: "Joriy soʻrov tugashini kuting yoki avval /stop ishlating."  # {Locked="/stop"}
+system.cannot_focus_session: "%{session_id} seansiga fokuslab boʻlmadi: u jonli ko‘rinadi, lekin hali hech qanday panel GUID’i bogʻlanmagan. Birozdan keyin qayta urinib koʻring."
+system.cannot_resume_no_load_session: "Agent panelida davom ettirib boʻlmadi: %{agent} ACP `loadSession` imkoniyatini eʼlon qilmagan. Buning oʻrniga yangi terminal panelida davom ettirish uchun Enter (Shift bosmasdan) bosing."  # {Locked="ACP","loadSession","Enter","Shift"}
+system.cannot_resume_no_resume_flag: "%{agent} seansini davom ettirib boʻlmadi: bu agentda `--resume` uslubidagi bayroq yoʻq. ACP orqali agent panelida davom ettirib koʻrish uchun Shift+Enter bosing."  # {Locked="--resume","Shift","Enter","ACP"}
+system.cannot_resume_unknown_agent: "%{session_id} seansini davom ettirib boʻlmadi: uning manba agenti ushbu WTA tuzilmasiga nomaʼlum."
+system.cannot_resume_phantom_via_flag: "%{agent} %{session_id} seansini davom ettirib boʻlmadi: u boshlangan, lekin hech qanday suhbat yigʻilmagan, shuning uchun %{agent} oʻzi davom ettirishni rad etadi. Qator olib tashlanmoqda."
+system.cannot_resume_phantom_via_load: "%{agent} %{session_id} seansini davom ettirib boʻlmadi: u boshlangan, lekin hech qanday suhbat yigʻilmagan, shuning uchun %{agent} yuklashni rad etadi. Qator olib tashlanmoqda."
+system.fallback.this_agent: "bu agent"
+system.fallback.connected_agent: "ulangan agent"
 
 # ── Runtime CLI output (src/main.rs) ────────────────────────────────────────
 output.no_windows: "Oynalar topilmadi."
@@ -171,3 +203,32 @@ hooks.installed_but_disabled: "⚠ oʻrnatilgan lekin oʻchirilgan"
 hooks.not_installed: "✗ oʻrnatilmagan"
 hooks.uninstall_skipped: "oʻtkazib yuborildi (CLI PATH-da emas)"
 hooks.install_attempted: "wt-agent-hooks oʻrnatish urinildi (idempotent). Natijani tekshirish uchun `wta hooks status` bajaring. Iz jurnali: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+# ── Relative time and date formatting ───────────────────────────────────────
+time.just_now: "hozirgina"
+time.minute_singular: "%{count} daqiqa oldin"
+time.minutes_other: "%{count} daqiqa oldin"
+time.hour_singular: "%{count} soat oldin"
+time.hours_other: "%{count} soat oldin"
+time.day_singular: "%{count} kun oldin"
+time.days_other: "%{count} kun oldin"
+
+# ── Tavsiyani bajarish (src/coordinator.rs) ─────────────────────────────────
+system.choice_execution_failed: "%{choice} tanlovi bajarilmadi: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "Agentni tanlang (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "Ushbu kompyuterda biron-bir mavjud agent CLI topilmadi."  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "Nomaʼlum yoki mavjud boʻlmagan agent %{agent} — mavjud roʻyxatni koʻrish uchun /agent yozing."  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "Agentni almashtirish Windows Terminal ilovasidan tashqarida mavjud emas."
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "Bu panel uchun modelni tanlang (toʻgʻridan-toʻgʻri almashtirish uchun /model <id>)"  # {Locked="/model","<id>"}
+commands.move.summary: "Bu tabning agent panelini koʻchirish (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "Modelni tanlang (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "Ulangan agent hech qanday tanlanadigan modelni eʼlon qilmadi."
+system.model_set: "Bu panel uchun model %{model} ga oʻrnatildi."  # {Locked="%{model}"}
+system.model_unknown: "Nomaʼlum model %{model} — mavjud roʻyxatni koʻrish uchun /model yozing."  # {Locked="%{model}","/model"}

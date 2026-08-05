@@ -3,32 +3,24 @@
 # "Agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), not a human representative or proxy
 
 # Setup screen titles
-setup.title.first_run: "Բարի գալուստ Խելացի Տերմինալ!"
 setup.title.agent_missing: "Ագենտը չի գտնվել"
 setup.title.agent_error: "Ագենտին միանալը ձախողվել է"
-# Button label — verb command to change which AI agent is active
-setup.title.switch_agent: "Փոխել ագենտը"
 # Title when the configured AI agent is not available
 setup.title.not_available: "Ագենտը հասանելի չէ"
 # Title when authentication is required
 setup.title.sign_in: "Պահանջվում է մուտք գործել"
 
 # %{agent} is replaced with the agent display name at runtime.
-setup.subtitle.copilot_missing: "Ձեր \"%{agent}\" ագենտը տեղադրված չէ։ Տեղադրելու համար հետեվեք ստորեվ նշված քայլերին։ Ագենտը փոխելու համար անցեք Settings։"
-setup.subtitle.agent_missing: "Ձեր \"%{agent}\" ագենտը տեղադրված չէ։ Խնդրում ենք ձեռքով վերատեղադրել և կրկին փորձել։ Ագենտը փոխելու համար անցեք Settings։"
-setup.subtitle.copilot_auth: "Ձեր \"%{agent}\" ագենտը պահանջում է նույնականացում։ Մուտք գործելու համար հետեվեք ստորեվ նշված քայլերին։ Ագենտը փոխելու համար անցեք Settings։"
-setup.subtitle.agent_auth: "Ձեր \"%{agent}\" ագենտը պահանջում է նույնականացում։ Մուտք գործեք ագենտի CLI-ի միջոցով և կրկին փորձել։ Ագենտը փոխելու համար անցեք Settings։"
+setup.subtitle.copilot_missing: "Ձեր \"%{agent}\" ագենտը տեղադրված չէ։ Տեղադրելու համար հետեվեք ստորեվ նշված քայլերին։ Ագենտը փոխելու համար անցեք Խելացի տերմինալ Settings > Agent։"
+setup.subtitle.agent_missing: "Ձեր \"%{agent}\" ագենտը տեղադրված չէ։ Խնդրում ենք ձեռքով վերատեղադրել և կրկին փորձել։ Ագենտը փոխելու համար անցեք Խելացի տերմինալ Settings > Agent։"
+setup.subtitle.copilot_auth: "Ձեր \"%{agent}\" ագենտը պահանջում է նույնականացում։ Մուտք գործելու համար հետեվեք ստորեվ նշված քայլերին։ Ագենտը փոխելու համար անցեք Խելացի տերմինալ Settings > Agent։"
+setup.subtitle.agent_auth: "Ձեր \"%{agent}\" ագենտը պահանջում է նույնականացում։ Մուտք գործեք ագենտի միջոցով, ապա ընտրեք ստորև \"Մուտք եմ գործել\"։ Ագենտը փոխելու համար անցեք Խելացի տերմինալ Settings > Agent։"
 
-setup.description.fre_line1: "Ընտրեք լռադրյալ ագենտի CLI-ն, որը ցանկանում եք օգտագործել Խելացի Տերմինալ-ում։ Դուք կարող եք"
-setup.description.fre_line2: "անցնել Settings՝ ձեր աշխատական տարածքը կարգավորելու համար։"
-
-setup.option.reinstall: "Վերատեղադրել %{agent}"
-setup.option.reinstall_hint: "(Կտեղադրվի ինքնաշխատորեն)"
+setup.option.install: "Տեղադրել %{agent}"
+setup.option.install_hint: "(Կտեղադրվի ինքնաշխատորեն)"
 setup.option.signin: "Մուտք գործել %{agent}"
-setup.option.retry_detection: "Կրկին հայտնաբերել"
+setup.option.retry_detection: "Կրկին փորձել"
 setup.option.retry_auth: "Մուտք եմ գործել — կրկին միանալ"
-setup.option.retry_connection: "Կրկին միանալ"
-setup.option.switch_to: "Անցնել %{agent}-ին"
 setup.status.installing: "Տեղադրվում է..."
 setup.status.install_failed: "Տեղադրումը ձախողվեց՝ "
 setup.status.installing_winget: " Տեղադրում winget-ի միջոցով..."
@@ -40,20 +32,26 @@ auth.agent_selected_with_status: "Ագենտի %{name} — "
 auth.checking_authentication: "  %{spinner} Նույնականացման ստուգում..."
 auth.waiting_for_authorization: "  %{spinner} Լիազորացման սպասում..."
 auth.code_copied_hint: "  Կոդը պատճենվեց — տեղադրեք այն ձեր բրաուզերում։"
-auth.sign_in_prompt: "Մուտք գործեք՝ ձեր ագենտն օգտագործելու համար՝"
+auth.device_code_prompt: "Այցելեք %{url} և մուտքագրեք կոդը՝ %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  Միացրեք %{name}՝ ագենտի հնարավորությունները միացնելու համար"
-auth.button_sign_in_github: "[ Մուտք գործել GitHub-ի միջոցով ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ Մուտք գործել %{name}-ի միջոցով ]"
-auth.hint_footer: "  Սեղմեք Enter մուտք գործելու համար, Esc հետ վերադառնալու համար"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  Enter՝ մուտք գործելու համար · E՝ GitHub Enterprise-ի համար · Esc՝ վերադառնալու համար"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise տիրույթ: "
+auth.enterprise_hint_footer: "  Enter՝ մուտք գործելու համար · Esc՝ github.com-ի համար"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Սեղմեք Enter՝ նորից փորձելու համար, կամ Esc՝ github.com-ի համար։ Հաճախակի պատճառներ՝ սխալ մուտքագրված կամ անհասանելի տիրույթ, ժամկետանց կոդ, կամ այդ հոսթում Copilot մուտքի իրավունք չկա."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Սեղմեք Enter՝ նորից փորձելու համար, կամ Esc՝ վերադառնալու համար."  # {Locked="Enter","Esc"}
 
 # ── Chat view (src/ui/chat.rs) ──────────────────────────────────────────────────────────────────────
 chat.activity_thinking: "Մտածում եմ…"
-chat.welcome_title: "Բարի գալուստ Խելացի Տերմինալ!"
+chat.welcome_title: "Բարի գալուստ Խելացի տերմինալ!"
+chat.welcome_disclaimer: "Խելացի տերմինալ-ը օգտագործում է AI: Ստուգեք սխալները."
 # Header label for the AI agent's step-by-step plan section
 chat.plan_header: "Պլան՝"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "Վերջին հրամանի ձախողումը ինքնաշխատ ախտորոշվել է"
+chat.turn_canceled: "(չեղարկվել է)"
+chat.turn_executed: "→ կատարվել է: %{title}"
 
 # ── Input placeholders (src/ui/input.rs) ──────────────────────────────────────────────────────────────────
 input.placeholder.connected: "Հարցրեք ցանկացած, / հրամանների համար.."  # {Locked="/"}
@@ -73,7 +71,7 @@ input.queue.removed: "Հերթագրված հաղորդագրությունը հ
 # queue is already at capacity (%{cap} entries). The user must wait for the
 # queue to drain or press Esc to remove queued items.
 input.queue.full: "Հերթը լիքն է (%{cap})։ Սպասեք ագենտին կամ սեղմեք Esc՝ հերթագրված տարրերը հեռացնելու համար։"  # {Locked="Esc"}
-
+input.image_attachments: "📎 Պատկերներ: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Command popup (src/ui/command_popup.rs) ─────────────────────────────────────────────────────────────────
 # {Locked="/"} - slash-command prefix, must remain ASCII
@@ -84,9 +82,22 @@ commands.help_header: "Slash հրամաններ — մուտքագրեք / մո�
 commands.help_escape_hint: "  //text     Ուղարկեք բառացի '/' (հրամանի վերլուծիչից փախում)"  # {Locked="//text","/"}
 commands.help_close_hint: "  Esc        Փակել օգնությունը"  # {Locked="Esc"}
 
+# Slash-command summaries shown in the popup and /help overlay.
+# Command names (/help, /clear, /new, /restart, /stop, /sessions) stay in
+# English. Only the descriptions are localized.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "Ցուցադրել այս հրամանների ցանկը"
+commands.clear.summary: "Մաքրել զրույցի ոլորման պատմությունը (նիստը պահպանվում է)"
+commands.new.summary: "Սկսել նոր ACP նիստ (ջնջել պատմությունը)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "Վերագործարկել ագենտը"
+commands.stop.summary: "Չեղարկել ընթացիկ հարցումը"
+commands.sessions.summary: "Բացել պատմական նիստերի ընտրիչը (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "Ընտրեք գործակալն այս ներդիրի համար (/agent <id>՝ ուղղակիորեն փոխելու համար)"  # {Locked="/agent","<id>"}
+
 # ── Recommendations panel (src/ui/recommendations.rs) ─────────────────────────────────────────────────────
-# {Locked="Enter","Esc","↵"} - key names and Return-key glyph, do not translate
-recommendations.nav_hint: "(↑ ↓ նավիգացիա • Enter ընտրելու համար • Esc չեղարկելու համար)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - key names and Return-key glyph, do not translate
+recommendations.nav_hint: "(↑ ↓ նավարկելու համար • ← → կոճակների միջև անցնելու համար • Enter ընտրելու համար • Esc չեղարկելու համար)"
 recommendations.button_run_command: "[ Գործարկել հրամանը ]"
 recommendations.button_insert_in_terminal: "Տեղադրել տերմինալում"
 recommendations.button_open_in_new_tab: "Բացել նոր ներդիրում ↵"
@@ -112,11 +123,8 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N պատասխանելու համար · չափը փոխեք լիարժեք քարտի համար]"  # {Locked="Y/N"}
 
 # ── Agent status (src/agent_check.rs) ───────────────────────────────────────────────────────────────
-agent.status.not_installed_auto: "Տեղադրված չէ — ընտրեք ինքնաշխատ տեղադրման համար"
 # Status badge when agent CLI binary is not on PATH
 agent.status.not_found: "Չի գտնվել"
-# Status badge when agent CLI binary is found on PATH
-agent.status.detected: "Հայտնաբերված է"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - tool names and command, must run verbatim
 agent.install.running_winget: "Գործարկվում է՝ winget install GitHub.Copilot"
 agent.install.launch_failed: "winget-ի գործարկումը ձախողվեց՝ %{error}"
@@ -127,8 +135,8 @@ agent.custom.auth_hint: "Համոզվեք, որ %{name}-ը տեղադրված է
 
 # ── Agents view (src/ui/agents_view.rs) ───────────────────────────────────────────────────────────────
 agents.loading: "Բեռնվում է..."
-# {Locked="Enter","Shift+enter","Esc"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ նավիգացիա • Enter նոր ներդիրում նիստ գործարկելու համար • Shift+enter ագենտի վահանակում նիստ գործարկելու համար • Esc դուրս գալու համար)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ նավիգացիա • Enter նիստ գործարկելու համար • Esc դուրս գալու համար • F5 թարմացնելու համար • / որոնելու համար)"
 # Status badge when agent session is actively processing
 agents.status.active: "Ակտիվ"
 agents.status.waiting_for_input: "Սպասում է մուտքի"
@@ -138,19 +146,40 @@ agents.status.error: "Սխալ"
 agents.status.idle: "Անգործ"
 
 # ── Layout welcome hint (src/ui/layout.rs) ──────────────────────────────────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. ագենտի վահանակը ցույց տալ/թաքցնել • Ctrl+Alt+/ ագենտի նիստը ցույց տալ/թաքցնել)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. ագենտի վահանակը ցույց տալ/թաքցնել • Ctrl+Shift+/ ագենտի նիստը ցույց տալ/թաքցնել)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────────────────────
 # Status text shown while launching the agent process
 connection.starting: "Ագենտը գործարկվում է..."
 # Status text shown while re-establishing agent connection
 connection.reconnecting: "Վերմիանում..."
+connection.connecting_activity: "Միանում է ագենտին…"
+connection.lost: "Ագենտի հետ կապը կորել է։ Մուտքագրեք /restart՝ նորից միանալու համար։"  # {Locked="/restart"}
 
 # ── System messages (src/app.rs) ────────────────────────────────────────────────────────────────────
+system.close_pane_hint: "Սեղմեք Ctrl+C կրկին՝ վահանակը փակելու համար"  # {Locked="Ctrl+C"}
+system.selection_copied: "Պատճենված է"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "Չեղարկված է։"
 system.no_prompt_in_flight: "Գործընթացում գտնվող հարցում չկա։"
 system.authentication_failed: "Նույնականացումը ձախողվեց"
-system.command_copied_retry: "Հրամանը պատճենվեց — գործարկեք այն մեկ այլ տերմինալում, ապա սեղմեք Enter կրկին փորձելու համար"  # {Locked="Enter"}
+system.stopped_max_tokens: "Պատասխանը կտրվեց՝ հասնելով մոդելի ելքի սահմանաչափին։"
+system.stopped_max_turn_requests: "Գործակալը կանգ առավ՝ հասնելով այս հերթի հարցումների սահմանաչափին։"
+system.stopped_refusal: "Գործակալը հրաժարվեց շարունակել այս հարցումը։"
+system.agent_busy: "Agent-ը զբաղված է այս ներդիրում — սպասեք, մինչև ընթացիկ հուշումն ավարտվի։"
+system.image_clipboard_empty: "Սեղմատախտակի վրա տեղադրելու պատկեր չկա։"
+system.image_not_supported: "Այս ագենտը չի աջակցում պատկերի մուտքագրմանը։"
+system.image_pasted: "Պատկերը կցվեց (%{label})։ Ուղարկելու համար սեղմեք Enter։"  # {Locked="%{label}","Enter"}
+system.resuming_session: "Վերսկսվում է աշխատաշրջանը %{session_id}..."
+system.unknown_command: "Անհայտ հրաման \"%{command}\" — ուղարկվել է որպես հուշում։ Ցանկի համար մուտքագրեք /help։"  # {Locked="/help"} — slash-command name.
+system.busy_use_stop: "Սպասեք, մինչև ընթացիկ հուշումն ավարտվի, կամ նախ օգտագործեք /stop։"  # {Locked="/stop"} — slash-command name.
+system.cannot_focus_session: "Չհաջողվեց կենտրոնանալ աշխատաշրջանի %{session_id} վրա. այն կարծես live է, բայց դեռ որևէ pane GUID կապված չէ։ Փորձեք մի փոքր հետո։"
+system.cannot_resume_no_load_session: "Չի կարող վերսկսվել agent pane-ում. %{agent}-ը չի հայտարարել ACP `loadSession` հնարավորության մասին։ Փոխարենը նոր terminal pane-ում վերսկսելու համար սեղմեք Enter (առանց Shift)։"  # {Locked="ACP","loadSession","Enter","Shift"} — protocol/UI terms.
+system.cannot_resume_no_resume_flag: "Չի կարող վերսկսվել %{agent} աշխատաշրջանը. այս agent-ը չունի `--resume` ոճի flag։ Փոխարենը ACP-ի միջոցով agent pane-ի ներսում վերսկսելու համար սեղմեք Shift+Enter։"  # {Locked="--resume","Shift","Enter","ACP"} — flag and UI terms.
+system.cannot_resume_unknown_agent: "Չի կարող վերսկսվել աշխատաշրջանը %{session_id}. դրա աղբյուր agent-ը անհայտ է WTA-ի այս build-ին։"
+system.cannot_resume_phantom_via_flag: "Չի կարող վերսկսվել %{agent} աշխատաշրջանը %{session_id}. այն սկսվել էր, բայց որևէ զրույց չէր կուտակել, ուստի %{agent}-ն ինքը կմերժեր վերսկսումը։ Հեռացվում է տողը։"
+system.cannot_resume_phantom_via_load: "Չի կարող վերսկսվել %{agent} աշխատաշրջանը %{session_id}. այն սկսվել էր, բայց որևէ զրույց չէր կուտակել, ուստի %{agent}-ը կմերժեր բեռնումը։ Հեռացվում է տողը։"
+system.fallback.this_agent: "այս agent-ը"
+system.fallback.connected_agent: "միացված agent-ը"
 
 # ── Runtime CLI output (src/main.rs) ──────────────────────────────────────────────────────────────────
 output.no_windows: "Պատուհաններ չեն գտնվել։"
@@ -182,13 +211,40 @@ error.wtcli_wait_for_failed: "wtcli wait-for ձախողվեց՝ %{stderr}"
 # {Locked="CLI","PATH","wt-agent-hooks","wta","wta hooks status","%LOCALAPPDATA%","IntelligentTerminal","wta-install-hooks.log"} - tool/CLI names, env vars, log file names
 hooks.bundle_source: "փաթեթի աղբյուր՝ %{source}%{path_suffix}"
 hooks.cli_not_on_path: "✗ CLI-ն PATH-ում չէ"
-# Shown when a shell hook is successfully installed
 hooks.installed: "✓ տեղադրված է"
 # Badge in hooks-status table when the extension install path is outdated
 hooks.marketplace_path_stale: "⚠ marketplace ճանապարհը հնացած է"
 # Badge when the shell hook extension is installed but the user has disabled it
 hooks.installed_but_disabled: "⚠ տեղադրված է, բայց անջատված է"
-# Shown when a shell hook is not yet installed
 hooks.not_installed: "✗ տեղադրված չէ"
 hooks.uninstall_skipped: "բաց թողվեց (CLI-ն PATH-ում չէ)"
 hooks.install_attempted: "wt-agent-hooks տեղադրման փորձ կատարվեց (իդեմպոտենտ)։ Գործարկեք `wta hooks status` արդյունքը ստուգելու համար։ Հետագծման մատյան՝ %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+# ── Relative time and date formatting ───────────────────────────────────────
+time.just_now: "հենց նոր"
+time.minute_singular: "1 րոպե առաջ"
+time.minutes_other: "%{count} րոպե առաջ"
+time.hour_singular: "1 ժամ առաջ"
+time.hours_other: "%{count} ժամ առաջ"
+time.day_singular: "1 օր առաջ"
+time.days_other: "%{count} օր առաջ"
+
+# ── Խորհրդատվության կատարում (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "Ընտրությունը %{choice} ձախողվեց. %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "Ընտրեք գործակալը (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "Այս սարքում հասանելի գործակալի CLI չի գտնվել:"  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "Անհայտ կամ անհասանելի գործակալ %{agent} — մուտքագրեք /agent՝ հասանելի ցանկը տեսնելու համար։"  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "Գործակալի փոխարկումը հասանելի չէ Windows Terminal-ի ներդիրից դուրս:"
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "Ընտրեք մոդելն այս վահանակի համար (/model <id>՝ ուղղակիորեն փոխելու համար)"  # {Locked="/model","<id>"}
+commands.move.summary: "Տեղափոխել այս ներդիրի ագենտի վահանակը (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "Ընտրեք մոդելը (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "Միացված ագենտը չհայտարարեց ընտրելի մոդելների մասին։"
+system.model_set: "Այս վահանակի մոդելը սահմանվել է %{model}։"  # {Locked="%{model}"}
+system.model_unknown: "Անհայտ մոդել %{model} — մուտքագրեք /model՝ հասանելի ցանկը տեսնելու համար։"  # {Locked="%{model}","/model"}

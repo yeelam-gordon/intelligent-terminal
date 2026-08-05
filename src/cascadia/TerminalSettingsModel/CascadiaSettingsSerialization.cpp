@@ -401,7 +401,14 @@ void SettingsLoader::FindFragmentsAndMergeIntoUserSettings(bool generateExtensio
     try
     {
         const auto catalog = AppExtensionCatalog::Open(AppExtensionHostName);
-        extensions = extractValueFromTaskWithoutMainThreadAwait(catalog.FindAllAsync());
+        if (auto catalog2{ catalog.try_as<IAppExtensionCatalog2>() })
+        {
+            extensions = catalog2.FindAll();
+        }
+        else
+        {
+            extensions = extractValueFromTaskWithoutMainThreadAwait(catalog.FindAllAsync());
+        }
     }
     CATCH_LOG();
 
@@ -423,20 +430,37 @@ void SettingsLoader::FindFragmentsAndMergeIntoUserSettings(bool generateExtensio
             continue;
         }
 
-        // Likewise, getting the public folder from an extension is an async operation.
-        auto foundFolder = extractValueFromTaskWithoutMainThreadAwait(ext.GetPublicFolderAsync());
-        if (!foundFolder)
+        winrt::hstring publicFolderPath;
+        if (auto ext3{ ext.try_as<IAppExtension3>() })
         {
-            continue;
+            // Windows 11 24H2 and above support a much faster, much less
+            // Windows.Storage-y API.
+            publicFolderPath = ext3.GetPublicPath();
+            if (publicFolderPath.empty())
+            {
+                // No point in falling through to GetPublicFolderAsync;
+                // it won't work.
+                continue;
+            }
+        }
+        else
+        {
+            // Likewise, getting the public folder from an extension is an async operation.
+            auto foundFolder = extractValueFromTaskWithoutMainThreadAwait(ext.GetPublicFolderAsync());
+            if (!foundFolder)
+            {
+                continue;
+            }
+
+            // the StorageFolder class has its own methods for obtaining the files within the folder
+            // however, all those methods are Async methods
+            // you may have noticed that we need to resort to clunky implementations for async operations
+            // (they are in extractValueFromTaskWithoutMainThreadAwait)
+            // so for now we will just take the folder path and access the files that way
+            publicFolderPath = foundFolder.Path();
         }
 
-        // the StorageFolder class has its own methods for obtaining the files within the folder
-        // however, all those methods are Async methods
-        // you may have noticed that we need to resort to clunky implementations for async operations
-        // (they are in extractValueFromTaskWithoutMainThreadAwait)
-        // so for now we will just take the folder path and access the files that way
-        const auto path = buildPath(foundFolder.Path(), FragmentsSubDirectory);
-
+        const auto path = buildPath(publicFolderPath, FragmentsSubDirectory);
         if (std::filesystem::is_directory(path))
         {
             // MSIX does not support machine-wide scope
@@ -1212,13 +1236,14 @@ try
     auto settingsString = til::io::read_file_as_utf8_string_if_exists(_settingsPath(), false, &lastWriteTime);
     auto firstTimeSetup = settingsString.empty();
 
-    // If it's the firstTimeSetup and a preview build, then try to
-    // read settings.json from the Release stable file path if it exists.
+    // If it's the firstTimeSetup and a shipped build, then try to
+    // read settings.json from the stable Microsoft Windows Terminal file
+    // path if it exists (GH#130: shipped Intelligent Terminal also migrates).
     // Otherwise use default settings file provided from original settings file
     bool releaseSettingExists = false;
     if (firstTimeSetup && !IsPortableMode())
     {
-#if defined(WT_BRANDING_PREVIEW) || defined(WT_BRANDING_CANARY)
+#if defined(WT_BRANDING_RELEASE) || defined(WT_BRANDING_PREVIEW) || defined(WT_BRANDING_CANARY)
         {
             try
             {
@@ -1650,12 +1675,12 @@ Json::Value CascadiaSettings::ToJson() const
     // top-level json object
     auto json{ _globals->ToJson() };
     // TODO(IntelligentTerminal): register these URLs on the aka.ms portal.
-    json["$help"] = "https://aka.ms/intelligentterminal/docs";
+    json["$help"] = "https://aka.ms/intelligent-terminal-docs";
     json["$schema"] =
 #if defined(WT_BRANDING_RELEASE)
-        "https://aka.ms/intelligentterminal/schema"
+        "https://aka.ms/terminal-profiles-schema"
 #elif defined(WT_BRANDING_PREVIEW)
-        "https://aka.ms/intelligentterminal/schema-preview"
+        "https://aka.ms/terminal-profiles-schema-preview"
 #elif !defined(NDEBUG) // DEBUG mode
         _getDevPathToSchema() // magic schema path that refers to the local source directory
 #else // All other brandings
@@ -1953,6 +1978,72 @@ void CascadiaSettings::LogSettingChanges(bool isJsonLoad) const
                               TraceLoggingValue(distribution, "Distribution"),
                               TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
                               TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
+        }
+    }
+
+    // ── Dedicated Intelligent Terminal telemetry ──
+    // Census-style events that report the *value* of AI-related settings.
+    // The generic JsonSettingsChanged / UISettingsChanged events above only
+    // record setting keys; these additional events let the pipeline know
+    // which agent provider / feature value each device has configured.
+    {
+        // Sanitize agent IDs: known product names are logged as-is;
+        // custom agent IDs may contain user file paths or commands,
+        // so we bucket those as "custom".
+        static const auto sanitizeProviderId = [](const winrt::hstring& id) -> std::string {
+            if (id == L"copilot" || id == L"claude" || id == L"codex" || id == L"gemini" || id == L"opencode")
+            {
+                return winrt::to_string(id);
+            }
+            return "custom";
+        };
+
+        const auto emitAgentProviderConfigured = [&](const char* providerType, const winrt::hstring& id) {
+            const auto sanitized = sanitizeProviderId(id);
+            TraceLoggingWrite(g_hSettingsModelProvider,
+                              "AgentProviderConfigured",
+                              TraceLoggingDescription("Event emitted when the user has an agent provider configured"),
+                              TraceLoggingValue(providerType, "ProviderType", "Which provider setting (AcpAgent or DelegateAgent)"),
+                              TraceLoggingValue(sanitized.c_str(), "ProviderId", "The agent provider ID"),
+                              TraceLoggingValue(branding, "Branding"),
+                              TraceLoggingValue(distribution, "Distribution"),
+                              TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
+                              TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
+        };
+        // Emit these census-style events based on the *effective* value at JSON
+        // load time, not on whether the setting was explicitly present in JSON.
+        // Since these settings have non-empty defaults, gating on `changes`
+        // would under-report the majority of devices that run with defaults.
+        if (isJsonLoad)
+        {
+            if (const auto acpAgent = _globals->AcpAgent(); !acpAgent.empty())
+            {
+                emitAgentProviderConfigured("AcpAgent", acpAgent);
+            }
+            if (const auto delegateAgent = _globals->DelegateAgent(); !delegateAgent.empty())
+            {
+                emitAgentProviderConfigured("DelegateAgent", delegateAgent);
+            }
+        }
+        const auto emitIntelligentFeatureConfigured = [&](const char* featureName, const wchar_t* featureValue) {
+            TraceLoggingWrite(g_hSettingsModelProvider,
+                              "IntelligentFeatureConfigured",
+                              TraceLoggingDescription("Event emitted when the user has an intelligent terminal feature configured"),
+                              TraceLoggingValue(featureName, "FeatureName", "The name of the feature"),
+                              TraceLoggingWideString(featureValue, "FeatureValue", "The configured value"),
+                              TraceLoggingValue(branding, "Branding"),
+                              TraceLoggingValue(distribution, "Distribution"),
+                              TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
+                              TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
+        };
+        if (isJsonLoad)
+        {
+            emitIntelligentFeatureConfigured("AutoErrorDetection", _globals->AutoErrorDetectionEnabled() ? L"true" : L"false");
+            emitIntelligentFeatureConfigured("AutoFix", _globals->AutoFixEnabled() ? L"true" : L"false");
+            if (const auto agentPanePosition = _globals->AgentPanePosition(); !agentPanePosition.empty())
+            {
+                emitIntelligentFeatureConfigured("AgentPanePosition", agentPanePosition.c_str());
+            }
         }
     }
 }

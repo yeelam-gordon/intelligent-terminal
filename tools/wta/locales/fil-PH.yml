@@ -1,29 +1,23 @@
 # Setup screen titles
-# {Locked="Intelligent Terminal"} - pangalan ng produkto, huwag isalin
-setup.title.first_run: "Maligayang pagdating sa Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "Hindi nahanap ang agent"
 setup.title.agent_error: "Nabigo ang koneksyon sa agent"
-setup.title.switch_agent: "Palitan ang agent"
 setup.title.not_available: "Hindi available ang agent"
 setup.title.sign_in: "Kailangang mag-sign in"
 
 # %{agent} ay pinapalitan ng display name ng agent sa runtime.
-setup.subtitle.copilot_missing: "Ang agent mong \"%{agent}\" ay hindi pa naka-install. Sundin ang mga hakbang sa ibaba para i-install ito. Para magpalit ng agent, pumunta sa Settings."
-setup.subtitle.agent_missing: "Ang agent mong \"%{agent}\" ay hindi pa naka-install. Mangyaring i-reinstall nang manu-mano, pagkatapos ay subukang muli. Para magpalit ng agent, pumunta sa Settings."
-setup.subtitle.copilot_auth: "Ang agent mong \"%{agent}\" ay nangangailangan ng authentication. Sundin ang mga hakbang sa ibaba para mag-sign in. Para magpalit ng agent, pumunta sa Settings."
-setup.subtitle.agent_auth: "Ang agent mong \"%{agent}\" ay nangangailangan ng authentication. Mangyaring mag-sign in sa pamamagitan ng agent CLI, pagkatapos ay subukang muli. Para magpalit ng agent, pumunta sa Settings."
+setup.subtitle.copilot_missing: "Ang agent mong \"%{agent}\" ay hindi pa naka-install. Sundin ang mga hakbang sa ibaba para i-install ito. Para magpalit ng agent, pumunta sa Matalinong Terminal Settings > Agent."
+setup.subtitle.agent_missing: "Ang agent mong \"%{agent}\" ay hindi pa naka-install. Mangyaring i-install nang manu-mano, pagkatapos ay subukang muli. Para magpalit ng agent, pumunta sa Matalinong Terminal Settings > Agent."
+setup.subtitle.copilot_auth: "Ang agent mong \"%{agent}\" ay nangangailangan ng authentication. Sundin ang mga hakbang sa ibaba para mag-sign in. Para magpalit ng agent, pumunta sa Matalinong Terminal Settings > Agent."
+setup.subtitle.agent_auth: "Ang agent mong \"%{agent}\" ay nangangailangan ng authentication. Mangyaring mag-sign in sa pamamagitan ng agent, pagkatapos ay piliin ang \"Naka-sign in na ako\" sa ibaba. Para magpalit ng agent, pumunta sa Matalinong Terminal Settings > Agent."
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "Pumili ng default na agent CLI na gusto mong gamitin sa Intelligent Terminal. Maaari kang"
-setup.description.fre_line2: "pumunta sa Settings para i-configure at i-set up ang iyong workspace."
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "I-reinstall ang %{agent}"
-setup.option.reinstall_hint: "(Awtomatikong mai-install)"
+setup.option.install: "I-install ang %{agent}"
+setup.option.install_hint: "(Awtomatikong mai-install)"
 setup.option.signin: "Mag-sign in sa %{agent}"
-setup.option.retry_detection: "Subukang muli ang detection"
-setup.option.retry_auth: "Naka-sign in na ako — subukang muli ang koneksyon"
-setup.option.retry_connection: "Subukang muli ang koneksyon"
-setup.option.switch_to: "Lumipat sa %{agent}"
+setup.option.retry_detection: "Subukang muli"
+setup.option.retry_auth: "Naka-sign in na ako — subukang kumonekta muli"
 setup.status.installing: "Ini-install..."
 setup.status.install_failed: "Nabigo ang pag-install: "
 setup.status.installing_winget: " Ini-install sa pamamagitan ng winget..."
@@ -35,25 +29,32 @@ auth.agent_selected_with_status: "Agent %{name} — "
 auth.checking_authentication: "  %{spinner} Sinusuri ang authentication..."
 auth.waiting_for_authorization: "  %{spinner} Naghihintay ng authorization..."
 auth.code_copied_hint: "  Nakopya ang code sa clipboard — i-paste ito sa iyong browser."
-auth.sign_in_prompt: "Mag-sign in para magamit ang iyong agent:"
+auth.device_code_prompt: "Bisitahin ang %{url} at ilagay ang code: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  Ikonekta ang %{name} para paganahin ang mga feature ng agent"
-auth.button_sign_in_github: "[ Mag-sign in gamit ang GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ Mag-sign in gamit ang %{name} ]"
-auth.hint_footer: "  Pindutin ang Enter para mag-sign in, Esc para bumalik"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  Enter para mag-sign in · E para sa GitHub Enterprise · Esc para bumalik"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Domain ng enterprise: "
+auth.enterprise_hint_footer: "  Enter para mag-sign in · Esc para gamitin ang github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Pindutin ang Enter para subukang muli, o Esc para gamitin ang github.com. Mga karaniwang sanhi: maling na-type o hindi maabot na domain, nag-expire na code, o walang access sa Copilot ang iyong account sa host na iyon."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Pindutin ang Enter para subukang muli, o Esc para bumalik."  # {Locked="Enter","Esc"}
 
 # ── Chat view (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Nag-iisip…"
-# {Locked="Intelligent Terminal"} - pangalan ng produkto, huwag isalin
-chat.welcome_title: "Maligayang pagdating sa Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "Maligayang pagdating sa Matalinong Terminal!"
+chat.welcome_disclaimer: "Gumagamit ang Matalinong Terminal ng AI. Suriin ang mga pagkakamali."
 chat.plan_header: "Plano:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "Awtomatikong na-diagnose ang kamakailang pagkabigo ng command"
+chat.turn_canceled: "(kinansela)"
+chat.turn_executed: "→ naisagawa: %{title}"
 
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "Magtanong ng kahit ano, / para sa mga command.."  # {Locked="/"}
 input.placeholder.connecting: "kumokonekta..."
 input.placeholder.disconnected: "nadiskonekta"
+input.image_attachments: "📎 Mga larawan: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Pending prompt queue (src/ui/queued_hint.rs, src/app.rs) ───────────────
 # Indicator shown above the input box while one or more prompts are queued
@@ -77,8 +78,8 @@ commands.help_escape_hint: "  //text     Magpadala ng literal na '/' (iniiwasan 
 commands.help_close_hint: "  Esc        Isara ang tulong na ito"  # {Locked="Esc"}
 
 # ── Recommendations panel (src/ui/recommendations.rs) ───────────────────────
-# {Locked="Enter","Esc","↵"} - key names and Return-key glyph, do not translate
-recommendations.nav_hint: "(↑ ↓ para mag-navigate • Enter para pumili • Esc para mag-cancel)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - key names and Return-key glyph, do not translate
+recommendations.nav_hint: "(↑ ↓ para mag-navigate • ← → para magpalit ng aksyon • Enter para pumili • Esc para mag-cancel)"
 recommendations.button_run_command: "[ Patakbuhin ang command ]"
 recommendations.button_insert_in_terminal: "Ilagay sa Terminal"
 recommendations.button_open_in_new_tab: "Buksan sa Bagong Tab ↵"
@@ -102,9 +103,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N para sumagot · i-resize para sa buong card]"  # {Locked="Y/N"}
 
 # ── Agent status (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "Hindi pa naka-install — piliin para awtomatikong mai-install"
 agent.status.not_found: "Hindi nahanap"
-agent.status.detected: "Na-detect"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - tool names and command, must run verbatim
 agent.install.running_winget: "Pinapatakbo: winget install GitHub.Copilot"
 agent.install.launch_failed: "Hindi mailunsad ang winget: %{error}"
@@ -115,25 +114,46 @@ agent.custom.auth_hint: "Tiyaking naka-install ang %{name} at nasa iyong PATH." 
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Naglo-load..."
-# {Locked="Enter","Shift+enter","Esc"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ para mag-navigate • Enter para magbukas ng session sa bagong tab • Shift+enter para magbukas ng session sa agent pane • Esc para lumabas)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ para mag-navigate • Enter para magbukas ng session • Esc para lumabas • F5 para mag-refresh • / para maghanap)"
 agents.status.active: "Aktibo"
 agents.status.waiting_for_input: "Naghihintay ng input"
 agents.status.error: "May error"
 agents.status.idle: "Walang ginagawa"
 
 # ── Layout welcome hint (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. para ipakita/itago ang agent pane • Ctrl+Alt+/ para ipakita/itago ang agent session)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. para ipakita/itago ang agent pane • Ctrl+Shift+/ para ipakita/itago ang agent session)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
 connection.starting: "Sinisimulan ang agent..."
 connection.reconnecting: "Kumokonekta muli..."
+connection.connecting_activity: "Kumokonekta sa agent…"
+connection.lost: "Nawala ang koneksyon sa agent. I-type ang /restart para kumonektang muli."  # {Locked="/restart"}
 
 # ── System messages (src/app.rs) ────────────────────────────────────────────
+system.close_pane_hint: "Pindutin muli ang Ctrl+C para isara ang pane"  # {Locked="Ctrl+C"}
+system.selection_copied: "Nakopya"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "Kinansela."
 system.no_prompt_in_flight: "Walang prompt na kasalukuyang pinapatakbo."
 system.authentication_failed: "Nabigo ang authentication"
-system.command_copied_retry: "Nakopya ang command — patakbuhin sa ibang terminal, pagkatapos ay pindutin ang Enter para subukang muli"  # {Locked="Enter"}
+system.stopped_max_tokens: "Naputol ang tugon pagkatapos maabot ang limitasyon sa output ng modelo."
+system.stopped_max_turn_requests: "Huminto ang ahente pagkatapos maabot ang limitasyon nito sa kahilingan para sa pagliko na ito."
+system.stopped_refusal: "Tumanggi ang ahente na ipagpatuloy ang kahilingang ito."
+system.agent_busy: "Abala ang agent sa tab na ito — hintaying matapos ang kasalukuyang prompt."
+system.image_clipboard_empty: "Walang larawang ipa-paste sa clipboard."
+system.image_not_supported: "Hindi sinusuportahan ng agent na ito ang image input."
+system.image_pasted: "Naka-attach ang larawan (%{label}). Pindutin ang Enter para ipadala."  # {Locked="%{label}","Enter"}
+system.resuming_session: "Ipinagpapatuloy ang session %{session_id}..."
+system.unknown_command: "Hindi kilalang command \"%{command}\" — ipinadala bilang prompt. I-type ang /help para sa listahan."  # {Locked="/help"}
+system.busy_use_stop: "Hintaying matapos ang kasalukuyang prompt, o mag-/stop muna."  # {Locked="/stop"}
+system.cannot_focus_session: "Hindi ma-focus ang session %{session_id}: mukhang live ito pero wala pang naka-bind na pane GUID. Subukan muli pagkalipas ng ilang sandali."
+system.cannot_resume_no_load_session: "Hindi maipagpatuloy sa agent pane: hindi in-advertise ng %{agent} ang ACP `loadSession` capability. Pindutin ang Enter (nang walang Shift) para ipagpatuloy na lang sa bagong terminal pane."  # {Locked="ACP","loadSession","Enter","Shift"}
+system.cannot_resume_no_resume_flag: "Hindi maipagpatuloy ang %{agent} session: walang `--resume`-style flag ang agent na ito. Pindutin ang Shift+Enter para subukang ipagpatuloy sa loob ng agent pane sa pamamagitan ng ACP."  # {Locked="--resume","Shift","Enter","ACP"}
+system.cannot_resume_unknown_agent: "Hindi maipagpatuloy ang session %{session_id}: hindi kilala ng build na ito ang source agent nito."
+system.cannot_resume_phantom_via_flag: "Hindi maipagpatuloy ang %{agent} session %{session_id}: nagsimula ito pero hindi kailanman nakaipon ng anumang pag-uusap, kaya tatanggihan ng %{agent} mismo ang resume. Inaalis ang row."
+system.cannot_resume_phantom_via_load: "Hindi maipagpatuloy ang %{agent} session %{session_id}: nagsimula ito pero hindi kailanman nakaipon ng anumang pag-uusap, kaya tatanggihan ng %{agent} ang load. Inaalis ang row."
+system.fallback.this_agent: "ang agent na ito"
+system.fallback.connected_agent: "ang nakakonektang agent"
 
 # ── Runtime CLI output (src/main.rs) ────────────────────────────────────────
 output.no_windows: "Walang nahanap na window."
@@ -171,3 +191,45 @@ hooks.installed_but_disabled: "⚠ naka-install pero naka-disable"
 hooks.not_installed: "✗ hindi naka-install"
 hooks.uninstall_skipped: "nilaktawan (wala ang CLI sa PATH)"
 hooks.install_attempted: "Sinubukang i-install ang wt-agent-hooks (idempotent). Patakbuhin ang `wta hooks status` para suriin ang resulta. Trace log: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+
+# ── Relative time and date formatting ─────────────────────────────────────
+time.just_now: "ngayon lang"
+time.minute_singular: "%{count} minuto ang nakalipas"
+time.minutes_other: "%{count} minuto ang nakalipas"
+time.hour_singular: "%{count} oras ang nakalipas"
+time.hours_other: "%{count} oras ang nakalipas"
+time.day_singular: "%{count} araw ang nakalipas"
+time.days_other: "%{count} araw ang nakalipas"
+
+# ── Slash-command summaries (src/commands.rs) ─────────────────────────────
+# Command names (/help, /clear, etc.) stay English; descriptions translate.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "Show this command list"
+commands.clear.summary: "Clear the chat scrollback (keeps session)"
+commands.new.summary: "Start a fresh ACP session (drops history)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "Restart agent"
+commands.stop.summary: "Cancel the in-flight prompt"
+commands.sessions.summary: "Open the historical sessions picker (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "Piliin ang agent para sa tab na ito (/agent <id> para magpalit nang diretso)"  # {Locked="/agent","<id>"}
+
+# ── Pagpapatupad ng rekomendasyon (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "Nabigo ang pagpipiliang %{choice}: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "Pumili ng agent (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "Walang nahanap na available na CLI ng agent sa machine na ito."  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "Hindi kilala o hindi available na agent %{agent} — i-type ang /agent para makita ang available na listahan."  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "Hindi available ang paglipat ng agent sa labas ng tab ng Windows Terminal."
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "Piliin ang modelo para sa pane na ito (/model <id> para magpalit nang diretso)"  # {Locked="/model","<id>"}
+commands.move.summary: "Ilipat ang agent pane ng tab na ito (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "Pumili ng modelo (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "Hindi nag-advertise ang nakakonektang agent ng anumang napipiling modelo."
+system.model_set: "Itinakda sa %{model} ang modelo para sa pane na ito."  # {Locked="%{model}"}
+system.model_unknown: "Hindi kilalang modelo %{model} — i-type ang /model para makita ang available na listahan."  # {Locked="%{model}","/model"}

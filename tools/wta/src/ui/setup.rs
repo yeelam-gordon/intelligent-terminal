@@ -8,9 +8,13 @@ const SPINNER: &[char] = &[
     '\u{2827}', '\u{2807}', '\u{280F}',
 ];
 
-// Figma: rgba(255,255,255,0.6) ≈ #999999
-const DIM_TEXT: Style = Style::new().fg(Color::Rgb(153, 153, 153));
-const SELECTED_COLOR: Color = Color::Rgb(96, 205, 255);
+// Muted secondary text. Dimmed default fg (not a fixed gray) so it tracks the
+// color scheme and stays readable on light schemes (#234). Figma reference was
+// rgba(255,255,255,0.6) ≈ #999999, which only worked on a dark background.
+const DIM_TEXT: Style = Style::new().fg(Color::Reset).add_modifier(Modifier::DIM);
+// Named ANSI (not fixed RGB) so the selection accent follows the color scheme
+// and stays readable on light schemes (#234).
+const SELECTED_COLOR: Color = Color::Cyan;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let setup = match &app.setup {
@@ -31,15 +35,15 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // Title — bold white with bullet
+    // Title — bold, scheme default foreground, with bullet
     lines.push(Line::from(vec![
         Span::styled(
             "\u{25CF} ",
-            Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             &setup.title,
-            Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::new().fg(Color::Reset).add_modifier(Modifier::BOLD),
         ),
     ]));
 
@@ -51,21 +55,6 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     // Blank line
     lines.push(Line::from(""));
-
-    // Description for FRE
-    if setup.reason == crate::app::SetupReason::FirstRun
-        || setup.reason == crate::app::SetupReason::SwitchAgent
-    {
-        lines.push(Line::from(Span::styled(
-            format!("  {}", t!("setup.description.fre_line1")),
-            DIM_TEXT,
-        )));
-        lines.push(Line::from(Span::styled(
-            format!("  {}", t!("setup.description.fre_line2")),
-            DIM_TEXT,
-        )));
-        lines.push(Line::from(""));
-    }
 
     // Info messages (e.g. "Copied to clipboard") — shown before options
     if !setup.install_in_progress && setup.install_error.is_none() && !setup.install_log.is_empty() {
@@ -87,52 +76,36 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         let is_selected = i == setup.selected_index;
 
         let (label, status_text) = match opt {
-            SetupOption::SelectAgent { agent } => {
-                let is_installing = setup.install_in_progress
-                    && agent.can_auto_install()
-                    && !agent.cli_found;
-                let status = if is_installing {
-                    format!("  {} {}", spinner_char, t!("setup.status.installing"))
-                } else {
-                    format!("  ({})", agent.status_label())
-                };
-                (agent.display_name.clone(), status)
+            SetupOption::ChooseAgentSource => {
+                (t!("agent_picker.title").into_owned(), String::new())
             }
-            SetupOption::Reinstall { display_name, .. } => {
+            SetupOption::Install { display_name, .. } => {
                 let status = if setup.install_in_progress {
                     format!("  {} {}", spinner_char, t!("setup.status.installing"))
                 } else {
-                    format!("  {}", t!("setup.option.reinstall_hint"))
+                    format!("  {}", t!("setup.option.install_hint"))
                 };
-                (t!("setup.option.reinstall", agent = display_name.as_str()).into_owned(), status)
+                (t!("setup.option.install", agent = display_name.as_str()).into_owned(), status)
             }
             SetupOption::SignIn { display_name, .. } => {
                 (t!("setup.option.signin", agent = display_name.as_str()).into_owned(), String::new())
             }
-            SetupOption::SwitchAgent { agent } => (
-                t!("setup.option.switch_to", agent = agent.display_name.as_str()).into_owned(),
-                format!("  ({})", agent.status_label()),
-            ),
             SetupOption::Retry => {
                 let label = match setup.reason {
                     crate::app::SetupReason::AgentMissing => t!("setup.option.retry_detection").into_owned(),
                     crate::app::SetupReason::AgentError => t!("setup.option.retry_auth").into_owned(),
-                    _ => t!("setup.option.retry_connection").into_owned(),
                 };
                 (label, String::new())
             }
         };
 
-        let is_installing_select = matches!(opt, SetupOption::SelectAgent { ref agent } if
-            setup.install_in_progress && agent.can_auto_install() && !agent.cli_found);
-        let is_installing_opt = is_installing_select
-            || (matches!(opt, SetupOption::Reinstall { .. }) && setup.install_in_progress);
+        let is_installing_opt = matches!(opt, SetupOption::Install { .. }) && setup.install_in_progress;
         let status_style = if is_installing_opt {
             Style::new().fg(Color::Yellow)
         } else if is_selected {
             Style::new().fg(SELECTED_COLOR)
         } else {
-            Style::new().fg(Color::White)
+            Style::new().fg(Color::Reset)
         };
 
         if is_selected {
@@ -149,7 +122,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             lines.push(Line::from(vec![
                 Span::raw("    "),
-                Span::styled(label, Style::new().fg(Color::White)),
+                Span::styled(label, Style::new().fg(Color::Reset)),
                 Span::styled(status_text, status_style),
             ]));
         }
@@ -166,7 +139,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Span::styled(
                 t!("setup.status.installing_winget").into_owned(),
-                Style::new().fg(Color::White),
+                Style::new().fg(Color::Reset),
             ),
         ]));
         for log_line in setup.install_log.iter() {
@@ -202,6 +175,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let paragraph = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
+    let paragraph = Paragraph::new(lines)
+        .alignment(crate::rtl::text_alignment())
+        .wrap(ratatui::widgets::Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }

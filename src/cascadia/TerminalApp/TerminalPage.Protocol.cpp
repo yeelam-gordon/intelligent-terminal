@@ -153,6 +153,8 @@ namespace winrt::TerminalApp::implementation
         if (const auto termControl = effectivePane->GetTerminalControl())
         {
             result.Cwd = termControl.WorkingDirectory();
+            result.Shell = termControl.ShellName();
+            result.ShellVersion = termControl.ShellVersion();
         }
 
         result.Pid = _getPidFromPane(effectivePane);
@@ -256,6 +258,8 @@ namespace winrt::TerminalApp::implementation
                         info.Rows = termControl.ViewHeight();
                         info.Columns = 0;
                         info.Cwd = termControl.WorkingDirectory();
+                        info.Shell = termControl.ShellName();
+                        info.ShellVersion = termControl.ShellVersion();
                     }
                 }
 
@@ -562,6 +566,43 @@ namespace winrt::TerminalApp::implementation
 
         Protocol::TabCreationResult result{};
 
+        // A protocol create_tab that carries a commandline but no profile would
+        // otherwise resolve (via CascadiaSettings::GetProfileForArgs) to the
+        // "Defaults" profile, whose panes are auto-closed on *any* process exit
+        // — even a non-zero one. So a command that runs and exits (e.g. a
+        // misconfigured delegate agent that prints "'x' is not recognized" and
+        // exits with code 1) flashes the tab shut before the user can read the
+        // error. Pin a real profile instead so its closeOnExit (automatic/
+        // graceful) keeps a non-zero exit visible, exactly like a normally-
+        // opened tab.
+        //
+        // Prefer the profile of the pane the user is currently working in, so a
+        // delegate/agent tab opened from e.g. a WSL/Ubuntu session matches that
+        // session (same intent as PR #366); fall back to the user's global
+        // default profile when there is no focused terminal. Either way this is
+        // never left empty — that's what re-introduces the auto-closing
+        // "Defaults" profile.
+        //
+        // Scope this narrowly to the case that actually hits the bug: a
+        // commandline with no explicit profile selection. A caller that omits
+        // the commandline already lands on the user's real default profile (not
+        // the auto-closing "Defaults"), and one that asked for a profile by name
+        // or index must keep it — so those are left untouched. If the resolved
+        // GUID somehow can't be matched, GetProfileForArgs falls back to the
+        // same "Defaults" profile as before (no regression).
+        if (args && !args.Commandline().empty() && args.Profile().empty() && !args.ProfileIndex())
+        {
+            auto profileGuid = _settings.GlobalSettings().DefaultProfile();
+            if (const auto focusedTab = _GetFocusedTabImpl())
+            {
+                if (const auto focusedProfile = focusedTab->GetFocusedProfile())
+                {
+                    profileGuid = focusedProfile.Guid();
+                }
+            }
+            args.Profile(::Microsoft::Console::Utils::GuidToString(profileGuid));
+        }
+
         auto pane = _MakePane(args, nullptr);
         if (!pane)
             co_return result;
@@ -728,7 +769,62 @@ namespace winrt::TerminalApp::implementation
             if (!paneId)
                 co_return false;
 
+            // Bring this window to the foreground. `focus_pane` can target a
+            // pane that lives in a *different* window than the one driving the
+            // request (e.g. Enter on a session in window B whose pane lives in
+            // window A). The `_SetFocusedTab` / `FocusPane` calls below only
+            // move XAML focus *within* this window — they don't activate the OS
+            // window, and when the target pane is already the focused pane here
+            // they no-op entirely. Without an explicit summon the window would
+            // then stay in the background whenever it happened to already have
+            // the target pane focused, while working only when focus actually
+            // transitioned (an accidental side effect). Raising
+            // `SummonWindowRequested` mirrors the desktop-notification
+            // activation path (TabManagement.cpp) and makes `focus_pane`
+            // reliably surface the window regardless of its prior focus state.
+            SummonWindowRequested.raise(nullptr, nullptr);
+
             _SetFocusedTab(tab);
+
+            // The pane may be a currently-stashed agent pane (Ctrl+Shift+. /
+            // openAgentPane toggle). `FindPaneBySessionId` happily returns
+            // hidden panes (HidePane only collapses the XAML layout, it
+            // doesn't detach from the parent's _firstChild/_secondChild
+            // tree), but `FocusPane` → `_Focus()` on a hidden TermControl
+            // silently drops because the element isn't in the visual tree.
+            // Detect that case and route through `RestoreStashedAgentPane`,
+            // which re-adds the pane to the XAML tree and schedules a
+            // low-priority Focus() so the freshly re-parented TermControl
+            // actually receives focus.
+            if (foundPane->IsHidden())
+            {
+                const auto splitDir = _AgentPanePositionToSplitDirection(_settings.GlobalSettings().AgentPanePosition());
+                if (tabImpl->RestoreStashedAgentPane(splitDir))
+                {
+                    // Mirror the unstash to wta so wta's tab.pane_open
+                    // state stays in sync. Without this, the
+                    // `_SetFocusedTab(tab)` above triggers a `tab_changed`
+                    // round-trip whose echo (`agent_state_changed` with
+                    // the stale `pane_open=false`) lands in
+                    // `OnAgentStateChanged` and immediately re-stashes
+                    // the pane we just restored. Matches the unstash
+                    // path in `_OpenOrReuseAgentPane`
+                    // (TerminalPage.cpp:2510-2518).
+                    //
+                    // View is intentionally left as nullopt: focus_pane
+                    // is a "go look at this session" gesture, not a
+                    // chat/sessions view switch, so we let wta echo back
+                    // whichever view the pane was last in.
+                    _RequestAgentStateForTab(tabImpl, std::nullopt, /*pane_open*/ true);
+                    co_return true;
+                }
+                // Restore precondition failed (e.g. agent pane is the root
+                // pane, so there's no parent to fold into). Fall through to
+                // the legacy focus path — it will no-op visually but won't
+                // crash, and the caller will at least observe a `false`
+                // return and can decide to escalate (e.g. open a new pane).
+            }
+
             if (!tabImpl->FocusPane(paneId.value()))
                 co_return false;
 

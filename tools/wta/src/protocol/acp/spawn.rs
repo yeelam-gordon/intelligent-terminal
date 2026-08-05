@@ -1,16 +1,171 @@
 //! Shared agent-process spawn logic for the ACP layer.
 //!
-//! Both [`super::client::run_inner`] and [`super::probe::probe_models`]
-//! need to spawn an ACP agent the same way: parse the user-facing
-//! cmdline, resolve bare names via [`crate::agent_registry`], optionally
-//! wrap in `cmd /c`, scrub `CLAUDECODE`, and pipe stdio with
-//! `kill_on_drop`. They diverge only after `spawn()` — the full client
-//! wraps stdio with instrumentation and drives a prompt loop; the probe
-//! attaches raw stdio, runs `initialize` + `new_session`, and exits.
+//! Both [`crate::master`] (spawning the shared agent CLI) and
+//! [`super::probe::probe_models`] need to spawn an ACP agent the same
+//! way: parse the user-facing cmdline, resolve bare names via
+//! [`crate::agent_registry`], optionally wrap in `cmd /c`, scrub the
+//! claude-code-acp guard env var, and pipe stdio with `kill_on_drop`.
+//! They diverge only after `spawn()` — master drives a full prompt loop
+//! over the helper pipes; the probe attaches raw stdio, runs `initialize`
+//! + `new_session`, and exits.
 
-use std::path::Path;
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
+use tokio::io::{AsyncBufReadExt, BufReader};
+
+const STARTUP_STDERR_MAX_LINES: usize = 32;
+const STARTUP_STDERR_MAX_CHARS_PER_LINE: usize = 1024;
+const STARTUP_STDERR_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StderrPhase {
+    Startup,
+    Running,
+    Failed,
+}
+
+#[derive(Debug)]
+struct AgentStderrLogInner {
+    phase: StderrPhase,
+    startup_lines: VecDeque<String>,
+}
+
+/// Keeps routine agent stderr at debug level while preserving startup failures
+/// in release logs. Only the bounded pre-initialize buffer is promoted.
+#[derive(Clone)]
+pub(crate) struct AgentStderrLog {
+    agent: Arc<str>,
+    inner: Arc<Mutex<AgentStderrLogInner>>,
+}
+
+impl AgentStderrLog {
+    pub(crate) fn new(agent: impl Into<Arc<str>>) -> Self {
+        Self {
+            agent: agent.into(),
+            inner: Arc::new(Mutex::new(AgentStderrLogInner {
+                phase: StderrPhase::Startup,
+                startup_lines: VecDeque::with_capacity(STARTUP_STDERR_MAX_LINES),
+            })),
+        }
+    }
+
+    pub(crate) fn drain(&self, stderr: tokio::process::ChildStderr) -> tokio::task::JoinHandle<()> {
+        let log = self.clone();
+        tokio::task::spawn_local(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => log.log_line(&line),
+                    Ok(None) => break,
+                    Err(error) => {
+                        log.log_line(&format!("failed to read agent stderr: {error}"));
+                        break;
+                    }
+                }
+            }
+        })
+    }
+
+    pub(crate) async fn finish_failed_startup(
+        &self,
+        child: &mut tokio::process::Child,
+        stderr_task: Option<tokio::task::JoinHandle<()>>,
+    ) {
+        let _ = child.start_kill();
+        if let Some(mut stderr_task) = stderr_task {
+            if tokio::time::timeout(STARTUP_STDERR_DRAIN_TIMEOUT, &mut stderr_task)
+                .await
+                .is_err()
+            {
+                stderr_task.abort();
+                let _ = stderr_task.await;
+            }
+        }
+        self.mark_failed();
+    }
+
+    pub(crate) fn mark_initialized(&self) {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        inner.phase = StderrPhase::Running;
+        inner.startup_lines.clear();
+    }
+
+    pub(crate) fn mark_failed(&self) {
+        let startup_lines = {
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if inner.phase != StderrPhase::Startup {
+                return;
+            }
+            inner.phase = StderrPhase::Failed;
+            inner.startup_lines.drain(..).collect::<Vec<_>>()
+        };
+
+        if !startup_lines.is_empty() {
+            tracing::warn!(
+                target: "agent_stderr",
+                agent = %self.agent,
+                phase = "startup_failure",
+                captured_lines = startup_lines.len(),
+                "agent startup failed; promoting captured stderr"
+            );
+        }
+        for line in startup_lines {
+            tracing::warn!(
+                target: "agent_stderr",
+                agent = %self.agent,
+                phase = "startup_failure",
+                "{line}"
+            );
+        }
+    }
+
+    fn log_line(&self, line: &str) {
+        {
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match inner.phase {
+                StderrPhase::Startup => {
+                    if inner.startup_lines.len() == STARTUP_STDERR_MAX_LINES {
+                        inner.startup_lines.pop_front();
+                    }
+                    inner.startup_lines.push_back(truncate_stderr_line(line));
+                }
+                StderrPhase::Running | StderrPhase::Failed => {}
+            }
+        }
+
+        tracing::debug!(target: "agent_stderr", agent = %self.agent, "{line}");
+    }
+}
+
+fn truncate_stderr_line(line: &str) -> String {
+    const ELLIPSIS: &str = "...";
+
+    if line.chars().count() <= STARTUP_STDERR_MAX_CHARS_PER_LINE {
+        return line.to_string();
+    }
+
+    let mut truncated = line
+        .chars()
+        .take(STARTUP_STDERR_MAX_CHARS_PER_LINE - ELLIPSIS.chars().count())
+        .collect::<String>();
+    truncated.push_str(ELLIPSIS);
+    truncated
+}
 
 pub(crate) struct AgentSpawn {
     pub child: tokio::process::Child,
@@ -31,9 +186,7 @@ impl AgentSpawn {
     /// Human-readable agent label for error messages. Prefers the npx
     /// adapter package id when present.
     pub fn label(&self) -> &str {
-        self.adapter_package
-            .as_deref()
-            .unwrap_or(&self.raw_program)
+        self.adapter_package.as_deref().unwrap_or(&self.raw_program)
     }
 }
 
@@ -65,16 +218,94 @@ pub(crate) fn spawn_agent_process(agent_cmd: &str, cwd: Option<&Path>) -> Result
         None
     };
 
-    let program = if needs_cmd { "cmd" } else { resolved_program.as_str() };
+    let program = if needs_cmd {
+        "cmd"
+    } else {
+        resolved_program.as_str()
+    };
     let mut cmd = tokio::process::Command::new(program);
     if needs_cmd {
         cmd.arg("/c").arg(&resolved_program);
     }
-    // claude-code-acp refuses to start when CLAUDECODE=1 is set — that
-    // guard exists to block recursive `claude` shells from sharing
-    // runtime, but doesn't apply to an ACP host. Scrub unconditionally;
-    // other agents don't care.
+
+    // The claude-code-acp adapter refuses to start when its recursion-
+    // guard env var is set — that guard exists to block recursive
+    // `claude` shells from sharing runtime, but doesn't apply to an
+    // ACP host. Scrub unconditionally; other agents don't care.
     cmd.env_remove("CLAUDECODE");
+
+    // Give the agent CLI a fresh PATH and make this package's `wta.exe`
+    // App Execution Alias the first match. The package-specific alias directory
+    // avoids collisions when Dev, Preview, and Store builds are installed
+    // together. Unpackaged builds prepend the running binary's directory.
+    //
+    // The agent's tool shells inherit this environment, so prompt contracts can
+    // invoke short `wta.exe` while still selecting this exact WTA installation.
+    let base_path = crate::agent_check::spawn_path()
+        .map(std::ffi::OsString::from)
+        .or_else(|| std::env::var_os("PATH"));
+    if let Some(base_path) = base_path.as_ref() {
+        cmd.env("PATH", base_path);
+    }
+    match wta_cli_directory().and_then(|directory| {
+        prepend_directory_to_path(&directory, base_path.as_deref().unwrap_or_default())
+    }) {
+        Ok(path) => {
+            cmd.env("PATH", path);
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "acp.spawn",
+                %error,
+                "wta_cli_alias_path_unavailable"
+            );
+        }
+    }
+    cmd.env("WTA_CLI_PATH", wta_cli_directory()?.join("wta.exe"));
+
+    // Tell the agent CLI's hook scripts (`send-event.ps1`, inherited via the
+    // CLI → node → powershell process chain) where to write their diagnostic
+    // trace. PowerShell can't resolve our package-private log dir on its own
+    // (it only sees the un-redirected `%LOCALAPPDATA%`, and doesn't know the
+    // package family name), so we hand it the already-resolved path. The hook
+    // falls back to bare `%LOCALAPPDATA%\IntelligentTerminal\logs` when this
+    // is unset (unpackaged dev runs, or an older wta that didn't set it).
+    // Versioned dir (`logs\<pkgver>\`) via the shared resolver so the hooks'
+    // `hook-trace.log` lands alongside this build's Rust + C++ logs.
+    cmd.env("WTA_HOOK_LOG_DIR", crate::logging::log_dir());
+
+    // Forward the user's locale to the agent process via standard POSIX
+    // environment variables. Many agent CLIs (and the large language models
+    // they speak to) honor `LANG` / `LC_ALL` to choose their response
+    // language. We keep the ACP wire format itself untouched — this is
+    // purely a hint for the agent's response language. Format:
+    // `<lang>_<REGION>.UTF-8` (BCP-47 with dashes converted to underscores;
+    // language lowercase, 2-letter region uppercase, plus UTF-8 codeset).
+    //
+    // Don't override the user's own locale env vars: if the user has
+    // intentionally pinned `LANG` or `LC_ALL` in their shell (e.g. to
+    // get an English-only Copilot response while running a zh-CN UI),
+    // respect that. Only set what's missing.
+    //
+    // Pseudo-locales (`qps-ploc*`) are UI-only and not real BCP-47 tags;
+    // forwarding them verbatim would make agent CLIs warn or fall back.
+    // Map them to en_US.UTF-8 so the agent gets a real locale.
+    {
+        let current_locale = rust_i18n::locale().to_string();
+        if !current_locale.is_empty() {
+            let posix_locale = if current_locale.starts_with("qps-") {
+                "en_US.UTF-8".to_string()
+            } else {
+                canonicalize_posix_locale(&current_locale)
+            };
+            if std::env::var_os("LANG").is_none() {
+                cmd.env("LANG", &posix_locale);
+            }
+            if std::env::var_os("LC_ALL").is_none() {
+                cmd.env("LC_ALL", &posix_locale);
+            }
+        }
+    }
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
@@ -94,4 +325,314 @@ pub(crate) fn spawn_agent_process(agent_cmd: &str, cwd: Option<&Path>) -> Result
         is_npx,
         adapter_package,
     })
+}
+
+fn wta_cli_directory() -> Result<PathBuf> {
+    let package_family = crate::runtime_paths::current_package_family_name();
+    let local_app_data = std::env::var_os("LOCALAPPDATA");
+    let current_exe =
+        std::env::current_exe().context("failed to resolve the running wta executable")?;
+    wta_cli_directory_for(
+        package_family.as_deref(),
+        local_app_data.as_deref(),
+        &current_exe,
+    )
+}
+
+fn wta_cli_directory_for(
+    package_family: Option<&std::ffi::OsStr>,
+    local_app_data: Option<&std::ffi::OsStr>,
+    current_exe: &Path,
+) -> Result<PathBuf> {
+    if let Some(package_family) = package_family {
+        let local_app_data = local_app_data
+            .context("LOCALAPPDATA is required to resolve the packaged wta execution alias")?;
+        return Ok(PathBuf::from(local_app_data)
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join(package_family));
+    }
+
+    current_exe
+        .parent()
+        .map(Path::to_path_buf)
+        .context("running wta executable has no parent directory")
+}
+
+fn prepend_directory_to_path(
+    directory: &Path,
+    base_path: &std::ffi::OsStr,
+) -> Result<std::ffi::OsString> {
+    std::env::join_paths(
+        std::iter::once(directory.to_path_buf()).chain(std::env::split_paths(base_path)),
+    )
+    .context("failed to prepend the wta CLI directory to the agent PATH")
+}
+
+/// Spawn an ACP agent in the selected per-tab execution source.
+pub(crate) fn spawn_agent_process_for_source(
+    agent_cmd: &str,
+    cwd: Option<&Path>,
+    source: &crate::agent_source::AgentSource,
+) -> Result<AgentSpawn> {
+    match source {
+        crate::agent_source::AgentSource::Host => spawn_agent_process(agent_cmd, cwd),
+        crate::agent_source::AgentSource::Wsl { distro } => {
+            spawn_wsl_agent_process(agent_cmd, distro)
+        }
+    }
+}
+
+fn spawn_wsl_agent_process(agent_cmd: &str, distro: &str) -> Result<AgentSpawn> {
+    let parts = crate::coordinator::split_windows_commandline(agent_cmd);
+    let raw_program = parts
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("empty agent command"))?;
+    let is_npx = ["npx", "npx.cmd", "npx.exe"]
+        .iter()
+        .any(|name| raw_program.eq_ignore_ascii_case(name));
+    let adapter_package = is_npx
+        .then(|| parts.iter().find(|arg| arg.starts_with('@')).cloned())
+        .flatten();
+    let script = wsl_agent_launch_script(&parts);
+
+    let mut command = tokio::process::Command::new("wsl.exe");
+    command
+        .arg("-d")
+        .arg(distro)
+        .arg("--")
+        .arg("bash")
+        .arg("--noprofile")
+        .arg("--norc")
+        .arg("-c")
+        .arg(script)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let child = command.spawn().map_err(|error| {
+            anyhow!(
+                "failed to spawn agent '{}' in WSL distro '{}': {}",
+                agent_cmd,
+                distro,
+                error
+            )
+        })?;
+
+    Ok(AgentSpawn {
+        child,
+        raw_program,
+        resolved_program: format!("wsl.exe -d {distro}"),
+        is_npx,
+        adapter_package,
+    })
+}
+
+fn wsl_agent_launch_script(parts: &[String]) -> String {
+    let invocation = parts
+        .iter()
+        .map(|part| crate::coordinator::sh_quote(part))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let inner = format!("exec 1>&3 3>&-; unset CLAUDECODE; exec {invocation}");
+    format!(
+        "bash -lc {} 3>&1 >/dev/null",
+        crate::coordinator::sh_quote(&inner)
+    )
+}
+
+/// Convert a BCP-47 locale tag (e.g. `zh-CN`, `gd-gb`) to the POSIX
+/// `LANG`/`LC_ALL` form (e.g. `zh_CN.UTF-8`, `gd_GB.UTF-8`).
+///
+/// POSIX runtimes expect language lowercase + region uppercase (e.g.
+/// `gd_GB.UTF-8`, not `gd_gb.UTF-8`). Our locale folder names are
+/// canonical BCP-47 except for a few inconsistencies like `gd-gb` —
+/// canonicalize defensively rather than depending on every locale file
+/// being named correctly.
+///
+/// Rules:
+/// - Split on `-`. First segment is always the language, lowercased.
+/// - Two-letter segments after the first are treated as ISO 3166-1
+///   region codes and converted to uppercase.
+/// - Four-letter segments are treated as ISO 15924 script codes and
+///   title-cased (e.g. `Latn`, `Cyrl`).
+/// - Anything else (numeric region, variant) is left as-is.
+/// - Joined with `_` per POSIX convention; UTF-8 codeset appended.
+fn canonicalize_posix_locale(tag: &str) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(3);
+    for (i, seg) in tag.split('-').enumerate() {
+        if i == 0 {
+            parts.push(seg.to_lowercase());
+        } else if seg.len() == 2 && seg.chars().all(|c| c.is_ascii_alphabetic()) {
+            parts.push(seg.to_uppercase());
+        } else if seg.len() == 4 && seg.chars().all(|c| c.is_ascii_alphabetic()) {
+            let mut chars = seg.chars();
+            let first = chars.next().unwrap().to_ascii_uppercase();
+            let rest: String = chars.map(|c| c.to_ascii_lowercase()).collect();
+            parts.push(format!("{}{}", first, rest));
+        } else {
+            parts.push(seg.to_string());
+        }
+    }
+    format!("{}.UTF-8", parts.join("_"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packaged_wta_cli_uses_package_specific_execution_alias() {
+        let directory = wta_cli_directory_for(
+            Some(std::ffi::OsStr::new("IntelligentTerminal_test")),
+            Some(std::ffi::OsStr::new(r"C:\Users\test\AppData\Local")),
+            Path::new(r"C:\Program Files\WindowsApps\package\wta.exe"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            directory,
+            PathBuf::from(
+                r"C:\Users\test\AppData\Local\Microsoft\WindowsApps\IntelligentTerminal_test"
+            )
+        );
+    }
+
+    #[test]
+    fn unpackaged_wta_cli_uses_running_executable_directory() {
+        let current_exe = Path::new(r"C:\src\wta\target\debug\wta.exe");
+        let directory = wta_cli_directory_for(None, None, current_exe).unwrap();
+
+        assert_eq!(directory, PathBuf::from(r"C:\src\wta\target\debug"));
+    }
+
+    #[test]
+    fn wta_cli_directory_is_first_on_agent_path() {
+        let directory = Path::new(r"C:\package-alias");
+        let path = prepend_directory_to_path(
+            directory,
+            std::ffi::OsStr::new(r"C:\Windows\System32;C:\Tools"),
+        )
+        .unwrap();
+        let entries = std::env::split_paths(&path).collect::<Vec<_>>();
+
+        assert_eq!(entries[0], directory);
+        assert_eq!(entries[1], Path::new(r"C:\Windows\System32"));
+        assert_eq!(entries[2], Path::new(r"C:\Tools"));
+    }
+
+    #[test]
+    fn wsl_launch_script_quotes_every_agent_argument() {
+        let parts = vec![
+            "copilot".to_string(),
+            "--model".to_string(),
+            "model; touch /tmp/nope".to_string(),
+        ];
+        assert_eq!(
+            wsl_agent_launch_script(&parts),
+            "bash -lc 'exec 1>&3 3>&-; unset CLAUDECODE; exec '\\''copilot'\\'' \
+             '\\''--model'\\'' '\\''model; touch /tmp/nope'\\''' 3>&1 >/dev/null"
+        );
+    }
+
+    #[test]
+    fn stderr_log_promotes_only_failed_startup_lines() {
+        let log = AgentStderrLog::new("test-agent");
+        let clone = log.clone();
+
+        for index in 0..STARTUP_STDERR_MAX_LINES + 1 {
+            log.log_line(&format!("startup line {index}"));
+        }
+        {
+            let inner = log
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert_eq!(inner.phase, StderrPhase::Startup);
+            assert_eq!(inner.startup_lines.len(), STARTUP_STDERR_MAX_LINES);
+            assert_eq!(inner.startup_lines.front().unwrap(), "startup line 1");
+        }
+
+        clone.mark_failed();
+        log.log_line("late failure detail");
+        let inner = log
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(inner.phase, StderrPhase::Failed);
+        assert!(inner.startup_lines.is_empty());
+    }
+
+    #[test]
+    fn stderr_log_discards_buffer_after_initialize() {
+        let log = AgentStderrLog::new("test-agent");
+        log.log_line("startup detail");
+        log.mark_initialized();
+
+        let inner = log
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(inner.phase, StderrPhase::Running);
+        assert!(inner.startup_lines.is_empty());
+    }
+
+    #[test]
+    fn stderr_line_at_limit_is_unchanged() {
+        let line = "a".repeat(STARTUP_STDERR_MAX_CHARS_PER_LINE);
+
+        assert_eq!(truncate_stderr_line(&line), line);
+    }
+
+    #[test]
+    fn stderr_line_over_limit_includes_ellipsis_within_limit() {
+        let line = "a".repeat(STARTUP_STDERR_MAX_CHARS_PER_LINE + 1);
+        let truncated = truncate_stderr_line(&line);
+
+        assert_eq!(truncated.chars().count(), STARTUP_STDERR_MAX_CHARS_PER_LINE);
+        assert!(truncated.ends_with("..."));
+        assert_eq!(
+            truncated,
+            format!("{}...", "a".repeat(STARTUP_STDERR_MAX_CHARS_PER_LINE - 3))
+        );
+    }
+
+    #[test]
+    fn stderr_line_truncation_preserves_unicode_characters() {
+        let line = "界".repeat(STARTUP_STDERR_MAX_CHARS_PER_LINE + 1);
+        let truncated = truncate_stderr_line(&line);
+
+        assert_eq!(truncated.chars().count(), STARTUP_STDERR_MAX_CHARS_PER_LINE);
+        assert_eq!(
+            truncated,
+            format!("{}...", "界".repeat(STARTUP_STDERR_MAX_CHARS_PER_LINE - 3))
+        );
+    }
+
+    #[test]
+    fn canonicalizes_simple_lang_region() {
+        assert_eq!(canonicalize_posix_locale("zh-CN"), "zh_CN.UTF-8");
+        assert_eq!(canonicalize_posix_locale("en-US"), "en_US.UTF-8");
+        // Lowercase region in source folder names gets normalized.
+        assert_eq!(canonicalize_posix_locale("gd-gb"), "gd_GB.UTF-8");
+        // Already-uppercase region preserved (idempotent).
+        assert_eq!(canonicalize_posix_locale("de-DE"), "de_DE.UTF-8");
+    }
+
+    #[test]
+    fn canonicalizes_script_code() {
+        // 4-letter script code (ISO 15924) → title case, region preserved.
+        assert_eq!(canonicalize_posix_locale("sr-Cyrl-RS"), "sr_Cyrl_RS.UTF-8");
+        assert_eq!(canonicalize_posix_locale("zh-Hans-CN"), "zh_Hans_CN.UTF-8");
+        assert_eq!(canonicalize_posix_locale("az-Latn-AZ"), "az_Latn_AZ.UTF-8");
+    }
+
+    #[test]
+    fn canonicalizes_language_only() {
+        assert_eq!(canonicalize_posix_locale("en"), "en.UTF-8");
+    }
 }

@@ -143,6 +143,9 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             VtSequenceReceived.raise(*this, winrt::hstring{ seq });
         });
 
+        auto pfnShowNotification = [this](auto&& PH1, auto&& PH2) { _terminalShowNotification(std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2)); };
+        _terminal->SetShowNotificationCallback(pfnShowNotification);
+
         auto pfnClearQuickFix = [this] { ClearQuickFix(); };
         _terminal->SetClearQuickFixCallback(pfnClearQuickFix);
 
@@ -248,6 +251,8 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             [weakThis = get_weak()](const auto& update) {
                 if (auto core{ weakThis.get() }; core && !core->_IsClosing())
                 {
+                    // GH#20219: re-evaluate if we're hovering over a hyperlink after scrolling
+                    core->_refreshHoveredCell();
                     core->ScrollPositionChanged.raise(*core, update);
                 }
             });
@@ -750,6 +755,9 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             _terminal->UserScrollViewport(viewTop);
         }
 
+        // GH#20219: re-evaluate if we're hovering over a hyperlink after scrolling
+        _refreshHoveredCell();
+
         const auto shared = _shared.lock_shared();
         if (shared->outputIdle)
         {
@@ -836,9 +844,20 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     {
         _updateHoveredCell(std::optional<til::point>{ pos });
     }
+
     void ControlCore::ClearHoveredCell()
     {
         _updateHoveredCell(std::nullopt);
+    }
+
+    void ControlCore::_refreshHoveredCell()
+    {
+        if (_lastHoveredCell)
+        {
+            const auto cell = *_lastHoveredCell;
+            _lastHoveredCell.reset();
+            _updateHoveredCell(cell);
+        }
     }
 
     void ControlCore::_updateHoveredCell(const std::optional<til::point> terminalPosition)
@@ -929,7 +948,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         // Manually turn off acrylic if they turn off transparency.
         _runtimeUseAcrylic = _settings.Opacity() < 1.0 && _settings.UseAcrylic();
 
-        const auto sizeChanged = _setFontSizeUnderLock(_settings.FontSize());
+        const auto sizeChanged = _setFontSizeUnderLock(_settings.FontSize() + _accumulatedFontSizeDelta);
 
         // Update the terminal core with its new Core settings
         _terminal->UpdateSettings(_settings);
@@ -1167,11 +1186,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - none
     void ControlCore::ResetFontSize()
     {
-        const auto lock = _terminal->LockForWriting();
-
-        if (_setFontSizeUnderLock(_settings.FontSize()))
+        if (std::exchange(_accumulatedFontSizeDelta, 0.f) != 0.f)
         {
-            _refreshSizeUnderLock();
+            // No point in doing this if there was no delta.
+            AdjustFontSize(0);
         }
     }
 
@@ -1181,9 +1199,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - fontSizeDelta: The amount to increase or decrease the font size by.
     void ControlCore::AdjustFontSize(float fontSizeDelta)
     {
+        _accumulatedFontSizeDelta += fontSizeDelta;
+
         const auto lock = _terminal->LockForWriting();
 
-        if (_setFontSizeUnderLock(_desiredFont.GetFontSize() + fontSizeDelta))
+        if (_setFontSizeUnderLock(_settings.FontSize() + _accumulatedFontSizeDelta))
         {
             _refreshSizeUnderLock();
         }
@@ -1521,6 +1541,18 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         return hstring{ _terminal->GetWorkingDirectory() };
     }
 
+    hstring ControlCore::ShellName() const
+    {
+        const auto lock = _terminal->LockForReading();
+        return hstring{ _terminal->GetShellName() };
+    }
+
+    hstring ControlCore::ShellVersion() const
+    {
+        const auto lock = _terminal->LockForReading();
+        return hstring{ _terminal->GetShellVersion() };
+    }
+
     bool ControlCore::BracketedPasteEnabled() const noexcept
     {
         const auto lock = _terminal->LockForReading();
@@ -1693,6 +1725,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     void ControlCore::_terminalSearchMissingCommand(std::wstring_view missingCommand, const til::CoordType& bufferRow)
     {
         SearchMissingCommand.raise(*this, make<implementation::SearchMissingCommandEventArgs>(hstring{ missingCommand }, bufferRow));
+    }
+
+    void ControlCore::_terminalShowNotification(std::wstring_view title, std::wstring_view body)
+    {
+        ShowNotification.raise(*this, make<implementation::ShowNotificationEventArgs>(hstring{ title }, hstring{ body }));
     }
 
     void ControlCore::OpenCWD()

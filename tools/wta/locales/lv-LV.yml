@@ -1,29 +1,23 @@
 # Setup screen titles
-# {Locked="Intelligent Terminal"} - product name, do not translate
-setup.title.first_run: "Laipni lūdzam Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "Aģents nav atrasts"
 setup.title.agent_error: "Neizdevās izveidot savienojumu ar aģentu"
-setup.title.switch_agent: "Mainīt aģentu"
 setup.title.not_available: "Aģents nav pieejams"
 setup.title.sign_in: "Nepieciešama pierakstīšanās"
 
 # %{agent} is replaced with the agent display name at runtime.
-setup.subtitle.copilot_missing: "Jūsu aģents \"%{agent}\" nav instalēts. Izpildiet tālāk norādītās darbības, lai to instalētu. Lai mainītu aģentu, dodieties uz Settings."
-setup.subtitle.agent_missing: "Jūsu aģents \"%{agent}\" nav instalēts. Pārinstalējiet to manuāli un mēģiniet vēlreiz. Lai mainītu aģentu, dodieties uz Settings."
-setup.subtitle.copilot_auth: "Jūsu aģents \"%{agent}\" pieprasa autentifikāciju. Izpildiet tālāk norādītās darbības, lai pierakstītos. Lai mainītu aģentu, dodieties uz Settings."
-setup.subtitle.agent_auth: "Jūsu aģents \"%{agent}\" pieprasa autentifikāciju. Pierakstieties, izmantojot aģenta CLI, un mēģiniet vēlreiz. Lai mainītu aģentu, dodieties uz Settings."
+setup.subtitle.copilot_missing: "Jūsu aģents \"%{agent}\" nav instalēts. Izpildiet tālāk norādītās darbības, lai to instalētu. Lai mainītu aģentu, dodieties uz Viedais Terminālis Settings > Agent."
+setup.subtitle.agent_missing: "Jūsu aģents \"%{agent}\" nav instalēts. Pārinstalējiet to manuāli un mēģiniet vēlreiz. Lai mainītu aģentu, dodieties uz Viedais Terminālis Settings > Agent."
+setup.subtitle.copilot_auth: "Jūsu aģents \"%{agent}\" pieprasa autentifikāciju. Izpildiet tālāk norādītās darbības, lai pierakstītos. Lai mainītu aģentu, dodieties uz Viedais Terminālis Settings > Agent."
+setup.subtitle.agent_auth: "Jūsu aģents \"%{agent}\" pieprasa autentifikāciju. Pierakstieties, izmantojot aģentu, un izvēlieties \"Esmu pierakstījies\" zemāk. Lai mainītu aģentu, dodieties uz Viedais Terminālis Settings > Agent."
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "Izvēlieties noklusējuma aģenta CLI, ko vēlaties izmantot Intelligent Terminal. Varat"
-setup.description.fre_line2: "doties uz Settings, lai konfigurētu un iestatītu savu darbvietu."
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "Pārinstalēt %{agent}"
-setup.option.reinstall_hint: "(Tiks instalēts automātiski)"
+setup.option.install: "Instalēt %{agent}"
+setup.option.install_hint: "(Tiks instalēts automātiski)"
 setup.option.signin: "Pierakstīties %{agent}"
-setup.option.retry_detection: "Mēģināt noteikt vēlreiz"
-setup.option.retry_auth: "Esmu pierakstījies — mēģināt savienojumu vēlreiz"
-setup.option.retry_connection: "Mēģināt savienojumu vēlreiz"
-setup.option.switch_to: "Pārslēgties uz %{agent}"
+setup.option.retry_detection: "Mēģināt vēlreiz"
+setup.option.retry_auth: "Esmu pierakstījies — mēģināt savienoties vēlreiz"
 setup.status.installing: "Instalē..."
 setup.status.install_failed: "Instalēšana neizdevās: "
 setup.status.installing_winget: " Instalē, izmantojot winget..."
@@ -35,25 +29,32 @@ auth.agent_selected_with_status: "Agent %{name} — "
 auth.checking_authentication: "  %{spinner} Pārbauda autentifikāciju..."
 auth.waiting_for_authorization: "  %{spinner} Gaida autorizāciju..."
 auth.code_copied_hint: "  Kods nokopēts starpliktuvē — ielīmējiet to pārlūkprogrammā."
-auth.sign_in_prompt: "Pierakstieties, lai izmantotu savu aģentu:"
+auth.device_code_prompt: "Apmeklējiet %{url} un ievadiet kodu: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  Savienojiet %{name}, lai iespējotu aģenta funkcijas"
-auth.button_sign_in_github: "[ Pierakstīties ar GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ Pierakstīties ar %{name} ]"
-auth.hint_footer: "  Nospiediet Enter, lai pierakstītos, Esc, lai atgrieztos"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  Enter = pierakstīties · E = GitHub Enterprise · Esc = atgriezties"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise domēns: "
+auth.enterprise_hint_footer: "  Enter = pierakstīties · Esc = github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Nospiediet Enter, lai mēģinātu vēlreiz, vai Esc, lai izmantotu github.com. Biežākie cēloņi: nepareizi ievadīts vai nesasniedzams domēns, beidzies koda derīguma termiņš vai nav Copilot piekļuves šajā resursdatorā."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Nospiediet Enter, lai mēģinātu vēlreiz, vai Esc, lai atgrieztos."  # {Locked="Enter","Esc"}
 
 # ── Chat view (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Domā..."
-# {Locked="Intelligent Terminal"} - product name, do not translate
-chat.welcome_title: "Laipni lūdzam Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "Laipni lūdzam Viedais Terminālis!"
+chat.welcome_disclaimer: "Viedais Terminālis izmanto AI. Pārbaudiet kļūdas."
 chat.plan_header: "Plāns:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "Automātiski diagnosticēta nesena komandas kļūme"
+chat.turn_canceled: "(atcelts)"
+chat.turn_executed: "→ izpildīts: %{title}"
 
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "Jautājiet jebko, / komandām.."  # {Locked="/"}
 input.placeholder.connecting: "savienojas..."
 input.placeholder.disconnected: "atvienots"
+input.image_attachments: "📎 Attēli: %{items}"  # {Locked="%{items}"} {Locked="📎"}
 
 # ── Gaidošo pieprasījumu rinda (src/ui/queued_hint.rs, src/app.rs) ───────────
 # Indikators, kas tiek rādīts virs ievades lodziņa, kamēr viens vai vairāki pieprasījumi ir rindā
@@ -77,8 +78,8 @@ commands.help_escape_hint: "  //text     Nosūtīt burtisku '/' (apiet komandu p
 commands.help_close_hint: "  Esc        Aizvērt šo palīdzību"  # {Locked="Esc"}
 
 # ── Recommendations panel (src/ui/recommendations.rs) ───────────────────────
-# {Locked="Enter","Esc","↵"} - key names and Return-key glyph, do not translate
-recommendations.nav_hint: "(↑ ↓ lai pārvietotos • Enter lai izvēlētos • Esc lai atceltu)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - key names and Return-key glyph, do not translate
+recommendations.nav_hint: "(↑ ↓ lai pārvietotos • ← → lai pārslēgtu pogas • Enter lai izvēlētos • Esc lai atceltu)"
 recommendations.button_run_command: "[ Izpildīt komandu ]"
 recommendations.button_insert_in_terminal: "Ievietot terminālī"
 recommendations.button_open_in_new_tab: "Atvērt jaunā cilnē ↵"
@@ -102,9 +103,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N lai atbildētu · mainiet izmēru pilnai kartītei]"  # {Locked="Y/N"}
 
 # ── Agent status (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "Nav instalēts — izvēlieties, lai instalētu automātiski"
 agent.status.not_found: "Nav atrasts"
-agent.status.detected: "Noteikts"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - tool names and command, must run verbatim
 agent.install.running_winget: "Running: winget install GitHub.Copilot"
 agent.install.launch_failed: "Failed to launch winget: %{error}"
@@ -115,25 +114,46 @@ agent.custom.auth_hint: "Pārliecinieties, ka %{name} ir instalēts un atrodas j
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Ielādē..."
-# {Locked="Enter","Shift+enter","Esc"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ lai pārvietotos • Enter lai sāktu sesiju jaunā cilnē • Shift+enter lai sāktu sesiju aģenta panelī • Esc lai izietu)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ lai pārvietotos • Enter lai sāktu sesiju • Esc lai izietu • F5 lai atsvaidzinātu • / lai meklētu)"
 agents.status.active: "Aktīvs"
 agents.status.waiting_for_input: "Gaida ievadi"
 agents.status.error: "Kļūda"
 agents.status.idle: "Dīkstāvē"
 
 # ── Layout welcome hint (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. lai rādītu/paslēptu aģenta paneli • Ctrl+Alt+/ lai rādītu/paslēptu aģenta sesiju)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. lai rādītu/paslēptu aģenta paneli • Ctrl+Shift+/ lai rādītu/paslēptu aģenta sesiju)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
 connection.starting: "Startē aģentu..."
 connection.reconnecting: "Atkārtoti savienojas..."
+connection.connecting_activity: "Savienojas ar aģentu…"
+connection.lost: "Savienojums ar aģentu tika zaudēts. Ierakstiet /restart, lai izveidotu savienojumu atkārtoti."  # {Locked="/restart"}
 
 # ── System messages (src/app.rs) ────────────────────────────────────────────
+system.close_pane_hint: "Nospiediet Ctrl+C vēlreiz, lai aizvērtu paneli."  # {Locked="Ctrl+C"}
+system.selection_copied: "Nokopēts"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "Atcelts."
 system.no_prompt_in_flight: "Nav aktīvu pieprasījumu."
 system.authentication_failed: "Autentifikācija neizdevās"
-system.command_copied_retry: "Komanda nokopēta — palaidiet to citā terminālī, pēc tam nospiediet Enter, lai mēģinātu vēlreiz"  # {Locked="Enter"}
+system.stopped_max_tokens: "Atbilde tika apcirsta pēc modeļa izvades ierobežojuma sasniegšanas."
+system.stopped_max_turn_requests: "Aģents apstājās pēc tā pieprasījumu ierobežojuma sasniegšanas šim gājienam."
+system.stopped_refusal: "Aģents atteicās turpināt šo pieprasījumu."
+system.agent_busy: "Aģents šajā cilnē ir aizņemts — uzgaidiet, līdz pašreizējā uzvedne tiek pabeigta."
+system.image_clipboard_empty: "Starpliktuvē nav attēla, ko ielīmēt."
+system.image_not_supported: "Šis aģents neatbalsta attēlu ievadi."
+system.image_pasted: "Attēls pievienots (%{label}). Nospiediet Enter, lai nosūtītu."  # {Locked="%{label}","Enter"}
+system.resuming_session: "Tiek atsākta sesija %{session_id}..."
+system.unknown_command: "Nezināma komanda \"%{command}\" — nosūtīta kā uzvedne. Sarakstam ierakstiet /help."  # {Locked="/help"}
+system.busy_use_stop: "Uzgaidiet, līdz pašreizējā uzvedne tiek pabeigta, vai vispirms izmantojiet /stop."  # {Locked="/stop"}
+system.cannot_focus_session: "Nevar fokusēt sesiju %{session_id}: tā šķiet aktīva, bet vēl nav piesaistīts neviens rūts GUID. Pēc brīža mēģiniet vēlreiz."
+system.cannot_resume_no_load_session: "Nevar atsākt aģenta rūtī: %{agent} nepaziņoja ACP `loadSession` iespēju. Nospiediet Enter (bez Shift), lai tā vietā atsāktu jaunā termināļa rūtī."  # {Locked="ACP","loadSession","Enter","Shift"}
+system.cannot_resume_no_resume_flag: "Nevar atsākt %{agent} sesiju: šim aģentam nav `--resume` stila karoga. Nospiediet Shift+Enter, lai mēģinātu atsākt aģenta rūtī, izmantojot ACP."  # {Locked="--resume","Shift","Enter","ACP"}
+system.cannot_resume_unknown_agent: "Nevar atsākt sesiju %{session_id}: tās avota aģents šim WTA būvējumam nav zināms."
+system.cannot_resume_phantom_via_flag: "Nevar atsākt %{agent} sesiju %{session_id}: tā tika sākta, bet tajā nav uzkrāta neviena saruna, tāpēc pats %{agent} noraidītu atsākšanu. Rinda tiek noņemta."
+system.cannot_resume_phantom_via_load: "Nevar atsākt %{agent} sesiju %{session_id}: tā tika sākta, bet tajā nav uzkrāta neviena saruna, tāpēc %{agent} noraidītu ielādi. Rinda tiek noņemta."
+system.fallback.this_agent: "šis aģents"
+system.fallback.connected_agent: "pievienotais aģents"
 
 # ── Runtime CLI output (src/main.rs) ────────────────────────────────────────
 output.no_windows: "Logi nav atrasti."
@@ -171,3 +191,45 @@ hooks.installed_but_disabled: "⚠ installed but disabled"
 hooks.not_installed: "✗ not installed"
 hooks.uninstall_skipped: "skipped (CLI not on PATH)"
 hooks.install_attempted: "wt-agent-hooks install attempted (idempotent). Run `wta hooks status` to inspect the result. Trace log: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+
+# ── Relative time and date formatting (src/ui/agents_view.rs) ───────────────
+time.just_now: "tikko"
+time.minute_singular: "pirms %{count} minūtes"
+time.minutes_other: "pirms %{count} minūtēm"
+time.hour_singular: "pirms %{count} stundas"
+time.hours_other: "pirms %{count} stundām"
+time.day_singular: "pirms %{count} dienas"
+time.days_other: "pirms %{count} dienām"
+
+# ── Slash-command summaries (src/commands.rs) ─────────────────────────────
+# Command names (/help, /clear, etc.) stay English; descriptions translate.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "Show this command list"
+commands.clear.summary: "Clear the chat scrollback (keeps session)"
+commands.new.summary: "Start a fresh ACP session (drops history)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "Restart agent"
+commands.stop.summary: "Cancel the in-flight prompt"
+commands.sessions.summary: "Open the historical sessions picker (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "Izvēlieties šīs rūts aģentu (/agent <id>, lai pārslēgtu tieši)"  # {Locked="/agent","<id>"}
+
+# ── Ieteikuma izpilde (src/coordinator.rs) ──────────────────────────────────
+system.choice_execution_failed: "Izvēle %{choice} neizdevās: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "Izvēlieties aģentu (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "Šajā datorā netika atrasts neviens pieejams aģenta CLI."  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "Nezināms vai nepieejams aģents %{agent} — ierakstiet /agent, lai redzētu pieejamo sarakstu."  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "Aģenta pārslēgšana nav pieejama ārpus Windows Terminal cilnes."
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "Izvēlieties šīs rūts modeli (/model <id>, lai pārslēgtu tieši)"  # {Locked="/model","<id>"}
+commands.move.summary: "Pārvietot šīs cilnes aģenta paneli (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "Izvēlieties modeli (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "Pievienotais aģents nepaziņoja nevienu atlasāmu modeli."
+system.model_set: "Šīs rūts modelis iestatīts uz %{model}."  # {Locked="%{model}"}
+system.model_unknown: "Nezināms modelis %{model} — ierakstiet /model, lai redzētu pieejamo sarakstu."  # {Locked="%{model}","/model"}

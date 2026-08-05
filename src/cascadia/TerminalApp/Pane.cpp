@@ -99,6 +99,10 @@ INewContentArgs Pane::GetTerminalArgsForPane(BuildStartupKind kind) const
 {
     // Leaves are the only things that have controls
     assert(_IsLeaf());
+    if (!_content)
+    {
+        return nullptr;
+    }
     return _content.GetNewTerminalArgs(kind);
 }
 
@@ -139,17 +143,34 @@ Pane::BuildStartupState Pane::BuildStartupActions(uint32_t currentId, uint32_t n
         return { .args = {}, .firstPane = shared_from_this(), .focusedPaneId = std::nullopt, .panesCreated = 0 };
     }
 
-    // If one of our children is an agent pane, skip it entirely and serialize
-    // only the non-agent subtree. Agent panes are transient and not persisted.
-    if (_firstChild && _secondChild)
+    // Agent panes participate in cross-window move (Content / MovePane); their
+    // conpty + helper child survive via the ContentId reattach mechanism (see
+    // _MakePane), and the helper process is unchanged across the drag.
+    //
+    // Persistence (BuildStartupKind::Persist, i.e. app restart) is different:
+    // an agent pane's command line is session-specific (it points at the
+    // previous run's wta-master named pipe and an owner-tab-id that no longer
+    // exist), and after a restart there is no live master / helper / conpty
+    // session left to rehydrate. Replaying that saved command line launches a
+    // broken `wta --connect-master <dead-pipe>` that fails its ACP transport
+    // and, combined with the per-tab pre-warmed agent pane each restored tab
+    // already re-creates, leaves the window littered with dead panes (#275).
+    //
+    // So we never persist agent panes into the saved window layout: when one
+    // child of this split is an agent-pane leaf, collapse the split and only
+    // serialize the other child. The user can re-open the agent pane after
+    // restore to get a fresh one.
+    if (kind == BuildStartupKind::Persist)
     {
-        if (_secondChild->_isAgentPane)
-        {
-            return _firstChild->BuildStartupActions(currentId, nextId, kind);
-        }
-        if (_firstChild->_isAgentPane)
+        const auto firstIsAgentLeaf = _firstChild->_IsLeaf() && _firstChild->_isAgentPane;
+        const auto secondIsAgentLeaf = _secondChild->_IsLeaf() && _secondChild->_isAgentPane;
+        if (firstIsAgentLeaf && !secondIsAgentLeaf)
         {
             return _secondChild->BuildStartupActions(currentId, nextId, kind);
+        }
+        if (secondIsAgentLeaf && !firstIsAgentLeaf)
+        {
+            return _firstChild->BuildStartupActions(currentId, nextId, kind);
         }
     }
 
@@ -1546,6 +1567,37 @@ void Pane::_CloseChild(const bool closeFirst)
         }
     }
 
+    // If the only thing left in this subtree is an agent pane, collapse the
+    // whole subtree. Agent panes are supplementary chrome and shouldn't
+    // outlive their owning normal pane — leaving one as the sole content of
+    // its parent (or the root) would orphan it in an otherwise-empty tab.
+    // Bubbling Closed lets the parent's _CloseChild (or, at the root, the
+    // Tab's _rootClosedToken) tear the rest down.
+    if (remainingChild->_IsLeaf() && remainingChild->_isAgentPane)
+    {
+        remainingChild->_setPaneContent(nullptr);
+        closedChild->Closed(closedChildClosedToken);
+        // Revoke our own routing token on the agent pane first so the
+        // Closed.raise below doesn't re-enter _CloseChildRoutine on us.
+        remainingChild->Closed(remainingChildClosedToken);
+        // Fire the agent pane's Closed for any *other* subscribers — most
+        // importantly the `SharedWta::ReleasePane` handler registered at
+        // agent-pane creation (TerminalPage.cpp). Without this, the WTA
+        // shared-master refcount leaks every time this branch tears down
+        // an agent pane (the `_RemoveTab` walk-the-tree compensation can't
+        // see it either, since we null the child pointers below before
+        // Tab::Closed bubbles up).
+        remainingChild->Closed.raise(nullptr, nullptr);
+        _firstChild = nullptr;
+        _secondChild = nullptr;
+        // Become an empty leaf so that subsequent `Pane::Shutdown` (driven
+        // by `Tab::Shutdown` once our Closed bubbles up) takes the leaf
+        // branch instead of dereferencing the now-null children.
+        _splitState = SplitState::None;
+        Closed.raise(nullptr, nullptr);
+        return;
+    }
+
     // If the only child left is a leaf, that means we're a leaf now.
     if (remainingChild->_IsLeaf())
     {
@@ -1739,7 +1791,7 @@ void Pane::_CloseChildRoutine(const bool closeFirst)
     // GH#7252: If either child is zoomed, just skip the animation. It won't work.
     const auto eitherChildZoomed = _firstChild->_zoomed || _secondChild->_zoomed;
     // Agent panes close synchronously: TerminalPage's rebuild path
-    // (_TeardownAgentPane → _AutoCreateHiddenAgentPane) mutates this same
+    // (_TeardownAgentPane → _OpenOrReuseAgentPane) mutates this same
     // parent's children on the very next line, so a deferred _CloseChild
     // would land on a tree that's already been re-split and crash inside
     // its XAML re-parenting (observed: TerminalApp.dll AV / 0xC000041D on
@@ -2844,7 +2896,7 @@ std::shared_ptr<Pane> Pane::FindPaneBySessionId(const winrt::guid& sessionId)
         // would walk every tab without finding a match → throw E_FAIL
         // (0x80004005), which surfaces in WTA as
         // `FocusPane failed: 0x80004005` whenever the user presses
-        // Enter on an active agent-pane session row in the F2 list.
+        // Enter on an active agent-pane session row in the session management list.
         const auto termContent = p->_getTerminalContent();
         if (!termContent)
             return false;
@@ -3284,6 +3336,9 @@ void Pane::UpdateResources(const PaneResources& resources)
 {
     _themeResources = resources;
     UpdateVisuals();
+    // Re-apply the now-current theme brush to the chip if we've already
+    // built one. No-op when the chip hasn't been lazily created yet.
+    _UpdateAgentChipBackground();
 
     if (!_IsLeaf())
     {
@@ -3335,6 +3390,109 @@ bool Pane::IsSourceOfAgentPane() const noexcept
 void Pane::SetSourceOfAgentPane(bool value) noexcept
 {
     _isSourceOfAgentPane = value;
+}
+
+// Show or hide the blue "Agent" pill in the bottom-right corner of the pane.
+// Driven from Tab / protocol-event layer — this pane just renders.
+void Pane::SetAgentChipVisible(bool value)
+{
+    if (value)
+    {
+        _EnsureAgentChip();
+        // Avoid XAML churn: if the chip is already visible and already at
+        // the top of the children collection (so above the borders and any
+        // splitter), this call is a no-op. `_UpdateAgentChipVisibility`
+        // runs on every active-pane update and walks the whole tree, so
+        // the repeat-true case is the common one in heavily-split tabs.
+        uint32_t idx = 0;
+        const auto& children = _root.Children();
+        const bool found = children.IndexOf(_agentChip, idx);
+        const bool alreadyOnTop = found && idx + 1 == children.Size();
+        if (alreadyOnTop && _agentChip.Visibility() == Visibility::Visible)
+        {
+            return;
+        }
+        if (found)
+        {
+            children.RemoveAt(idx);
+        }
+        children.Append(_agentChip);
+        _agentChip.Visibility(Visibility::Visible);
+    }
+    else if (_agentChip)
+    {
+        _agentChip.Visibility(Visibility::Collapsed);
+    }
+}
+
+// The connection's session GUID for terminal panes. Returns the empty
+// guid for non-terminal panes (e.g. branch nodes, agent panes, snippets).
+// Used by Tab to match a protocol-supplied pane id to a Pane.
+winrt::guid Pane::GetSessionId() const
+{
+    // Mirror `_getSessionIdFromPane` in TerminalPage.Protocol.cpp:
+    // walk content → control → connection and read the SessionId. Using
+    // GetContent() (instead of `_content` directly) keeps the non-leaf
+    // case to a clean nullptr without needing an explicit leaf check.
+    if (const auto termContent = GetContent().try_as<winrt::TerminalApp::TerminalPaneContent>())
+    {
+        if (const auto control = termContent.GetTermControl())
+        {
+            if (const auto conn = control.Connection())
+            {
+                return conn.SessionId();
+            }
+        }
+    }
+    return {};
+}
+
+void Pane::_EnsureAgentChip()
+{
+    if (_agentChip)
+    {
+        return;
+    }
+
+    Controls::TextBlock text{};
+    text.Text(RS_(L"FreOverlay_AgentLabel/Text"));
+    text.FontSize(10.0);
+    text.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+    text.Foreground(Media::SolidColorBrush{ winrt::Windows::UI::Colors::White() });
+
+    _agentChip = Controls::Border{};
+    _agentChip.Child(text);
+    _agentChip.HorizontalAlignment(HorizontalAlignment::Right);
+    _agentChip.VerticalAlignment(VerticalAlignment::Bottom);
+    _agentChip.Margin({ 0, 0, 8, 8 });
+    _agentChip.Padding({ 8, 1, 8, 2 });
+    _agentChip.CornerRadius({ 4, 4, 4, 4 });
+    _agentChip.IsHitTestVisible(false);
+    _agentChip.Visibility(Visibility::Collapsed);
+    _UpdateAgentChipBackground();
+}
+
+// Apply the theme-tracking background brush to the chip. Reuses the
+// focused-border brush so the chip matches the accent color the rest of
+// Pane's chrome uses for "active" / "focused" state — picks up theme and
+// high-contrast changes for free via `UpdateResources`. Falls back to a
+// reasonable solid blue if `UpdateResources` hasn't pushed brushes yet
+// (e.g. very early in initialization).
+void Pane::_UpdateAgentChipBackground()
+{
+    if (!_agentChip)
+    {
+        return;
+    }
+    if (_themeResources.focusedBorderBrush)
+    {
+        _agentChip.Background(_themeResources.focusedBorderBrush);
+    }
+    else
+    {
+        _agentChip.Background(Media::SolidColorBrush{
+            winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0x2D, 0x6F, 0xE0) });
+    }
 }
 
 // Method Description:

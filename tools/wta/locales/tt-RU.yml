@@ -1,29 +1,23 @@
 # Setup screen titles
-# {Locked="Intelligent Terminal"} - product name, do not translate
-setup.title.first_run: "Intelligent Terminal-га рәхим итегез!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "Агент табылмады"
 setup.title.agent_error: "Агентка тоташу уңышсыз булды"
-setup.title.switch_agent: "Агентны алыштыру"
 setup.title.not_available: "Агент мөмкин түгел"
 setup.title.sign_in: "Керү таләп ителә"
 
 # %{agent} is replaced with the agent display name at runtime.
-setup.subtitle.copilot_missing: "Сезнең \"%{agent}\" агентыгыз урнатылмаган. Урнату өчен түбәндәге адымнарны үтәгез. Агентны алыштыру өчен Settings бүлегенә күчегез."
-setup.subtitle.agent_missing: "Сезнең \"%{agent}\" агентыгыз урнатылмаган. Зинһар, кулдан яңадан урнатыгыз, аннан яңадан тырышыгыз. Агентны алыштыру өчен Settings бүлегенә күчегез."
-setup.subtitle.copilot_auth: "Сезнең \"%{agent}\" агентыгыз аутентификация таләп итә. Керү өчен түбәндәге адымнарны үтәгез. Агентны алыштыру өчен Settings бүлегенә күчегез."
-setup.subtitle.agent_auth: "Сезнең \"%{agent}\" агентыгыз аутентификация таләп итә. Зинһар, агент CLI аша керегез, аннан яңадан тырышыгыз. Агентны алыштыру өчен Settings бүлегенә күчегез."
+setup.subtitle.copilot_missing: "Сезнең \"%{agent}\" агентыгыз урнатылмаган. Урнату өчен түбәндәге адымнарны үтәгез. Агентны алыштыру өчен Акыллы терминал Settings > Agent бүлегенә күчегез."
+setup.subtitle.agent_missing: "Сезнең \"%{agent}\" агентыгыз урнатылмаган. Зинһар, кулдан яңадан урнатыгыз, аннан яңадан тырышыгыз. Агентны алыштыру өчен Акыллы терминал Settings > Agent бүлегенә күчегез."
+setup.subtitle.copilot_auth: "Сезнең \"%{agent}\" агентыгыз аутентификация таләп итә. Керү өчен түбәндәге адымнарны үтәгез. Агентны алыштыру өчен Акыллы терминал Settings > Agent бүлегенә күчегез."
+setup.subtitle.agent_auth: "Сезнең \"%{agent}\" агентыгыз аутентификация таләп итә. Зинһар, агент аша керегез, аннан түбәндә \"Мин кердем\" сайлагыз. Агентны алыштыру өчен Акыллы терминал Settings > Agent бүлегенә күчегез."
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "Intelligent Terminal-да кулланырга теләгән килешенгән агент CLI сайлагыз. Эш"
-setup.description.fre_line2: "мәйданыгызны көйләү өчен Settings бүлегенә күчә аласыз."
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "%{agent} яңадан урнату"
-setup.option.reinstall_hint: "(Автоматик рәвештә урнатылачак)"
+setup.option.install: "%{agent} яңадан урнату"
+setup.option.install_hint: "(Автоматик рәвештә урнатылачак)"
 setup.option.signin: "%{agent} керү"
-setup.option.retry_detection: "Ачыклауны яңадан сынау"
-setup.option.retry_auth: "Кердем — тоташуны яңадан сынау"
-setup.option.retry_connection: "Тоташуны яңадан сынау"
-setup.option.switch_to: "%{agent} алыштыру"
+setup.option.retry_detection: "Яңадан тырышыгыз"
+setup.option.retry_auth: "Мин кердем — яңадан тоташырга тырышыгыз"
 setup.status.installing: "Урнатыла..."
 setup.status.install_failed: "Урнату уңышсыз: "
 setup.status.installing_winget: " winget аша урнатыла..."
@@ -35,20 +29,26 @@ auth.agent_selected_with_status: "Агент %{name} — "
 auth.checking_authentication: "  %{spinner} Аутентификация тикшерелә..."
 auth.waiting_for_authorization: "  %{spinner} Авторизация көтелә..."
 auth.code_copied_hint: "  Код буферга күчерелде — браузерга куегыз."
-auth.sign_in_prompt: "Агентыгызны куллану өчен керегез:"
+auth.device_code_prompt: "%{url} адресына керегез һәм кодны кертегез: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  Агент мөмкинлекләрен кушу өчен %{name} тоташтырыгыз"
-auth.button_sign_in_github: "[ GitHub аша керү ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ %{name} аша керү ]"
-auth.hint_footer: "  Керү өчен Enter, артка кайту өчен Esc басыгыз"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  Керү өчен Enter · GitHub Enterprise өчен E · кире кайту өчен Esc"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise домены: "
+auth.enterprise_hint_footer: "  Керү өчен Enter · github.com өчен Esc"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Кабатлап карау өчен Enter төймәсенә басыгыз, яки github.com өчен Esc. Еш очрый торган сәбәпләр: ялгыш язылган яки тоташып булмый торган домен, вакыты чыккан код, яки бу хостта Copilot мөмкинлеге юк."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Кабатлап карау өчен Enter төймәсенә басыгыз, яки кире кайту өчен Esc."  # {Locked="Enter","Esc"}
 
 # ── Chat view (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Уйлыйм…"
-# {Locked="Intelligent Terminal"} - product name, do not translate
-chat.welcome_title: "Intelligent Terminal-га рәхим итегез!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "Акыллы терминал-га рәхим итегез!"
+chat.welcome_disclaimer: "Акыллы терминал AI куллана. Хаталарны тикшерегез."
 chat.plan_header: "План:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "Соңгы команда хатасы автоматик рәвештә диагнозланды"
+chat.turn_canceled: "(гамәлдән чыгарылды)"
+chat.turn_executed: "→ үтәлде: %{title}"
 
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "Теләсә нәрсә сорагыз, / боерыклар өчен.."  # {Locked="/"}
@@ -66,7 +66,7 @@ input.queue.removed: "Чираттагы хәбәр бетерелде: %{previe
 # queue is already at capacity (%{cap} entries). The user must wait for the
 # queue to drain or press Esc to remove queued items.
 input.queue.full: "Чират тулган (%{cap}). Агентны көтегез яки чираттагы элементларны бетерү өчен Esc басыгыз."  # {Locked="Esc"}
-
+input.image_attachments: "📎 Рәсемнәр: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Command popup (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - slash-command prefix, must remain ASCII
@@ -76,9 +76,22 @@ commands.help_header: "Слэш боерыклары — кертү кырына
 commands.help_escape_hint: "  //text     Туры мәгънәдәге '/' җибәрү (боерык анализаторын читләп үтү)"  # {Locked="//text","/"}
 commands.help_close_hint: "  Esc        Бу ярдәмне ябу"  # {Locked="Esc"}
 
+# Slash-command summaries shown in the popup and /help overlay.
+# Command names (/help, /clear, /new, /restart, /stop, /sessions) stay in
+# English. Only the descriptions are localized.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "Бу боерыклар исемлеген күрсәтү"
+commands.clear.summary: "Чат әйләндерү тарихын чистарту (сеансны саклый)"
+commands.new.summary: "Яңа ACP сеансын башлау (тарихны ташлый)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "Агентны яңадан старт"
+commands.stop.summary: "Башкарылучы сорауны кире кагу"
+commands.sessions.summary: "Тарихи сеанслар сайлагычын ачу (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "Бу панель өчен агент сайлагыз (туры алыштыру өчен /agent <id>)"  # {Locked="/agent","<id>"}
+
 # ── Recommendations panel (src/ui/recommendations.rs) ───────────────────────
-# {Locked="Enter","Esc","↵"} - key names and Return-key glyph, do not translate
-recommendations.nav_hint: "(↑ ↓ навигация өчен • Enter сайлау өчен • Esc баш тарту өчен)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - key names and Return-key glyph, do not translate
+recommendations.nav_hint: "(↑ ↓ навигация өчен • ← → төймәләр арасында күчү өчен • Enter сайлау өчен • Esc баш тарту өчен)"
 recommendations.button_run_command: "[ Боерыкны башкару ]"
 recommendations.button_insert_in_terminal: "Terminal-га кертү"
 recommendations.button_open_in_new_tab: "Яңа табда ачу ↵"
@@ -102,9 +115,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N җавап өчен · тулы карта өчен үлчәмне үзгәртегез]"  # {Locked="Y/N"}
 
 # ── Agent status (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "Урнатылмаган — автоматик урнату өчен сайлагыз"
 agent.status.not_found: "Табылмады"
-agent.status.detected: "Ачыкланды"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - tool names and command, must run verbatim
 agent.install.running_winget: "Башкарыла: winget install GitHub.Copilot"
 agent.install.launch_failed: "winget эшкә кушылмады: %{error}"
@@ -115,25 +126,46 @@ agent.custom.auth_hint: "%{name} урнатылуына һәм PATH-та бул�
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Йөкләнә..."
-# {Locked="Enter","Shift+enter","Esc"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ навигация өчен • Enter яңа табда сеансны ачу өчен • Shift+enter агент панелендә сеансны ачу өчен • Esc чыгу өчен)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ навигация өчен • Enter сеансны ачу өчен • Esc чыгу өчен • F5 яңарту өчен • / эзләү өчен)"
 agents.status.active: "Актив"
 agents.status.waiting_for_input: "Кертү көтелә"
 agents.status.error: "Хата"
 agents.status.idle: "Буш"
 
 # ── Layout welcome hint (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. агент панелен күрсәтү/яшерү • Ctrl+Alt+/ агент сеансын күрсәтү/яшерү)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. агент панелен күрсәтү/яшерү • Ctrl+Shift+/ агент сеансын күрсәтү/яшерү)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
 connection.starting: "Агент эшкә кушыла..."
 connection.reconnecting: "Яңадан тоташу..."
+connection.connecting_activity: "Агентка тоташу…"
+connection.lost: "Агент белән тоташу югалды. Яңадан тоташу өчен /restart дип языгыз."  # {Locked="/restart"}
 
 # ── System messages (src/app.rs) ────────────────────────────────────────────
+system.close_pane_hint: "Панельне ябу өчен Ctrl+C төймәләренә тагын бер кат басыгыз."  # {Locked="Ctrl+C"}
+system.selection_copied: "Күчерелде"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "Баш тартылды."
 system.no_prompt_in_flight: "Башкарылучы сорау юк."
 system.authentication_failed: "Аутентификация уңышсыз булды"
-system.command_copied_retry: "Боерык күчерелде — башка терминалда башкарыгыз, аннан яңадан сынау өчен Enter басыгыз"  # {Locked="Enter"}
+system.stopped_max_tokens: "Җавап модельнең чыгару чикләвенә җиткәч киселде."
+system.stopped_max_turn_requests: "Агент бу чират өчен сорау чикләвенә җиткәч туктады."
+system.stopped_refusal: "Агент бу сорауны дәвам итүдән баш тартты."
+system.agent_busy: "Агент бу кыстыргычта мәшгуль — агымдагы сорау тәмамланганын көтегез."
+system.image_clipboard_empty: "Кую өчен буферда рәсем юк."
+system.image_not_supported: "Бу агент рәсем кертүне хупламый."
+system.image_pasted: "Рәсем беркетелде (%{label}). Җибәрү өчен Enter басыгыз."  # {Locked="%{label}","Enter"}
+system.resuming_session: "%{session_id} сеансы дәвам иттерелә..."
+system.unknown_command: "Билгесез боерык \"%{command}\" — сорау буларак җибәрелде. Исемлек өчен /help языгыз."  # {Locked="/help"}
+system.busy_use_stop: "Агымдагы сорау тәмамланганын көтегез яки башта /stop кулланыгыз."  # {Locked="/stop"}
+system.cannot_focus_session: "%{session_id} сеансына фокус куеп булмый: ул тере булып күренә, ләкин әле бер панель GUID-ы да бәйләнмәгән. Бераздан кабатлап карагыз."
+system.cannot_resume_no_load_session: "Агент панелендә дәвам итеп булмый: %{agent} ACP `loadSession` мөмкинлеген игълан итмәде. Аның урынына яңа терминал панелендә дәвам итү өчен Enter (Shift-сыз) басыгыз."  # {Locked="ACP","loadSession","Enter","Shift"}
+system.cannot_resume_no_resume_flag: "%{agent} сеансын дәвам итеп булмый: бу агентта `--resume` рәвешендәге флаг юк. ACP аша агент панелендә дәвам итеп карау өчен Shift+Enter басыгыз."  # {Locked="--resume","Shift","Enter","ACP"}
+system.cannot_resume_unknown_agent: "%{session_id} сеансын дәвам итеп булмый: аның чыганак агенты бу WTA җыелмасына билгесез."
+system.cannot_resume_phantom_via_flag: "%{agent} %{session_id} сеансын дәвам итеп булмый: ул башлатылган, ләкин бер сөйләшү дә җыймаган, шуңа күрә %{agent} үзе дәвам итүне кире кагар иде. Юл бетерелә."
+system.cannot_resume_phantom_via_load: "%{agent} %{session_id} сеансын дәвам итеп булмый: ул башлатылган, ләкин бер сөйләшү дә җыймаган, шуңа күрә %{agent} йөкләүне кире кагар иде. Юл бетерелә."
+system.fallback.this_agent: "бу агент"
+system.fallback.connected_agent: "тоташкан агент"
 
 # ── Runtime CLI output (src/main.rs) ────────────────────────────────────────
 output.no_windows: "Тәрәзәләр табылмады."
@@ -171,3 +203,32 @@ hooks.installed_but_disabled: "⚠ урнатылган ләкин сүндер�
 hooks.not_installed: "✗ урнатылмаган"
 hooks.uninstall_skipped: "калдырылды (CLI PATH-та түгел)"
 hooks.install_attempted: "wt-agent-hooks урнату тырышылды (idempotent). Нәтиҗәне тикшерү өчен `wta hooks status` башкарыгыз. Эз журналы: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+# ── Relative time and date formatting ───────────────────────────────────────
+time.just_now: "яңа гына"
+time.minute_singular: "%{count} минут элек"
+time.minutes_other: "%{count} минут элек"
+time.hour_singular: "%{count} сәгать элек"
+time.hours_other: "%{count} сәгать элек"
+time.day_singular: "%{count} көн элек"
+time.days_other: "%{count} көн элек"
+
+# ── Тәкъдимне үтәү (src/coordinator.rs) ─────────────────────────────────────
+system.choice_execution_failed: "%{choice} сайлавы уңышсыз булды: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "Агент сайлагыз (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "Бу компьютерда агентның бердә бер мөмкин булган CLI табылмады."  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "Билгесез яки мөмкин булмаган агент %{agent} — мөмкин булган исемлекне күрү өчен /agent языгыз."  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "Агентны күчерү Windows Terminal салынмасыннан тыш мөмкин түгел."
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "Бу панель өчен модель сайлагыз (туры алыштыру өчен /model <id>)"  # {Locked="/model","<id>"}
+commands.move.summary: "Бу салынманың агент панелен күчерү (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "Модель сайлагыз (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "Тоташкан агент бер дә сайлап була торган модель игълан итмәде."
+system.model_set: "Бу панель өчен модель %{model} итеп билгеләнде."  # {Locked="%{model}"}
+system.model_unknown: "Билгесез модель %{model} — мөмкин булган исемлекне күрү өчен /model языгыз."  # {Locked="%{model}","/model"}

@@ -10,9 +10,8 @@ use crate::ui::card::{self, CARD_MIN_SIZE};
 /// either ≥ `CARD_MIN_SIZE` (full card) or exactly 1 (compact fallback —
 /// the agent flow is blocked on this prompt, so we must remain visible).
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let perm = match &app.current_tab().permission {
-        Some(p) => p,
-        None => return,
+    let Some(perm) = app.current_tab().permission.front() else {
+        return;
     };
 
     if area.height < CARD_MIN_SIZE {
@@ -29,8 +28,41 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let content_inner = card::inset_horizontal(content_area, 2);
     if content_inner.width > 0 {
-        let content = Paragraph::new(perm.description.clone())
-            .style(theme::CARD_DESCRIPTION)
+        // Header: optional kind glyph + the agent's own title. Unlike the
+        // chat tool-call card, the target line below is never deduped
+        // against the title — this card is a decision point, so
+        // restating exactly what's being authorized is intentional even
+        // if it repeats a preceding chat card (see
+        // `client.rs::request_permission`).
+        let header = match &perm.kind_label {
+            Some(icon) => format!("{icon} {}", perm.title),
+            None => perm.title.clone(),
+        };
+        let mut lines = vec![Line::styled(header, theme::CARD_DESCRIPTION)];
+        if let Some(target) = &perm.target {
+            if perm.target_is_command {
+                // A command target can be several `;`-chained statements
+                // (agents commonly batch multiple checks into one tool
+                // call) — split it the same way as the chat tool-call
+                // card so it doesn't render as an unreadable wall of
+                // text (see `ui/command_format.rs`).
+                for entry in crate::ui::command_format::command_display_lines(target) {
+                    let text = match entry {
+                        crate::ui::command_format::CommandLine::Statement(s) => format!("$ {s}"),
+                        crate::ui::command_format::CommandLine::Folded { remaining } => {
+                            format!("… (+{remaining} more)")
+                        }
+                    };
+                    lines.push(Line::styled(text, theme::CARD_CODE));
+                }
+            } else {
+                // Paths are shown as-is — the code styling alone
+                // distinguishes it from the title.
+                lines.push(Line::styled(target.clone(), theme::CARD_CODE));
+            }
+        }
+        let content = Paragraph::new(lines)
+            .alignment(crate::rtl::text_alignment())
             .wrap(Wrap { trim: false });
         frame.render_widget(content, content_inner);
     }
@@ -39,9 +71,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     if button_inner.width > 0 {
         // Mark the targets of the `y` / `n` quick-keys so users can discover
         // them without a separate hint line. Position-based to stay in sync
-        // with the matching logic in `App::handle_key`.
-        let y_idx = perm.options.iter().position(|o| o.kind.contains("allow"));
-        let n_idx = perm.options.iter().position(|o| o.kind.contains("reject"));
+        // with the matching logic in `App::handle_key` (both go through
+        // `PermissionState::allow_index` / `reject_index`).
+        let y_idx = perm.allow_index();
+        let n_idx = perm.reject_index();
         let labels: Vec<String> = perm
             .options
             .iter()
@@ -106,5 +139,8 @@ fn render_compact(frame: &mut Frame, perm: &PermissionState, area: Rect) {
         Span::raw(separator),
         Span::styled(hint, theme::DIM),
     ]);
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(
+        Paragraph::new(line).alignment(crate::rtl::text_alignment()),
+        area,
+    );
 }

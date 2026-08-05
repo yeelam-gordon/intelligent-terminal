@@ -167,6 +167,8 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         hstring Title();
         Windows::Foundation::IReference<winrt::Windows::UI::Color> TabColor() noexcept;
         hstring WorkingDirectory() const;
+        hstring ShellName() const;
+        hstring ShellVersion() const;
 
         TerminalConnection::ConnectionState ConnectionState() const;
 
@@ -294,6 +296,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         til::typed_event<IInspectable, Control::CompletionsChangedEventArgs> CompletionsChanged;
         til::typed_event<IInspectable, Control::SearchMissingCommandEventArgs> SearchMissingCommand;
         til::typed_event<IInspectable, winrt::hstring> VtSequenceReceived;
+        til::typed_event<IInspectable, Control::ShowNotificationEventArgs> ShowNotification;
         til::typed_event<> RefreshQuickFixUI;
         til::typed_event<IInspectable, Control::WindowSizeChangedEventArgs> WindowSizeChanged;
 
@@ -335,6 +338,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                                    const int velocity,
                                    const std::chrono::microseconds duration);
         void _terminalSearchMissingCommand(std::wstring_view missingCommand, const til::CoordType& bufferRow);
+        void _terminalShowNotification(std::wstring_view title, std::wstring_view body);
         void _terminalWindowSizeChanged(int32_t width, int32_t height);
 
         void _terminalCompletionsChanged(std::wstring_view menuJson, unsigned int replaceLength);
@@ -353,6 +357,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         void _connectionOutputHandler(winrt::array_view<const char16_t> str);
         void _connectionStateChangedHandler(const TerminalConnection::ITerminalConnection&, const Windows::Foundation::IInspectable&);
         void _updateHoveredCell(const std::optional<til::point> terminalPosition);
+        void _refreshHoveredCell();
         void _setOpacity(const float opacity, const bool focused = true);
 
         bool _isBackgroundTransparent();
@@ -393,6 +398,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         bool _colorGlyphs = true;
         CSSLengthPercentage _cellWidth;
         CSSLengthPercentage _cellHeight;
+        float _accumulatedFontSizeDelta = 0.f; // Preserved across reloads to prevent user zoom from being overwritten.
 
         // Rendering stuff.
         winrt::handle _lastSwapChainHandle{ nullptr };

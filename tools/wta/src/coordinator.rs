@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 
-use crate::app::AppEvent;
+use crate::app_contracts::AppEvent;
 use crate::shell::ShellManager;
+use crate::turn_context::TurnContext;
 
 use crate::agent_registry::{self, PromptFlag};
 
@@ -81,6 +82,8 @@ pub enum RecommendedAction {
         /// fixed wtcli passes "automatic" when neither is set).
         #[serde(default)]
         direction: Option<String>,
+        #[serde(default)]
+        profile: Option<String>,
     },
     Open {
         target: OpenTarget,
@@ -94,6 +97,8 @@ pub enum RecommendedAction {
         /// Ignored for tab target.
         #[serde(default)]
         direction: Option<String>,
+        #[serde(default)]
+        profile: Option<String>,
     },
 }
 
@@ -103,6 +108,8 @@ pub struct ChoiceExecution {
     pub choice: RecommendationChoice,
     /// When true, Send actions paste text without a trailing Enter (insert-only).
     pub insert_only: bool,
+    /// Host-owned context associated with the turn that produced this choice.
+    pub context: TurnContext,
 }
 
 pub fn default_supported_delegate_agents() -> Vec<SupportedDelegateAgent> {
@@ -132,15 +139,17 @@ pub fn default_delegate_agent_runtimes(
 
 /// Derive a (id, display_name) pair from a delegate agent commandline.
 fn derive_agent_identity(commandline: &str) -> (String, String) {
-    let first_token = commandline
-        .split_whitespace()
-        .next()
-        .unwrap_or(commandline);
-    let unquoted = first_token.trim_matches('"');
-    let profile = agent_registry::lookup_profile(unquoted);
+    let profile = agent_registry::lookup_profile_by_id(agent_registry::resolve_agent_id_from_cmd(
+        commandline,
+    ));
     if profile.id != "unknown" {
         return (profile.id.to_string(), profile.display_name.to_string());
     }
+    let first_token = split_windows_commandline(commandline)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| commandline.to_string());
+    let unquoted = first_token.trim_matches('"');
     // Unknown agent — use the basename as both id and name.
     let basename = unquoted
         .rsplit(|ch: char| ch == '\\' || ch == '/')
@@ -262,48 +271,6 @@ pub fn parse_autofix_response(text: &str) -> AutofixDecision {
     }
 }
 
-/// Filter out choices that target the coordinator's own pane.
-/// Returns the filtered set. If all choices are removed, returns an error.
-pub fn validate_recommendation_set_for_coordinator_target(
-    set: &RecommendationSet,
-    coordinator_target: Option<&str>,
-) -> Result<RecommendationSet> {
-    let Some(coordinator_target) = coordinator_target
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-    else {
-        return Ok(set.clone());
-    };
-
-    let filtered: Vec<RecommendationChoice> = set
-        .choices
-        .iter()
-        .filter(|choice| {
-            !choice.actions.iter().any(|action| {
-                matches!(action, RecommendedAction::Send { parent, .. } if parent == coordinator_target)
-            })
-        })
-        .cloned()
-        .collect();
-
-    if filtered.is_empty() {
-        bail!(
-            "all choices target the current coordinator pane {}",
-            coordinator_target
-        );
-    }
-
-    // Adjust recommended_choice if the original was filtered out.
-    let recommended_choice = set.recommended_choice.filter(|rc| {
-        filtered.iter().any(|c| c.choice == *rc)
-    });
-
-    Ok(RecommendationSet {
-        recommended_choice,
-        choices: filtered,
-    })
-}
-
 pub fn recommended_choice_index(set: &RecommendationSet) -> usize {
     if let Some(choice_no) = set.recommended_choice {
         if let Some(idx) = set
@@ -321,19 +288,80 @@ pub async fn run_recommendation_executor(
     mut rx: mpsc::UnboundedReceiver<ChoiceExecution>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
     shell_mgr: Arc<ShellManager>,
-    delegate_agents: Vec<DelegateAgentRuntime>,
+    // Shared so the App can hot-swap the configured delegate agent/model on
+    // an `agent_config_changed` settings update without respawning anything.
+    // Snapshotted (cloned) under the lock per choice — the table is tiny
+    // (one entry) and the lock is never held across an await.
+    delegate_agents: Arc<std::sync::Mutex<Vec<DelegateAgentRuntime>>>,
 ) {
-    while let Some(exec) = rx.recv().await {
-        match execute_choice(&exec.choice, exec.insert_only, &shell_mgr, &delegate_agents, &event_tx).await {
+    while let Some(mut exec) = rx.recv().await {
+        let delegate_agents = delegate_agents.lock().unwrap().clone();
+        let result =
+            match bind_choice_target(&mut exec.choice, exec.context.target_pane_id.as_deref()) {
+            Ok(()) => {
+                execute_choice(
+                    &exec.choice,
+                    exec.insert_only,
+                    &shell_mgr,
+                    &delegate_agents,
+                    &event_tx,
+                )
+                .await
+            }
+            Err(err) => Err(err),
+        };
+        match result {
             Ok(()) => {}
             Err(err) => {
-                let _ = event_tx.send(AppEvent::SystemMessage(format!(
-                    "Choice {} failed: {:#}",
-                    exec.choice.choice, err
-                )));
+                let err_str = format!("{:#}", err);
+                let _ = event_tx.send(AppEvent::SystemMessage(
+                    t!(
+                        "system.choice_execution_failed",
+                        choice = exec.choice.choice,
+                        error = err_str.as_str()
+                    )
+                    .into_owned(),
+                ));
             }
         }
     }
+}
+
+fn bind_choice_target(
+    choice: &mut RecommendationChoice,
+    target_pane_id: Option<&str>,
+) -> Result<()> {
+    for action in &mut choice.actions {
+        let requires_target = matches!(action, RecommendedAction::Send { .. })
+            || matches!(
+                action,
+                RecommendedAction::OpenAndSend {
+                    target: OpenTarget::Panel,
+                    ..
+                } | RecommendedAction::Open {
+                    target: OpenTarget::Panel,
+                    ..
+                }
+            );
+        if requires_target {
+            let target = target_pane_id
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .context("the host could not resolve a target pane for this recommendation")?;
+            match action {
+                RecommendedAction::Send { parent, .. } => *parent = target.to_string(),
+                RecommendedAction::OpenAndSend { parent, .. }
+                | RecommendedAction::Open { parent, .. } => *parent = Some(target.to_string()),
+            }
+        } else {
+            match action {
+                RecommendedAction::OpenAndSend { parent, .. }
+                | RecommendedAction::Open { parent, .. } => *parent = None,
+                RecommendedAction::Send { .. } => unreachable!(),
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn execute_choice(
@@ -349,11 +377,10 @@ async fn execute_choice(
                 ensure_non_empty("parent", parent)?;
                 ensure_non_empty("input", input)?;
                 coordinator_log(&format!(
-                    "send begin parent={} insert_only={} input_chars={} input_preview={:?}",
+                    "send begin parent={} insert_only={} input_chars={}",
                     parent,
                     insert_only,
                     input.chars().count(),
-                    truncate_for_log(input, 120)
                 ));
                 let action_label = if insert_only { "Inserting" } else { "Sending" };
                 let _ = event_tx.send(AppEvent::ExecutionInfo(format!(
@@ -382,17 +409,15 @@ async fn execute_choice(
                     "{} input to pane {}.",
                     done_label, parent
                 )));
-                // Run is "the user dispatched a command to pane X" — follow
-                // focus to that pane so they can keep typing / observe output
-                // without an extra click. Best-effort: log and ignore on
-                // failure (focus is UX-nice, not correctness-critical).
-                if !insert_only {
-                    if let Err(err) = shell_mgr.wt_focus_pane(parent).await {
-                        coordinator_log(&format!(
-                            "send focus skipped parent={} error={}",
-                            parent, err
-                        ));
-                    }
+                // Both actions hand control back to the target pane: Run lets
+                // the user observe output, while Insert lets them edit or
+                // submit the inserted command. Focus is best-effort because
+                // the input has already been delivered successfully.
+                if let Err(err) = shell_mgr.wt_focus_pane(parent).await {
+                    coordinator_log(&format!(
+                        "send focus skipped parent={} error={}",
+                        parent, err
+                    ));
                 }
             }
             RecommendedAction::OpenAndSend {
@@ -403,7 +428,12 @@ async fn execute_choice(
                 cwd,
                 title,
                 direction,
+                profile,
             } => {
+                // Resolve profile: prefer explicit from LLM, fall back to active pane's profile
+                let active_pane = shell_mgr.wt_get_active_pane().await.ok();
+                let profile = resolve_agent_profile(profile.as_deref(), active_pane.as_ref());
+
                 ensure_non_empty("input", input)?;
                 let runtime = match agent.as_deref() {
                     Some(agent) => Some(lookup_delegate_agent(delegate_agents, agent)?),
@@ -415,23 +445,37 @@ async fn execute_choice(
                     .unwrap_or(DelegatePromptDelivery::LaunchThenSend);
                 let target_label = open_target_label(target);
                 coordinator_log(&format!(
-                    "open_and_send begin target={} parent={:?} agent={:?} cwd={:?} title={:?} direction={:?} delivery_mode={} input_chars={} input_preview={:?}",
+                    "open_and_send begin target={} parent={:?} agent={:?} title={:?} direction={:?} delivery_mode={} input_chars={}",
                     target_label,
                     parent,
                     agent,
-                    cwd,
                     title,
                     direction,
                     delegate_prompt_delivery_label(delivery_mode),
                     input.chars().count(),
-                    truncate_for_log(input, 120)
                 ));
                 let _ = event_tx.send(AppEvent::ExecutionInfo(match runtime_name {
                     Some(name) => format!("Opening {} for {}.", target_label, name),
                     None => format!("Opening {}.", target_label),
                 }));
+                let pinned_session_id = runtime.and_then(|runtime| {
+                    pinned_session_id_for_runtime(
+                        runtime,
+                        delegate_command_launchable(&runtime.commandline),
+                    )
+                });
+                coordinator_log(&format!(
+                    "open_and_send pin decision agent={:?} pinned_session_id={:?}",
+                    agent, pinned_session_id
+                ));
                 let commandline = runtime
-                    .map(|runtime| build_delegate_launch_commandline(runtime, input))
+                    .map(|runtime| {
+                        build_delegate_launch_commandline(
+                            runtime,
+                            Some(input),
+                            pinned_session_id.as_deref(),
+                        )
+                    })
                     .transpose()?;
                 let pane_id = match target {
                     OpenTarget::Tab => {
@@ -441,6 +485,7 @@ async fn execute_choice(
                                 commandline.as_deref(),
                                 cwd.as_deref(),
                                 title.as_deref().or(runtime_name),
+                                profile.as_deref(),
                             )
                             .await
                             .context("failed to create tab")?;
@@ -459,6 +504,7 @@ async fn execute_choice(
                                 cwd.as_deref(),
                                 direction.as_deref(),
                                 None,
+                                profile.as_deref(),
                             )
                             .await
                             .with_context(|| format!("failed to split pane {}", parent))?;
@@ -479,15 +525,44 @@ async fn execute_choice(
                     "Opened {} pane {}.",
                     target_label, pane_id
                 )));
+                if let (Some(session_id), Some(runtime)) = (pinned_session_id.as_deref(), runtime) {
+                    let event = crate::agent_sessions::SessionEvent::SessionStarted {
+                        key: session_id.to_string(),
+                        cli_source: crate::agent_sessions::CliSource::from(
+                            crate::session_registry::SessionHookCliSource::Known(
+                                runtime.id.clone(),
+                            ),
+                        ),
+                        pane_session_id: pane_id.clone(),
+                        cwd: cwd
+                            .as_deref()
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_default(),
+                        title: String::new(),
+                    };
+                    coordinator_log(&format!(
+                        "open_and_send born-bound registering session_id={} pane={} cli={}",
+                        session_id, pane_id, runtime.id
+                    ));
+                    if event_tx
+                        .send(AppEvent::RegisterBornBoundSession { event })
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            target: "coordinator",
+                            "born-bound registration event queue is unavailable",
+                        );
+                    }
+                }
                 if matches!(delivery_mode, DelegatePromptDelivery::LaunchThenSend) {
                     send_input_to_new_pane(shell_mgr, &pane_id, input, event_tx).await?;
                 } else {
                     coordinator_log(&format!(
-                        "open_and_send startup_prompt_delivery target={} pane_id={} commandline={:?}",
-                        target_label,
-                        pane_id,
-                        commandline
+                        "open_and_send startup_prompt_delivery target={} pane_id={}",
+                        target_label, pane_id
                     ));
+                    // commandline bakes in the user prompt — trace only.
+                    tracing::trace!(target: "coordinator.content", commandline = ?commandline, "open_and_send commandline");
                     let _ = event_tx.send(AppEvent::ExecutionInfo(format!(
                         "Passed startup prompt to pane {} on launch.",
                         pane_id
@@ -500,11 +575,16 @@ async fn execute_choice(
                 cwd,
                 title,
                 direction,
+                profile,
             } => {
+                // Resolve profile: prefer explicit from LLM, fall back to active pane's profile
+                let active_pane = shell_mgr.wt_get_active_pane().await.ok();
+                let profile = resolve_agent_profile(profile.as_deref(), active_pane.as_ref());
+
                 let target_label = open_target_label(target);
                 coordinator_log(&format!(
-                    "open begin target={} parent={:?} cwd={:?} title={:?} direction={:?}",
-                    target_label, parent, cwd, title, direction
+                    "open begin target={} parent={:?} title={:?} direction={:?}",
+                    target_label, parent, title, direction
                 ));
                 let _ = event_tx.send(AppEvent::ExecutionInfo(format!(
                     "Opening {}.",
@@ -513,7 +593,12 @@ async fn execute_choice(
                 let pane_id = match target {
                     OpenTarget::Tab => {
                         let result = shell_mgr
-                            .wt_create_tab(None, cwd.as_deref(), title.as_deref())
+                            .wt_create_tab(
+                                None,
+                                cwd.as_deref(),
+                                title.as_deref(),
+                                profile.as_deref(),
+                            )
                             .await
                             .context("failed to create tab")?;
                         coordinator_log(&format!(
@@ -525,7 +610,14 @@ async fn execute_choice(
                     OpenTarget::Panel => {
                         let parent = required_parent(parent.as_deref(), "open")?;
                         let result = shell_mgr
-                            .wt_split_pane(parent, None, cwd.as_deref(), direction.as_deref(), None)
+                            .wt_split_pane(
+                                parent,
+                                None,
+                                cwd.as_deref(),
+                                direction.as_deref(),
+                                None,
+                                profile.as_deref(),
+                            )
                             .await
                             .with_context(|| format!("failed to split pane {}", parent))?;
                         coordinator_log(&format!(
@@ -552,7 +644,7 @@ async fn execute_choice(
     Ok(())
 }
 
-fn validate_recommendation_set(set: &RecommendationSet) -> Result<()> {
+pub(crate) fn validate_recommendation_set(set: &RecommendationSet) -> Result<()> {
     if !(1..=3).contains(&set.choices.len()) {
         bail!("expected 1 to 3 choices, got {}", set.choices.len());
     }
@@ -577,6 +669,45 @@ fn validate_recommendation_set(set: &RecommendationSet) -> Result<()> {
     Ok(())
 }
 
+/// Remove choices that would send input back into the helper's own pane.
+pub(crate) fn validate_recommendation_set_for_coordinator_target(
+    set: &RecommendationSet,
+    coordinator_target: Option<&str>,
+) -> Result<RecommendationSet> {
+    let Some(coordinator_target) = coordinator_target
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(set.clone());
+    };
+
+    let choices: Vec<RecommendationChoice> = set
+        .choices
+        .iter()
+        .filter(|choice| {
+            !choice.actions.iter().any(|action| {
+                matches!(
+                    action,
+                    RecommendedAction::Send { parent, .. } if parent == coordinator_target
+                )
+            })
+        })
+        .cloned()
+        .collect();
+
+    if choices.is_empty() {
+        bail!("all choices target the current coordinator pane {coordinator_target}");
+    }
+
+    let recommended_choice = set
+        .recommended_choice
+        .filter(|number| choices.iter().any(|choice| choice.choice == *number));
+    Ok(RecommendationSet {
+        recommended_choice,
+        choices,
+    })
+}
+
 fn validate_action(action: &RecommendedAction) -> Result<()> {
     match action {
         RecommendedAction::Send { parent: _, input } => {
@@ -598,9 +729,6 @@ fn validate_action(action: &RecommendedAction) -> Result<()> {
             if let Some(agent) = agent.as_deref() {
                 ensure_non_empty("agent", agent)?;
             }
-            if matches!(target, OpenTarget::Panel) {
-                required_parent(parent.as_deref(), "open_and_send")?;
-            }
             validate_direction(direction.as_deref(), target)?;
         }
         RecommendedAction::Open {
@@ -611,9 +739,6 @@ fn validate_action(action: &RecommendedAction) -> Result<()> {
         } => {
             if let Some(parent) = parent.as_deref() {
                 ensure_non_empty("parent", parent)?;
-            }
-            if matches!(target, OpenTarget::Panel) {
-                required_parent(parent.as_deref(), "open")?;
             }
             validate_direction(direction.as_deref(), target)?;
         }
@@ -655,30 +780,65 @@ fn lookup_delegate_agent<'a>(
         .ok_or_else(|| anyhow!("no delegate agent configured"))
 }
 
-/// Build the full commandline for launching a delegate agent with a prompt.
-pub fn build_delegate_commandline(
+fn pinned_session_id_for_runtime(
     runtime: &DelegateAgentRuntime,
-    input: &str,
+    launchable: bool,
+) -> Option<String> {
+    if !launchable {
+        return None;
+    }
+
+    agent_registry::lookup_profile_by_id(agent_registry::resolve_agent_id_from_cmd(
+        &runtime.commandline,
+    ))
+    .new_session_id_flag
+    .map(|_| uuid::Uuid::new_v4().to_string())
+}
+
+/// Build the delegate launch command line, optionally pinning a session id.
+/// When `session_id` is `Some` and the resolved agent advertises
+/// `new_session_id_flag`, append `<flag> <session_id>` so WTA controls the id
+/// the CLI writes its session under (enables hook-independent binding).
+pub fn build_delegate_launch_commandline_with_session(
+    runtime: &DelegateAgentRuntime,
+    input: Option<&str>,
+    session_id: Option<&str>,
 ) -> Result<String> {
-    build_delegate_launch_commandline(runtime, input)
+    build_delegate_launch_commandline(runtime, input, session_id)
 }
 
 fn build_delegate_launch_commandline(
     runtime: &DelegateAgentRuntime,
-    input: &str,
+    input: Option<&str>,
+    session_id: Option<&str>,
 ) -> Result<String> {
     let commandline = runtime.commandline.trim();
     if commandline.is_empty() {
         bail!("delegate agent runtime commandline is empty");
     }
+    if split_windows_commandline(commandline).is_empty() {
+        bail!("delegate agent runtime commandline has no executable");
+    }
     // Resolve bare names (e.g. "claude" → "claude.exe") at launch time so we
     // always see the current PATH, not a stale snapshot from process startup.
     let resolved = resolve_commandline_executable(commandline);
 
+    // Identify the agent profile from the *raw* command line so flag lookups
+    // (model, session id) see the real CLI -- not a later `cmd /c` wrapper, and
+    // not the PATH-resolved exe (which may be a quoted path containing spaces
+    // that a naive whitespace split would mangle into `"C:\Program`).
+    // `resolve_agent_id_from_cmd` tokenizes correctly and also recognizes
+    // adapter launches (e.g. `npx -y @agentclientprotocol/claude-agent-acp` -> claude).
+    // Using the same raw command line that `delegate_with_context` inspects to
+    // decide whether to pin a session id keeps that decision and the flag we
+    // append here in agreement -- otherwise we could register a born-bound id
+    // that the CLI was never actually launched with.
+    let profile = agent_registry::lookup_profile_by_id(agent_registry::resolve_agent_id_from_cmd(
+        commandline,
+    ));
+
     // If a model is configured, append --model <value> using the agent's model flags.
     let with_model = if let Some(ref model) = runtime.model {
-        let exe = resolved.split_whitespace().next().unwrap_or("");
-        let profile = agent_registry::lookup_profile(exe);
         if let Some(flag) = profile.model_flags.first() {
             format!("{} {} {}", resolved, flag, model)
         } else {
@@ -687,22 +847,243 @@ fn build_delegate_launch_commandline(
     } else {
         resolved.clone()
     };
-    let resolved_ref = with_model.as_str();
 
-    let raw = match runtime.prompt_delivery {
-        DelegatePromptDelivery::LaunchThenSend => resolved_ref.to_string(),
-        DelegatePromptDelivery::LaunchWithStartupPrompt => {
-            ensure_non_empty("input", input)?;
-            build_delegate_startup_prompt_commandline(resolved_ref, input)?
-        }
+    // Pin a caller-chosen session id when the agent supports it, so the launched
+    // CLI writes its session under a known id (enables hook-independent binding).
+    // Appended here — before any `cmd /c` wrap below — so the flag lands on the
+    // agent CLI, not on `cmd`.
+    let with_session = match (session_id, profile.new_session_id_flag) {
+        (Some(sid), Some(flag)) => format!("{} {} {}", with_model, flag, sid),
+        _ => with_model,
     };
-    // .cmd/.bat shims (e.g. npm-installed CLIs) can't be launched directly
-    // via CreateProcess — wrap with cmd /c so the command interpreter finds them.
+    let resolved_ref = with_session.as_str();
+
+    let raw = match input {
+        // Interactive (no prompt): launch the bare agent CLI regardless of
+        // the configured prompt-delivery mode.
+        None => resolved_ref.to_string(),
+        Some(input) => match runtime.prompt_delivery {
+            DelegatePromptDelivery::LaunchThenSend => resolved_ref.to_string(),
+            DelegatePromptDelivery::LaunchWithStartupPrompt => {
+                ensure_non_empty("input", input)?;
+                build_delegate_startup_prompt_commandline(resolved_ref, input)?
+            }
+        },
+    };
+    // .cmd/.bat shims (e.g. npm-installed CLIs) can't be launched directly via
+    // CreateProcess — normally we wrap with `cmd /c` so the interpreter resolves
+    // them. But `cmd /c` truncates a command-line argument at the first newline
+    // (#403), dropping the multi-line `## Terminal Context` block. For a
+    // multi-line prompt, prefer PowerShell 7 (`pwsh`) and otherwise invoke a
+    // known agent through Windows PowerShell just as a user would. Both paths
+    // keep the prompt base64-encoded until after the WT commandline transport.
+    // The Windows PowerShell fallback replaces its black-box-unsafe characters
+    // with ASCII HTML entities before handing the prompt to the agent.
     if needs_shell_launch(&resolved) {
-        Ok(format!("cmd /c {}", raw))
-    } else {
-        Ok(raw)
+        if let Some(input) = input {
+            if input.contains('\n')
+                && matches!(
+                    runtime.prompt_delivery,
+                    DelegatePromptDelivery::LaunchWithStartupPrompt
+                )
+            {
+                if is_direct_known_agent_command(commandline) {
+                    let commandline = build_shell_multiline_delegate_launch(
+                        commandline,
+                        profile,
+                        runtime.model.as_deref(),
+                        session_id,
+                        input,
+                        pwsh_available(),
+                    );
+                    return Ok(commandline);
+                }
+            }
+        }
+        return Ok(format!("cmd /c {}", raw));
     }
+    Ok(raw)
+}
+
+fn is_direct_known_agent_command(commandline: &str) -> bool {
+    split_windows_commandline(commandline)
+        .first()
+        .map(|command| agent_registry::lookup_profile(command).id != "unknown")
+        .unwrap_or(false)
+}
+
+/// Split an agent commandline into PowerShell invocation tokens, replacing a
+/// batch shim only with its adjacent `.ps1` companion or the known profile id.
+fn powershell_invocation_tokens(
+    commandline: &str,
+    profile: &agent_registry::AgentProfile,
+) -> Vec<String> {
+    let mut tokens = split_windows_commandline(commandline);
+    let Some(first) = tokens.first_mut() else {
+        return tokens;
+    };
+    let path = std::path::Path::new(first);
+    let is_batch = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        })
+        .unwrap_or(false);
+    if !is_batch {
+        return tokens;
+    }
+
+    let is_explicit_path = first.contains('\\') || first.contains('/');
+    if is_explicit_path {
+        let companion = path.with_extension("ps1");
+        if companion.is_file() {
+            *first = companion.to_string_lossy().into_owned();
+            return tokens;
+        }
+    }
+
+    *first = profile.id.to_string();
+    tokens
+}
+
+/// Build a delegate launch commandline that runs a `.cmd`/`.bat` shim agent from
+/// PowerShell 7 with the prompt delivered as inline base64 (issue #403).
+///
+/// The prompt is base64-encoded (an inert `[A-Za-z0-9+/=]` payload — no shell
+/// syntax characters and no `%`, so it survives WT's
+/// `ExpandEnvironmentStringsW` and the commandline transport untouched), decoded
+/// inside pwsh into `$p`, then handed to the agent via `& <agent> … $p` — the same
+/// PATH-resolved invocation a user would type. pwsh's native-argument passing
+/// delivers the multi-line `$p` to the CLI verbatim (unlike Windows PowerShell
+/// 5.1). Requires `pwsh` on PATH; callers gate on [`pwsh_available`].
+fn build_pwsh_base64_launch(
+    commandline: &str,
+    profile: &agent_registry::AgentProfile,
+    model: Option<&str>,
+    session_id: Option<&str>,
+    input: &str,
+) -> String {
+    let b64 = crate::osc52::base64_encode(input.as_bytes());
+
+    // `& <agent tokens> [flags] $p` — every literal token single-quoted for
+    // PowerShell; `$p` (the decoded prompt) stays a bare variable reference.
+    let mut call = String::from("& ");
+    for (i, tok) in powershell_invocation_tokens(commandline, profile)
+        .iter()
+        .enumerate()
+    {
+        if i > 0 {
+            call.push(' ');
+        }
+        call.push_str(&ps_single_quote(tok));
+    }
+    if let (Some(model), Some(flag)) = (model, profile.model_flags.first()) {
+        call.push(' ');
+        call.push_str(&ps_single_quote(flag));
+        call.push(' ');
+        call.push_str(&ps_single_quote(model));
+    }
+    if let (Some(sid), Some(flag)) = (session_id, profile.new_session_id_flag) {
+        call.push(' ');
+        call.push_str(&ps_single_quote(flag));
+        call.push(' ');
+        call.push_str(&ps_single_quote(sid));
+    }
+    if let PromptFlag::Flag(flag) = profile.delegate_prompt_flag {
+        call.push(' ');
+        call.push_str(&ps_single_quote(flag));
+    }
+    call.push_str(" $p");
+
+    let script = format!(
+        "$p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{b64}')); {call}; exit $LASTEXITCODE"
+    );
+    format!(
+        "pwsh -NoProfile -Command {}",
+        quote_windows_commandline_arg(&script)
+    )
+}
+
+fn build_shell_multiline_delegate_launch(
+    commandline: &str,
+    profile: &agent_registry::AgentProfile,
+    model: Option<&str>,
+    session_id: Option<&str>,
+    input: &str,
+    has_pwsh: bool,
+) -> String {
+    if has_pwsh {
+        return build_pwsh_base64_launch(commandline, profile, model, session_id, input);
+    }
+    build_windows_powershell_base64_launch(commandline, profile, model, session_id, input)
+}
+
+/// Build the host fallback for a known agent using Windows PowerShell 5.1.
+///
+/// The original prompt remains base64-encoded until the inline script runs.
+/// Before invoking the same bare command a user would type, the script replaces
+/// the characters that PowerShell 5.1's legacy native binder cannot preserve
+/// with ASCII HTML entities and tells the model to decode them exactly once.
+fn build_windows_powershell_base64_launch(
+    commandline: &str,
+    profile: &agent_registry::AgentProfile,
+    model: Option<&str>,
+    session_id: Option<&str>,
+    input: &str,
+) -> String {
+    let b64 = crate::osc52::base64_encode(input.as_bytes());
+    let mut call = String::from("& ");
+    for (i, token) in powershell_invocation_tokens(commandline, profile)
+        .iter()
+        .enumerate()
+    {
+        if i > 0 {
+            call.push(' ');
+        }
+        call.push_str(&ps_single_quote(token));
+    }
+    if let (Some(model), Some(flag)) = (model, profile.model_flags.first()) {
+        call.push(' ');
+        call.push_str(&ps_single_quote(flag));
+        call.push(' ');
+        call.push_str(&ps_single_quote(model));
+    }
+    if let (Some(sid), Some(flag)) = (session_id, profile.new_session_id_flag) {
+        call.push(' ');
+        call.push_str(&ps_single_quote(flag));
+        call.push(' ');
+        call.push_str(&ps_single_quote(sid));
+    }
+    if let PromptFlag::Flag(flag) = profile.delegate_prompt_flag {
+        call.push(' ');
+        call.push_str(&ps_single_quote(flag));
+    }
+    call.push_str(" $p");
+
+    let script = format!(
+        r#"$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{b64}'));$p=$p.Replace('&','&amp;').Replace('"','&quot;');$p=[regex]::Replace($p,'(\\+)\z',{{param($m)'&#92;'*$m.Value.Length}});$p='[WTA transport note: decode HTML entities exactly once before interpreting the task and terminal context.]'+"`n`n"+$p;{call};exit $LASTEXITCODE"#
+    );
+    format!(
+        "powershell.exe -NoProfile -Command {}",
+        quote_windows_commandline_arg(&script)
+    )
+}
+
+/// Quote a string as a PowerShell single-quoted literal (only `'` is special,
+/// doubled).
+fn ps_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// Whether PowerShell 7 (`pwsh.exe`) is available on `PATH`. The host base64
+/// delegate launch needs pwsh's correct native-argument passing; Windows
+/// PowerShell 5.1 (`powershell.exe`) cannot preserve embedded double quotes or
+/// a terminal backslash through a native CLI shim without prompt normalization.
+fn pwsh_available() -> bool {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).any(|dir| dir.join("pwsh.exe").is_file()))
+        .unwrap_or(false)
 }
 
 /// Resolve the first token (executable) of a commandline using the agent CLI
@@ -761,8 +1142,14 @@ fn needs_cmd_wrapper(command: &str) -> bool {
     if lower.ends_with(".exe") || lower.ends_with(".com") {
         return false;
     }
-    let basename = lower.rsplit(|ch: char| ch == '\\' || ch == '/').next().unwrap_or(&lower);
-    if matches!(basename, "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe") {
+    let basename = lower
+        .rsplit(|ch: char| ch == '\\' || ch == '/')
+        .next()
+        .unwrap_or(&lower);
+    if matches!(
+        basename,
+        "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
+    ) {
         return false;
     }
 
@@ -787,7 +1174,6 @@ fn needs_cmd_wrapper(command: &str) -> bool {
     // No .exe found on PATH — likely a .cmd/.bat shim, needs wrapping.
     true
 }
-
 
 pub fn split_windows_commandline(commandline: &str) -> Vec<String> {
     let mut args = Vec::new();
@@ -831,10 +1217,9 @@ async fn send_input_to_new_pane(
     ensure_non_empty("session_id", pane_id)?;
     ensure_non_empty("input", input)?;
     coordinator_log(&format!(
-        "open_and_send send_input_begin pane_id={} wait_ms=700 input_chars={} input_preview={:?}",
+        "open_and_send send_input_begin pane_id={} wait_ms=700 input_chars={}",
         pane_id,
         input.chars().count(),
-        truncate_for_log(input, 120)
     ));
     let _ = event_tx.send(AppEvent::ExecutionInfo(format!(
         "Sending input to pane {}.",
@@ -883,6 +1268,145 @@ fn build_delegate_startup_prompt_commandline(commandline: &str, input: &str) -> 
     Ok(join_windows_commandline(&args))
 }
 
+/// Quote a string for safe use inside `bash -c '...'`.
+///
+/// Wraps the input in single quotes, preventing ALL shell expansion
+/// (variable expansion, command substitution, globbing, etc.).  The only
+/// character that cannot appear inside single quotes is a single quote
+/// itself, which is escaped using the standard POSIX idiom:
+///
+///   `'text'\''more text'`
+///
+/// Safety through `CreateProcessW`: Windows only treats `\"` specially
+/// inside double-quoted strings — the `'\''` sequence's `\'` passes
+/// through as a literal backslash + single quote, which is exactly what
+/// bash expects for the escaped quote.
+pub(crate) fn sh_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// Build the bash command that launches the delegate agent inside a WSL distro.
+///
+/// The (possibly multi-line) prompt may contain shell syntax characters and is
+/// delivered as an **inline base64 payload**, decoded in-distro into `$prompt`
+/// and handed to the agent as a single `"$prompt"` argument. base64's alphabet
+/// (`[A-Za-z0-9+/=]`) has no shell syntax characters, whitespace, or `%`, so
+/// the payload is immune to every re-parsing layer between here and the inner
+/// login bash:
+///
+/// * WT `ConptyConnection` runs `ExpandEnvironmentStringsW` on the commandline
+///   before `CreateProcessW` (see `ConptyConnection.cpp`), so a raw `%VAR%` in
+///   the prompt would be Windows-expanded — base64 has no `%`.
+/// * the `wsl.exe` interop performs one round of double-quote-context expansion
+///   (`$(…)`, backtick, `$…`) — even inside single quotes — before the inner
+///   `bash -lc` runs. base64 triggers none of it.
+///
+/// The agent invocation and the fixed decode wrapper are escaped for that
+/// `wsl.exe` expansion pass via [`escape_for_intermediate_shell`], so the inner
+/// bash receives the command verbatim and performs the `$(base64 -d …)` /
+/// `$prompt` expansion exactly once. Validated md5-exact through an
+/// `ExpandEnvironmentStringsW` + `CreateProcessW` probe (issue #404).
+///
+/// Callers wrap the result with `quote_windows_commandline_arg`, embed in
+/// `bash -lc <escaped>`, then `wsl -d <distro> --cd "<cwd>" -- <full>` before
+/// `CreateProcessW`.
+pub(crate) fn build_wsl_delegate_commandline(
+    runtime: &DelegateAgentRuntime,
+    input: Option<&str>,
+    session_id: Option<&str>,
+) -> Result<String> {
+    let agent_cmd = runtime.commandline.trim();
+    if agent_cmd.is_empty() {
+        bail!("delegate agent runtime commandline is empty");
+    }
+    let profile =
+        agent_registry::lookup_profile_by_id(agent_registry::resolve_agent_id_from_cmd(agent_cmd));
+
+    // Agent invocation: the CLI tokens plus model / session-id flags, each
+    // single-quoted for the inner bash.
+    let mut parts: Vec<String> = split_windows_commandline(agent_cmd)
+        .into_iter()
+        .map(|token| sh_quote(&token))
+        .collect();
+    if parts.is_empty() {
+        bail!("delegate agent runtime commandline is empty");
+    }
+    if let Some(ref model) = runtime.model {
+        if let Some(flag) = profile.model_flags.first() {
+            parts.push(sh_quote(flag));
+            parts.push(sh_quote(model));
+        }
+    }
+    if let (Some(sid), Some(flag)) = (session_id, profile.new_session_id_flag) {
+        parts.push(sh_quote(flag));
+        parts.push(sh_quote(sid));
+    }
+    let agent_invocation = parts.join(" ");
+
+    // Only bake a startup prompt when the delivery mode asks for one.
+    let startup_prompt = match input {
+        Some(input)
+            if matches!(
+                runtime.prompt_delivery,
+                DelegatePromptDelivery::LaunchWithStartupPrompt
+            ) && !input.is_empty() =>
+        {
+            Some(input)
+        }
+        _ => None,
+    };
+
+    // `exec` so the agent CLI replaces bash as the pane's process.
+    let bash_command = match startup_prompt {
+        Some(input) => {
+            let b64 = crate::osc52::base64_encode(input.as_bytes());
+            let prompt_arg = match profile.delegate_prompt_flag {
+                PromptFlag::Flag(flag) => format!("{} \"$prompt\"", sh_quote(flag)),
+                PromptFlag::Positional => "\"$prompt\"".to_string(),
+            };
+            format!("prompt=$(base64 -d <<< '{b64}'); exec {agent_invocation} {prompt_arg}")
+        }
+        None => format!("exec {agent_invocation}"),
+    };
+
+    Ok(escape_for_intermediate_shell(&bash_command))
+}
+
+/// Escape a bash command so it survives the single round of double-quote-context
+/// shell expansion the `wsl.exe` interop applies to `bash -lc "<cmd>"` before the
+/// inner login bash sees it.
+///
+/// That pass performs command substitution (`$(…)`, backtick) and parameter
+/// expansion (`$…`) — even inside single quotes — plus one level of backslash
+/// processing, but not full command parsing. Escaping every `$`, backtick, and
+/// `\` with a leading backslash makes the pass a no-op: it consumes exactly one
+/// backslash level and hands the inner bash the command verbatim.
+fn escape_for_intermediate_shell(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len() + 16);
+    for ch in cmd.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '$' => out.push_str("\\$"),
+            '`' => out.push_str("\\`"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// Returns true if the command cannot be launched directly via CreateProcess
 /// and should be typed into a shell tab instead (e.g. npm .cmd/.bat shims).
 pub fn needs_shell_launch(commandline: &str) -> bool {
@@ -893,8 +1417,80 @@ pub fn needs_shell_launch(commandline: &str) -> bool {
     needs_cmd_wrapper(&first_token)
 }
 
+/// Returns true if the first token of `commandline` can actually be launched —
+/// i.e. it resolves to a real program: a shell, an `.exe`/`.cmd`/`.bat`/`.com`
+/// found on PATH, or an existing file. Used to detect a misconfigured /
+/// nonexistent delegate agent so the delegate can keep that doomed launch out
+/// of the prompt-baking path and instead launch it bare, where the failure is
+/// clean and stays visible (a shell-wrapped miss prints "not recognized" and
+/// exits non-zero; a direct `.exe` miss fails to start — either way WT keeps
+/// the pane open). Baking the active pane's output into the launch is fragile:
+/// once the command is shell-wrapped, a stray `"`/`&` in that arbitrary text
+/// can unbalance the shell's quoting so it exits 0 and the pane closes before
+/// the error is readable. Known built-in agents are covered because
+/// `resolve_commandline_executable` first resolves them to a concrete path.
+pub fn delegate_command_launchable(commandline: &str) -> bool {
+    let resolved = resolve_commandline_executable(commandline);
+    let token = match split_windows_commandline(&resolved).into_iter().next() {
+        Some(t) => t,
+        None => return false,
+    };
+    let unquoted = token.trim_matches('"');
+    if unquoted.is_empty() {
+        return false;
+    }
+    let lower = unquoted.to_ascii_lowercase();
+    let basename = lower
+        .rsplit(|c: char| c == '\\' || c == '/')
+        .next()
+        .unwrap_or(&lower);
+    // Shells are always launchable.
+    if matches!(
+        basename,
+        "cmd" | "cmd.exe" | "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe"
+    ) {
+        return true;
+    }
+    let path = std::path::Path::new(unquoted);
+    // An explicit path (contains a separator): it must exist as a file — try the
+    // common executable extensions when none was given.
+    if unquoted.contains('\\') || unquoted.contains('/') {
+        if path.is_file() {
+            return true;
+        }
+        if path.extension().is_none() {
+            for ext in ["exe", "cmd", "bat", "com"] {
+                if path.with_extension(ext).is_file() {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    // A bare name: search PATH. With an extension look for it verbatim; otherwise
+    // try the common executable extensions.
+    let Ok(path_var) = std::env::var("PATH") else {
+        return false;
+    };
+    let has_ext = path.extension().is_some();
+    for dir in std::env::split_paths(&path_var) {
+        if has_ext {
+            if dir.join(unquoted).is_file() {
+                return true;
+            }
+        } else {
+            for ext in ["exe", "cmd", "bat", "com"] {
+                if dir.join(format!("{unquoted}.{ext}")).is_file() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 // Quote arguments using the standard Windows CommandLineToArgvW escaping rules.
-fn quote_windows_commandline_arg(arg: &str) -> String {
+pub(crate) fn quote_windows_commandline_arg(arg: &str) -> String {
     if arg.is_empty() {
         return "\"\"".to_string();
     }
@@ -937,6 +1533,64 @@ fn ensure_non_empty(field: &str, value: &str) -> Result<()> {
         bail!("field '{}' must not be empty", field);
     }
     Ok(())
+}
+
+/// Resolve the profile for an agent-created terminal.
+///
+/// Prefers an explicit, non-empty profile supplied by the LLM; otherwise falls
+/// back to the `profile` field of the active pane (the shell the user is
+/// working in). An empty profile from either source is treated as "no profile"
+/// so downstream callers let Windows Terminal pick the default — this keeps the
+/// behavior consistent with `ShellManager::create_terminal_wt`.
+pub(crate) fn resolve_agent_profile(
+    explicit: Option<&str>,
+    active_pane: Option<&serde_json::Value>,
+) -> Option<String> {
+    match explicit {
+        Some(p) if !p.is_empty() => Some(p.to_owned()),
+        _ => active_pane
+            .and_then(|v| v.get("profile"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_owned()),
+    }
+}
+
+/// A bare POSIX absolute path (`/home/user`, `/mnt/c/...`) — starts with a
+/// single `/`. A `//`-prefixed path is a forward-slash UNC path (e.g.
+/// `//wsl.localhost/Ubuntu/...`), which *is* a valid Windows path, so it's not
+/// treated as POSIX here.
+fn is_posix_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.first() == Some(&b'/') && bytes.get(1) != Some(&b'/')
+}
+
+/// Choose the working directory to hand a **Windows** agent CLI process.
+///
+/// A WSL pane reports a POSIX cwd (e.g. `/home/user`), which is not a valid
+/// working directory for a Windows process — handing it to a Windows agent CLI
+/// (Copilot/Claude/Gemini) makes it fail to launch. When the provided cwd is a
+/// bare POSIX path we fall back to the Windows home (`%USERPROFILE%`, passed in
+/// as `windows_home`) if available; otherwise drop it so Windows Terminal picks
+/// a sensible default. Windows paths (drive-letter, UNC) and relative paths pass
+/// through unchanged, and a missing/blank cwd stays `None`.
+///
+/// Running an agent *natively inside WSL* (so it honors the Linux cwd and uses
+/// the WSL toolchain) is a separate future feature; this is only a guard so the
+/// Windows agent CLI doesn't crash on an unusable cwd.
+pub(crate) fn sanitize_windows_agent_cwd(
+    cwd: Option<&str>,
+    windows_home: Option<&str>,
+) -> Option<String> {
+    let cwd = cwd.map(str::trim).filter(|c| !c.is_empty())?;
+    if is_posix_absolute_path(cwd) {
+        windows_home
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .map(str::to_owned)
+    } else {
+        Some(cwd.to_owned())
+    }
 }
 
 fn resolve_created_pane_id(result: &serde_json::Value, action_name: &str) -> Result<String> {
@@ -1051,12 +1705,178 @@ fn extract_balanced_json_object(text: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_delegate_launch_commandline, default_delegate_agent_runtimes, parse_autofix_response,
-        parse_recommendation_set, resolve_created_pane_id,
-        validate_recommendation_set_for_coordinator_target, AutofixDecision,
-        DelegatePromptDelivery, OpenTarget, RecommendedAction,
+        bind_choice_target, build_delegate_launch_commandline,
+        build_delegate_launch_commandline_with_session, build_pwsh_base64_launch,
+        build_shell_multiline_delegate_launch, build_windows_powershell_base64_launch,
+        build_wsl_delegate_commandline, default_delegate_agent_runtimes,
+        escape_for_intermediate_shell, execute_choice, is_direct_known_agent_command,
+        parse_autofix_response, parse_recommendation_set, pinned_session_id_for_runtime,
+        pwsh_available, resolve_agent_profile, resolve_created_pane_id, sanitize_windows_agent_cwd,
+        AutofixDecision, DelegateAgentRuntime, DelegatePromptDelivery, OpenTarget,
+        RecommendationChoice, RecommendedAction,
     };
+    use crate::shell::wt_channel::WtChannel;
+    use crate::shell::ShellManager;
     use serde_json::json;
+    use std::os::windows::process::CommandExt;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc;
+
+    #[derive(Default)]
+    struct RecordingWtChannel {
+        requests: Mutex<Vec<(String, serde_json::Value)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl WtChannel for RecordingWtChannel {
+        async fn request(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> anyhow::Result<serde_json::Value> {
+            self.requests
+                .lock()
+                .unwrap()
+                .push((method.to_string(), params));
+            Ok(json!({}))
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn host_target_overrides_model_generated_pane_targets() {
+        let mut choice = RecommendationChoice {
+            choice: 1,
+            title: "Check port".to_string(),
+            rationale: String::new(),
+            actions: vec![
+                RecommendedAction::Send {
+                    parent: "10".to_string(),
+                    input: "Get-NetTCPConnection -LocalPort 8000".to_string(),
+                },
+                RecommendedAction::Open {
+                    target: OpenTarget::Panel,
+                    parent: Some("invented-pane".to_string()),
+                    cwd: None,
+                    title: None,
+                    direction: None,
+                    profile: None,
+                },
+            ],
+        };
+
+        bind_choice_target(&mut choice, Some("real-pane-guid")).unwrap();
+
+        assert!(matches!(
+            &choice.actions[0],
+            RecommendedAction::Send { parent, .. } if parent == "real-pane-guid"
+        ));
+        assert!(matches!(
+            &choice.actions[1],
+            RecommendedAction::Open { parent: Some(parent), .. } if parent == "real-pane-guid"
+        ));
+    }
+
+    #[test]
+    fn target_requiring_action_fails_when_host_has_no_target() {
+        let mut choice = RecommendationChoice {
+            choice: 1,
+            title: "Check port".to_string(),
+            rationale: String::new(),
+            actions: vec![RecommendedAction::Send {
+                parent: "10".to_string(),
+                input: "Get-NetTCPConnection -LocalPort 8000".to_string(),
+            }],
+        };
+
+        let err = bind_choice_target(&mut choice, None).unwrap_err();
+
+        assert!(format!("{err:#}").contains("host could not resolve a target pane"));
+    }
+
+    #[test]
+    fn tab_target_actions_discard_model_provided_parent_even_with_host_target() {
+        // Tab-targeted open/open_and_send actions don't need a parent pane at
+        // all (they create a brand new tab), so any model-invented parent
+        // must be wiped rather than bound to the host's resolved pane.
+        let mut choice = RecommendationChoice {
+            choice: 1,
+            title: "Delegate to a new tab".to_string(),
+            rationale: String::new(),
+            actions: vec![
+                RecommendedAction::OpenAndSend {
+                    target: OpenTarget::Tab,
+                    parent: Some("model-invented-tab-parent".to_string()),
+                    input: "Inspect the repo".to_string(),
+                    agent: Some("copilot".to_string()),
+                    cwd: None,
+                    title: None,
+                    direction: None,
+                    profile: None,
+                },
+                RecommendedAction::Open {
+                    target: OpenTarget::Tab,
+                    parent: Some("another-model-invented-parent".to_string()),
+                    cwd: None,
+                    title: None,
+                    direction: None,
+                    profile: None,
+                },
+            ],
+        };
+
+        // Even though the host resolved a real target pane, tab actions must
+        // never inherit it (or retain the model's guess) since they open a
+        // brand new tab rather than routing into an existing pane.
+        bind_choice_target(&mut choice, Some("real-pane-guid")).unwrap();
+
+        assert!(matches!(
+            &choice.actions[0],
+            RecommendedAction::OpenAndSend { parent: None, .. }
+        ));
+        assert!(matches!(
+            &choice.actions[1],
+            RecommendedAction::Open { parent: None, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn insert_into_terminal_focuses_target_pane_after_sending_input() {
+        let channel = Arc::new(RecordingWtChannel::default());
+        let shell_mgr = ShellManager::new().with_wt_channel(channel.clone() as Arc<dyn WtChannel>);
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let choice = RecommendationChoice {
+            choice: 1,
+            title: "Insert command".to_string(),
+            rationale: String::new(),
+            actions: vec![RecommendedAction::Send {
+                parent: "target-pane".to_string(),
+                input: "git status\r\n".to_string(),
+            }],
+        };
+
+        execute_choice(&choice, true, &shell_mgr, &[], &event_tx)
+            .await
+            .expect("insert should succeed");
+
+        let requests = channel.requests.lock().unwrap();
+        assert_eq!(
+            requests.as_slice(),
+            [
+                (
+                    "send_input".to_string(),
+                    json!({ "session_id": "target-pane", "text": "git status" }),
+                ),
+                (
+                    "focus_pane".to_string(),
+                    json!({ "session_id": "target-pane" }),
+                ),
+            ]
+        );
+    }
 
     #[test]
     fn default_delegate_runtime_uses_cli_default_model() {
@@ -1079,8 +1899,12 @@ mod tests {
             .find(|runtime| runtime.id == "copilot")
             .expect("copilot runtime should exist");
 
-        let commandline =
-            build_delegate_launch_commandline(&runtime, "Fix the build and report back").unwrap();
+        let commandline = build_delegate_launch_commandline(
+            &runtime,
+            Some("Fix the build and report back"),
+            None,
+        )
+                .unwrap();
 
         assert!(!commandline.contains("--model"));
         // May be wrapped as "cmd /c copilot ..." if copilot.exe isn't on PATH.
@@ -1118,6 +1942,18 @@ mod tests {
     }
 
     #[test]
+    fn delegate_runtime_identifies_quoted_agent_path_with_spaces() {
+        let runtime =
+            default_delegate_agent_runtimes(Some(r#""C:\npm tools\codex.cmd""#), None, None)
+                .into_iter()
+                .next()
+                .expect("delegate runtime");
+
+        assert_eq!(runtime.id, "codex");
+        assert_eq!(runtime.name, "Codex");
+    }
+
+    #[test]
     fn delegate_runtime_prefers_explicit_delegate_command() {
         let runtime = default_delegate_agent_runtimes(
             Some("copilot --model claude-haiku-4.5"),
@@ -1144,7 +1980,8 @@ mod tests {
 
         let commandline = build_delegate_launch_commandline(
             &runtime,
-            "Fix the Rust build error and run cargo build",
+            Some("Fix the Rust build error and run cargo build"),
+            None,
         )
         .unwrap();
 
@@ -1152,6 +1989,206 @@ mod tests {
         assert!(commandline.contains("copilot"));
         assert!(commandline.contains("--model claude-haiku-4.5"));
         assert!(commandline.contains("-i \"Fix the Rust build error and run cargo build\""));
+    }
+
+    #[test]
+    fn delegate_interactive_commandline_omits_startup_prompt() {
+        let runtime = default_delegate_agent_runtimes(
+            Some("copilot --model claude-haiku-4.5"),
+            Some("copilot --acp --stdio --model gpt-5.2"),
+            None,
+        )
+        .into_iter()
+        .find(|runtime| runtime.id == "copilot")
+        .expect("copilot runtime should exist");
+
+        let commandline =
+            build_delegate_launch_commandline_with_session(&runtime, None, None).unwrap();
+
+        // May be wrapped as "cmd /c copilot ..." if copilot.exe isn't on PATH.
+        assert!(commandline.contains("copilot"));
+        // Model is still applied for the interactive launch.
+        assert!(commandline.contains("--model claude-haiku-4.5"));
+        // No startup-prompt flag is appended when there's no prompt.
+        assert!(!commandline.contains("-i "));
+    }
+
+    #[test]
+    fn delegate_command_launchable_detects_missing_agent() {
+        // A shell is always launchable; a real system exe resolves on PATH; a
+        // bogus bare name does not — this is the up-front check that keeps a
+        // doomed launch out of the fragile prompt-baking path, so it fails
+        // cleanly as a bare `cmd /c <agent>` and stays visible in its tab.
+        assert!(super::delegate_command_launchable("cmd"));
+        assert!(super::delegate_command_launchable("cmd.exe /c echo hi"));
+        assert!(
+            !super::delegate_command_launchable("wt-nonexistent-delegate-xyz"),
+            "a nonexistent bare command must be reported as not launchable"
+        );
+        assert!(
+            !super::delegate_command_launchable("wt-nonexistent-delegate-xyz -i \"hi\""),
+            "extra args must not make a missing agent look launchable"
+        );
+    }
+
+    #[test]
+    fn delegate_commandline_appends_pinned_session_id_for_copilot() {
+        let runtime = DelegateAgentRuntime {
+            id: "copilot".to_string(),
+            name: "Copilot".to_string(),
+            description: "Launches copilot as a delegate agent.".to_string(),
+            commandline: "copilot".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        let commandline = build_delegate_launch_commandline_with_session(
+            &runtime,
+            Some("hi"),
+            Some("11111111-2222-3333-4444-555555555555"),
+        )
+        .unwrap();
+
+        assert!(commandline.contains("--session-id 11111111-2222-3333-4444-555555555555"));
+    }
+
+    #[test]
+    fn pinned_session_id_follows_agent_not_cmd_wrapper() {
+        // copilot may or may not be `cmd /c`-wrapped depending on whether
+        // copilot.exe vs copilot.cmd is on PATH. Either way the pinned flag must
+        // be present and positioned *after* the agent name — never lost to a
+        // first-token lookup that sees `cmd` instead of the agent.
+        let runtime = DelegateAgentRuntime {
+            id: "copilot".to_string(),
+            name: "Copilot".to_string(),
+            description: "Launches copilot as a delegate agent.".to_string(),
+            commandline: "copilot".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        let commandline = build_delegate_launch_commandline_with_session(
+            &runtime,
+            Some("hi"),
+            Some("11111111-2222-3333-4444-555555555555"),
+        )
+        .unwrap();
+
+        assert!(
+            commandline.contains("--session-id 11111111-2222-3333-4444-555555555555"),
+            "pinned flag missing: {commandline}"
+        );
+        let agent_pos = commandline.find("copilot").expect("agent name present");
+        let flag_pos = commandline.find("--session-id").unwrap();
+        assert!(
+            flag_pos > agent_pos,
+            "--session-id must follow the agent, not attach to a cmd wrapper: {commandline}"
+        );
+    }
+
+    #[test]
+    fn pinned_session_id_appended_for_adapter_launch_command() {
+        // Regression for the agent-identification bug behind PR review: an
+        // adapter-style launch ("npx -y @agentclientprotocol/claude-agent-acp@0.59.0" ->
+        // claude) must still be recognized as a pinnable agent. The old
+        // `split_whitespace().next()` + lookup_profile saw "npx" ->
+        // DEFAULT_PROFILE -> no --session-id; `resolve_agent_id_from_cmd`
+        // resolves the adapter command to claude, which advertises the flag.
+        let runtime = DelegateAgentRuntime {
+            id: "claude".to_string(),
+            name: "Claude".to_string(),
+            description: "Launches claude as a delegate agent.".to_string(),
+            commandline: "npx -y @agentclientprotocol/claude-agent-acp@0.59.0".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        let commandline = build_delegate_launch_commandline_with_session(
+            &runtime,
+            Some("hi"),
+            Some("11111111-2222-3333-4444-555555555555"),
+        )
+        .unwrap();
+
+        assert!(
+            commandline.contains("--session-id 11111111-2222-3333-4444-555555555555"),
+            "adapter launch must be identified as a pinnable agent: {commandline}"
+        );
+    }
+
+    #[test]
+    fn delegate_commandline_omits_session_id_when_unset() {
+        let runtime = DelegateAgentRuntime {
+            id: "copilot".to_string(),
+            name: "Copilot".to_string(),
+            description: "Launches copilot as a delegate agent.".to_string(),
+            commandline: "copilot".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        let commandline =
+            build_delegate_launch_commandline_with_session(&runtime, Some("hi"), None).unwrap();
+
+        assert!(!commandline.contains("--session-id"));
+    }
+
+    #[test]
+    fn recommendation_launch_generates_session_id_for_copilot() {
+        let runtime = DelegateAgentRuntime {
+            id: "copilot".to_string(),
+            name: "Copilot".to_string(),
+            description: String::new(),
+            commandline: "copilot".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        let session_id =
+            pinned_session_id_for_runtime(&runtime, true).expect("copilot should support pinning");
+        assert!(uuid::Uuid::parse_str(&session_id).is_ok());
+    }
+
+    #[test]
+    fn recommendation_launch_skips_session_id_for_codex() {
+        let runtime = DelegateAgentRuntime {
+            id: "codex".to_string(),
+            name: "Codex".to_string(),
+            description: String::new(),
+            commandline: "codex".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        assert!(pinned_session_id_for_runtime(&runtime, true).is_none());
+    }
+
+    #[test]
+    fn recommendation_launch_resolves_adapter_before_pinning() {
+        let runtime = DelegateAgentRuntime {
+            id: "claude".to_string(),
+            name: "Claude".to_string(),
+            description: String::new(),
+            commandline: "npx -y @agentclientprotocol/claude-agent-acp".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        assert!(pinned_session_id_for_runtime(&runtime, true).is_some());
+    }
+
+    #[test]
+    fn recommendation_launch_skips_session_id_when_agent_is_unavailable() {
+        let runtime = DelegateAgentRuntime {
+            id: "copilot".to_string(),
+            name: "Copilot".to_string(),
+            description: String::new(),
+            commandline: "copilot".to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        };
+
+        assert!(pinned_session_id_for_runtime(&runtime, false).is_none());
     }
 
     #[test]
@@ -1167,8 +2204,12 @@ mod tests {
         .find(|runtime| runtime.id == "copilot")
         .expect("copilot runtime should exist");
 
-        let commandline =
-            build_delegate_launch_commandline(&runtime, "Inspect the repo and summarize").unwrap();
+        let commandline = build_delegate_launch_commandline(
+            &runtime,
+            Some("Inspect the repo and summarize"),
+            None,
+        )
+                .unwrap();
 
         assert_eq!(
             commandline,
@@ -1322,6 +2363,232 @@ mod tests {
         }
     }
 
+    // ── profile inheritance (PR #366) ──────────────────────────────────────
+
+    #[test]
+    fn open_action_defaults_profile_to_none_when_absent() {
+        // The `profile` field is optional; an LLM emitting the pre-#366 schema
+        // (no `profile` key) must still parse, with profile == None.
+        let text = r#"```json
+{
+  "recommended_choice": 1,
+  "choices": [
+    {
+      "choice": 1,
+      "title": "Open a tab",
+      "actions": [ { "type": "open", "target": "tab" } ]
+    }
+  ]
+}
+```"#;
+        let parsed = parse_recommendation_set(text).expect("open without profile should parse");
+        match &parsed.choices[0].actions[0] {
+            RecommendedAction::Open { profile, .. } => assert_eq!(profile.as_deref(), None),
+            other => panic!("expected Open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_action_parses_explicit_profile() {
+        let text = r#"```json
+{
+  "recommended_choice": 1,
+  "choices": [
+    {
+      "choice": 1,
+      "title": "Open Ubuntu tab",
+      "actions": [ { "type": "open", "target": "tab", "profile": "Ubuntu" } ]
+    }
+  ]
+}
+```"#;
+        let parsed = parse_recommendation_set(text).expect("open with profile should parse");
+        match &parsed.choices[0].actions[0] {
+            RecommendedAction::Open { profile, .. } => {
+                assert_eq!(profile.as_deref(), Some("Ubuntu"));
+            }
+            other => panic!("expected Open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_and_send_parses_explicit_profile() {
+        let text = r#"```json
+{
+  "recommended_choice": 1,
+  "choices": [
+    {
+      "choice": 1,
+      "title": "Open Ubuntu tab and run",
+      "actions": [
+        {
+          "type": "open_and_send",
+          "target": "tab",
+          "input": "ls -la",
+          "profile": "Ubuntu"
+        }
+      ]
+    }
+  ]
+}
+```"#;
+        let parsed = parse_recommendation_set(text).expect("open_and_send should parse");
+        match &parsed.choices[0].actions[0] {
+            RecommendedAction::OpenAndSend { profile, input, .. } => {
+                assert_eq!(profile.as_deref(), Some("Ubuntu"));
+                assert_eq!(input, "ls -la");
+            }
+            other => panic!("expected OpenAndSend, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_profile_prefers_explicit_over_active_pane() {
+        let active = json!({ "profile": "PowerShell" });
+        assert_eq!(
+            resolve_agent_profile(Some("Ubuntu"), Some(&active)),
+            Some("Ubuntu".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_profile_falls_back_to_active_pane_when_explicit_missing() {
+        let active = json!({ "profile": "Ubuntu" });
+        assert_eq!(
+            resolve_agent_profile(None, Some(&active)),
+            Some("Ubuntu".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_profile_falls_back_when_explicit_empty() {
+        // An empty explicit profile is treated as "unspecified" and must not
+        // shadow the active pane's profile.
+        let active = json!({ "profile": "Ubuntu" });
+        assert_eq!(
+            resolve_agent_profile(Some(""), Some(&active)),
+            Some("Ubuntu".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_profile_none_when_active_pane_profile_empty() {
+        // An empty active-pane profile must resolve to None (not Some("")), so
+        // downstream lets Windows Terminal pick the default. This mirrors
+        // ShellManager::create_terminal_wt's non-empty guard.
+        let active = json!({ "profile": "" });
+        assert_eq!(resolve_agent_profile(None, Some(&active)), None);
+    }
+
+    #[test]
+    fn resolve_profile_none_when_active_pane_has_no_profile_field() {
+        let active = json!({ "session_id": "abc" });
+        assert_eq!(resolve_agent_profile(None, Some(&active)), None);
+    }
+
+    #[test]
+    fn resolve_profile_none_when_active_pane_unavailable() {
+        // wt_get_active_pane() failing (COM error) yields None; with no explicit
+        // profile the result is None (default profile downstream).
+        assert_eq!(resolve_agent_profile(None, None), None);
+    }
+
+    #[test]
+    fn resolve_profile_uses_explicit_when_active_pane_unavailable() {
+        assert_eq!(
+            resolve_agent_profile(Some("Ubuntu"), None),
+            Some("Ubuntu".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_profile_ignores_non_string_active_pane_profile() {
+        let active = json!({ "profile": 42 });
+        assert_eq!(resolve_agent_profile(None, Some(&active)), None);
+    }
+
+    // ── Windows agent CLI cwd sanitize (WSL POSIX cwd guard) ───────────────
+
+    #[test]
+    fn sanitize_cwd_passes_through_windows_drive_path() {
+        assert_eq!(
+            sanitize_windows_agent_cwd(Some(r"C:\repo"), Some(r"C:\Users\me")),
+            Some(r"C:\repo".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_cwd_falls_back_for_posix_path() {
+        // A WSL pane's "/home/user" is unusable for a Windows agent CLI → home.
+        assert_eq!(
+            sanitize_windows_agent_cwd(Some("/home/user"), Some(r"C:\Users\me")),
+            Some(r"C:\Users\me".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_cwd_falls_back_for_mnt_path() {
+        assert_eq!(
+            sanitize_windows_agent_cwd(Some("/mnt/c/repo"), Some(r"C:\Users\me")),
+            Some(r"C:\Users\me".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_cwd_root_posix_falls_back() {
+        assert_eq!(
+            sanitize_windows_agent_cwd(Some("/"), Some(r"C:\Users\me")),
+            Some(r"C:\Users\me".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_cwd_posix_without_home_is_dropped() {
+        // No Windows home available → drop the unusable cwd (None), letting WT
+        // pick a default rather than crashing the agent CLI on a POSIX path.
+        assert_eq!(sanitize_windows_agent_cwd(Some("/home/user"), None), None);
+        assert_eq!(
+            sanitize_windows_agent_cwd(Some("/home/user"), Some("   ")),
+            None
+        );
+    }
+
+    #[test]
+    fn sanitize_cwd_keeps_unc_path() {
+        // Forward-slash and backslash UNC paths are valid Windows paths — keep.
+        assert_eq!(
+            sanitize_windows_agent_cwd(
+                Some("//wsl.localhost/Ubuntu/home/user"),
+                Some(r"C:\Users\me")
+            ),
+            Some("//wsl.localhost/Ubuntu/home/user".to_string())
+        );
+        assert_eq!(
+            sanitize_windows_agent_cwd(
+                Some(r"\\wsl.localhost\Ubuntu\home\user"),
+                Some(r"C:\Users\me")
+            ),
+            Some(r"\\wsl.localhost\Ubuntu\home\user".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_cwd_none_and_blank_stay_none() {
+        assert_eq!(sanitize_windows_agent_cwd(None, Some(r"C:\Users\me")), None);
+        assert_eq!(
+            sanitize_windows_agent_cwd(Some("   "), Some(r"C:\Users\me")),
+            None
+        );
+    }
+
+    #[test]
+    fn sanitize_cwd_keeps_relative_path() {
+        assert_eq!(
+            sanitize_windows_agent_cwd(Some("subdir"), Some(r"C:\Users\me")),
+            Some("subdir".to_string())
+        );
+    }
+
     #[test]
     fn rejects_open_with_invalid_direction() {
         let text = r#"```json
@@ -1372,7 +2639,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_open_panel_without_parent() {
+    fn accepts_open_panel_without_model_owned_parent() {
         let text = r#"```json
 {
   "recommended_choice": 1,
@@ -1391,68 +2658,11 @@ mod tests {
 }
 ```"#;
 
-        assert!(parse_recommendation_set(text).is_err());
+        assert!(parse_recommendation_set(text).is_ok());
     }
 
     #[test]
-    fn rejects_send_to_current_coordinator_target() {
-        let text = r#"```json
-{
-  "recommended_choice": 1,
-  "choices": [
-    {
-      "choice": 1,
-      "title": "Reply in the current pane",
-      "actions": [
-        {
-          "type": "send",
-          "parent": "14",
-          "input": "Continue in this pane"
-        }
-      ]
-    },
-    {
-      "choice": 2,
-      "title": "Run locally",
-      "actions": [
-        {
-          "type": "send",
-          "parent": "1",
-          "input": "pwd"
-        }
-      ]
-    },
-    {
-      "choice": 3,
-      "title": "Delegate",
-      "actions": [
-        {
-          "type": "open_and_send",
-          "target": "tab",
-          "input": "Inspect the repo",
-          "agent": "copilot",
-          "cwd": "C:\\repo"
-        }
-      ]
-    }
-  ]
-}
-```"#;
-
-        let parsed = parse_recommendation_set(text).expect("recommendation set should parse");
-        let filtered = validate_recommendation_set_for_coordinator_target(&parsed, Some("14"))
-            .expect("should filter instead of rejecting");
-
-        // Choice 1 (self-targeted) should be removed, choices 2 and 3 remain.
-        assert_eq!(filtered.choices.len(), 2);
-        assert_eq!(filtered.choices[0].choice, 2);
-        assert_eq!(filtered.choices[1].choice, 3);
-        // recommended_choice was 1 (now filtered out), so it should be None.
-        assert_eq!(filtered.recommended_choice, None);
-    }
-
-    #[test]
-    fn rejects_open_and_send_panel_without_parent() {
+    fn accepts_open_and_send_panel_without_model_owned_parent() {
         let text = r#"```json
 {
   "recommended_choice": 1,
@@ -1494,10 +2704,7 @@ mod tests {
 }
 ```"#;
 
-        let err =
-            parse_recommendation_set(text).expect_err("panel without parent should be rejected");
-        assert!(format!("{err:#}")
-            .contains("field 'parent' is required for open_and_send target panel"));
+        assert!(parse_recommendation_set(text).is_ok());
     }
 
     #[test]
@@ -1692,5 +2899,481 @@ mod tests {
             parse_autofix_response(text),
             AutofixDecision::Ignore
         ));
+    }
+
+    // ── #404: WSL delegate inline base64 ─────────────────────────────────
+
+    fn base64_runtime(commandline: &str) -> DelegateAgentRuntime {
+        DelegateAgentRuntime {
+            id: commandline.to_string(),
+            name: commandline.to_string(),
+            description: String::new(),
+            commandline: commandline.to_string(),
+            prompt_delivery: DelegatePromptDelivery::LaunchWithStartupPrompt,
+            model: None,
+        }
+    }
+
+    #[test]
+    fn wsl_delegate_delivers_prompt_as_inline_base64() {
+        let runtime = base64_runtime("claude"); // positional prompt flag
+        let prompt = "fix it\n\n## Terminal Context\n```\n$(whoami) `id` %TEMP% \"q\"\n```";
+        let cmd = build_wsl_delegate_commandline(&runtime, Some(prompt), None).expect("cmd");
+
+        // The whole command is a single line — no raw newline rides the commandline.
+        assert!(
+            !cmd.contains('\n'),
+            "commandline must be single-line: {cmd}"
+        );
+        // The raw prompt and its shell syntax characters never appear literally.
+        assert!(!cmd.contains("$(whoami)"));
+        assert!(!cmd.contains("%TEMP%"));
+        // The base64 of the prompt is present, decoded via a here-string.
+        let b64 = crate::osc52::base64_encode(prompt.as_bytes());
+        assert!(cmd.contains(&b64), "base64 payload missing: {cmd}");
+        assert!(cmd.contains("base64 -d <<<"));
+        // The decode wrapper is escaped for the wsl.exe expansion pass.
+        assert!(cmd.contains("\\$(base64 -d"), "escaped $() missing: {cmd}");
+        assert!(
+            cmd.contains("exec 'claude' \"\\$prompt\""),
+            "exec form: {cmd}"
+        );
+    }
+
+    #[test]
+    fn wsl_delegate_uses_prompt_flag_for_flag_agents() {
+        let runtime = base64_runtime("copilot"); // -i flag agent
+        let cmd = build_wsl_delegate_commandline(&runtime, Some("hi\nthere"), None).expect("cmd");
+        assert!(
+            cmd.contains("'-i' \"\\$prompt\""),
+            "flag prompt form: {cmd}"
+        );
+    }
+
+    #[test]
+    fn opencode_delegate_uses_interactive_prompt_flag() {
+        let mut runtime = base64_runtime("opencode");
+        runtime.model = Some("anthropic/claude-sonnet-4-5".to_string());
+        let cmd = build_wsl_delegate_commandline(&runtime, Some("hi\nthere"), None).expect("cmd");
+        assert!(
+            cmd.contains(
+                "'opencode' '--model' 'anthropic/claude-sonnet-4-5' '--prompt' \"\\$prompt\""
+            ),
+            "OpenCode delegate form: {cmd}"
+        );
+
+        let profile = crate::agent_registry::lookup_profile_by_id("opencode");
+        let cmd = build_pwsh_base64_launch(
+            "opencode",
+            profile,
+            Some("anthropic/claude-sonnet-4-5"),
+            None,
+            "hi\nthere",
+        );
+        assert!(
+            cmd.contains(
+                "& 'opencode' '--model' 'anthropic/claude-sonnet-4-5' '--prompt' $p; exit $LASTEXITCODE"
+            ),
+            "OpenCode PowerShell delegate form: {cmd}"
+        );
+
+        let cmd = build_windows_powershell_base64_launch(
+            "opencode",
+            profile,
+            Some("anthropic/claude-sonnet-4-5"),
+            None,
+            "hi\nthere",
+        );
+        assert!(
+            cmd.contains(
+                "& 'opencode' '--model' 'anthropic/claude-sonnet-4-5' '--prompt' $p;exit $LASTEXITCODE"
+            ),
+            "OpenCode Windows PowerShell delegate form: {cmd}"
+        );
+
+        runtime.commandline = r"C:\tools\opencode.exe".to_string();
+        let cmd = build_delegate_launch_commandline(&runtime, Some("hi there"), None)
+            .expect("OpenCode direct command");
+        assert_eq!(
+            cmd,
+            r#"C:\tools\opencode.exe --model anthropic/claude-sonnet-4-5 --prompt "hi there""#
+        );
+    }
+
+    #[test]
+    fn delegate_launch_rejects_commandline_without_executable() {
+        let mut runtime = base64_runtime("opencode");
+        runtime.commandline = "\"\"".to_string();
+
+        let error = build_delegate_launch_commandline(&runtime, Some("hi"), None)
+            .expect_err("quote-only commandline should be rejected");
+        assert!(
+            error.to_string().contains("has no executable"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn wsl_delegate_interactive_has_no_base64() {
+        let runtime = base64_runtime("claude");
+        let cmd = build_wsl_delegate_commandline(&runtime, None, None).expect("cmd");
+        assert_eq!(cmd, "exec 'claude'");
+    }
+
+    #[test]
+    fn escape_for_intermediate_shell_escapes_expansion_chars() {
+        assert_eq!(escape_for_intermediate_shell("a$b`c\\d"), "a\\$b\\`c\\\\d");
+        assert_eq!(escape_for_intermediate_shell("plain text"), "plain text");
+    }
+
+    // ── #403: host pwsh + inline base64 (avoids cmd /c truncation) ───────
+
+    #[test]
+    fn pwsh_base64_launch_uses_bare_name_and_base64() {
+        let profile = crate::agent_registry::lookup_profile_by_id("codex"); // positional
+        let prompt = "l1\nl2 \"q\" %TEMP%";
+        let cmd = build_pwsh_base64_launch("codex", profile, None, None, prompt);
+
+        assert!(cmd.starts_with("pwsh -NoProfile -Command "));
+        // launched like a user: bare name, no .cmd / underlying exe resolution.
+        assert!(cmd.contains("& 'codex'"));
+        assert!(!cmd.contains(".cmd"));
+        assert!(!cmd.contains("node "));
+        // prompt delivered as base64, decoded to $p inside pwsh (never raw).
+        let b64 = crate::osc52::base64_encode(prompt.as_bytes());
+        assert!(cmd.contains(&b64), "base64 payload missing: {cmd}");
+        assert!(cmd.contains("FromBase64String"));
+        assert!(
+            cmd.trim_end().ends_with("$p; exit $LASTEXITCODE\""),
+            "propagates the agent exit code: {cmd}"
+        );
+        assert!(!cmd.contains("l1\nl2"), "no raw multi-line prompt: {cmd:?}");
+    }
+
+    #[test]
+    fn pwsh_base64_launch_appends_prompt_flag_for_flag_agents() {
+        let profile = crate::agent_registry::lookup_profile_by_id("copilot"); // -i flag
+        let cmd = build_pwsh_base64_launch("copilot", profile, None, None, "a\nb");
+        assert!(
+            cmd.contains("& 'copilot' '-i' $p; exit $LASTEXITCODE"),
+            "flag prompt form: {cmd}"
+        );
+    }
+
+    fn powershell_base64_launches(
+        commandline: &str,
+        profile: &crate::agent_registry::AgentProfile,
+    ) -> [String; 2] {
+        [
+            build_pwsh_base64_launch(commandline, profile, None, None, "prompt"),
+            build_windows_powershell_base64_launch(commandline, profile, None, None, "prompt"),
+        ]
+    }
+
+    #[test]
+    fn powershell_base64_launches_use_sibling_ps1_for_quoted_batch_path() {
+        let root =
+            std::env::temp_dir().join(format!("wta PowerShell companion {}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create test directory");
+        let cmd_path = root.join("codex.cmd");
+        let ps1_path = root.join("codex.ps1");
+        std::fs::write(&cmd_path, "@exit /b 0\r\n").expect("write batch shim");
+        std::fs::write(&ps1_path, "exit 0\r\n").expect("write PowerShell companion");
+        let commandline = format!(
+            "{} --search --full-auto",
+            super::quote_windows_commandline_arg(
+                cmd_path.to_str().expect("test shim path is UTF-8")
+            )
+        );
+        let profile = crate::agent_registry::lookup_profile_by_id("codex");
+
+        for launch in powershell_base64_launches(&commandline, profile) {
+            assert!(
+                launch.contains(&format!(
+                    "& {} '--search' '--full-auto' $p",
+                    super::ps_single_quote(
+                        ps1_path.to_str().expect("test companion path is UTF-8")
+                    )
+                )),
+                "PowerShell companion and flags missing: {launch}"
+            );
+            assert!(
+                !launch.contains(".cmd"),
+                "batch shim should not be invoked: {launch}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).expect("remove test directory");
+    }
+
+    #[test]
+    fn powershell_base64_launches_fall_back_to_profile_for_batch_without_companion() {
+        let root = std::env::temp_dir().join(format!(
+            "wta-missing-powershell-companion-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create test directory");
+        let cmd_path = root.join("codex.cmd");
+        std::fs::write(&cmd_path, "@exit /b 0\r\n").expect("write batch shim");
+        let commandline = format!(
+            "{} --search",
+            super::quote_windows_commandline_arg(
+                cmd_path.to_str().expect("test shim path is UTF-8")
+            )
+        );
+        let profile = crate::agent_registry::lookup_profile_by_id("codex");
+
+        for launch in powershell_base64_launches(&commandline, profile) {
+            assert!(
+                launch.contains("& 'codex' '--search' $p"),
+                "profile fallback and flags missing: {launch}"
+            );
+            assert!(
+                !launch.contains(".cmd"),
+                "missing companion path should not be invoked: {launch}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).expect("remove test directory");
+    }
+
+    #[test]
+    fn powershell_base64_launches_fall_back_to_profile_for_bare_batch_name() {
+        let profile = crate::agent_registry::lookup_profile_by_id("codex");
+
+        for commandline in [
+            "codex.cmd --search",
+            "codex.CMD --search",
+            "codex.BaT --search",
+        ] {
+            for launch in powershell_base64_launches(commandline, profile) {
+                assert!(
+                    launch.contains("& 'codex' '--search' $p"),
+                    "bare batch fallback and flags missing: {launch}"
+                );
+                assert!(
+                    !launch.contains("codex.cmd")
+                        && !launch.contains("codex.CMD")
+                        && !launch.contains("codex.BaT"),
+                    "bare batch shim should not be invoked: {launch}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn powershell_base64_launches_preserve_non_batch_first_tokens() {
+        let profile = crate::agent_registry::lookup_profile_by_id("codex");
+
+        for commandline in ["codex.ps1 --search", "codex.exe --search"] {
+            let first = super::split_windows_commandline(commandline)
+                .into_iter()
+                .next()
+                .expect("first commandline token");
+            for launch in powershell_base64_launches(commandline, profile) {
+                assert!(
+                    launch.contains(&format!("& '{}' '--search' $p", first)),
+                    "non-batch token or flags changed: {launch}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pwsh_base64_launch_propagates_agent_exit_code() {
+        if !pwsh_available() {
+            eprintln!("skipping pwsh exit-code test: pwsh.exe is not on PATH");
+            return;
+        }
+        let root =
+            std::env::temp_dir().join(format!("wta-pwsh-exit-code-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create test directory");
+        let shim = root.join("agent.ps1");
+        std::fs::write(&shim, "exit 7\r\n").expect("write PowerShell shim");
+        let profile = crate::agent_registry::lookup_profile_by_id("codex");
+        let commandline =
+            super::quote_windows_commandline_arg(shim.to_str().expect("test shim path is UTF-8"));
+        let launch = build_pwsh_base64_launch(&commandline, profile, None, None, "prompt");
+        let raw_args = launch
+            .strip_prefix("pwsh ")
+            .expect("PowerShell executable prefix");
+        let status = std::process::Command::new("pwsh")
+            .raw_arg(raw_args)
+            .status()
+            .expect("launch PowerShell agent");
+
+        std::fs::remove_dir_all(&root).expect("remove test directory");
+        assert_eq!(status.code(), Some(7));
+    }
+
+    #[test]
+    fn windows_powershell_base64_launch_normalizes_prompt_for_black_box_agent() {
+        let profile = crate::agent_registry::lookup_profile_by_id("codex");
+        let prompt = concat!(
+            "line1",
+            "\n",
+            "line2 \"quoted\" & literal &quot; trailing\\"
+        );
+
+        let cmd =
+            build_windows_powershell_base64_launch("codex --search", profile, None, None, prompt);
+
+        assert!(cmd.starts_with("powershell.exe -NoProfile -Command "));
+        assert!(!cmd.contains(prompt), "raw prompt leaked: {cmd:?}");
+        assert!(
+            cmd.contains("& 'codex' '--search' $p"),
+            "bare call missing: {cmd}"
+        );
+        let prompt_b64 = crate::osc52::base64_encode(prompt.as_bytes());
+        assert!(cmd.contains(&prompt_b64), "prompt payload missing: {cmd}");
+        assert!(
+            cmd.contains(r#".Replace('&','&amp;').Replace('\"','&quot;')"#),
+            "HTML entity normalization missing: {cmd}"
+        );
+        assert!(
+            cmd.contains("'&#92;'*$m.Value.Length"),
+            "terminal slash normalization missing: {cmd}"
+        );
+        assert!(
+            cmd.contains("decode HTML entities exactly once"),
+            "transport note missing: {cmd}"
+        );
+    }
+
+    #[test]
+    fn windows_powershell_base64_launch_stays_below_windows_commandline_limit() {
+        let profile = crate::agent_registry::lookup_profile_by_id("codex");
+        let prompt = "\"".repeat(12 * 1024);
+
+        let cmd = build_windows_powershell_base64_launch("codex", profile, None, None, &prompt);
+
+        assert!(
+            cmd.encode_utf16().count() < 32_767,
+            "fallback commandline has {} UTF-16 code units",
+            cmd.encode_utf16().count()
+        );
+    }
+
+    fn capture_windows_powershell_fallback(prompt: &str) -> String {
+        let root =
+            std::env::temp_dir().join(format!("wta-powershell-black-box-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create test directory");
+        let capture = root.join("capture.js");
+        let shim = root.join("agent.ps1");
+        std::fs::write(&capture, "WScript.StdOut.Write(WScript.Arguments.Item(0));")
+            .expect("write native argument capture");
+        std::fs::write(
+            &shim,
+            "& cscript.exe //nologo \"$PSScriptRoot\\capture.js\" $args\r\nexit $LASTEXITCODE\r\n",
+        )
+        .expect("write PowerShell shim");
+        let profile = crate::agent_registry::lookup_profile_by_id("codex");
+        let commandline =
+            super::quote_windows_commandline_arg(shim.to_str().expect("test shim path is UTF-8"));
+        let launch =
+            build_windows_powershell_base64_launch(&commandline, profile, None, None, prompt);
+        let raw_args = launch
+            .strip_prefix("powershell.exe ")
+            .expect("fallback executable prefix");
+        let output = std::process::Command::new("powershell.exe")
+            .raw_arg(raw_args)
+            .output()
+            .expect("launch Windows PowerShell fallback");
+
+        std::fs::remove_dir_all(&root).expect("remove test directory");
+        assert!(
+            output.status.success(),
+            "fallback failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("capture is UTF-8")
+    }
+
+    #[test]
+    fn windows_powershell_fallback_reaches_native_black_box_with_safe_prompt() {
+        assert_eq!(
+            capture_windows_powershell_fallback(concat!(
+                "line1",
+                "\n",
+                "line2 \"quoted\" & literal &quot; trailing\\"
+            )),
+            concat!(
+                "[WTA transport note: decode HTML entities exactly once before ",
+                "interpreting the task and terminal context.]\n\n",
+                "line1",
+                "\n",
+                "line2 &quot;quoted&quot; &amp; literal &amp;quot; trailing&#92;"
+            )
+        );
+    }
+
+    #[test]
+    fn windows_powershell_fallback_does_not_escape_slash_before_final_newline() {
+        assert_eq!(
+            capture_windows_powershell_fallback("line1\\\n"),
+            concat!(
+                "[WTA transport note: decode HTML entities exactly once before ",
+                "interpreting the task and terminal context.]\n\n",
+                "line1\\\n"
+            )
+        );
+    }
+
+    #[test]
+    fn mixed_case_known_batch_delegate_with_multiline_prompt_uses_powershell() {
+        for commandline in ["codex.CMD", "codex.BaT"] {
+            let runtime = base64_runtime(commandline);
+            let launch = build_delegate_launch_commandline(
+                &runtime,
+                Some(concat!(
+                    "fix it",
+                    "\n\n",
+                    "## Terminal Context",
+                    "\n",
+                    "command output"
+                )),
+                None,
+            )
+            .expect("delegate launch commandline");
+
+            assert!(
+                launch.starts_with("pwsh ") || launch.starts_with("powershell.exe "),
+                "mixed-case known batch command must use a PowerShell builder: {launch}"
+            );
+            assert!(
+                !launch.starts_with("cmd /c "),
+                "multiline prompt must not use cmd /c: {launch}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_powershell_fallback_only_handles_direct_known_agents() {
+        assert!(is_direct_known_agent_command("codex"));
+        assert!(is_direct_known_agent_command(
+            r#""C:\npm tools\codex.cmd" --search"#
+        ));
+        assert!(!is_direct_known_agent_command(
+            "npx -y @agentclientprotocol/codex-acp@1.1.4"
+        ));
+    }
+
+    #[test]
+    fn windows_powershell_is_used_when_pwsh_is_unavailable() {
+        let profile = crate::agent_registry::lookup_profile_by_id("codex");
+
+        let cmd = build_shell_multiline_delegate_launch(
+            "codex",
+            profile,
+            None,
+            None,
+            concat!("line1", "\n", "line2"),
+            false,
+        );
+
+        assert!(
+            cmd.starts_with("powershell.exe "),
+            "must not fall back to cmd: {cmd}"
+        );
     }
 }

@@ -14,58 +14,153 @@ pub enum CommandKind {
     Clear,
     Stop,
     New,
+    /// Run the auto-fix prompt on demand.
+    ///
+    /// Submits the dedicated `auto-fix.md` template plus the active
+    /// terminal pane's recent output to the agent — the same pipeline the
+    /// error-triggered autofix uses (`PromptSubmission::is_autofix`), but
+    /// invoked manually. Any text after `/fix` is passed through as an
+    /// extra hint to steer the diagnosis (`/fix the path looks wrong`).
+    Fix,
+    /// Reset the agent CLI subprocess.
+    ///
+    /// * Standalone wta: tears down + respawns the agent CLI in-process;
+    ///   tabs lazily get fresh sessions on the next prompt.
+    /// * Helper mode: fires a `restart_agent_stack` `SendEvent` to the C++
+    ///   side, which mirrors the path settings reload already takes when
+    ///   `acpAgent` changes: tear down every agent pane (master + helper
+    ///   processes die with them), force `SharedWta::Restart()` to bypass
+    ///   refcount and respawn master on the *same stable pipe name*, and
+    ///   re-toggle the active tab's agent pane. The new helper auto-
+    ///   connects to the new master. Visible UX: agent panes flash closed
+    ///   and reopen with a clean session; nothing requires the user to
+    ///   restart Windows Terminal.
     Restart,
     Sessions,
+    /// Pick the ACP agent for this Windows Terminal tab.
+    ///
+    /// Bare `/agent` opens an interactive picker containing only agents that
+    /// are both host-policy-allowed and installed on this machine;
+    /// `/agent <id>` switches directly. The helper asks Windows Terminal to
+    /// rebuild only its owning tab, so the choice remains a runtime per-tab
+    /// override and never changes the global `acpAgent` setting.
+    Agent,
+    /// Pick the ACP model for *this* agent pane.
+    ///
+    /// Bare `/model` opens an interactive picker listing the models the
+    /// connected agent advertised; `/model <id-or-name>` switches directly.
+    /// The choice is a transient per-pane override that survives `/new` for
+    /// the life of the pane but is reset by a global `acpModel` settings
+    /// change — see `App::apply_global_acp_model`.
+    Model,
+    /// Move this tab's agent pane without changing the global pane-position
+    /// setting or any other tab.
+    Move,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct CommandSpec {
     pub name: &'static str,
-    pub summary: &'static str,
+    /// rust-i18n key for the user-facing description. Resolved at render
+    /// time so the popup follows the current locale.
+    pub summary_key: &'static str,
     pub kind: CommandKind,
-    /// True if this command takes free-form arguments after the name.
-    /// MVP commands are all zero-arg; the field exists so the popup
-    /// knows whether to leave a trailing space after Tab-completion.
-    pub takes_args: bool,
+}
+
+impl CommandSpec {
+    /// Look up the localized summary at render time.
+    ///
+    /// Returns `Cow<'static, str>` so the common case where rust-i18n's
+    /// store contains the key as a `&'static str` (the typical compile-
+    /// time-embedded yml) avoids an allocation on every render — the
+    /// command popup re-fetches summaries per frame and per row.
+    pub fn summary(&self) -> std::borrow::Cow<'static, str> {
+        rust_i18n::t!(self.summary_key)
+    }
 }
 
 /// Static registry. Order is the display order in `/help`.
 pub const REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         name: "help",
-        summary: "Show this command list",
+        summary_key: "commands.help.summary",
         kind: CommandKind::Help,
-        takes_args: false,
     },
     CommandSpec {
         name: "clear",
-        summary: "Clear the chat scrollback (keeps session)",
+        summary_key: "commands.clear.summary",
         kind: CommandKind::Clear,
-        takes_args: false,
     },
     CommandSpec {
         name: "new",
-        summary: "Start a fresh ACP session (drops history)",
+        summary_key: "commands.new.summary",
         kind: CommandKind::New,
-        takes_args: false,
+    },
+    CommandSpec {
+        name: "fix",
+        summary_key: "commands.fix.summary",
+        kind: CommandKind::Fix,
     },
     CommandSpec {
         name: "restart",
-        summary: "Reconnect: kill agent process and respawn",
+        summary_key: "commands.restart.summary",
         kind: CommandKind::Restart,
-        takes_args: false,
     },
     CommandSpec {
         name: "stop",
-        summary: "Cancel the in-flight prompt",
+        summary_key: "commands.stop.summary",
         kind: CommandKind::Stop,
-        takes_args: false,
     },
     CommandSpec {
         name: "sessions",
-        summary: "Open the historical sessions picker (Ctrl+Shift+/)",
+        summary_key: "commands.sessions.summary",
         kind: CommandKind::Sessions,
-        takes_args: false,
+    },
+    CommandSpec {
+        name: "agent",
+        summary_key: "commands.agent.summary",
+        kind: CommandKind::Agent,
+    },
+    CommandSpec {
+        name: "model",
+        summary_key: "commands.model.summary",
+        // `/model <id>` switches directly; bare `/model` opens the picker.
+        kind: CommandKind::Model,
+    },
+    CommandSpec {
+        name: "move",
+        summary_key: "commands.move.summary",
+        kind: CommandKind::Move,
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MovePositionSpec {
+    pub name: &'static str,
+    pub alias: &'static str,
+    pub pane_position: &'static str,
+}
+
+pub const MOVE_POSITIONS: &[MovePositionSpec] = &[
+    MovePositionSpec {
+        name: "left",
+        alias: "l",
+        pane_position: "left",
+    },
+    MovePositionSpec {
+        name: "right",
+        alias: "r",
+        pane_position: "right",
+    },
+    MovePositionSpec {
+        name: "up",
+        alias: "u",
+        pane_position: "up",
+    },
+    MovePositionSpec {
+        name: "down",
+        alias: "d",
+        pane_position: "bottom",
     },
 ];
 
@@ -73,11 +168,34 @@ pub const REGISTRY: &[CommandSpec] = &[
 pub struct ParsedCommand {
     pub kind: CommandKind,
     pub spec: &'static CommandSpec,
-    /// Anything after the command name (trimmed, may be empty).
-    /// MVP commands ignore this; reserved for future `/model`, `/cwd`, …
-    #[allow(dead_code)]
+    /// Anything after the command name (trimmed, may be empty). Consumed by
+    /// arg-taking commands (`/fix <hint>`); zero-arg commands ignore it.
     pub rest: String,
 }
+
+/// Outcome of classifying a committed input line. Lets the caller branch on
+/// *intent* without re-deriving the "is this a slash attempt?" predicate —
+/// that escaping rule (`/` yes, `//` no) lives only here and in [`parse`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseOutcome {
+    /// A registered command. Run it; consume the keystroke.
+    Command(ParsedCommand),
+    /// Looks like a slash-command attempt (`/foo`) but `foo` isn't
+    /// registered. Carries the attempted token *with* its leading `/`
+    /// (e.g. `"/nope"`) for the "Unknown command" advisory. The caller
+    /// still sends the raw line as a prompt so the user doesn't lose input.
+    Unknown(String),
+    /// Not a command at all (no `/`, or `//literal` escape). Send as prompt.
+    NotCommand,
+}
+
+impl PartialEq for ParsedCommand {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.spec.name == other.spec.name && self.rest == other.rest
+    }
+}
+
+impl Eq for ParsedCommand {}
 
 /// Parse an input line as a slash-command, or return `None` if the line
 /// should be sent as a normal prompt.
@@ -116,6 +234,35 @@ pub fn parse(input: &str) -> Option<ParsedCommand> {
     })
 }
 
+/// Classify a committed input line into [`ParseOutcome`]. This is the entry
+/// point the Enter handler should use: it folds the "known command",
+/// "unknown-but-looks-like-a-command", and "plain prompt" cases into one
+/// match so the caller never re-implements the slash/escape rules.
+///
+/// - `/help` → [`ParseOutcome::Command`]
+/// - `/nope foo` → [`ParseOutcome::Unknown`]`("/nope")`
+/// - `hello`, `//etc/hosts`, `/` (bare) → [`ParseOutcome::NotCommand`]
+pub fn classify(input: &str) -> ParseOutcome {
+    if let Some(cmd) = parse(input) {
+        return ParseOutcome::Command(cmd);
+    }
+
+    // Not a known command. Was it at least an *attempt* at one? Reuse the
+    // same trimming + `//` escape rules as `parse`/`is_command_prefix`.
+    let trimmed = input.trim_start();
+    if let Some(rest) = trimmed.strip_prefix('/') {
+        if !rest.starts_with('/') {
+            // First whitespace-delimited token after the `/`.
+            let name = rest.split_whitespace().next().unwrap_or("");
+            if !name.is_empty() {
+                return ParseOutcome::Unknown(format!("/{name}"));
+            }
+        }
+    }
+
+    ParseOutcome::NotCommand
+}
+
 /// Return the [`CommandSpec`] for the given name (case-insensitive), or
 /// `None` if unknown.
 pub fn lookup(name: &str) -> Option<&'static CommandSpec> {
@@ -133,6 +280,58 @@ pub fn matches(prefix: &str) -> Vec<&'static CommandSpec> {
         .iter()
         .filter(|spec| spec.name.starts_with(&needle))
         .collect()
+}
+
+/// Resolve a `/move` argument from either its full name or one-letter alias.
+pub fn lookup_move_position(value: &str) -> Option<&'static MovePositionSpec> {
+    let value = value.trim();
+    MOVE_POSITIONS
+        .iter()
+        .find(|position| {
+            position.name.eq_ignore_ascii_case(value)
+                || position.alias.eq_ignore_ascii_case(value)
+        })
+}
+
+/// Prefix-match `/move` positions by full name or one-letter alias.
+pub fn match_move_positions(prefix: &str) -> Vec<&'static MovePositionSpec> {
+    let needle = prefix.trim().to_ascii_lowercase();
+    MOVE_POSITIONS
+        .iter()
+        .filter(|position| {
+            position.name.starts_with(&needle) || position.alias.starts_with(&needle)
+        })
+        .collect()
+}
+
+/// Return the canonical agent-id prefix while completing `/agent <id>`.
+///
+/// The command name must be complete and followed by whitespace. Agent IDs
+/// are single tokens, so a second argument hides completion.
+pub fn agent_id_prefix(input: &str) -> Option<&str> {
+    single_argument_prefix(input, "agent")
+}
+
+/// Return the argument prefix while the input is completing `/move <position>`.
+///
+/// The command name must be complete and followed by whitespace. A second
+/// argument hides the popup because `/move` accepts exactly one position.
+pub fn move_position_prefix(input: &str) -> Option<&str> {
+    single_argument_prefix(input, "move")
+}
+
+fn single_argument_prefix<'a>(input: &'a str, command: &str) -> Option<&'a str> {
+    let trimmed = input.trim_start();
+    let rest = trimmed.strip_prefix('/')?;
+    let command_end = rest.find(char::is_whitespace)?;
+    if !rest[..command_end].eq_ignore_ascii_case(command) {
+        return None;
+    }
+    let argument = rest[command_end..].trim_start();
+    if argument.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(argument)
 }
 
 /// True if the input *looks like* a slash-command attempt (starts with `/`
@@ -177,6 +376,50 @@ mod tests {
     }
 
     #[test]
+    fn agent_parses_with_optional_id() {
+        let bare = parse("/agent").unwrap();
+        assert_eq!(bare.kind, CommandKind::Agent);
+        assert_eq!(bare.rest, "");
+
+        let direct = parse("/agent claude").unwrap();
+        assert_eq!(direct.kind, CommandKind::Agent);
+        assert_eq!(direct.rest, "claude");
+
+        let trailing_space = parse("/agent ").unwrap();
+        assert_eq!(trailing_space.kind, CommandKind::Agent);
+        assert_eq!(trailing_space.rest, "");
+    }
+
+    #[test]
+    fn move_parses_and_resolves_positions() {
+        let direct = parse("/move l").unwrap();
+        assert_eq!(direct.kind, CommandKind::Move);
+        assert_eq!(direct.rest, "l");
+        assert_eq!(lookup_move_position(&direct.rest).unwrap().name, "left");
+        assert_eq!(lookup_move_position("R").unwrap().name, "right");
+        assert_eq!(lookup_move_position("up").unwrap().alias, "u");
+        assert_eq!(lookup_move_position("d").unwrap().name, "down");
+        assert_eq!(
+            lookup_move_position("down").unwrap().pane_position,
+            "bottom"
+        );
+        assert!(lookup_move_position("bottom").is_none());
+        assert!(lookup_move_position("top").is_none());
+    }
+
+    #[test]
+    fn fix_parses_with_optional_hint() {
+        // Bare /fix: no hint.
+        let bare = parse("/fix").unwrap();
+        assert_eq!(bare.kind, CommandKind::Fix);
+        assert_eq!(bare.rest, "");
+        // /fix <hint>: the trailing text is captured verbatim.
+        let hinted = parse("/fix the path looks wrong").unwrap();
+        assert_eq!(hinted.kind, CommandKind::Fix);
+        assert_eq!(hinted.rest, "the path looks wrong");
+    }
+
+    #[test]
     fn rest_is_captured() {
         let p = parse("/help me please").unwrap();
         assert_eq!(p.kind, CommandKind::Help);
@@ -190,8 +433,8 @@ mod tests {
 
     #[test]
     fn unknown_command_falls_through() {
-        assert!(parse("/notacommand").is_none());
-        assert!(parse("/notacommand foo").is_none());
+        assert!(parse("/no-such-command").is_none());
+        assert!(parse("/no-such-command foo").is_none());
     }
 
     #[test]
@@ -230,6 +473,34 @@ mod tests {
         let h = matches("HE");
         assert_eq!(h.len(), 1);
         assert_eq!(h[0].name, "help");
+    }
+
+    #[test]
+    fn move_position_matches_full_names_and_aliases() {
+        let all = match_move_positions("");
+        assert_eq!(all.len(), MOVE_POSITIONS.len());
+        assert_eq!(match_move_positions("l")[0].name, "left");
+        assert_eq!(match_move_positions("ri")[0].name, "right");
+        assert_eq!(match_move_positions("U")[0].name, "up");
+        assert_eq!(match_move_positions("do")[0].name, "down");
+        assert!(match_move_positions("x").is_empty());
+
+        assert_eq!(move_position_prefix("/move "), Some(""));
+        assert_eq!(move_position_prefix("/MOVE r"), Some("r"));
+        assert_eq!(move_position_prefix("  /move dow"), Some("dow"));
+        assert_eq!(move_position_prefix("/move"), None);
+        assert_eq!(move_position_prefix("/move left extra"), None);
+        assert_eq!(move_position_prefix("/model r"), None);
+    }
+
+    #[test]
+    fn agent_id_prefix_accepts_one_argument() {
+        assert_eq!(agent_id_prefix("/agent "), Some(""));
+        assert_eq!(agent_id_prefix("/AGENT co"), Some("co"));
+        assert_eq!(agent_id_prefix("  /agent gem"), Some("gem"));
+        assert_eq!(agent_id_prefix("/agent"), None);
+        assert_eq!(agent_id_prefix("/agent copilot extra"), None);
+        assert_eq!(agent_id_prefix("/model co"), None);
     }
 
     #[test]

@@ -1,29 +1,23 @@
 # Setup screen titles
-# {Locked="Intelligent Terminal"} - product name, do not translate
-setup.title.first_run: "ຍິນດີຕ້ອນຮັບສູ່ Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "ບໍ່ພົບ agent"
 setup.title.agent_error: "ການເຊື່ອມຕໍ່ agent ລົ້ມເຫລວ"
-setup.title.switch_agent: "ປ່ຽນ agent"
 setup.title.not_available: "Agent ບໍ່ພ້ອມໃຊ້ງານ"
 setup.title.sign_in: "ຕ້ອງການເຂົ້າສູ່ລະບົບ"
 
 # %{agent} is replaced with the agent display name at runtime.
-setup.subtitle.copilot_missing: "Agent ຂອງທ່ານ \"%{agent}\" ບໍ່ໄດ້ຕິດຕັ້ງຢູ່། ໃຫ້ເຮັດຕາມຂັ້ນຕອນຂ້າງລຸ່ມເພື່ອຕິດຕັ້ງ། ເພື່ອປ່ຽນ agent, ໄປທີ່ Settings།"
-setup.subtitle.agent_missing: "Agent ຂອງທ່ານ \"%{agent}\" ບໍ່ໄດ້ຕິດຕັ້ງຢູ່། ກະລຸນາຕິດຕັ້ງໃໝ່ດ້ວຍມື ແລ້ວລອງໃໝ່། ເພື່ອປ່ຽນ agent, ໄປທີ່ Settings།"
-setup.subtitle.copilot_auth: "Agent ຂອງທ່ານ \"%{agent}\" ຕ້ອງການການຢືນຢັນຕົວຕົນ། ໃຫ້ເຮັດຕາມຂັ້ນຕອນຂ້າງລຸ່ມເພື່ອເຂົ້າສູ່ລະບົບ། ເພື່ອປ່ຽນ agent, ໄປທີ່ Settings།"
-setup.subtitle.agent_auth: "Agent ຂອງທ່ານ \"%{agent}\" ຕ້ອງການການຢືນຢັນຕົວຕົນ། ກະລຸນາເຂົ້າສູ່ລະບົບຜ່ານ agent CLI ແລ້ວລອງໃໝ່། ເພື່ອປ່ຽນ agent, ໄປທີ່ Settings།"
+setup.subtitle.copilot_missing: "Agent ຂອງທ່ານ \"%{agent}\" ບໍ່ໄດ້ຕິດຕັ້ງຢູ່། ໃຫ້ເຮັດຕາມຂັ້ນຕອນຂ້າງລຸ່ມເພື່ອຕິດຕັ້ງ། ເພື່ອປ່ຽນ agent, ໄປທີ່ ເທອຮ໌ມິນັລອັດຊະລິຍະ Settings > Agent།"
+setup.subtitle.agent_missing: "Agent ຂອງທ່ານ \"%{agent}\" ບໍ່ໄດ້ຕິດຕັ້ງຢູ່། ກະລຸນາຕິດຕັ້ງໃໝ່ດ້ວຍມື ແລ້ວລອງໃໝ່། ເພື່ອປ່ຽນ agent, ໄປທີ່ ເທອຮ໌ມິນັລອັດຊະລິຍະ Settings > Agent།"
+setup.subtitle.copilot_auth: "Agent ຂອງທ່ານ \"%{agent}\" ຕ້ອງການການຢືນຢັນຕົວຕົນ། ໃຫ້ເຮັດຕາມຂັ້ນຕອນຂ້າງລຸ່ມເພື່ອເຂົ້າສູ່ລະບົບ། ເພື່ອປ່ຽນ agent, ໄປທີ່ ເທອຮ໌ມິນັລອັດຊະລິຍະ Settings > Agent།"
+setup.subtitle.agent_auth: "Agent ຂອງທ່ານ \"%{agent}\" ຕ້ອງການການຢືນຢັນຕົວຕົນ། ກະລຸນາເຂົ້າສູ່ລະບົບຜ່ານ agent, ຈາກນັ້ນເລືອກ \"ຂ້ອຍໄດ້ເຂົ້າສູ່ລະບົບແລ້ວ\" ຂ້າງລຸ່ມ། ເພື່ອປ່ຽນ agent, ໄປທີ່ ເທອຮ໌ມິນັລອັດຊະລິຍະ Settings > Agent།"
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "ເລືອກ agent CLI ເລີ່ມຕົ້ນທີ່ທ່ານຕ້ອງການໃຊ້ໃນ Intelligent Terminal། ທ່ານສາມາດ"
-setup.description.fre_line2: "ໄປທີ່ Settings ເພື່ອຕັ້ງຄ່າ ແລະຕັ້ງຄ່າພື້ນທີ່ເຮັດວຽກຂອງທ່ານ།"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "ຕິດຕັ້ງໃໝ່ %{agent}"
-setup.option.reinstall_hint: "(ຈະຕິດຕັ້ງໂດຍອັດຕະໂນມັດ)"
+setup.option.install: "ຕິດຕັ້ງ %{agent}"
+setup.option.install_hint: "(ຈະຕິດຕັ້ງໂດຍອັດຕະໂນມັດ)"
 setup.option.signin: "ເຂົ້າສູ່ລະບົບ %{agent}"
-setup.option.retry_detection: "ລອງກວດຈັບໃໝ່"
-setup.option.retry_auth: "ຂ້ອຍໄດ້ເຂົ້າສູ່ລະບົບແລ້ວ — ລອງເຊື່ອມຕໍ່ໃໝ່"
-setup.option.retry_connection: "ລອງເຊື່ອມຕໍ່ໃໝ່"
-setup.option.switch_to: "ປ່ຽນໄປ %{agent}"
+setup.option.retry_detection: "ລອງໃໝ່"
+setup.option.retry_auth: "ຂ້ອຍໄດ້ເຂົ້າສູ່ລະບົບແລ້ວ — ລອງເຊື່ອມຕໍ່ອີກຄັ້ງ"
 setup.status.installing: "ກຳລັງຕິດຕັ້ງ..."
 setup.status.install_failed: "ການຕິດຕັ້ງລົ້ມເຫລວ: "
 setup.status.installing_winget: " ກຳລັງຕິດຕັ້ງຜ່ານ winget..."
@@ -35,25 +29,32 @@ auth.agent_selected_with_status: "Agent %{name} — "
 auth.checking_authentication: "  %{spinner} ກຳລັງກວດສອບການຢືນຢັນຕົວຕົນ..."
 auth.waiting_for_authorization: "  %{spinner} ກຳລັງລໍຖ້າການອະນຸຍາດ..."
 auth.code_copied_hint: "ລະຫັດຖືກຄັດລອກແລ້ວ — ໃຫ້ວາງໃນຕົວທ່ອງເວັບຂອງທ່ານ།"
-auth.sign_in_prompt: "ເຂົ້າສູ່ລະບົບເພື່ອໃຊ້ agent ຂອງທ່ານ:"
+auth.device_code_prompt: "ໄປທີ່ %{url} ແລ້ວປ້ອນລະຫັດ: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "ເຊື່ອມຕໍ່ %{name} ເພື່ອເປີດໃຊ້ຄວາມສາມາດຂອງ agent"
-auth.button_sign_in_github: "[ ເຂົ້າສູ່ລະບົບດ້ວຍ GitHub ]"
-auth.button_sign_in_with: "[ ເຂົ້າສູ່ລະບົບດ້ວຍ %{name} ]"
-auth.hint_footer: "ກົດ Enter ເພື່ອເຂົ້າສູ່ລະບົບ, Esc ເພື່ອກັບຄືນ"
+auth.enterprise_prompt: "  Enter ເພື່ອເຂົ້າສູ່ລະບົບ · E ສຳລັບ GitHub Enterprise · Esc ເພື່ອກັບຄືນ"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  ໂດເມນອົງກອນ: "
+auth.enterprise_hint_footer: "  Enter ເພື່ອເຂົ້າສູ່ລະບົບ · Esc ເພື່ອໃຊ້ github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  ກົດ Enter ເພື່ອລອງໃໝ່ ຫຼື Esc ເພື່ອໃຊ້ github.com. ສາເຫດທົ່ວໄປ: ພິມໂດເມນຜິດ ຫຼືໂດເມນເຂົ້າບໍ່ໄດ້, ລະຫັດໝົດອາຍຸ, ຫຼືບັນຊີຂອງທ່ານບໍ່ມີສິດເຂົ້າເຖິງ Copilot ໃນໂຮສນັ້ນ."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  ກົດ Enter ເພື່ອລອງໃໝ່ ຫຼື Esc ເພື່ອກັບຄືນ."  # {Locked="Enter","Esc"}
 
 # ── Chat view (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "ກຳລັງຄິດ…"
-# {Locked="Intelligent Terminal"} - product name, do not translate
-chat.welcome_title: "ຍິນດີຕ້ອນຮັບສູ່ Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "ຍິນດີຕ້ອນຮັບສູ່ ເທອຮ໌ມິນັລອັດຊະລິຍະ!"
+chat.welcome_disclaimer: "ເທອຮ໌ມິນັລອັດຊະລິຍະ ໃຊ້ AI. ກວດເບິ່ງຂໍ້ຜິດພາດ."
 chat.plan_header: "ແຜນການ:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "ການລົ້ມເຫລວຄຳສັ່ງຫຼ້າສຸດໄດ້ຮັບການວິນິດໄສໂດຍອັດຕະໂນມັດ"
+chat.turn_canceled: "(ຍົກເລີກແລ້ວ)"
+chat.turn_executed: "→ ດໍາເນີນການແລ້ວ: %{title}"
 
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "Ask anything, / for commands.."  # {Locked="/"}
 input.placeholder.connecting: "connecting..."
-input.placeholder.disconnected: "disconnect"
+input.placeholder.disconnected: "disconnected"
+input.image_attachments: "📎 ຮູບພາບ: %{items}"  # {Locked="%{items}"} {Locked="📎"}
 
 # ── Pending prompt queue (src/ui/queued_hint.rs, src/app.rs) ───────────────
 # Indicator shown above the input box while one or more prompts are queued
@@ -77,8 +78,8 @@ commands.help_escape_hint: "  //text     Send a literal '/' (escapes the command
 commands.help_close_hint: "  Esc        Close this help"  # {Locked="Esc"}
 
 # ── Recommendations panel (src/ui/recommendations.rs) ───────────────────────
-# {Locked="Enter","Esc","↵"} - key names and Return-key glyph, do not translate
-recommendations.nav_hint: "(↑ ↓ to navigate • Enter to select • Esc to cancel)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - key names and Return-key glyph, do not translate
+recommendations.nav_hint: "(↑ ↓ to navigate • ← → ສະຫຼັບການກະທຳ • Enter to select • Esc to cancel)"
 recommendations.button_run_command: "[ Run command ]"
 recommendations.button_insert_in_terminal: "Insert in Terminal"
 recommendations.button_open_in_new_tab: "Open in New Tab ↵"
@@ -102,9 +103,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N to answer · resize for full card]"  # {Locked="Y/N"}
 
 # ── Agent status (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "ບໍ່ໄດ້ຕິດຕັ້ງ — ເລືອກເພື່ອຕິດຕັ້ງໂດຍອັດຕະໂນມັດ"
 agent.status.not_found: "ບໍ່ພົບ"
-agent.status.detected: "ກວດພົບແລ້ວ"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - tool names and command, must run verbatim
 agent.install.running_winget: "Running: winget install GitHub.Copilot"
 agent.install.launch_failed: "Failed to launch winget: %{error}"
@@ -115,25 +114,46 @@ agent.custom.auth_hint: "Make sure %{name} is installed and on your PATH."  # {L
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Loading..."
-# {Locked="Enter","Shift+enter","Esc"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ to navigate • Enter to launch session in new tab • Shift+enter to launch session in agent pane • Esc to exit)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ to navigate • Enter to launch session • Esc to exit • F5 to refresh • / to search)"
 agents.status.active: "Active"
 agents.status.waiting_for_input: "Waiting for input"
 agents.status.error: "Error"
 agents.status.idle: "Idle"
 
 # ── Layout welcome hint (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "(Ctrl+Shift+. ສະແດງ/ເຊື່ອງແຜງ agent • Ctrl+Alt+/ ສະແດງ/ເຊື່ອງພາກສ່ວນ agent)"
+layout.welcome_hint: "(Ctrl+Shift+. ສະແດງ/ເຊື່ອງແຜງ agent • Ctrl+Shift+/ ສະແດງ/ເຊື່ອງພາກສ່ວນ agent)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
 connection.starting: "ກຳລັງເລີ່ມ agent..."
 connection.reconnecting: "ກຳລັງເຊື່ອມຕໍ່ໃໝ່..."
+connection.connecting_activity: "ກຳລັງເຊື່ອມຕໍ່ຫາ agent…"
+connection.lost: "ການເຊື່ອມຕໍ່ຫາ agent ຂາດຫາຍໄປ. ພິມ /restart ເພື່ອເຊື່ອມຕໍ່ໃໝ່."  # {Locked="/restart"}
 
 # ── System messages (src/app.rs) ────────────────────────────────────────────
+system.close_pane_hint: "ກົດ Ctrl+C ອີກຄັ້ງເພື່ອປິດ pane."  # {Locked="Ctrl+C"}
+system.selection_copied: "ສຳເນົາແລ້ວ"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "Cancelled."
 system.no_prompt_in_flight: "No prompt in flight."
 system.authentication_failed: "Authentication failed"
-system.command_copied_retry: "Command copied — run it in another terminal, then press Enter to retry"  # {Locked="Enter"}
+system.stopped_max_tokens: "ການຕອບໄດ້ຖືກຕັດອອກຫຼັງຈາກບັນລຸຂີດຈຳກັດຜົນຜະລິດຂອງແບບຈຳລອງ."
+system.stopped_max_turn_requests: "ຕົວແທນໄດ້ຢຸດຫຼັງຈາກບັນລຸຂີດຈຳກັດການຮ້ອງຂໍສຳລັບຮອບນີ້."
+system.stopped_refusal: "ຕົວແທນໄດ້ປະຕິເສດທີ່ຈະດຳເນີນການຮ້ອງຂໍນີ້ຕໍ່."
+system.agent_busy: "Agent ກຳລັງບໍ່ວ່າງໃນແຖບນີ້ — ລໍຖ້າໃຫ້ prompt ປັດຈຸບັນສຳເລັດ."
+system.image_clipboard_empty: "ບໍ່ມີຮູບພາບໃນ clipboard ເພື່ອວາງ."
+system.image_not_supported: "Agent ນີ້ບໍ່ຮອງຮັບການປ້ອນຮູບພາບ."
+system.image_pasted: "ແນບຮູບພາບແລ້ວ (%{label}). ກົດ Enter ເພື່ອສົ່ງ."  # {Locked="%{label}","Enter"}
+system.resuming_session: "ກຳລັງສືບຕໍ່ session %{session_id}..."
+system.unknown_command: "ບໍ່ຮູ້ຈັກຄຳສັ່ງ \"%{command}\" — ສົ່ງເປັນ prompt ແລ້ວ. ພິມ /help ເພື່ອເບິ່ງລາຍການ."  # {Locked="/help"}
+system.busy_use_stop: "ລໍຖ້າໃຫ້ prompt ປັດຈຸບັນສຳເລັດ ຫຼືໃຊ້ /stop ກ່ອນ."  # {Locked="/stop"}
+system.cannot_focus_session: "ບໍ່ສາມາດໂຟກັສ session %{session_id}: ມັນເບິ່ງຄືວ່າ live ແຕ່ຍັງບໍ່ມີ GUID ຂອງ pane ຖືກຜູກໄວ້. ລອງອີກຄັ້ງອີກສັກຄູ່."
+system.cannot_resume_no_load_session: "ບໍ່ສາມາດສືບຕໍ່ໃນ agent pane: %{agent} ບໍ່ໄດ້ແຈ້ງຄວາມສາມາດ ACP `loadSession`. ກົດ Enter (ໂດຍບໍ່ກົດ Shift) ເພື່ອສືບຕໍ່ໃນ terminal pane ໃໝ່ແທນ."  # {Locked="ACP","loadSession","Enter","Shift"}
+system.cannot_resume_no_resume_flag: "ບໍ່ສາມາດສືບຕໍ່ session %{agent}: agent ນີ້ບໍ່ມີ flag ແບບ `--resume`. ກົດ Shift+Enter ເພື່ອລອງສືບຕໍ່ພາຍໃນ agent pane ຜ່ານ ACP ແທນ."  # {Locked="--resume","Shift","Enter","ACP"}
+system.cannot_resume_unknown_agent: "ບໍ່ສາມາດສືບຕໍ່ session %{session_id}: agent ຕົ້ນທາງຂອງມັນບໍ່ຖືກຮູ້ຈັກໃນ build ນີ້."
+system.cannot_resume_phantom_via_flag: "ບໍ່ສາມາດສືບຕໍ່ session %{agent} %{session_id}: ມັນເລີ່ມແລ້ວ ແຕ່ບໍ່ເຄີຍມີການສົນທະນາໃດໆສະສົມ, ດັ່ງນັ້ນ %{agent} ເອງຈະປະຕິເສດການສືບຕໍ່. ກຳລັງລຶບແຖວ."
+system.cannot_resume_phantom_via_load: "ບໍ່ສາມາດສືບຕໍ່ session %{agent} %{session_id}: ມັນເລີ່ມແລ້ວ ແຕ່ບໍ່ເຄີຍມີການສົນທະນາໃດໆສະສົມ, ດັ່ງນັ້ນ %{agent} ຈະປະຕິເສດການໂຫຼດ. ກຳລັງລຶບແຖວ."
+system.fallback.this_agent: "agent ນີ້"
+system.fallback.connected_agent: "agent ທີ່ເຊື່ອມຕໍ່ແລ້ວ"
 
 # ── Runtime CLI output (src/main.rs) ────────────────────────────────────────
 output.no_windows: "No windows found."
@@ -171,3 +191,45 @@ hooks.installed_but_disabled: "⚠ installed but disabled"
 hooks.not_installed: "✗ not installed"
 hooks.uninstall_skipped: "skipped (CLI not on PATH)"
 hooks.install_attempted: "wt-agent-hooks install attempted (idempotent). Run `wta hooks status` to inspect the result. Trace log: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+
+# ── Relative time and date formatting ─────────────────────────────────────
+time.just_now: "ເມື່ອກີ້ນີ້"
+time.minute_singular: "%{count} ນາທີກ່ອນ"
+time.minutes_other: "%{count} ນາທີກ່ອນ"
+time.hour_singular: "%{count} ຊົ່ວໂມງກ່ອນ"
+time.hours_other: "%{count} ຊົ່ວໂມງກ່ອນ"
+time.day_singular: "%{count} ມື້ກ່ອນ"
+time.days_other: "%{count} ມື້ກ່ອນ"
+
+# ── Slash-command summaries (src/commands.rs) ─────────────────────────────
+# Command names (/help, /clear, etc.) stay English; descriptions translate.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "Show this command list"
+commands.clear.summary: "Clear the chat scrollback (keeps session)"
+commands.new.summary: "Start a fresh ACP session (drops history)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "Restart agent"
+commands.stop.summary: "Cancel the in-flight prompt"
+commands.sessions.summary: "Open the historical sessions picker (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "ເລືອກຕົວແທນສຳລັບ pane ນີ້ (/agent <id> ເພື່ອປ່ຽນໂດຍກົງ)"  # {Locked="/agent","<id>"}
+
+# ── ການດຳເນີນການຄຳແນະນຳ (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "ຕົວເລືອກ %{choice} ລົ້ມເຫຼວ: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "ເລືອກຕົວແທນ (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "ບໍ່ພົບ CLI ຕົວແທນທີ່ມີຢູ່ໃນເຄື່ອງນີ້."  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "ບໍ່ຮູ້ຈັກຕົວແທນ %{agent} — ພິມ /agent ເພື່ອເບິ່ງລາຍການທີ່ມີ."  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "ການສະຫຼັບຕົວແທນແມ່ນບໍ່ສາມາດໃຊ້ໄດ້ຢູ່ນອກແທັບ Windows Terminal."
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "ເລືອກແບບຈຳລອງສຳລັບ pane ນີ້ (/model <id> ເພື່ອປ່ຽນໂດຍກົງ)"  # {Locked="/model","<id>"}
+commands.move.summary: "ຍ້າຍແຜງຕົວແທນຂອງແທັບນີ້ (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "ເລືອກແບບຈຳລອງ (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "agent ທີ່ເຊື່ອມຕໍ່ບໍ່ໄດ້ປະກາດແບບຈຳລອງທີ່ສາມາດເລືອກໄດ້ໃດໆ."
+system.model_set: "ແບບຈຳລອງສຳລັບ pane ນີ້ຖືກຕັ້ງເປັນ %{model}."  # {Locked="%{model}"}
+system.model_unknown: "ບໍ່ຮູ້ຈັກແບບຈຳລອງ %{model} — ພິມ /model ເພື່ອເບິ່ງລາຍການທີ່ມີ."  # {Locked="%{model}","/model"}

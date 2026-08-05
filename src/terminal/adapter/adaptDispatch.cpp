@@ -3002,17 +3002,15 @@ void AdaptDispatch::SoftReset()
     SetGraphicsRendition({}); // Normal rendition.
     SetCharacterProtectionAttribute({}); // Default (unprotected)
 
-    // Reset the saved cursor state.
-    // Note that XTerm only resets the main buffer state, but that
-    // seems likely to be a bug. Most other terminals reset both.
-    _savedCursorState.at(0) = {}; // Main buffer
-    _savedCursorState.at(1) = {}; // Alt buffer
+    // Reset only the active saved cursor state.
+    // This matches xterm behavior when DECSTR is processed while using
+    // the alternate screen buffer (GH#19918).
+    _savedCursorState.at(_usingAltBuffer ? 1 : 0) = {};
 
-    // The TerminalOutput state in these buffers must be reset to
+    // The TerminalOutput state in this buffer must be reset to
     // the same state as the _termOutput instance, which is not
     // necessarily equivalent to a full reset.
-    _savedCursorState.at(0).TermOutput = _termOutput;
-    _savedCursorState.at(1).TermOutput = _termOutput;
+    _savedCursorState.at(_usingAltBuffer ? 1 : 0).TermOutput = _termOutput;
 
     // Soft reset the Sixel parser if in use.
     if (_sixelParser)
@@ -3846,6 +3844,8 @@ void AdaptDispatch::DoVsCodeAction(const std::wstring_view string)
 //     to the terminal. The command is then shared with WinGet to see if it can
 //     find a package that provides that command, which is then displayed to the
 //     user.
+//   * ShellType: The shell reports its own identity (name + version) so the
+//     terminal knows which shell currently owns the pane.
 // - Not actually used in conhost
 // Arguments:
 // - string: contains the parameters that define which action we do
@@ -3872,32 +3872,54 @@ void AdaptDispatch::DoWTAction(const std::wstring_view string)
             _api.SearchMissingCommand(missingCmd);
         }
     }
-    else if (action == L"WtaReq")
+    else if (action == L"ShellType")
     {
-        // WTA (Windows Terminal Agent) protocol request via VT escape sequence.
-        // Format: \x1b]9001;WtaReq;{json}\x07
-        // Supports: {"method":"discover"} → returns pipe name + token for protocol access.
-        // The response is injected back as \x1b]9001;WtaRes;{json}\x1b\\ via stdin.
-        if (parts.size() >= 2)
-        {
-            const auto payload = til::at(parts, 1);
+        // The shell reports its own identity once per prompt so the terminal
+        // always knows which shell currently owns the pane (including after a
+        // nested shell like `wsl` exits).
+        // The structure of the message is as follows:
+        // `e]9001;
+        // 0:     ShellType;
+        // 1:     <shell name>   (e.g. pwsh, powershell, bash, wsl:Ubuntu)
+        // 2:     <shell version> (optional)
+        const std::wstring_view shellName = parts.size() >= 2 ? til::at(parts, 1) : std::wstring_view{};
+        const std::wstring_view shellVersion = parts.size() >= 3 ? til::at(parts, 2) : std::wstring_view{};
+        _api.SetShellType(shellName, shellVersion);
+    }
+}
 
-            // Check if this is a "discover" request
-            if (payload.find(L"discover") != std::wstring_view::npos)
-            {
-                // Compute pipe name from current PID — matches what WindowEmperor creates.
-                const auto pid = GetCurrentProcessId();
-                const auto pipeName = fmt::format(FMT_COMPILE(L"\\\\\\\\.\\\\pipe\\\\WindowsTerminal-{}"), pid);
-                const auto response = fmt::format(FMT_COMPILE(L"9001;WtaRes;{{\"status\":\"ok\",\"pipe\":\"{}\",\"token\":\"\"}}"), pipeName);
-                _ReturnOscResponse(response);
-            }
-            else
-            {
-                // Default ack for other methods (e.g. "identify")
-                const auto response = fmt::format(FMT_COMPILE(L"9001;WtaRes;{{\"status\":\"ok\",\"vt_supported\":true}}"));
-                _ReturnOscResponse(response);
-            }
-        }
+// Method Description:
+// - OSC 777 - Handles urxvt requests. Currently, the only supported request is for desktop notifications.
+//   The format is: OSC 777;notify;title;body ST
+// Arguments:
+// - string: contains the parameters that define the notification
+void AdaptDispatch::DoUrxvtAction(const std::wstring_view string)
+{
+    if (!_optionalFeatures.test(OptionalFeature::DesktopNotification))
+    {
+        return;
+    }
+
+    const auto parts = Utils::SplitString(string, L';');
+
+    if (parts.size() < 1)
+    {
+        return;
+    }
+
+    til::split_iterator split{ string, L';' };
+    const auto action = split.next();
+    if (action == L"notify")
+    {
+        // The body is everything after "notify;title;". We can't just use
+        // parts[2] because the body itself may contain semicolons.
+        const auto title = split.next();
+        const auto body = split.remaining();
+        _api.ShowNotification(title, body);
+    }
+    else
+    {
+        _api.UnknownSequence();
     }
 }
 
@@ -3973,7 +3995,15 @@ ITermDispatch::StringHandler AdaptDispatch::DownloadDRCS(const VTInt fontNumber,
         // with the constructed bit pattern.
         if (ch != AsciiChars::ESC)
         {
-            _fontBuffer->AddSixelData(ch);
+            try
+            {
+                _fontBuffer->AddSixelData(ch);
+            }
+            catch (...)
+            {
+                // Ignore all further content.
+                return false;
+            }
         }
         else if (_fontBuffer->FinalizeSixelData())
         {

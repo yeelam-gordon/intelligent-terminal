@@ -58,7 +58,7 @@ parameters:
     type: object
     default:
       name: SHINE-INT-S # By default, send jobs to the small agent pool.
-      demands: ImageOverride -equals SHINE-VS17-Latest
+      demands: ImageOverride -equals SHINE-VS18-Latest
 
 variables:
   - template: variables-nuget-package-version.yml
@@ -81,7 +81,7 @@ stages:
         parameters:
           pool:
             name: SHINE-INT-L # Run the compilation on the large agent pool, rather than the default small one.
-            demands: ImageOverride -equals SHINE-VS17-Latest
+            demands: ImageOverride -equals SHINE-VS18-Latest
           branding: ${{ parameters.branding }}
           buildTerminal: ${{ parameters.buildTerminal }}
           buildConPTY: ${{ parameters.buildConPTY }}
@@ -91,9 +91,9 @@ stages:
           buildPlatforms: ${{ parameters.buildPlatforms }}
           generateSbom: ${{ parameters.generateSbom }}
           codeSign: ${{ parameters.codeSign }}
-          beforeBuildSteps: # Right before we build, lay down the universal package and localizations
+          beforeRustBuildSteps:
             - template: ./build/pipelines/templates-v2/steps-setup-versioning.yml@self
-
+          beforeBuildSteps: # Right before we build, lay down the universal package and localizations
             - task: UniversalPackages@0
               displayName: Download terminal-internal Universal Package
               inputs:
@@ -115,9 +115,9 @@ stages:
               - Any CPU
             generateSbom: ${{ parameters.generateSbom }}
             codeSign: ${{ parameters.codeSign }}
-            beforeBuildSteps:
+            beforeRustBuildSteps:
               - template: ./build/pipelines/templates-v2/steps-setup-versioning.yml@self
-              # WPF doesn't need the localizations or the universal package, but if it does... put them here.
+            # WPF doesn't need the localizations or the universal package, but if it does... put them here.
 
   - stage: Package
     displayName: Package

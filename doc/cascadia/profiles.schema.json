@@ -441,6 +441,7 @@
         "openTabColorPicker",
         "openTabRenamer",
         "openWindowRenamer",
+        "openWorkspace",
         "paste",
         "prevTab",
         "quakeMode",
@@ -479,6 +480,7 @@
         "toggleReadOnlyMode",
         "toggleShaderEffects",
         "toggleSplitOrientation",
+        "workspaces",
         "wt",
         "unbound"
       ],
@@ -1721,6 +1723,28 @@
         }
       ]
     },
+    "OpenWorkspaceAction": {
+      "description": "Arguments corresponding to an openWorkspace Action",
+      "allOf": [
+        {
+          "$ref": "#/$defs/ShortcutAction"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "const": "openWorkspace"
+            },
+            "name": {
+              "type": "string",
+              "default": "",
+              "description": "The name of the workspace to open. If omitted, the workspaces UI will be shown so the user can pick one."
+            }
+          }
+        }
+      ]
+    },
     "FocusPaneAction": {
       "description": "Arguments corresponding to a focusPane Action",
       "allOf": [
@@ -2040,6 +2064,11 @@
         "unfocusedFrame": {
           "description": "The color of the window frame when the window is inactive. This only works on Windows 11",
           "$ref": "#/$defs/ThemeColor"
+        },
+        "showWorkspacesButton": {
+          "description": "When set to true, the workspaces button will be shown in the tab row.",
+          "type": "boolean",
+          "default": true
         }
       }
     },
@@ -2207,6 +2236,9 @@
             },
             {
               "$ref": "#/$defs/RenameWindowAction"
+            },
+            {
+              "$ref": "#/$defs/OpenWorkspaceAction"
             },
             {
               "$ref": "#/$defs/FocusPaneAction"
@@ -2469,6 +2501,13 @@
           "description": "Disables all the dynamic profile generators in this list, preventing them from adding their profiles to the list of profiles on startup.",
           "items": {
             "$ref": "#/$defs/DynamicProfileSource"
+          },
+          "type": "array"
+        },
+        "safeUriSchemes": {
+          "description": "Specifies a list of URI schemes that are considered safe. No confirmation will be required to open URIs with these schemes.",
+          "items": {
+            "type": "string"
           },
           "type": "array"
         },
@@ -2785,6 +2824,11 @@
         "compatibility.allowOSC52": {
           "default": true,
           "description": "When set to true, VT applications will be allowed to set the contents of the local clipboard using OSC 52 (Manipulate Selection Data).",
+          "type": "boolean"
+        },
+        "compatibility.allowOSC777": {
+          "default": false,
+          "description": "When set to true, applications can send OSC 777 escape sequences to trigger desktop toast notifications with a custom title and body.",
           "type": "boolean"
         },
         "unfocusedAppearance": {
@@ -3150,6 +3194,22 @@
             "string",
             "null"
           ]
+        },
+        "agentPaneBackend": {
+          "description": "Selects an optional profile-specific agent pane agent. An empty value uses the global Windows-hosted agent. WSL values identify an agent installed in the profile's own distro.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(|host:[^:]+|wsl:[^:]+:[^:]+)$"
+        },
+        "commandPaletteAgent": {
+          "description": "Selects the agent used for command palette delegation from this profile. An empty value uses the global Windows-hosted delegate agent. An explicit host or WSL selection is strict and never falls back to another agent.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(|host:[^:]+|wsl:[^:]+:[^:]+)$"
         },
         "suppressApplicationTitle": {
           "description": "When set to true, tabTitle overrides the default title of the tab and any title change messages from the application will be suppressed. When set to false, tabTitle behaves as normal.",

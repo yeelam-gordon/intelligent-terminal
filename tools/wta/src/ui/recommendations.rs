@@ -72,7 +72,8 @@ pub fn render_hint(frame: &mut Frame, area: Rect) {
     let hint = Paragraph::new(Line::from(Span::styled(
         t!("recommendations.nav_hint").into_owned(),
         theme::DIM,
-    )));
+    )))
+    .alignment(crate::rtl::text_alignment());
     frame.render_widget(hint, area);
 }
 
@@ -87,14 +88,10 @@ fn render_card(
         return;
     }
 
-    // The key handlers already gate Up/Down/Left/Right/Tab/Enter on
-    // `input.is_empty()` — i.e. you can navigate cards only when no text is
-    // in the prompt box. Mirror that here so the focus highlight matches:
-    // typing should visibly take focus away from the cards, otherwise the
-    // user sees "two focuses" and can't tell whether Enter will activate
-    // the card or submit the prompt.
-    let nav_mode = app.current_tab().input.is_empty();
-    let is_selected = nav_mode && idx == app.current_tab().selected_recommendation;
+    // A selected card only paints button focus while recommendation navigation
+    // targets it; Up/Down can move that focus to the input while cards remain
+    // visible.
+    let is_selected = idx == app.current_tab().selected_recommendation;
     let border_style = if is_selected {
         theme::CARD_BORDER_SELECTED
     } else {
@@ -121,7 +118,10 @@ fn render_card(
 
     let button_inner = card::inset_horizontal(button_area, 2);
     if button_inner.width > 0 {
-        let focused = if is_selected {
+        let focused = if is_selected
+            && app.current_tab().recommendation_focus
+                == crate::app::RecommendationFocus::Button
+        {
             Some(app.current_tab().selected_button)
         } else {
             None

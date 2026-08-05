@@ -1,29 +1,23 @@
 # Setup screen titles
-# {Locked="Intelligent Terminal"} - tên sản phẩm, không dịch
-setup.title.first_run: "Chào mừng bạn đến Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "Không tìm thấy tác nhân AI"
 setup.title.agent_error: "Kết nối tới tác nhân AI thất bại"
-setup.title.switch_agent: "Chuyển tác nhân AI"
 setup.title.not_available: "Tác nhân AI không khả dụng"
 setup.title.sign_in: "Cần đăng nhập"
 
 # %{agent} được thay thế bằng tên hiển thị của tác nhân AI khi chạy.
-setup.subtitle.copilot_missing: "Tác nhân AI \"%{agent}\" của bạn chưa được cài đặt. Thực hiện theo các bước bên dưới để cài đặt. Để chuyển tác nhân AI, hãy đi tới Settings."
-setup.subtitle.agent_missing: "Tác nhân AI \"%{agent}\" của bạn chưa được cài đặt. Vui lòng cài đặt lại thủ công, sau đó thử lại. Để chuyển tác nhân AI, hãy đi tới Settings."
-setup.subtitle.copilot_auth: "Tác nhân AI \"%{agent}\" của bạn yêu cầu xác thực. Thực hiện theo các bước bên dưới để đăng nhập. Để chuyển tác nhân AI, hãy đi tới Settings."
-setup.subtitle.agent_auth: "Tác nhân AI \"%{agent}\" của bạn yêu cầu xác thực. Vui lòng đăng nhập qua CLI của tác nhân AI, sau đó thử lại. Để chuyển tác nhân AI, hãy đi tới Settings."
+setup.subtitle.copilot_missing: "Tác nhân AI \"%{agent}\" của bạn chưa được cài đặt. Thực hiện theo các bước bên dưới để cài đặt. Để chuyển tác nhân AI, hãy đi tới Đầu cuối thông minh Settings > Agent."
+setup.subtitle.agent_missing: "Tác nhân AI \"%{agent}\" của bạn chưa được cài đặt. Vui lòng cài đặt lại thủ công, sau đó thử lại. Để chuyển tác nhân AI, hãy đi tới Đầu cuối thông minh Settings > Agent."
+setup.subtitle.copilot_auth: "Tác nhân AI \"%{agent}\" của bạn yêu cầu xác thực. Thực hiện theo các bước bên dưới để đăng nhập. Để chuyển tác nhân AI, hãy đi tới Đầu cuối thông minh Settings > Agent."
+setup.subtitle.agent_auth: "Tác nhân AI \"%{agent}\" của bạn yêu cầu xác thực. Vui lòng đăng nhập qua tác nhân AI, sau đó chọn \"Tôi đã đăng nhập\" bên dưới. Để chuyển tác nhân AI, hãy đi tới Đầu cuối thông minh Settings > Agent."
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "Chọn CLI tác nhân AI mặc định mà bạn muốn sử dụng trong Intelligent Terminal. Bạn có thể"
-setup.description.fre_line2: "đi tới Settings để cấu hình và thiết lập không gian làm việc của bạn."
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "Cài đặt lại %{agent}"
-setup.option.reinstall_hint: "(Sẽ được cài đặt tự động)"
+setup.option.install: "Cài đặt %{agent}"
+setup.option.install_hint: "(Sẽ được cài đặt tự động)"
 setup.option.signin: "Đăng nhập vào %{agent}"
-setup.option.retry_detection: "Thử phát hiện lại"
+setup.option.retry_detection: "Thử lại"
 setup.option.retry_auth: "Tôi đã đăng nhập — thử kết nối lại"
-setup.option.retry_connection: "Thử kết nối lại"
-setup.option.switch_to: "Chuyển sang %{agent}"
 setup.status.installing: "Đang cài đặt..."
 setup.status.install_failed: "Cài đặt thất bại: "
 setup.status.installing_winget: " Đang cài đặt qua winget..."
@@ -35,25 +29,32 @@ auth.agent_selected_with_status: "CLI tác nhân AI %{name} — "
 auth.checking_authentication: "  %{spinner} Đang kiểm tra xác thực..."
 auth.waiting_for_authorization: "  %{spinner} Đang chờ ủy quyền..."
 auth.code_copied_hint: "  Mã đã được sao chép vào bộ nhớ tạm — hãy dán vào trình duyệt của bạn."
-auth.sign_in_prompt: "Đăng nhập để sử dụng tác nhân AI của bạn:"
+auth.device_code_prompt: "Truy cập %{url} và nhập mã: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  Kết nối %{name} để bật tính năng tác nhân AI"
-auth.button_sign_in_github: "[ Đăng nhập bằng GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ Đăng nhập bằng %{name} ]"
-auth.hint_footer: "  Nhấn Enter để đăng nhập, Esc để quay lại"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  Enter để đăng nhập · E để dùng GitHub Enterprise · Esc để quay lại"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Miền doanh nghiệp: "
+auth.enterprise_hint_footer: "  Enter để đăng nhập · Esc để dùng github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Nhấn Enter để thử lại hoặc Esc để dùng github.com. Nguyên nhân thường gặp: nhập sai miền hoặc miền không truy cập được, mã đã hết hạn, hoặc tài khoản của bạn không có quyền truy cập Copilot trên máy chủ đó."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Nhấn Enter để thử lại hoặc Esc để quay lại."  # {Locked="Enter","Esc"}
 
 # ── Chat view (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Đang suy nghĩ…"
-# {Locked="Intelligent Terminal"} - tên sản phẩm, không dịch
-chat.welcome_title: "Chào mừng bạn đến Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "Chào mừng bạn đến Đầu cuối thông minh!"
+chat.welcome_disclaimer: "Đầu cuối thông minh sử dụng AI. Hãy kiểm tra lỗi."
 chat.plan_header: "Kế hoạch:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "Đã tự động chẩn đoán một lỗi lệnh gần đây"
+chat.turn_canceled: "(đã hủy)"
+chat.turn_executed: "→ đã thực thi: %{title}"
 
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "Hỏi bất cứ điều gì, / cho lệnh.."  # {Locked="/"}
 input.placeholder.connecting: "đang kết nối..."
 input.placeholder.disconnected: "đã ngắt kết nối"
+input.image_attachments: "📎 Hình ảnh: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Pending prompt queue (src/ui/queued_hint.rs, src/app.rs) ───────────────
 # Indicator shown above the input box while one or more prompts are queued
@@ -77,8 +78,8 @@ commands.help_escape_hint: "  //text     Gửi ký tự '/' theo nghĩa đen (b�
 commands.help_close_hint: "  Esc        Đóng trợ giúp này"  # {Locked="Esc"}
 
 # ── Recommendations panel (src/ui/recommendations.rs) ───────────────────────
-# {Locked="Enter","Esc","↵"} - key names and Return-key glyph, do not translate
-recommendations.nav_hint: "(↑ ↓ để di chuyển • Enter để chọn • Esc để hủy)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - key names and Return-key glyph, do not translate
+recommendations.nav_hint: "(↑ ↓ để di chuyển • ← → để chuyển hành động • Enter để chọn • Esc để hủy)"
 recommendations.button_run_command: "[ Chạy lệnh ]"
 recommendations.button_insert_in_terminal: "Chèn vào Terminal"
 recommendations.button_open_in_new_tab: "Mở trong Tab mới ↵"
@@ -102,9 +103,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N để trả lời · thay đổi kích thước để xem đầy đủ]"  # {Locked="Y/N"}
 
 # ── Agent status (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "Chưa cài đặt — chọn để cài đặt tự động"
 agent.status.not_found: "Không tìm thấy"
-agent.status.detected: "Đã phát hiện"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - tool names and command, must run verbatim
 agent.install.running_winget: "Đang chạy: winget install GitHub.Copilot"
 agent.install.launch_failed: "Không thể khởi chạy winget: %{error}"
@@ -115,25 +114,46 @@ agent.custom.auth_hint: "Hãy đảm bảo %{name} đã được cài đặt và
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Đang tải..."
-# {Locked="Enter","Shift+enter","Esc"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ để di chuyển • Enter để mở phiên trong tab mới • Shift+enter để mở phiên trong bảng tác nhân AI • Esc để thoát)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ để di chuyển • Enter để mở phiên • Esc để thoát • F5 để làm mới • / để tìm kiếm)"
 agents.status.active: "Đang hoạt động"
 agents.status.waiting_for_input: "Đang chờ nhập liệu"
 agents.status.error: "Lỗi"
 agents.status.idle: "Rảnh"
 
 # ── Layout welcome hint (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. để hiện/ẩn bảng tác nhân AI • Ctrl+Alt+/ để hiện/ẩn phiên tác nhân AI)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. để hiện/ẩn bảng tác nhân AI • Ctrl+Shift+/ để hiện/ẩn phiên tác nhân AI)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
 connection.starting: "Đang khởi động tác nhân AI..."
 connection.reconnecting: "Đang kết nối lại..."
+connection.connecting_activity: "Đang kết nối với tác nhân AI…"
+connection.lost: "Đã mất kết nối với tác nhân AI. Nhập /restart để kết nối lại."  # {Locked="/restart"}
 
 # ── System messages (src/app.rs) ────────────────────────────────────────────
+system.close_pane_hint: "Nhấn Ctrl+C lần nữa để đóng bảng."  # {Locked="Ctrl+C"}
+system.selection_copied: "Đã sao chép"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "Đã hủy."
 system.no_prompt_in_flight: "Không có lệnh nào đang chạy."
 system.authentication_failed: "Xác thực thất bại"
-system.command_copied_retry: "Đã sao chép lệnh — chạy trong terminal khác, sau đó nhấn Enter để thử lại"  # {Locked="Enter"}
+system.stopped_max_tokens: "Phản hồi đã bị cắt sau khi đạt đến giới hạn đầu ra của mô hình."
+system.stopped_max_turn_requests: "Tác nhân đã dừng sau khi đạt đến giới hạn yêu cầu cho lượt này."
+system.stopped_refusal: "Tác nhân đã từ chối tiếp tục với yêu cầu này."
+system.agent_busy: "Tác nhân đang bận trên tab này — hãy đợi lời nhắc hiện tại hoàn tất."
+system.image_clipboard_empty: "Không có hình ảnh trong bảng tạm để dán."
+system.image_not_supported: "Tác nhân này không hỗ trợ nhập hình ảnh."
+system.image_pasted: "Đã đính kèm hình ảnh (%{label}). Nhấn Enter để gửi."  # {Locked="%{label}","Enter"}
+system.resuming_session: "Đang tiếp tục phiên %{session_id}..."
+system.unknown_command: "Lệnh không xác định \"%{command}\" — đã gửi dưới dạng lời nhắc. Nhập /help để xem danh sách."  # {Locked="/help"}
+system.busy_use_stop: "Hãy đợi lời nhắc hiện tại hoàn tất, hoặc chạy /stop trước."  # {Locked="/stop"}
+system.cannot_focus_session: "Không thể tập trung vào phiên %{session_id}: phiên có vẻ đang hoạt động nhưng chưa có GUID bảng nào được liên kết. Hãy thử lại sau giây lát."
+system.cannot_resume_no_load_session: "Không thể tiếp tục trong bảng tác nhân: %{agent} không quảng bá khả năng ACP `loadSession`. Thay vào đó, nhấn Enter (không nhấn Shift) để tiếp tục trong bảng terminal mới."  # {Locked="ACP","loadSession","Enter","Shift"}
+system.cannot_resume_no_resume_flag: "Không thể tiếp tục phiên %{agent}: tác nhân này không có cờ kiểu `--resume`. Nhấn Shift+Enter để thử tiếp tục bên trong bảng tác nhân thông qua ACP."  # {Locked="--resume","Shift","Enter","ACP"}
+system.cannot_resume_unknown_agent: "Không thể tiếp tục phiên %{session_id}: tác nhân nguồn của phiên không được bản dựng này nhận dạng."
+system.cannot_resume_phantom_via_flag: "Không thể tiếp tục phiên %{agent} %{session_id}: phiên đã được khởi tạo nhưng chưa từng tích lũy cuộc trò chuyện nào, nên chính %{agent} sẽ từ chối tiếp tục. Đang xóa hàng."
+system.cannot_resume_phantom_via_load: "Không thể tiếp tục phiên %{agent} %{session_id}: phiên đã được khởi tạo nhưng chưa từng tích lũy cuộc trò chuyện nào, nên %{agent} sẽ từ chối tải. Đang xóa hàng."
+system.fallback.this_agent: "tác nhân này"
+system.fallback.connected_agent: "tác nhân đã kết nối"
 
 # ── Runtime CLI output (src/main.rs) ────────────────────────────────────────
 output.no_windows: "Không tìm thấy cửa sổ nào."
@@ -171,3 +191,45 @@ hooks.installed_but_disabled: "⚠ đã cài đặt nhưng bị tắt"
 hooks.not_installed: "✗ chưa cài đặt"
 hooks.uninstall_skipped: "đã bỏ qua (CLI không nằm trong PATH)"
 hooks.install_attempted: "Đã thử cài đặt wt-agent-hooks (idempotent). Chạy `wta hooks status` để kiểm tra kết quả. Nhật ký: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+
+# ── Relative time and date formatting ─────────────────────────────────────
+time.just_now: "vừa xong"
+time.minute_singular: "%{count} phút trước"
+time.minutes_other: "%{count} phút trước"
+time.hour_singular: "%{count} giờ trước"
+time.hours_other: "%{count} giờ trước"
+time.day_singular: "%{count} ngày trước"
+time.days_other: "%{count} ngày trước"
+
+# ── Slash-command summaries (src/commands.rs) ─────────────────────────────
+# Command names (/help, /clear, etc.) stay English; descriptions translate.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "Hiển thị danh sách lệnh này"
+commands.clear.summary: "Xóa phần cuộn lại của cuộc trò chuyện (giữ phiên)"
+commands.new.summary: "Bắt đầu phiên ACP mới (bỏ lịch sử)"  # {Locked="ACP"}
+commands.fix.summary: "Chẩn đoán terminal đang hoạt động và đề xuất cách khắc phục (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "Khởi động lại tác nhân"
+commands.stop.summary: "Hủy prompt đang chạy"
+commands.sessions.summary: "Mở bộ chọn phiên lịch sử (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "Chọn agent cho bảng này (/agent <id> để chuyển trực tiếp)"  # {Locked="/agent","<id>"}
+
+# ── Thực thi đề xuất (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "Lựa chọn %{choice} không thành công: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "Chọn agent (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "Không tìm thấy CLI agent khả dụng nào trên máy này."  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "Agent không xác định %{agent} — nhập /agent để xem danh sách khả dụng."  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "Tính năng chuyển đổi agent không khả dụng bên ngoài tab Windows Terminal."
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "Chọn mô hình cho bảng này (/model <id> để chuyển trực tiếp)"  # {Locked="/model","<id>"}
+commands.move.summary: "Di chuyển bảng tác nhân AI của tab này (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "Chọn mô hình (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "Tác nhân AI đã kết nối không quảng bá bất kỳ mô hình nào có thể chọn."
+system.model_set: "Mô hình cho bảng này được đặt thành %{model}."  # {Locked="%{model}"}
+system.model_unknown: "Mô hình không xác định %{model} — nhập /model để xem danh sách khả dụng."  # {Locked="%{model}","/model"}

@@ -11,6 +11,7 @@ ACL'd
 acp
 actctx
 ACTCTXW
+activedir
 ADDALIAS
 ADDREF
 ADDSTRING
@@ -22,10 +23,13 @@ AFX
 AHelper
 ahicon
 ahz
+aic
 AImpl
 AInplace
+aiu
 ALIGNRIGHT
 allocing
+allsigned
 alpc
 ALTERNATENAME
 ALTF
@@ -123,7 +127,6 @@ BPPF
 branchconfig
 brandings
 Browsable
-Bspace
 bspace
 BTNFACE
 bufferout
@@ -181,6 +184,7 @@ clsids
 cmatrix
 cmder
 CMDEXT
+cmdrecall
 cmh
 CMOUSEBUTTONS
 Cmts
@@ -437,6 +441,8 @@ defterm
 DELAYLOAD
 DELETEONRELEASE
 depersist
+depl
+deploit
 deprioritized
 devicecode
 Dext
@@ -521,6 +527,7 @@ EOK
 EPres
 EQU
 ERASEBKGND
+EReport
 ERRORONEXIT
 espt
 esrp
@@ -591,6 +598,8 @@ FORCEONFEEDBACK
 FRAMECHANGED
 fre
 Free'd
+frob
+frobnicate
 frontends
 fsanitize
 FSINFOCLASS
@@ -606,6 +615,7 @@ fwdecl
 fwe
 fzf
 gci
+gco
 gcx
 gdi
 gdip
@@ -672,6 +682,7 @@ GMEM
 Goldmine
 gonce
 goutput
+gpo
 GPUs
 GREENSCROLL
 Grehan
@@ -679,6 +690,7 @@ Greyscale
 gridline
 gset
 gsl
+gti
 guc
 GUIDATOM
 GValue
@@ -688,6 +700,7 @@ gwsz
 HABCDEF
 Hackathon
 HALTCOND
+handrolled
 HANGEUL
 hardlinks
 hashalg
@@ -806,6 +819,7 @@ INVALIDARG
 INVALIDATERECT
 ipch
 ipsp
+ITE
 iterm
 itermcolors
 itf
@@ -962,6 +976,7 @@ maxval
 maxversiontested
 MAXWORD
 maybenull
+mbr
 MBUTTON
 MBUTTONDBLCLK
 MBUTTONDOWN
@@ -1076,6 +1091,7 @@ NOCONTEXTHELP
 NOCOPYBITS
 nodiscard
 NODUP
+NODEFAULT
 noexcepts
 NOFONT
 NOHIDDENTEXT
@@ -1094,6 +1110,7 @@ nonspace
 NOOWNERZORDER
 NOPAINT
 noprofile
+norc
 NOREDRAW
 NOREMOVE
 NOREPOSITION
@@ -1139,7 +1156,7 @@ nullopts
 NUMSCROLL
 NUnit
 nupkg
-NVIDIA
+nvidia
 NVT
 OACR
 ocolor
@@ -1319,6 +1336,7 @@ propsys
 PROPTITLE
 propvar
 propvariant
+proxyable
 psa
 PSECURITY
 pseudoconsole
@@ -1329,7 +1347,6 @@ PSINGLE
 psl
 psldl
 PSNRET
-PSobject
 psp
 PSPCB
 psr
@@ -1383,6 +1400,7 @@ redist
 REDSCROLL
 REFCLSID
 Reference'd
+refetches
 REFGUID
 REFIID
 REFPROPERTYKEY
@@ -1539,7 +1557,6 @@ SHOWWINDOW
 sidebyside
 SIF
 SIGDN
-Signtool
 SINGLETHREADED
 siup
 sixel
@@ -1554,13 +1571,16 @@ SLGP
 SLIST
 slmult
 sln
+slnf
 slnx
 slpit
+SLU
 SManifest
 SMARTQUOTE
 SMTO
 snapcx
 snapcy
+SND
 snk
 SOLIDBOX
 Solutiondir
@@ -1756,6 +1776,7 @@ UPKEY
 upss
 uregex
 URegular
+urxvt
 usebackq
 USECALLBACK
 USECOLOR
@@ -1818,7 +1839,6 @@ VSTS
 VSTT
 vswhere
 vtapp
-VTE
 VTID
 vtmode
 vtpipeterm
@@ -1855,6 +1875,7 @@ Widthx
 Wiggum
 wil
 WINAPI
+winapp
 winbasep
 wincon
 winconp
@@ -1934,9 +1955,10 @@ wstr
 wstrings
 wsz
 wta
-WTCLI
 wtai
 wtd
+wtdeployit
+wtdeployt
 WTEXT
 WTo
 wtof
@@ -1966,6 +1988,7 @@ XFG
 XFORM
 XIn
 xorg
+xqzwvbnmlkjh
 xstyler
 XTPOPSGR
 XTPUSHSGR
@@ -2032,3 +2055,18 @@ inbox
 prioritization
 sourced
 IME
+CLDR
+doy
+Hinnant
+LONGDATE
+MRT
+Uninstalls
+agentclientprotocol
+AHP
+boxfnonce
+INJ
+jsonrpcmsg
+reorderable
+sacp
+Takeaways
+workstream

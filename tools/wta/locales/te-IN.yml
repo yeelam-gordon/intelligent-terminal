@@ -1,29 +1,23 @@
 # సెటప్ స్క్రీన్ శీర్షికలు
-# {Locked="Intelligent Terminal"} - ఉత్పత్తి పేరు, అనువదించవద్దు
-setup.title.first_run: "Intelligent Terminal-కు స్వాగతం!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "ఏజెంట్ కనుగొనబడలేదు"
 setup.title.agent_error: "ఏజెంట్ కనెక్షన్ విఫలమైంది"
-setup.title.switch_agent: "ఏజెంట్‌ను మార్చండి"
 setup.title.not_available: "ఏజెంట్ అందుబాటులో లేదు"
 setup.title.sign_in: "సైన్ ఇన్ అవసరం"
 
 # %{agent} రన్‌టైమ్‌లో ఏజెంట్ ప్రదర్శన పేరుతో భర్తీ చేయబడుతుంది.
-setup.subtitle.copilot_missing: "మీ ఏజెంట్ \"%{agent}\" ఇన్‌స్టాల్ చేయబడలేదు. ఇన్‌స్టాల్ చేయడానికి దిగువ దశలను అనుసరించండి. ఏజెంట్‌ను మార్చడానికి Settings కు వెళ్ళండి."
-setup.subtitle.agent_missing: "మీ ఏజెంట్ \"%{agent}\" ఇన్‌స్టాల్ చేయబడలేదు. దయచేసి మాన్యువల్‌గా మళ్ళీ ఇన్‌స్టాల్ చేసి, మళ్ళీ ప్రయత్నించండి. ఏజెంట్‌ను మార్చడానికి Settings కు వెళ్ళండి."
-setup.subtitle.copilot_auth: "మీ ఏజెంట్ \"%{agent}\" కు ప్రమాణీకరణ అవసరం. సైన్ ఇన్ చేయడానికి దిగువ దశలను అనుసరించండి. ఏజెంట్‌ను మార్చడానికి Settings కు వెళ్ళండి."
-setup.subtitle.agent_auth: "మీ ఏజెంట్ \"%{agent}\" కు ప్రమాణీకరణ అవసరం. దయచేసి ఏజెంట్ CLI ద్వారా సైన్ ఇన్ చేసి, మళ్ళీ ప్రయత్నించండి. ఏజెంట్‌ను మార్చడానికి Settings కు వెళ్ళండి."
+setup.subtitle.copilot_missing: "మీ ఏజెంట్ \"%{agent}\" ఇన్‌స్టాల్ చేయబడలేదు. ఇన్‌స్టాల్ చేయడానికి దిగువ దశలను అనుసరించండి. ఏజెంట్‌ను మార్చడానికి ఇంటెలిజెంట్ టెర్మినల్ Settings > Agent కు వెళ్ళండి."
+setup.subtitle.agent_missing: "మీ ఏజెంట్ \"%{agent}\" ఇన్‌స్టాల్ చేయబడలేదు. దయచేసి మాన్యువల్‌గా మళ్ళీ ఇన్‌స్టాల్ చేసి, మళ్ళీ ప్రయత్నించండి. ఏజెంట్‌ను మార్చడానికి ఇంటెలిజెంట్ టెర్మినల్ Settings > Agent కు వెళ్ళండి."
+setup.subtitle.copilot_auth: "మీ ఏజెంట్ \"%{agent}\" కు ప్రమాణీకరణ అవసరం. సైన్ ఇన్ చేయడానికి దిగువ దశలను అనుసరించండి. ఏజెంట్‌ను మార్చడానికి ఇంటెలిజెంట్ టెర్మినల్ Settings > Agent కు వెళ్ళండి."
+setup.subtitle.agent_auth: "మీ ఏజెంట్ \"%{agent}\" కు ప్రామాణీకరణ అవసరం. దయచేసి ఏజెంట్ ద్వారా సైన్ ఇన్ చేసి, క్రింద \"నేను సైన్ ఇన్ చేసాను\" ఎంచుకోండి. ఏజెంట్‌లను మార్చడానికి Settings కు వెళ్లండి."
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "Intelligent Terminal లో ఉపయోగించడానికి డిఫాల్ట్ ఏజెంట్ CLI ని ఎంచుకోండి. మీరు"
-setup.description.fre_line2: "మీ వర్క్‌స్పేస్‌ను కాన్ఫిగర్ చేసి సెటప్ చేయడానికి Settings కు నావిగేట్ చేయవచ్చు."
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "%{agent} మళ్ళీ ఇన్‌స్టాల్ చేయండి"
-setup.option.reinstall_hint: "(ఆటోమేటిక్‌గా ఇన్‌స్టాల్ చేయబడుతుంది)"
+setup.option.install: "%{agent} మళ్ళీ ఇన్‌స్టాల్ చేయండి"
+setup.option.install_hint: "(ఆటోమేటిక్‌గా ఇన్‌స్టాల్ చేయబడుతుంది)"
 setup.option.signin: "%{agent} లో సైన్ ఇన్ చేయండి"
-setup.option.retry_detection: "గుర్తింపును మళ్ళీ ప్రయత్నించండి"
-setup.option.retry_auth: "నేను సైన్ ఇన్ చేసాను — కనెక్షన్ మళ్ళీ ప్రయత్నించండి"
-setup.option.retry_connection: "కనెక్షన్ మళ్ళీ ప్రయత్నించండి"
-setup.option.switch_to: "%{agent} కు మారండి"
+setup.option.retry_detection: "మళ్లీ ప్రయత్నించండి"
+setup.option.retry_auth: "నేను సైన్ ఇన్ చేసాను — మళ్లీ కనెక్ట్ చేయడానికి ప్రయత్నించండి"
 setup.status.installing: "ఇన్‌స్టాల్ అవుతోంది..."
 setup.status.install_failed: "ఇన్‌స్టాల్ విఫలమైంది: "
 setup.status.installing_winget: " winget ద్వారా ఇన్‌స్టాల్ అవుతోంది..."
@@ -35,25 +29,32 @@ auth.agent_selected_with_status: "ఏజెంట్ %{name} — "
 auth.checking_authentication: "  %{spinner} ప్రమాణీకరణ తనిఖీ చేయబడుతోంది..."
 auth.waiting_for_authorization: "  %{spinner} అధికారం కోసం వేచి ఉంది..."
 auth.code_copied_hint: "  కోడ్ క్లిప్‌బోర్డ్‌కు కాపీ చేయబడింది — మీ బ్రౌజర్‌లో పేస్ట్ చేయండి."
-auth.sign_in_prompt: "మీ ఏజెంట్‌ను ఉపయోగించడానికి సైన్ ఇన్ చేయండి:"
+auth.device_code_prompt: "%{url}ను సందర్శించి కోడ్‌ను నమోదు చేయండి: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  ఏజెంట్ ఫీచర్లను ఎనేబుల్ చేయడానికి %{name} ను కనెక్ట్ చేయండి"
-auth.button_sign_in_github: "[ GitHub తో సైన్ ఇన్ చేయండి ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ %{name} తో సైన్ ఇన్ చేయండి ]"
-auth.hint_footer: "  సైన్ ఇన్ చేయడానికి Enter నొక్కండి, వెనుకకు వెళ్ళడానికి Esc నొక్కండి"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  సైన్ ఇన్ చేయడానికి Enter · GitHub Enterprise కోసం E · వెనక్కి వెళ్లడానికి Esc"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise డొమైన్: "
+auth.enterprise_hint_footer: "  సైన్ ఇన్ చేయడానికి Enter · github.com కోసం Esc"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  మళ్లీ ప్రయత్నించడానికి Enter నొక్కండి, లేదా github.com కోసం Esc. సాధారణ కారణాలు: తప్పుగా టైప్ చేసిన లేదా అందుబాటులో లేని డొమైన్, గడువు ముగిసిన కోడ్, లేదా ఆ హోస్ట్‌లో Copilot యాక్సెస్ లేకపోవడం."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  మళ్లీ ప్రయత్నించడానికి Enter నొక్కండి, లేదా వెనక్కి వెళ్లడానికి Esc."  # {Locked="Enter","Esc"}
 
 # ── చాట్ వ్యూ (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "ఆలోచిస్తోంది…"
-# {Locked="Intelligent Terminal"} - ఉత్పత్తి పేరు, అనువదించవద్దు
-chat.welcome_title: "Intelligent Terminal-కు స్వాగతం!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "ఇంటెలిజెంట్ టెర్మినల్-కు స్వాగతం!"
+chat.welcome_disclaimer: "ఇంటెలిజెంట్ టెర్మినల్ AI ఉపయోగిస్తుంది. తప్పులు ఉన్నాయా తనిఖీ చేయండి."
 chat.plan_header: "ప్లాన్:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "ఇటీవలి కమాండ్ వైఫల్యం స్వయంచాలకంగా నిర్ధారించబడింది"
+chat.turn_canceled: "(రద్దు చేయబడింది)"
+chat.turn_executed: "→ అమలు చేయబడింది: %{title}"
 
 # ── ఇన్‌పుట్ ప్లేస్‌హోల్డర్‌లు (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "ఏదైనా అడగండి, / కమాండ్‌ల కోసం.."  # {Locked="/"}
 input.placeholder.connecting: "కనెక్ట్ అవుతోంది..."
 input.placeholder.disconnected: "డిస్‌కనెక్ట్"
+input.image_attachments: "📎 చిత్రాలు: %{items}"  # {Locked="📎","%{items}"}
 
 # ── పెండింగ్ ప్రాంప్ట్ క్యూ (src/ui/queued_hint.rs, src/app.rs) ───────────────
 # ఒకటి లేదా అంతకంటే ఎక్కువ ప్రాంప్ట్‌లు క్యూలో ఉండి, ఏజెంట్ ప్రస్తుత టర్న్ ముగియడానికి
@@ -76,9 +77,22 @@ commands.help_header: "స్లాష్ కమాండ్‌లు — ఇన
 commands.help_escape_hint: "  //text     అక్షరాల '/' పంపండి (కమాండ్ పార్సర్‌ను ఎస్కేప్ చేస్తుంది)"  # {Locked="//text","/"}
 commands.help_close_hint: "  Esc        ఈ సహాయాన్ని మూసివేయండి"  # {Locked="Esc"}
 
+# Slash-command summaries shown in the popup and /help overlay.
+# Command names (/help, /clear, /new, /restart, /stop, /sessions) stay in
+# English. Only the descriptions are localized.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "ఈ కమాండ్ జాబితాను చూపించు"
+commands.clear.summary: "చాట్ స్క్రోల్‌బ్యాక్‌ను క్లియర్ చేయి (సెషన్‌ను ఉంచుతుంది)"
+commands.new.summary: "కొత్త ACP సెషన్‌ను ప్రారంభించు (చరిత్రను తొలగిస్తుంది)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "ఏజెంట్‌ను పునఃప్రారంభించండి"
+commands.stop.summary: "నడుస్తున్న ప్రాంప్ట్‌ను రద్దు చేయి"
+commands.sessions.summary: "చారిత్రక సెషన్‌ల ఎంపికను తెరవండి (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "ఈ ట్యాబ్ కోసం ఏజెంట్‌ను ఎంచుకోండి (నేరుగా మార్చడానికి /agent <id>)"  # {Locked="/agent","<id>"}
+
 # ── సిఫార్సుల ప్యానెల్ (src/ui/recommendations.rs) ───────────────────────────────
-# {Locked="Enter","Esc","↵"} - కీ పేర్లు మరియు Return-కీ గ్లిఫ్, అనువదించవద్దు
-recommendations.nav_hint: "(↑ ↓ నావిగేట్ చేయండి • Enter ఎంచుకోండి • Esc రద్దు చేయండి)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - కీ పేర్లు మరియు Return-కీ గ్లిఫ్, అనువదించవద్దు
+recommendations.nav_hint: "(↑ ↓ నావిగేట్ చేయడానికి • ← → బటన్‌లను మార్చడానికి • Enter ఎంచుకోవడానికి • Esc రద్దు చేయడానికి)"
 recommendations.button_run_command: "[ కమాండ్ అమలు చేయండి ]"
 recommendations.button_insert_in_terminal: "టెర్మినల్‌లో చొప్పించండి"
 recommendations.button_open_in_new_tab: "కొత్త ట్యాబ్‌లో తెరవండి ↵"
@@ -102,9 +116,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N సమాధానం ఇవ్వండి · పూర్తి కార్డ్ కోసం రీసైజ్ చేయండి]"  # {Locked="Y/N"}
 
 # ── ఏజెంట్ స్థితి (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "ఇన్‌స్టాల్ చేయబడలేదు — ఆటోమేటిక్‌గా ఇన్‌స్టాల్ చేయడానికి ఎంచుకోండి"
 agent.status.not_found: "కనుగొనబడలేదు"
-agent.status.detected: "గుర్తించబడింది"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - టూల్ పేర్లు మరియు కమాండ్, యథాతథంగా అమలు చేయాలి
 agent.install.running_winget: "అమలవుతోంది: winget install GitHub.Copilot"
 agent.install.launch_failed: "winget ప్రారంభించడం విఫలమైంది: %{error}"
@@ -115,25 +127,46 @@ agent.custom.auth_hint: "%{name} ఇన్‌స్టాల్ చేయబడ�
 
 # ── ఏజెంట్‌ల వ్యూ (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "లోడ్ అవుతోంది..."
-# {Locked="Enter","Shift+enter","Esc"} - కీ కాంబినేషన్‌లు, అనువదించవద్దు
-agents.footer_hint: "(↑ ↓ నావిగేట్ చేయండి • Enter కొత్త ట్యాబ్‌లో సెషన్ ప్రారంభించండి • Shift+enter ఏజెంట్ పేన్‌లో సెషన్ ప్రారంభించండి • Esc నిష్క్రమించండి)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - కీ కాంబినేషన్‌లు, అనువదించవద్దు
+agents.footer_hint: "(↑ ↓ నావిగేట్ చేయండి • Enter సెషన్ ప్రారంభించండి • Esc నిష్క్రమించండి • F5 రిఫ్రెష్ చేయండి • / వెతకండి)"
 agents.status.active: "సక్రియం"
 agents.status.waiting_for_input: "ఇన్‌పుట్ కోసం వేచి ఉంది"
 agents.status.error: "ఎర్రర్"
 agents.status.idle: "నిష్క్రియం"
 
 # ── లేఔట్ స్వాగత సూచన (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. ఏజెంట్ పేన్ చూపించు/దాచు • Ctrl+Alt+/ ఏజెంట్ సెషన్ చూపించు/దాచు)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. ఏజెంట్ పేన్ చూపించు/దాచు • Ctrl+Shift+/ ఏజెంట్ సెషన్ చూపించు/దాచు)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── కనెక్షన్ స్థితి ────────────────────────────────────────────────────────
 connection.starting: "ఏజెంట్ ప్రారంభమవుతోంది..."
 connection.reconnecting: "మళ్ళీ కనెక్ట్ అవుతోంది..."
+connection.connecting_activity: "ఏజెంట్‌కు కనెక్ట్ అవుతోంది…"
+connection.lost: "ఏజెంట్‌తో కనెక్షన్ కోల్పోయింది. మళ్లీ కనెక్ట్ చేయడానికి /restart అని టైప్ చేయండి."  # {Locked="/restart"}
 
 # ── సిస్టమ్ సందేశాలు (src/app.rs) ────────────────────────────────────────────────
+system.close_pane_hint: "పేన్‌ను మూసివేయడానికి Ctrl+C ని మళ్లీ నొక్కండి."  # {Locked="Ctrl+C"}
+system.selection_copied: "కాపీ చేయబడింది"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "రద్దు చేయబడింది."
 system.no_prompt_in_flight: "ప్రగతిలో ఎటువంటి ప్రాంప్ట్ లేదు."
 system.authentication_failed: "ప్రమాణీకరణ విఫలమైంది"
-system.command_copied_retry: "కమాండ్ కాపీ చేయబడింది — మరొక టెర్మినల్‌లో దాన్ని అమలు చేసి, మళ్ళీ ప్రయత్నించడానికి Enter నొక్కండి"  # {Locked="Enter"}
+system.stopped_max_tokens: "మోడల్ అవుట్‌పుట్ పరిమితిని చేరుకున్న తర్వాత ప్రతిస్పందన కత్తిరించబడింది."
+system.stopped_max_turn_requests: "ఈ వంతు కోసం దాని అభ్యర్థన పరిమితిని చేరుకున్న తర్వాత ఏజెంట్ ఆగిపోయింది."
+system.stopped_refusal: "ఈ అభ్యర్థనను కొనసాగించడానికి ఏజెంట్ నిరాకరించింది."
+system.agent_busy: "ఈ ట్యాబ్‌లో Agent బిజీగా ఉంది — ప్రస్తుత ప్రాంప్ట్ పూర్తయ్యే వరకు వేచి ఉండండి."
+system.image_clipboard_empty: "అతికించడానికి క్లిప్‌బోర్డ్‌లో చిత్రం లేదు."
+system.image_not_supported: "ఈ ఏజెంట్ చిత్రం ఇన్‌పుట్‌కు మద్దతు ఇవ్వదు."
+system.image_pasted: "చిత్రం జోడించబడింది (%{label}). పంపడానికి Enter నొక్కండి."  # {Locked="%{label}","Enter"}
+system.resuming_session: "సెషన్ %{session_id} మళ్లీ ప్రారంభిస్తోంది..."
+system.unknown_command: "తెలియని ఆదేశం \"%{command}\" — ప్రాంప్ట్‌గా పంపబడింది. జాబితా కోసం /help టైప్ చేయండి."  # {Locked="/help"} — slash-command name.
+system.busy_use_stop: "ప్రస్తుత ప్రాంప్ట్ పూర్తయ్యే వరకు వేచి ఉండండి, లేదా ముందుగా /stop చేయండి."  # {Locked="/stop"} — slash-command name.
+system.cannot_focus_session: "సెషన్ %{session_id} పై ఫోకస్ చేయలేరు: అది live గా కనిపిస్తోంది కానీ ఇంకా ఏ pane GUID బైండ్ కాలేదు. కొద్దిసేపట్లో మళ్లీ ప్రయత్నించండి."
+system.cannot_resume_no_load_session: "agent pane లో మళ్లీ ప్రారంభించలేరు: %{agent} ACP `loadSession` సామర్థ్యాన్ని ప్రకటించలేదు. బదులుగా కొత్త terminal pane లో మళ్లీ ప్రారంభించడానికి Enter (Shift లేకుండా) నొక్కండి."  # {Locked="ACP","loadSession","Enter","Shift"} — protocol/UI terms.
+system.cannot_resume_no_resume_flag: "%{agent} సెషన్‌ను మళ్లీ ప్రారంభించలేరు: ఈ agent కు `--resume` శైలి flag లేదు. బదులుగా ACP ద్వారా agent pane లోపల మళ్లీ ప్రారంభించడానికి Shift+Enter నొక్కి ప్రయత్నించండి."  # {Locked="--resume","Shift","Enter","ACP"} — flag and UI terms.
+system.cannot_resume_unknown_agent: "సెషన్ %{session_id} మళ్లీ ప్రారంభించలేరు: దాని మూల agent ఈ WTA build కు తెలియదు."
+system.cannot_resume_phantom_via_flag: "%{agent} సెషన్ %{session_id} మళ్లీ ప్రారంభించలేరు: అది ప్రారంభమైంది కానీ ఏ సంభాషణను కూడగట్టలేదు, కాబట్టి %{agent} స్వయంగా resume ను తిరస్కరిస్తుంది. వరుసను తీసివేస్తోంది."
+system.cannot_resume_phantom_via_load: "%{agent} సెషన్ %{session_id} మళ్లీ ప్రారంభించలేరు: అది ప్రారంభమైంది కానీ ఏ సంభాషణను కూడగట్టలేదు, కాబట్టి %{agent} load ను తిరస్కరిస్తుంది. వరుసను తీసివేస్తోంది."
+system.fallback.this_agent: "ఈ agent"
+system.fallback.connected_agent: "కనెక్ట్ అయిన agent"
 
 # ── రన్‌టైమ్ CLI అవుట్‌పుట్ (src/main.rs) ────────────────────────────────────────
 output.no_windows: "విండోలు కనుగొనబడలేదు."
@@ -171,3 +204,33 @@ hooks.installed_but_disabled: "⚠ ఇన్‌స్టాల్ చేయబ�
 hooks.not_installed: "✗ ఇన్‌స్టాల్ చేయబడలేదు"
 hooks.uninstall_skipped: "దాటవేయబడింది (CLI PATH లో లేదు)"
 hooks.install_attempted: "wt-agent-hooks ఇన్‌స్టాల్ ప్రయత్నించబడింది (ఐడెంపోటెంట్). ఫలితాన్ని తనిఖీ చేయడానికి `wta hooks status` అమలు చేయండి. ట్రేస్ లాగ్: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+
+# ── Relative time and date formatting ─────────────────────────────────────
+time.just_now: "ఇప్పుడే"
+time.minute_singular: "%{count} నిమిషం క్రితం"
+time.minutes_other: "%{count} నిమిషాల క్రితం"
+time.hour_singular: "%{count} గంట క్రితం"
+time.hours_other: "%{count} గంటల క్రితం"
+time.day_singular: "%{count} రోజు క్రితం"
+time.days_other: "%{count} రోజుల క్రితం"
+
+# ── సిఫార్సు అమలు (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "ఎంపిక %{choice} విఫలమైంది: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "ఏజెంట్‌ను ఎంచుకోండి (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "ఈ మెషీన్‌లో అందుబాటులో ఉన్న ఏజెంట్ CLI కనుగొనబడలేదు."  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "తెలియని ఏజెంట్ %{agent} — అందుబాటులో ఉన్న జాబితాను చూడటానికి /agent టైప్ చేయండి."  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "Windows Terminal ట్యాబ్ వెలుపల ఏజెంట్ మార్పిడి అందుబాటులో లేదు."
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "ఈ పేన్ కోసం మోడల్‌ను ఎంచుకోండి (నేరుగా మార్చడానికి /model <id>)"  # {Locked="/model","<id>"}
+commands.move.summary: "ఈ ట్యాబ్ యొక్క ఏజెంట్ పేన్‌ను తరలించండి (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "మోడల్‌ను ఎంచుకోండి (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "కనెక్ట్ అయిన ఏజెంట్ ఎంచుకోదగిన ఏ మోడల్‌ను కూడా ప్రకటించలేదు."
+system.model_set: "ఈ పేన్ కోసం మోడల్ %{model} గా సెట్ చేయబడింది."  # {Locked="%{model}"}
+system.model_unknown: "తెలియని మోడల్ %{model} — అందుబాటులో ఉన్న జాబితాను చూడటానికి /model టైప్ చేయండి."  # {Locked="%{model}","/model"}

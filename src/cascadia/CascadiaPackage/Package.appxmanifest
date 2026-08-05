@@ -21,7 +21,7 @@
   <Identity
     Name="Microsoft.IntelligentTerminal"
     Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
-    Version="0.1.0.0" />
+    Version="0.2.0.0" />
 
   <Properties>
     <DisplayName>ms-resource:AppStoreName</DisplayName>
@@ -202,6 +202,8 @@
                 <com:Interface Id="E686C757-9A35-4A1C-B3CE-0BCC8B5C69F4" ProxyStubClsid="BA251D6A-94D2-4523-AAA0-9477EE21766E"/>
                 <com:Interface Id="6F23DA90-15C5-4203-9DB0-64E73F1B1B00" ProxyStubClsid="BA251D6A-94D2-4523-AAA0-9477EE21766E"/> <!-- ITerminalHandoff3 -->
                 <com:Interface Id="746E6BC0-AB05-4E38-AB14-71E86763141F" ProxyStubClsid="BA251D6A-94D2-4523-AAA0-9477EE21766E"/>
+                <com:Interface Id="9C7E2A14-3B5D-4F8A-A2C9-1E4F6B8D0A3C" ProxyStubClsid="BA251D6A-94D2-4523-AAA0-9477EE21766E"/> <!-- ITerminalProtocol (classic) -->
+                <com:Interface Id="3D8F4B26-5C7E-4A9B-B1D0-2F5A7C9E1B4D" ProxyStubClsid="BA251D6A-94D2-4523-AAA0-9477EE21766E"/> <!-- ITerminalProtocolEventSink (classic) -->
             </com:ComInterface>
         </com:Extension>
         <com:Extension Category="windows.comServer">
@@ -233,10 +235,10 @@
 
     </Application>
 
-    <!-- Second Application hosts the wtcli.exe appExecutionAlias.
+    <!-- Additional Applications host CLI appExecutionAliases.
          appx schema forbids more than one windows.appExecutionAlias
-         Extension per Application, so wtcli (separate binary from wtai)
-         lives under its own Application entry.
+         Extension per Application, so each CLI binary lives under its
+         own Application entry.
          AppListEntry="none" hides it from Start menu / app list. -->
     <Application Id="Wtcli"
       Executable="wtcli.exe"
@@ -252,6 +254,24 @@
         <uap3:Extension Category="windows.appExecutionAlias" Executable="wtcli.exe" EntryPoint="Windows.FullTrustApplication">
           <uap3:AppExecutionAlias>
             <desktop:ExecutionAlias Alias="wtcli.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+    <Application Id="WtaCli"
+      Executable="wta.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        AppListEntry="none"
+        DisplayName="Intelligent Terminal Agent CLI"
+        Description="Intelligent Terminal agent command-line client"
+        BackgroundColor="transparent"
+        Square150x150Logo="Images\Square150x150Logo.png"
+        Square44x44Logo="Images\Square44x44Logo.png" />
+      <Extensions>
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="wta.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="wta.exe" />
           </uap3:AppExecutionAlias>
         </uap3:Extension>
       </Extensions>

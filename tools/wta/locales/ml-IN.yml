@@ -1,29 +1,23 @@
 # സെറ്റപ്പ് സ്ക്രീന്‍ ശീര്‍ഷകങ്ങള്‍
-# {Locked="Intelligent Terminal"} - ഉല്‍പ്പന്ന നാമം, വിവര്‍ത്തനം ചെയ്യരുത്
-setup.title.first_run: "Intelligent Terminal-ലേക്ക് സ്വാഗതം!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "ഏജന്റ് കണ്ടെത്തിയില്ല"
 setup.title.agent_error: "ഏജന്റ് കണക്ഷന്‍ പരാജയപ്പെട്ടു"
-setup.title.switch_agent: "ഏജന്റ് മാറ്റുക"
 setup.title.not_available: "ഏജന്റ് ലഭ്യമല്ല"
 setup.title.sign_in: "സൈന്‍ ഇന്‍ ആവശ്യമാണ്"
 
 # %{agent} റണ്‍ടൈമില്‍ ഏജന്റ് പ്രദര്‍ശന നാമം ഉപയോഗിച്ച് മാറ്റിസ്ഥാപിക്കപ്പെടുന്നു.
-setup.subtitle.copilot_missing: "നിങ്ങളുടെ ഏജന്റ് \"%{agent}\" ഇന്‍സ്റ്റാള്‍ ചെയ്തിട്ടില്ല. ഇന്‍സ്റ്റാള്‍ ചെയ്യാന്‍ താഴെയുള്ള ഘട്ടങ്ങള്‍ പിന്തുടരുക. ഏജന്റ് മാറ്റാന്‍ Settings-ലേക്ക് പോകുക."
-setup.subtitle.agent_missing: "നിങ്ങളുടെ ഏജന്റ് \"%{agent}\" ഇന്‍സ്റ്റാള്‍ ചെയ്തിട്ടില്ല. ദയവായി സ്വമേധയാ വീണ്ടും ഇന്‍സ്റ്റാള്‍ ചെയ്ത്, വീണ്ടും ശ്രമിക്കുക. ഏജന്റ് മാറ്റാന്‍ Settings-ലേക്ക് പോകുക."
-setup.subtitle.copilot_auth: "നിങ്ങളുടെ ഏജന്റ് \"%{agent}\"-ന് പ്രമാണീകരണം ആവശ്യമാണ്. സൈന്‍ ഇന്‍ ചെയ്യാന്‍ താഴെയുള്ള ഘട്ടങ്ങള്‍ പിന്തുടരുക. ഏജന്റ് മാറ്റാന്‍ Settings-ലേക്ക് പോകുക."
-setup.subtitle.agent_auth: "നിങ്ങളുടെ ഏജന്റ് \"%{agent}\"-ന് പ്രമാണീകരണം ആവശ്യമാണ്. ദയവായി ഏജന്റ് CLI വഴി സൈന്‍ ഇന്‍ ചെയ്ത്, വീണ്ടും ശ്രമിക്കുക. ഏജന്റ് മാറ്റാന്‍ Settings-ലേക്ക് പോകുക."
+setup.subtitle.copilot_missing: "നിങ്ങളുടെ ഏജന്റ് \"%{agent}\" ഇന്‍സ്റ്റാള്‍ ചെയ്തിട്ടില്ല. ഇന്‍സ്റ്റാള്‍ ചെയ്യാന്‍ താഴെയുള്ള ഘട്ടങ്ങള്‍ പിന്തുടരുക. ഏജന്റ് മാറ്റാന്‍ ഇന്റലിജന്റ് ടെർമിനൽ Settings > Agent-ലേക്ക് പോകുക."
+setup.subtitle.agent_missing: "നിങ്ങളുടെ ഏജന്റ് \"%{agent}\" ഇന്‍സ്റ്റാള്‍ ചെയ്തിട്ടില്ല. ദയവായി സ്വമേധയാ വീണ്ടും ഇന്‍സ്റ്റാള്‍ ചെയ്ത്, വീണ്ടും ശ്രമിക്കുക. ഏജന്റ് മാറ്റാന്‍ ഇന്റലിജന്റ് ടെർമിനൽ Settings > Agent-ലേക്ക് പോകുക."
+setup.subtitle.copilot_auth: "നിങ്ങളുടെ ഏജന്റ് \"%{agent}\"-ന് പ്രമാണീകരണം ആവശ്യമാണ്. സൈന്‍ ഇന്‍ ചെയ്യാന്‍ താഴെയുള്ള ഘട്ടങ്ങള്‍ പിന്തുടരുക. ഏജന്റ് മാറ്റാന്‍ ഇന്റലിജന്റ് ടെർമിനൽ Settings > Agent-ലേക്ക് പോകുക."
+setup.subtitle.agent_auth: "നിങ്ങളുടെ ഏജന്റ് \"%{agent}\"-ന് പ്രാമാണീകരണം ആവശ്യമാണ്. ദയവായി ഏജന്റ് വഴി സൈൻ ഇൻ ചെയ്ത് താഴെ \"ഞാൻ സൈൻ ഇൻ ചെയ്‌തു\" തിരഞ്ഞെടുക്കുക. ഏജന്റുകൾ മാറ്റാൻ ഇന്റലിജന്റ് ടെർമിനൽ Settings > Agent-ലേക്ക് പോകുക."
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "Intelligent Terminal-ല്‍ ഉപയോഗിക്കാന്‍ ഡിഫോള്‍ട്ട് ഏജന്റ് CLI തിരഞ്ഞെടുക്കുക. നിങ്ങള്‍ക്ക്"
-setup.description.fre_line2: "നിങ്ങളുടെ വര്‍ക്ക്‌സ്‌പേസ് കോണ്‍ഫിഗര്‍ ചെയ്ത് സജ്ജീകരിക്കാന്‍ Settings-ലേക്ക് നാവിഗേറ്റ് ചെയ്യാം."
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "%{agent} വീണ്ടും ഇന്‍സ്റ്റാള്‍ ചെയ്യുക"
-setup.option.reinstall_hint: "(സ്വയമേവ ഇന്‍സ്റ്റാള്‍ ചെയ്യപ്പെടും)"
+setup.option.install: "%{agent} വീണ്ടും ഇന്‍സ്റ്റാള്‍ ചെയ്യുക"
+setup.option.install_hint: "(സ്വയമേവ ഇന്‍സ്റ്റാള്‍ ചെയ്യപ്പെടും)"
 setup.option.signin: "%{agent}-ല്‍ സൈന്‍ ഇന്‍ ചെയ്യുക"
-setup.option.retry_detection: "കണ്ടെത്തല്‍ വീണ്ടും ശ്രമിക്കുക"
-setup.option.retry_auth: "ഞാന്‍ സൈന്‍ ഇന്‍ ചെയ്‌തു — കണക്ഷന്‍ വീണ്ടും ശ്രമിക്കുക"
-setup.option.retry_connection: "കണക്ഷന്‍ വീണ്ടും ശ്രമിക്കുക"
-setup.option.switch_to: "%{agent}-ലേക്ക് മാറുക"
+setup.option.retry_detection: "വീണ്ടും ശ്രമിക്കുക"
+setup.option.retry_auth: "ഞാൻ സൈൻ ഇൻ ചെയ്‌തു — വീണ്ടും ബന്ധിപ്പിക്കാൻ ശ്രമിക്കുക"
 setup.status.installing: "ഇന്‍സ്റ്റാള്‍ ചെയ്യുന്നു..."
 setup.status.install_failed: "ഇന്‍സ്റ്റാള്‍ പരാജയപ്പെട്ടു: "
 setup.status.installing_winget: " winget വഴി ഇന്‍സ്റ്റാള്‍ ചെയ്യുന്നു..."
@@ -35,25 +29,32 @@ auth.agent_selected_with_status: "ഏജന്റ് %{name} — "
 auth.checking_authentication: "  %{spinner} പ്രമാണീകരണം പരിശോധിക്കുന്നു..."
 auth.waiting_for_authorization: "  %{spinner} അംഗീകാരത്തിനായി കാത്തിരിക്കുന്നു..."
 auth.code_copied_hint: "  കോഡ് ക്ലിപ്ബോര്‍ഡിലേക്ക് പകര്‍ത്തി — നിങ്ങളുടെ ബ്രൗസറില്‍ ഒട്ടിക്കുക."
-auth.sign_in_prompt: "നിങ്ങളുടെ ഏജന്റ് ഉപയോഗിക്കാന്‍ സൈന്‍ ഇന്‍ ചെയ്യുക:"
+auth.device_code_prompt: "%{url} സന്ദർശിച്ച് കോഡ് നൽകുക: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  ഏജന്റ് ഫീച്ചറുകള്‍ പ്രവര്‍ത്തനക്ഷമമാക്കാന്‍ %{name} കണക്ട് ചെയ്യുക"
-auth.button_sign_in_github: "[ GitHub ഉപയോഗിച്ച് സൈന്‍ ഇന്‍ ചെയ്യുക ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ %{name} ഉപയോഗിച്ച് സൈന്‍ ഇന്‍ ചെയ്യുക ]"
-auth.hint_footer: "  സൈന്‍ ഇന്‍ ചെയ്യാന്‍ Enter അമര്‍ത്തുക, തിരികെ പോകാന്‍ Esc അമര്‍ത്തുക"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  സൈൻ ഇൻ ചെയ്യാൻ Enter · GitHub Enterprise നായി E · തിരികെ പോകാൻ Esc"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise ഡൊമെയ്ൻ: "
+auth.enterprise_hint_footer: "  സൈൻ ഇൻ ചെയ്യാൻ Enter · github.com നായി Esc"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  വീണ്ടും ശ്രമിക്കാൻ Enter അമർത്തുക, അല്ലെങ്കിൽ github.com നായി Esc. പൊതുവായ കാരണങ്ങൾ: തെറ്റായി ടൈപ്പ് ചെയ്തതോ എത്താനാകാത്തതോ ആയ ഡൊമെയ്ൻ, കാലഹരണപ്പെട്ട കോഡ്, അല്ലെങ്കിൽ ആ ഹോസ്റ്റിൽ Copilot ആക്സസ് ഇല്ലാത്തത്."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  വീണ്ടും ശ്രമിക്കാൻ Enter അമർത്തുക, അല്ലെങ്കിൽ തിരികെ പോകാൻ Esc."  # {Locked="Enter","Esc"}
 
 # ── ചാറ്റ് വ്യൂ (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "ചിന്തിക്കുന്നു…"
-# {Locked="Intelligent Terminal"} - ഉല്‍പ്പന്ന നാമം, വിവര്‍ത്തനം ചെയ്യരുത്
-chat.welcome_title: "Intelligent Terminal-ലേക്ക് സ്വാഗതം!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "ഇന്റലിജന്റ് ടെർമിനൽ-ലേക്ക് സ്വാഗതം!"
+chat.welcome_disclaimer: "ഇന്റലിജന്റ് ടെർമിനൽ AI ഉപയോഗിക്കുന്നു. തെറ്റുകൾ പരിശോധിക്കുക."
 chat.plan_header: "പദ്ധതി:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "സമീപകാല കമാൻഡ് പരാജയം സ്വയം നിർണ്ണയിച്ചു"
+chat.turn_canceled: "(റദ്ദാക്കി)"
+chat.turn_executed: "→ നടപ്പിലാക്കി: %{title}"
 
 # ── ഇന്‍പുട്ട് പ്ലേസ്‌ഹോള്‍ഡറുകള്‍ (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "എന്തും ചോദിക്കൂ, / കമാന്‍ഡുകള്‍ക്ക്.."  # {Locked="/"}
 input.placeholder.connecting: "കണക്ട് ചെയ്യുന്നു..."
 input.placeholder.disconnected: "വിച്ഛേദിച്ചു"
+input.image_attachments: "📎 ചിത്രങ്ങൾ: %{items}"  # {Locked="%{items}"} {Locked="📎"}
 
 # ── തീർപ്പാക്കാത്ത പ്രോംപ്റ്റ് ക്യൂ (src/ui/queued_hint.rs, src/app.rs) ───────────────
 # ഒന്നോ അതിലധികമോ പ്രോംപ്റ്റുകൾ ക്യൂവിലുണ്ടായിരിക്കുമ്പോൾ ഇൻപുട്ട് ബോക്സിന് മുകളിൽ
@@ -76,9 +77,22 @@ commands.help_header: "സ്ലാഷ് കമാന്‍ഡുകള്‍ �
 commands.help_escape_hint: "  //text     അക്ഷരാര്‍ഥ '/' അയയ്ക്കുക (കമാന്‍ഡ് പാര്‍സര്‍ എസ്കേപ്പ് ചെയ്യുന്നു)"  # {Locked="//text","/"}
 commands.help_close_hint: "  Esc        ഈ സഹായം അടയ്ക്കുക"  # {Locked="Esc"}
 
+# Slash-command summaries shown in the popup and /help overlay.
+# Command names (/help, /clear, /new, /restart, /stop, /sessions) stay in
+# English. Only the descriptions are localized.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "ഈ കമാൻഡ് ലിസ്റ്റ് കാണിക്കുക"
+commands.clear.summary: "ചാറ്റ് സ്ക്രോൾബാക്ക് മായ്ക്കുക (സെഷൻ നിലനിർത്തും)"
+commands.new.summary: "പുതിയ ACP സെഷൻ ആരംഭിക്കുക (ചരിത്രം ഒഴിവാക്കും)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "ഏജന്റ് റീസ്റ്റാർട്ട് ചെയ്യുക"
+commands.stop.summary: "നടന്നുകൊണ്ടിരിക്കുന്ന പ്രോംപ്റ്റ് റദ്ദാക്കുക"
+commands.sessions.summary: "ചരിത്ര സെഷനുകളുടെ പിക്കർ തുറക്കുക (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "ഈ ടാബിനായി ഏജന്റ് തിരഞ്ഞെടുക്കുക (നേരിട്ട് മാറാൻ /agent <id>)"  # {Locked="/agent","<id>"}
+
 # ── ശുപാര്‍ശ പാനല്‍ (src/ui/recommendations.rs) ───────────────────────────────
-# {Locked="Enter","Esc","↵"} - കീ പേരുകളും Return-കീ ഗ്ലിഫും, വിവര്‍ത്തനം ചെയ്യരുത്
-recommendations.nav_hint: "(↑ ↓ നാവിഗേറ്റ് ചെയ്യുക • Enter തിരഞ്ഞെടുക്കുക • Esc റദ്ദാക്കുക)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - കീ പേരുകളും Return-കീ ഗ്ലിഫും, വിവര്‍ത്തനം ചെയ്യരുത്
+recommendations.nav_hint: "(↑ ↓ നാവിഗേറ്റ് ചെയ്യാൻ • ← → ബട്ടണുകൾ മാറ്റാൻ • Enter തിരഞ്ഞെടുക്കാൻ • Esc റദ്ദാക്കാൻ)"
 recommendations.button_run_command: "[ കമാന്‍ഡ് പ്രവര്‍ത്തിപ്പിക്കുക ]"
 recommendations.button_insert_in_terminal: "ടെര്‍മിനലില്‍ ചേര്‍ക്കുക"
 recommendations.button_open_in_new_tab: "പുതിയ ടാബില്‍ തുറക്കുക ↵"
@@ -102,9 +116,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N ഉത്തരം നല്‍കുക · മുഴുവന്‍ കാര്‍ഡിനായി വലുപ്പം മാറ്റുക]"  # {Locked="Y/N"}
 
 # ── ഏജന്റ് നില (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "ഇന്‍സ്റ്റാള്‍ ചെയ്തിട്ടില്ല — സ്വയമേവ ഇന്‍സ്റ്റാള്‍ ചെയ്യാന്‍ തിരഞ്ഞെടുക്കുക"
 agent.status.not_found: "കണ്ടെത്തിയില്ല"
-agent.status.detected: "കണ്ടെത്തി"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - ടൂള്‍ പേരുകളും കമാന്‍ഡും, അതേപടി പ്രവര്‍ത്തിപ്പിക്കണം
 agent.install.running_winget: "പ്രവര്‍ത്തിപ്പിക്കുന്നു: winget install GitHub.Copilot"
 agent.install.launch_failed: "winget ലോഞ്ച് ചെയ്യുന്നതില്‍ പരാജയം: %{error}"
@@ -115,25 +127,46 @@ agent.custom.auth_hint: "%{name} ഇന്‍സ്റ്റാള്‍ ചെ�
 
 # ── ഏജന്റുകളുടെ വ്യൂ (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "ലോഡ് ചെയ്യുന്നു..."
-# {Locked="Enter","Shift+enter","Esc"} - കീ കോമ്പിനേഷനുകള്‍, വിവര്‍ത്തനം ചെയ്യരുത്
-agents.footer_hint: "(↑ ↓ നാവിഗേറ്റ് ചെയ്യുക • Enter പുതിയ ടാബില്‍ സെഷന്‍ ആരംഭിക്കുക • Shift+enter ഏജന്റ് പേനില്‍ സെഷന്‍ ആരംഭിക്കുക • Esc പുറത്തുകടക്കുക)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - കീ കോമ്പിനേഷനുകള്‍, വിവര്‍ത്തനം ചെയ്യരുത്
+agents.footer_hint: "(↑ ↓ നാവിഗേറ്റ് ചെയ്യുക • Enter സെഷന്‍ ആരംഭിക്കുക • Esc പുറത്തുകടക്കുക • F5 പുതുക്കുക • / തിരയുക)"
 agents.status.active: "സജീവം"
 agents.status.waiting_for_input: "ഇന്‍പുട്ടിനായി കാത്തിരിക്കുന്നു"
 agents.status.error: "പിശക്"
 agents.status.idle: "നിഷ്ക്രിയം"
 
 # ── ലേഔട്ട് സ്വാഗത സൂചന (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. ഏജന്റ് പേന്‍ കാണിക്കുക/മറയ്ക്കുക • Ctrl+Alt+/ ഏജന്റ് സെഷന്‍ കാണിക്കുക/മറയ്ക്കുക)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. ഏജന്റ് പേന്‍ കാണിക്കുക/മറയ്ക്കുക • Ctrl+Shift+/ ഏജന്റ് സെഷന്‍ കാണിക്കുക/മറയ്ക്കുക)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── കണക്ഷന്‍ നില ────────────────────────────────────────────────────────
 connection.starting: "ഏജന്റ് ആരംഭിക്കുന്നു..."
 connection.reconnecting: "വീണ്ടും കണക്ട് ചെയ്യുന്നു..."
+connection.connecting_activity: "ഏജന്റുമായി കണക്റ്റ് ചെയ്യുന്നു…"
+connection.lost: "ഏജന്റുമായുള്ള കണക്ഷൻ നഷ്ടപ്പെട്ടു. വീണ്ടും കണക്റ്റ് ചെയ്യാൻ /restart ടൈപ്പ് ചെയ്യുക."  # {Locked="/restart"}
 
 # ── സിസ്റ്റം സന്ദേശങ്ങള്‍ (src/app.rs) ────────────────────────────────────────────────
+system.close_pane_hint: "പേന്‍ അടയ്ക്കാൻ Ctrl+C വീണ്ടും അമർത്തുക."  # {Locked="Ctrl+C"}
+system.selection_copied: "പകർത്തി"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "റദ്ദാക്കി."
 system.no_prompt_in_flight: "പുരോഗതിയില്‍ പ്രോംപ്റ്റ് ഇല്ല."
 system.authentication_failed: "പ്രമാണീകരണം പരാജയപ്പെട്ടു"
-system.command_copied_retry: "കമാന്‍ഡ് പകര്‍ത്തി — മറ്റൊരു ടെര്‍മിനലില്‍ അത് പ്രവര്‍ത്തിപ്പിക്കുക, എന്നിട്ട് വീണ്ടും ശ്രമിക്കാന്‍ Enter അമര്‍ത്തുക"  # {Locked="Enter"}
+system.stopped_max_tokens: "മോഡലിന്റെ ഔട്ട്പുട്ട് പരിധിയിലെത്തിയ ശേഷം പ്രതികരണം മുറിച്ചുമാറ്റി."
+system.stopped_max_turn_requests: "ഈ ഊഴത്തിനായുള്ള അഭ്യർത്ഥനാ പരിധിയിലെത്തിയ ശേഷം ഏജന്റ് നിർത്തി."
+system.stopped_refusal: "ഈ അഭ്യർത്ഥന തുടരാൻ ഏജന്റ് വിസമ്മതിച്ചു."
+system.agent_busy: "ഈ ടാബിൽ Agent തിരക്കിലാണ് — നിലവിലെ പ്രോംപ്റ്റ് പൂർത്തിയാകുന്നത് വരെ കാത്തിരിക്കുക."
+system.image_clipboard_empty: "ഒട്ടിക്കാൻ ക്ലിപ്പ്ബോർഡിൽ ചിത്രം ഇല്ല."
+system.image_not_supported: "ഈ ഏജന്റ് ഇമേജ് ഇൻപുട്ട് പിന്തുണയ്ക്കുന്നില്ല."
+system.image_pasted: "ചിത്രം അറ്റാച്ച് ചെയ്തു (%{label}). അയയ്ക്കാൻ Enter അമർത്തുക."  # {Locked="%{label}","Enter"}
+system.resuming_session: "സെഷൻ %{session_id} പുനരാരംഭിക്കുന്നു..."
+system.unknown_command: "അറിയാത്ത കമാൻഡ് \"%{command}\" — പ്രോംപ്റ്റായി അയച്ചു. പട്ടികയ്ക്കായി /help ടൈപ്പ് ചെയ്യുക."  # {Locked="/help"} — slash-command name.
+system.busy_use_stop: "നിലവിലെ പ്രോംപ്റ്റ് പൂർത്തിയാകുന്നത് വരെ കാത്തിരിക്കുക, അല്ലെങ്കിൽ ആദ്യം /stop ചെയ്യുക."  # {Locked="/stop"} — slash-command name.
+system.cannot_focus_session: "സെഷൻ %{session_id} ഫോക്കസ് ചെയ്യാനാകില്ല: അത് live ആയി തോന്നുന്നു, പക്ഷേ pane GUID ഇനിയും ബൗണ്ട് ചെയ്തിട്ടില്ല. കുറച്ച് കഴിഞ്ഞ് വീണ്ടും ശ്രമിക്കുക."
+system.cannot_resume_no_load_session: "agent pane-ൽ പുനരാരംഭിക്കാൻ കഴിയില്ല: %{agent} ACP `loadSession` കഴിവ് പ്രഖ്യാപിച്ചിട്ടില്ല. പകരം പുതിയ terminal pane-ൽ പുനരാരംഭിക്കാൻ Enter (Shift ഇല്ലാതെ) അമർത്തുക."  # {Locked="ACP","loadSession","Enter","Shift"} — protocol/UI terms.
+system.cannot_resume_no_resume_flag: "%{agent} സെഷൻ പുനരാരംഭിക്കാൻ കഴിയില്ല: ഈ agent-ന് `--resume` ശൈലിയിലുള്ള flag ഇല്ല. പകരം ACP വഴി agent pane-നുള്ളിൽ പുനരാരംഭിക്കാൻ Shift+Enter അമർത്തി ശ്രമിക്കുക."  # {Locked="--resume","Shift","Enter","ACP"} — flag and UI terms.
+system.cannot_resume_unknown_agent: "സെഷൻ %{session_id} പുനരാരംഭിക്കാൻ കഴിയില്ല: ഇതിന്റെ ഉറവിട agent ഈ WTA build-ന് അറിയില്ല."
+system.cannot_resume_phantom_via_flag: "%{agent} സെഷൻ %{session_id} പുനരാരംഭിക്കാൻ കഴിയില്ല: അത് തുടങ്ങിയിരുന്നു, പക്ഷേ ഒരു സംഭാഷണവും ശേഖരിച്ചിട്ടില്ല; അതിനാൽ %{agent} തന്നെ resume നിരസിക്കും. വരി നീക്കം ചെയ്യുന്നു."
+system.cannot_resume_phantom_via_load: "%{agent} സെഷൻ %{session_id} പുനരാരംഭിക്കാൻ കഴിയില്ല: അത് തുടങ്ങിയിരുന്നു, പക്ഷേ ഒരു സംഭാഷണവും ശേഖരിച്ചിട്ടില്ല; അതിനാൽ %{agent} load നിരസിക്കും. വരി നീക്കം ചെയ്യുന്നു."
+system.fallback.this_agent: "ഈ agent"
+system.fallback.connected_agent: "കണക്റ്റുചെയ്‌ത agent"
 
 # ── റണ്‍ടൈം CLI ഔട്ട്പുട്ട് (src/main.rs) ────────────────────────────────────────
 output.no_windows: "വിന്‍ഡോകള്‍ കണ്ടെത്തിയില്ല."
@@ -171,3 +204,33 @@ hooks.installed_but_disabled: "⚠ ഇന്‍സ്റ്റാള്‍ ച�
 hooks.not_installed: "✗ ഇന്‍സ്റ്റാള്‍ ചെയ്തിട്ടില്ല"
 hooks.uninstall_skipped: "ഒഴിവാക്കി (CLI PATH-ല്‍ ഇല്ല)"
 hooks.install_attempted: "wt-agent-hooks ഇന്‍സ്റ്റാള്‍ ശ്രമിച്ചു (ഐഡംപോറ്റന്റ്). ഫലം പരിശോധിക്കാന്‍ `wta hooks status` പ്രവര്‍ത്തിപ്പിക്കുക. ട്രേസ് ലോഗ്: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+
+# ── Relative time and date formatting ─────────────────────────────────────
+time.just_now: "ഇപ്പോഴേ"
+time.minute_singular: "%{count} മിനിറ്റ് മുമ്പ്"
+time.minutes_other: "%{count} മിനിറ്റ് മുമ്പ്"
+time.hour_singular: "%{count} മണിക്കൂർ മുമ്പ്"
+time.hours_other: "%{count} മണിക്കൂർ മുമ്പ്"
+time.day_singular: "%{count} ദിവസം മുമ്പ്"
+time.days_other: "%{count} ദിവസങ്ങൾ മുമ്പ്"
+
+# ── ശുപാർശ നടപ്പാക്കൽ (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "തിരഞ്ഞെടുപ്പ് %{choice} പരാജയപ്പെട്ടു: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "ഏജന്റ് തിരഞ്ഞെടുക്കുക (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "ഈ മെഷീനിൽ ലഭ്യമായ ഏജന്റ് CLI ഒന്നും കണ്ടെത്തിയില്ല."  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "അറിയാത്ത മോഡൽ %{agent} — ലഭ്യമായ പട്ടിക കാണാൻ /agent ടൈപ്പ് ചെയ്യുക."  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "വിൻഡോസ് ടെർമിനൽ ടാബിന് പുറത്ത് ഏജന്റ് സ്വിച്ചിംഗ് ലഭ്യമല്ല."
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "ഈ പേനിനായി മോഡൽ തിരഞ്ഞെടുക്കുക (നേരിട്ട് മാറാൻ /model <id>)"  # {Locked="/model","<id>"}
+commands.move.summary: "ഈ ടാബിന്റെ ഏജന്റ് പേൻ നീക്കുക (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "മോഡൽ തിരഞ്ഞെടുക്കുക (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "കണക്റ്റുചെയ്‌ത agent തിരഞ്ഞെടുക്കാവുന്ന ഒരു മോഡലും പ്രഖ്യാപിച്ചില്ല."
+system.model_set: "ഈ പേനിനായുള്ള മോഡൽ %{model} ആയി സജ്ജമാക്കി."  # {Locked="%{model}"}
+system.model_unknown: "അറിയാത്ത മോഡൽ %{model} — ലഭ്യമായ പട്ടിക കാണാൻ /model ടൈപ്പ് ചെയ്യുക."  # {Locked="%{model}","/model"}

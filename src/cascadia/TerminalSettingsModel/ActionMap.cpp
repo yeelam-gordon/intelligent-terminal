@@ -113,6 +113,7 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
                 { ShortcutAction::FocusAgentPane, USES_RESOURCE(L"FocusAgentPaneCommandKey") },
                 { ShortcutAction::OpenAgentSessions, USES_RESOURCE(L"OpenAgentSessionsCommandKey") },
                 { ShortcutAction::TriggerAutofix, USES_RESOURCE(L"TriggerAutofixCommandKey") },
+                { ShortcutAction::OpenBackgroundAgent, USES_RESOURCE(L"OpenBackgroundAgentCommandKey") },
                 { ShortcutAction::OpenCWD, USES_RESOURCE(L"OpenCWDCommandKey") },
                 { ShortcutAction::OpenNewTabDropdown, USES_RESOURCE(L"OpenNewTabDropdownCommandKey") },
                 { ShortcutAction::OpenScratchpad, USES_RESOURCE(L"OpenScratchpadKey") },
@@ -121,6 +122,7 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
                 { ShortcutAction::OpenTabColorPicker, USES_RESOURCE(L"OpenTabColorPickerCommandKey") },
                 { ShortcutAction::OpenTabRenamer, USES_RESOURCE(L"OpenTabRenamerCommandKey") },
                 { ShortcutAction::OpenWindowRenamer, USES_RESOURCE(L"OpenWindowRenamerCommandKey") },
+                { ShortcutAction::OpenWorkspace, USES_RESOURCE(L"OpenWorkspaceDefaultCommandKey") },
                 { ShortcutAction::PasteText, USES_RESOURCE(L"PasteTextCommandKey") },
                 { ShortcutAction::PrevTab, USES_RESOURCE(L"PrevTabCommandKey") },
                 { ShortcutAction::QuickFix, USES_RESOURCE(L"QuickFixCommandKey") },
@@ -169,6 +171,7 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
                 { ShortcutAction::TogglePaneZoom, USES_RESOURCE(L"TogglePaneZoomCommandKey") },
                 { ShortcutAction::ToggleShaderEffects, USES_RESOURCE(L"ToggleShaderEffectsCommandKey") },
                 { ShortcutAction::ToggleSplitOrientation, USES_RESOURCE(L"ToggleSplitOrientationCommandKey") },
+                { ShortcutAction::Workspaces, USES_RESOURCE(L"WorkspacesCommandKey") },
             };
         }();
 
@@ -232,6 +235,8 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
             return winrt::make<NextTabArgs>();
         case Model::ShortcutAction::OpenSettings:
             return winrt::make<OpenSettingsArgs>();
+        case Model::ShortcutAction::OpenWorkspace:
+            return winrt::make<OpenWorkspaceArgs>();
         case Model::ShortcutAction::SetFocusMode:
             return winrt::make<SetFocusModeArgs>();
         case Model::ShortcutAction::SetFullScreen:

@@ -7,6 +7,8 @@
 
 #include "../src/inc/unicode.hpp"
 
+#include <atomic>
+
 using namespace Microsoft::Terminal::Core;
 using namespace Microsoft::Console::Render;
 using namespace Microsoft::Console::Types;
@@ -91,8 +93,12 @@ void Terminal::SetWindowTitle(const std::wstring_view title)
     _assertLocked();
     if (!_suppressApplicationTitle)
     {
-        _title.emplace(title.empty() ? _startingTitle : title);
-        _pfnTitleChanged(_title.value());
+        _title.reset();
+        if (!title.empty())
+        {
+            _title.emplace(title);
+        }
+        _pfnTitleChanged(GetConsoleTitle());
     }
 }
 
@@ -108,6 +114,13 @@ bool Terminal::ResizeWindow(const til::CoordType width, const til::CoordType hei
     _assertLocked();
 
     if (width <= 0 || height <= 0 || width > SHRT_MAX || height > SHRT_MAX)
+    {
+        return false;
+    }
+
+    const auto currentDimensions = _GetMutableViewport().Dimensions();
+
+    if (width == currentDimensions.width && height == currentDimensions.height)
     {
         return false;
     }
@@ -221,6 +234,29 @@ void Terminal::SetWorkingDirectory(std::wstring_view uri)
     }
 
     _workingDirectory = uri;
+}
+
+void Terminal::SetShellType(std::wstring_view shellName, std::wstring_view shellVersion)
+{
+    _assertLocked();
+
+    // Telemetry is logged once per process. `logged` is function-static
+    // (shared across all Terminal instances, which hold *different* locks),
+    // so the `_assertLocked()` above does NOT serialize it — use an atomic
+    // exchange to make the one-shot gate race-free.
+    static std::atomic<bool> logged{ false };
+    if (!logged.exchange(true))
+    {
+        TraceLoggingWrite(
+            g_hCTerminalCoreProvider,
+            "ShellIntegrationShellTypeSet",
+            TraceLoggingDescription("The shell reported its identity via OSC 9001;ShellType"),
+            TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
+            TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
+    }
+
+    _shellName = shellName;
+    _shellVersion = shellVersion;
 }
 
 void Terminal::PlayMidiNote(const int noteNumber, const int velocity, const std::chrono::microseconds duration)
@@ -374,6 +410,14 @@ void Terminal::NotifyVtSequence(const std::wstring_view sequence)
     if (_pfnVtSequence)
     {
         _pfnVtSequence(sequence);
+    }
+}
+
+void Terminal::ShowNotification(const std::wstring_view title, const std::wstring_view body)
+{
+    if (_pfnShowNotification)
+    {
+        _pfnShowNotification(title, body);
     }
 }
 

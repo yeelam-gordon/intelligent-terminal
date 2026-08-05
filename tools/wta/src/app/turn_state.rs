@@ -9,6 +9,7 @@
 //! effects live on `App` methods in `app.rs`.
 
 use crate::coordinator::RecommendationSet;
+use crate::turn_context::TurnContext;
 
 /// Per-tab turn state.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,14 +45,13 @@ pub struct SubmittedPrompt {
     pub id: u64,
     pub text: String,
     pub submitted_at_unix_s: f64,
+    pub context: TurnContext,
     pub autofix: Option<AutofixContext>,
 }
 
 /// Extra context attached to autofix-initiated turns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutofixContext {
-    /// Pane that produced the failing command.
-    pub target_pane_id: String,
     /// `App.autofix_generation` at submit time. Compared against current
     /// generation on every chunk / end event; mismatch means a newer autofix
     /// (or an Esc cancel) has invalidated this turn — drop the response.
@@ -140,6 +140,18 @@ impl TurnState {
         }
     }
 
+    /// Mutable prompt info for the in-flight or just-surfaced turn. Used to
+    /// late-bind the host-resolved turn context (see
+    /// `App::apply_prompt_target_resolved`).
+    pub fn prompt_mut(&mut self) -> Option<&mut SubmittedPrompt> {
+        match self {
+            TurnState::Idle => None,
+            TurnState::Submitted(p) => Some(p),
+            TurnState::Streaming { prompt, .. } => Some(prompt),
+            TurnState::Surfaced { prompt, .. } => Some(prompt),
+        }
+    }
+
     /// Autofix generation snapshot for the current turn, if any.
     pub fn autofix_generation(&self) -> Option<u64> {
         self.prompt()
@@ -154,16 +166,6 @@ impl TurnState {
             .unwrap_or(false)
     }
 
-    /// Spinner label, if the state should drive a busy indicator.
-    /// `Submitted` / `Streaming` show the spinner; `Surfaced` and `Idle`
-    /// do not.
-    pub fn spinner_label(&self) -> Option<&'static str> {
-        match self {
-            TurnState::Submitted(_) => Some("Thinking..."),
-            TurnState::Streaming { .. } => Some("Thinking..."),
-            _ => None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -176,6 +178,7 @@ mod tests {
             id: 1,
             text: "hello".into(),
             submitted_at_unix_s: 0.0,
+            context: TurnContext::default(),
             autofix: None,
         }
     }
@@ -185,10 +188,8 @@ mod tests {
             id: 2,
             text: "autofix".into(),
             submitted_at_unix_s: 0.0,
-            autofix: Some(AutofixContext {
-                target_pane_id: "pane-1".into(),
-                generation: gen,
-            }),
+            context: TurnContext::with_target_pane("pane-1"),
+            autofix: Some(AutofixContext { generation: gen }),
         }
     }
 
@@ -215,7 +216,6 @@ mod tests {
         assert!(s.prompt().is_none());
         assert!(s.autofix_generation().is_none());
         assert!(!s.is_autofix());
-        assert!(s.spinner_label().is_none());
         assert!(!s.is_in_flight());
     }
 
@@ -228,7 +228,6 @@ mod tests {
         assert!(s.buffer().is_none());
         assert!(s.recommendations().is_none());
         assert!(s.prompt().is_some());
-        assert!(s.spinner_label().is_some());
         assert!(s.is_in_flight());
     }
 
@@ -244,7 +243,6 @@ mod tests {
         assert_eq!(s.buffer(), Some("partial"));
         assert!(s.recommendations().is_none());
         assert!(s.prompt().is_some());
-        assert!(s.spinner_label().is_some());
         assert!(s.is_in_flight());
     }
 
@@ -256,8 +254,20 @@ mod tests {
             end_pending: true,
         };
         assert!(!s.accepts_new_prompt());
-        assert!(s.spinner_label().is_none());
+        // end_pending=true means AgentMessageEnd hasn't arrived yet, so the UI
+        // gate remains held even though visible output may already be present.
         assert!(s.is_in_flight());
+    }
+
+    #[test]
+    fn surfaced_end_done_is_not_in_flight() {
+        let s = TurnState::Surfaced {
+            prompt: prompt(),
+            outcome: TurnOutcome::ChatTurn,
+            end_pending: false,
+        };
+        assert!(s.accepts_new_prompt());
+        assert!(!s.is_in_flight());
     }
 
     #[test]

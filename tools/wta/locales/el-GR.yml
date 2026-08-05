@@ -1,29 +1,23 @@
 # Setup screen titles
-# {Locked="Intelligent Terminal"} - product name, do not translate
-setup.title.first_run: "Καλώς ήρθατε στο Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "Δεν βρέθηκε ο παράγοντας"
 setup.title.agent_error: "Η σύνδεση με τον παράγοντα απέτυχε"
-setup.title.switch_agent: "Αλλαγή παράγοντα"
 setup.title.not_available: "Ο παράγοντας δεν είναι διαθέσιμος"
 setup.title.sign_in: "Απαιτείται σύνδεση"
 
 # %{agent} is replaced with the agent display name at runtime.
-setup.subtitle.copilot_missing: "Ο παράγοντάς σας \"%{agent}\" δεν είναι εγκατεστημένος. Ακολουθήστε τα παρακάτω βήματα για να τον εγκαταστήσετε. Για αλλαγή παράγοντα, μεταβείτε στο Settings."
-setup.subtitle.agent_missing: "Ο παράγοντάς σας \"%{agent}\" δεν είναι εγκατεστημένος. Εγκαταστήστε τον ξανά χειροκίνητα και δοκιμάστε ξανά. Για αλλαγή παράγοντα, μεταβείτε στο Settings."
-setup.subtitle.copilot_auth: "Ο παράγοντάς σας \"%{agent}\" απαιτεί έλεγχο ταυτότητας. Ακολουθήστε τα παρακάτω βήματα για να συνδεθείτε. Για αλλαγή παράγοντα, μεταβείτε στο Settings."
-setup.subtitle.agent_auth: "Ο παράγοντάς σας \"%{agent}\" απαιτεί έλεγχο ταυτότητας. Συνδεθείτε μέσω του CLI του παράγοντα και δοκιμάστε ξανά. Για αλλαγή παράγοντα, μεταβείτε στο Settings."
+setup.subtitle.copilot_missing: "Ο παράγοντάς σας \"%{agent}\" δεν είναι εγκατεστημένος. Ακολουθήστε τα παρακάτω βήματα για να τον εγκαταστήσετε. Για αλλαγή παράγοντα, μεταβείτε στο Έξυπνο Τερματικό Settings > Agent."
+setup.subtitle.agent_missing: "Ο παράγοντάς σας \"%{agent}\" δεν είναι εγκατεστημένος. Εγκαταστήστε τον ξανά χειροκίνητα και δοκιμάστε ξανά. Για αλλαγή παράγοντα, μεταβείτε στο Έξυπνο Τερματικό Settings > Agent."
+setup.subtitle.copilot_auth: "Ο παράγοντάς σας \"%{agent}\" απαιτεί έλεγχο ταυτότητας. Ακολουθήστε τα παρακάτω βήματα για να συνδεθείτε. Για αλλαγή παράγοντα, μεταβείτε στο Έξυπνο Τερματικό Settings > Agent."
+setup.subtitle.agent_auth: "Ο παράγοντάς σας \"%{agent}\" απαιτεί έλεγχο ταυτότητας. Συνδεθείτε μέσω του παράγοντα και επιλέξτε \"Έχω συνδεθεί\" παρακάτω. Για αλλαγή παράγοντα, μεταβείτε στο Έξυπνο Τερματικό Settings > Agent."
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "Επιλέξτε το προεπιλεγμένο CLI παράγοντα που θέλετε να χρησιμοποιήσετε στο Intelligent Terminal. Μπορείτε να"
-setup.description.fre_line2: "μεταβείτε στο Settings για ρύθμιση παραμέτρων του χώρου εργασίας σας."
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "Επανεγκατάσταση %{agent}"
-setup.option.reinstall_hint: "(Θα εγκατασταθεί αυτόματα)"
+setup.option.install: "Εγκατάσταση %{agent}"
+setup.option.install_hint: "(Θα εγκατασταθεί αυτόματα)"
 setup.option.signin: "Σύνδεση στο %{agent}"
-setup.option.retry_detection: "Επανάληψη ανίχνευσης"
-setup.option.retry_auth: "Συνδέθηκα — επανάληψη σύνδεσης"
-setup.option.retry_connection: "Επανάληψη σύνδεσης"
-setup.option.switch_to: "Εναλλαγή σε %{agent}"
+setup.option.retry_detection: "Δοκιμάστε ξανά"
+setup.option.retry_auth: "Έχω συνδεθεί — δοκιμάστε ξανά τη σύνδεση"
 setup.status.installing: "Εγκατάσταση..."
 setup.status.install_failed: "Η εγκατάσταση απέτυχε: "
 setup.status.installing_winget: " Εγκατάσταση μέσω winget..."
@@ -35,20 +29,26 @@ auth.agent_selected_with_status: "CLI παράγοντα %{name} — "
 auth.checking_authentication: "  %{spinner} Έλεγχος ταυτοποίησης..."
 auth.waiting_for_authorization: "  %{spinner} Αναμονή εξουσιοδότησης..."
 auth.code_copied_hint: "  Ο κωδικός αντιγράφηκε στο πρόχειρο — επικολλήστε τον στο πρόγραμμα περιήγησης."
-auth.sign_in_prompt: "Συνδεθείτε για να χρησιμοποιήσετε τον παράγοντα:"
+auth.device_code_prompt: "Επισκεφθείτε τη διεύθυνση %{url} και εισαγάγετε τον κωδικό: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  Συνδέστε το %{name} για ενεργοποίηση λειτουργιών παράγοντα"
-auth.button_sign_in_github: "[ Σύνδεση με GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ Σύνδεση με %{name} ]"
-auth.hint_footer: "  Πατήστε Enter για σύνδεση, Esc για επιστροφή"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  Enter = είσοδος · E = GitHub Enterprise · Esc = επιστροφή"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Τομέας Enterprise: "
+auth.enterprise_hint_footer: "  Enter = είσοδος · Esc = github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  Πατήστε Enter για να δοκιμάσετε ξανά ή Esc για github.com. Συνήθεις αιτίες: λανθασμένος ή μη προσβάσιμος τομέας, ληγμένος κωδικός ή απουσία πρόσβασης Copilot σε αυτόν τον κεντρικό υπολογιστή."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  Πατήστε Enter για να δοκιμάσετε ξανά ή Esc για επιστροφή."  # {Locked="Enter","Esc"}
 
 # ── Chat view (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "Σκέφτομαι…"
-# {Locked="Intelligent Terminal"} - product name, do not translate
-chat.welcome_title: "Καλώς ήρθατε στο Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "Καλώς ήρθατε στο Έξυπνο Τερματικό!"
+chat.welcome_disclaimer: "Το Έξυπνο Τερματικό χρησιμοποιεί AI. Ελέγξτε για σφάλματα."
 chat.plan_header: "Σχέδιο:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "Αυτόματη διάγνωση πρόσφατης αποτυχίας εντολής"
+chat.turn_canceled: "(ακυρώθηκε)"
+chat.turn_executed: "→ εκτελέστηκε: %{title}"
 
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "Ρωτήστε οτιδήποτε, / για εντολές.."  # {Locked="/"}
@@ -66,7 +66,8 @@ input.queue.removed: "Το μήνυμα σε ουρά καταργήθηκε: %{
 # queue is already at capacity (%{cap} entries). The user must wait for the
 # queue to drain or press Esc to remove queued items.
 input.queue.full: "Η ουρά είναι πλήρης (%{cap}). Περιμένετε τον παράγοντα ή πατήστε Esc για να καταργήσετε στοιχεία από την ουρά."  # {Locked="Esc"}
-
+# Summary of attached images; keep 📎 and %{items} verbatim.
+input.image_attachments: "📎 Εικόνες: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Command popup (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - slash-command prefix, must remain ASCII
@@ -77,8 +78,8 @@ commands.help_escape_hint: "  //text     Αποστολή κυριολεκτικ
 commands.help_close_hint: "  Esc        Κλείσιμο αυτής της βοήθειας"  # {Locked="Esc"}
 
 # ── Recommendations panel (src/ui/recommendations.rs) ───────────────────────
-# {Locked="Enter","Esc","↵"} - key names and Return-key glyph, do not translate
-recommendations.nav_hint: "(↑ ↓ για πλοήγηση • Enter για επιλογή • Esc για ακύρωση)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - key names and Return-key glyph, do not translate
+recommendations.nav_hint: "(↑ ↓ για πλοήγηση • ← → για εναλλαγή κουμπιών • Enter για επιλογή • Esc για ακύρωση)"
 recommendations.button_run_command: "[ Εκτέλεση εντολής ]"
 recommendations.button_insert_in_terminal: "Εισαγωγή στο Terminal"
 recommendations.button_open_in_new_tab: "Άνοιγμα σε νέα καρτέλα ↵"
@@ -102,9 +103,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N για απάντηση · αλλάξτε μέγεθος για πλήρη κάρτα]"  # {Locked="Y/N"}
 
 # ── Agent status (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "Δεν έχει εγκατασταθεί — επιλέξτε για αυτόματη εγκατάσταση"
 agent.status.not_found: "Δεν βρέθηκε"
-agent.status.detected: "Ανιχνεύθηκε"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - tool names and command, must run verbatim
 agent.install.running_winget: "Εκτελείται: winget install GitHub.Copilot"
 agent.install.launch_failed: "Αποτυχία εκκίνησης winget: %{error}"
@@ -115,25 +114,47 @@ agent.custom.auth_hint: "Βεβαιωθείτε ότι το %{name} είναι �
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "Φόρτωση..."
-# {Locked="Enter","Shift+enter","Esc"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ για πλοήγηση • Enter για έναρξη συνεδρίας σε νέα καρτέλα • Shift+enter για έναρξη συνεδρίας στο πλαίσιο παράγοντα • Esc για έξοδο)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ για πλοήγηση • Enter για έναρξη συνεδρίας • Esc για έξοδο • F5 για ανανέωση • / για αναζήτηση)"
 agents.status.active: "Ενεργός"
 agents.status.waiting_for_input: "Αναμονή εισόδου"
 agents.status.error: "Σφάλμα"
 agents.status.idle: "Αδρανής"
 
 # ── Layout welcome hint (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. για εμφάνιση/απόκρυψη πλαισίου παράγοντα • Ctrl+Alt+/ για εμφάνιση/απόκρυψη συνεδρίας παράγοντα)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. για εμφάνιση/απόκρυψη πλαισίου παράγοντα • Ctrl+Shift+/ για εμφάνιση/απόκρυψη συνεδρίας παράγοντα)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
 connection.starting: "Εκκίνηση παράγοντα..."
 connection.reconnecting: "Επανασύνδεση..."
+connection.connecting_activity: "Σύνδεση με τον παράγοντα…"
+connection.lost: "Η σύνδεση με τον παράγοντα χάθηκε. Πληκτρολογήστε /restart για επανασύνδεση."  # {Locked="/restart"}
 
 # ── System messages (src/app.rs) ────────────────────────────────────────────
+system.close_pane_hint: "Πατήστε ξανά Ctrl+C για να κλείσετε το πλαίσιο"  # {Locked="Ctrl+C"}
+system.selection_copied: "Αντιγράφηκε"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "Ακυρώθηκε."
 system.no_prompt_in_flight: "Δεν υπάρχει ενεργή εντολή."
 system.authentication_failed: "Ο έλεγχος ταυτότητας απέτυχε"
-system.command_copied_retry: "Η εντολή αντιγράφηκε — εκτελέστε την σε άλλο τερματικό, μετά πατήστε Enter για νέα δοκιμή"  # {Locked="Enter"}
+system.stopped_max_tokens: "Η απάντηση περικόπηκε μετά την επίτευξη του ορίου εξόδου του μοντέλου."
+system.stopped_max_turn_requests: "Ο πράκτορας σταμάτησε μετά την επίτευξη του ορίου αιτημάτων για αυτόν τον γύρο."
+system.stopped_refusal: "Ο πράκτορας αρνήθηκε να συνεχίσει με αυτό το αίτημα."
+system.agent_busy: "Ο agent είναι απασχολημένος σε αυτήν την καρτέλα — περιμένετε να ολοκληρωθεί η τρέχουσα προτροπή."
+# Image paste messages; "agent" refers to an AI agent. Keep Enter and %{label} verbatim.
+system.image_clipboard_empty: "Δεν υπάρχει εικόνα στο πρόχειρο για επικόλληση."
+system.image_not_supported: "Αυτός ο παράγοντας δεν υποστηρίζει είσοδο εικόνας."
+system.image_pasted: "Η εικόνα επισυνάφθηκε (%{label}). Πατήστε Enter για αποστολή."  # {Locked="%{label}","Enter"}
+system.resuming_session: "Συνέχιση της περιόδου λειτουργίας %{session_id}..."
+system.unknown_command: "Άγνωστη εντολή \"%{command}\" — στάλθηκε ως προτροπή. Πληκτρολογήστε /help για τη λίστα."  # {Locked="/help"} — slash-command name.
+system.busy_use_stop: "Περιμένετε να ολοκληρωθεί η τρέχουσα προτροπή ή χρησιμοποιήστε πρώτα /stop."  # {Locked="/stop"} — slash-command name.
+system.cannot_focus_session: "Δεν είναι δυνατή η εστίαση στην περίοδο λειτουργίας %{session_id}: φαίνεται ενεργή, αλλά δεν έχει συνδεθεί ακόμα GUID τμήματος παραθύρου. Δοκιμάστε ξανά σε λίγο."
+system.cannot_resume_no_load_session: "Δεν είναι δυνατή η συνέχιση στο τμήμα παραθύρου agent: ο %{agent} δεν δήλωσε τη δυνατότητα ACP `loadSession`. Πατήστε Enter (χωρίς Shift) για συνέχιση σε νέο τμήμα παραθύρου τερματικού αντ' αυτού."  # {Locked="ACP","loadSession","Enter","Shift"} — protocol/UI terms.
+system.cannot_resume_no_resume_flag: "Δεν είναι δυνατή η συνέχιση της περιόδου λειτουργίας %{agent}: αυτός ο agent δεν έχει σημαία τύπου `--resume`. Πατήστε Shift+Enter για να δοκιμάσετε συνέχιση μέσα στο τμήμα παραθύρου agent μέσω ACP αντ' αυτού."  # {Locked="--resume","Shift","Enter","ACP"} — flag and UI terms.
+system.cannot_resume_unknown_agent: "Δεν είναι δυνατή η συνέχιση της περιόδου λειτουργίας %{session_id}: ο agent προέλευσης είναι άγνωστος σε αυτήν την έκδοση του WTA."
+system.cannot_resume_phantom_via_flag: "Δεν είναι δυνατή η συνέχιση της περιόδου λειτουργίας %{agent} %{session_id}: ξεκίνησε αλλά δεν συγκέντρωσε ποτέ καμία συνομιλία, επομένως ο ίδιος ο %{agent} θα απέρριπτε τη συνέχιση. Κατάργηση της γραμμής."
+system.cannot_resume_phantom_via_load: "Δεν είναι δυνατή η συνέχιση της περιόδου λειτουργίας %{agent} %{session_id}: ξεκίνησε αλλά δεν συγκέντρωσε ποτέ καμία συνομιλία, επομένως ο %{agent} θα απέρριπτε τη φόρτωση. Κατάργηση της γραμμής."
+system.fallback.this_agent: "αυτός ο agent"
+system.fallback.connected_agent: "ο συνδεδεμένος agent"
 
 # ── Runtime CLI output (src/main.rs) ────────────────────────────────────────
 output.no_windows: "Δεν βρέθηκαν παράθυρα."
@@ -171,3 +192,44 @@ hooks.installed_but_disabled: "⚠ εγκατεστημένο αλλά απεν�
 hooks.not_installed: "✗ δεν έχει εγκατασταθεί"
 hooks.uninstall_skipped: "παραλείφθηκε (το CLI δεν βρίσκεται στο PATH)"
 hooks.install_attempted: "Δοκιμάστηκε η εγκατάσταση wt-agent-hooks (idempotent). Εκτελέστε `wta hooks status` για έλεγχο αποτελεσμάτων. Αρχείο καταγραφής: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+# ── Relative time + date formatting (src/ui/agents_view.rs) ─────────────────
+time.just_now: "μόλις τώρα"
+time.minute_singular: "πριν από %{count} λεπτό"
+time.minutes_other: "πριν από %{count} λεπτά"
+time.hour_singular: "πριν από %{count} ώρα"
+time.hours_other: "πριν από %{count} ώρες"
+time.day_singular: "πριν από %{count} ημέρα"
+time.days_other: "πριν από %{count} ημέρες"
+
+# ── Slash-command summaries (src/commands.rs) ─────────────────────────────
+# Command names (/help, /clear, etc.) stay English; descriptions translate.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "Show this command list"
+commands.clear.summary: "Clear the chat scrollback (keeps session)"
+commands.new.summary: "Start a fresh ACP session (drops history)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "Restart agent"
+commands.stop.summary: "Cancel the in-flight prompt"
+commands.sessions.summary: "Open the historical sessions picker (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "Επιλέξτε το πράκτορα για αυτό το πλαίσιο (/agent <id> για άμεση εναλλαγή)"  # {Locked="/agent","<id>"}
+
+# ── Εκτέλεση σύστασης (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "Η επιλογή %{choice} απέτυχε: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "Επιλέξτε πράκτορα (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "Δεν βρέθηκε διαθέσιμο CLI πράκτορα σε αυτό το μηχάνημα."  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "Άγνωστος ή μη διαθέσιμος πράκτορας %{agent} — πληκτρολογήστε /agent για να δείτε τη διαθέσιμη λίστα."  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "Η εναλλαγή πρακτόρων δεν είναι διαθέσιμη εκτός καρτέλας του Windows Terminal."
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "Επιλέξτε το μοντέλο για αυτό το πλαίσιο (/model <id> για άμεση εναλλαγή)"  # {Locked="/model","<id>"}
+commands.move.summary: "Μετακίνηση του πλαισίου παράγοντα αυτής της καρτέλας (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "Επιλέξτε μοντέλο (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "Ο συνδεδεμένος agent δεν δήλωσε κανένα επιλέξιμο μοντέλο."
+system.model_set: "Το μοντέλο για αυτό το πλαίσιο ορίστηκε σε %{model}."  # {Locked="%{model}"}
+system.model_unknown: "Άγνωστο μοντέλο %{model} — πληκτρολογήστε /model για να δείτε τη διαθέσιμη λίστα."  # {Locked="%{model}","/model"}

@@ -1,29 +1,23 @@
 # عناوین صفحه راه‌اندازی
-# {Locked="Intelligent Terminal"} - نام محصول، ترجمه نکنید
-setup.title.first_run: "به Intelligent Terminal خوش آمدید!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "عامل هوش مصنوعی یافت نشد"
 setup.title.agent_error: "اتصال به عامل هوش مصنوعی ناموفق بود"
-setup.title.switch_agent: "تغییر عامل هوش مصنوعی"
 setup.title.not_available: "عامل هوش مصنوعی در دسترس نیست"
 setup.title.sign_in: "ورود به سیستم لازم است"
 
 # %{agent} در زمان اجرا با نام نمایشی عامل هوش مصنوعی جایگزین می‌شود.
-setup.subtitle.copilot_missing: "عامل هوش مصنوعی \"%{agent}\" نصب نشده است. مراحل زیر را برای نصب آن دنبال کنید. برای تغییر عامل‌های هوش مصنوعی، به Settings بروید."
-setup.subtitle.agent_missing: "عامل هوش مصنوعی \"%{agent}\" نصب نشده است. لطفاً آن را به صورت دستی دوباره نصب کنید، سپس دوباره تلاش کنید. برای تغییر عامل‌های هوش مصنوعی، به Settings بروید."
-setup.subtitle.copilot_auth: "عامل هوش مصنوعی \"%{agent}\" نیاز به احراز هویت دارد. مراحل زیر را برای ورود دنبال کنید. برای تغییر عامل‌های هوش مصنوعی، به Settings بروید."
-setup.subtitle.agent_auth: "عامل هوش مصنوعی \"%{agent}\" نیاز به احراز هویت دارد. لطفاً از طریق CLI عامل هوش مصنوعی وارد شوید، سپس دوباره تلاش کنید. برای تغییر عامل‌های هوش مصنوعی، به Settings بروید."
+setup.subtitle.copilot_missing: "عامل هوش مصنوعی \"%{agent}\" نصب نشده است. مراحل زیر را برای نصب آن دنبال کنید. برای تغییر عامل‌های هوش مصنوعی، به پایانه هوشمند Settings > Agent بروید."
+setup.subtitle.agent_missing: "عامل هوش مصنوعی \"%{agent}\" نصب نشده است. لطفاً آن را به صورت دستی دوباره نصب کنید، سپس دوباره تلاش کنید. برای تغییر عامل‌های هوش مصنوعی، به پایانه هوشمند Settings > Agent بروید."
+setup.subtitle.copilot_auth: "عامل هوش مصنوعی \"%{agent}\" نیاز به احراز هویت دارد. مراحل زیر را برای ورود دنبال کنید. برای تغییر عامل‌های هوش مصنوعی، به پایانه هوشمند Settings > Agent بروید."
+setup.subtitle.agent_auth: "عامل هوش مصنوعی \"%{agent}\" نیاز به احراز هویت دارد. لطفاً از طریق عامل هوش مصنوعی وارد شوید، سپس \"وارد شدم\" را در زیر انتخاب کنید. برای تغییر عامل‌های هوش مصنوعی، به پایانه هوشمند Settings > Agent بروید."
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "CLI عامل هوش مصنوعی پیش‌فرضی را که می‌خواهید در Intelligent Terminal استفاده کنید انتخاب نمایید. می‌توانید"
-setup.description.fre_line2: "به Settings بروید تا فضای کاری خود را پیکربندی و راه‌اندازی کنید."
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "نصب مجدد %{agent}"
-setup.option.reinstall_hint: "(به صورت خودکار نصب خواهد شد)"
+setup.option.install: "نصب %{agent}"
+setup.option.install_hint: "(به صورت خودکار نصب خواهد شد)"
 setup.option.signin: "ورود به %{agent}"
-setup.option.retry_detection: "تلاش مجدد برای شناسایی"
-setup.option.retry_auth: "وارد شدم — تلاش مجدد اتصال"
-setup.option.retry_connection: "تلاش مجدد اتصال"
-setup.option.switch_to: "تغییر به %{agent}"
+setup.option.retry_detection: "دوباره تلاش کنید"
+setup.option.retry_auth: "وارد شدم — دوباره اتصال را امتحان کنید"
 setup.status.installing: "در حال نصب..."
 setup.status.install_failed: "نصب ناموفق بود: "
 setup.status.installing_winget: " در حال نصب از طریق winget..."
@@ -35,20 +29,26 @@ auth.agent_selected_with_status: "CLI عامل هوش مصنوعی %{name} — "
 auth.checking_authentication: "  %{spinner} در حال بررسی احراز هویت..."
 auth.waiting_for_authorization: "  %{spinner} در انتظار مجوز..."
 auth.code_copied_hint: "  کد در کلیپ‌بورد کپی شد — آن را در مرورگر خود جای‌گذاری کنید."
-auth.sign_in_prompt: "برای استفاده از عامل هوش مصنوعی خود وارد شوید:"
+auth.device_code_prompt: "به %{url} بروید و کد را وارد کنید: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  %{name} را متصل کنید تا قابلیت‌های عامل هوش مصنوعی فعال شوند"
-auth.button_sign_in_github: "[ ورود با GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ ورود با %{name} ]"
-auth.hint_footer: "  Enter را برای ورود فشار دهید، Esc برای بازگشت"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  Enter برای ورود · E برای GitHub Enterprise · Esc برای بازگشت"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  دامنه سازمانی: "
+auth.enterprise_hint_footer: "  Enter برای ورود · Esc برای github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  برای تلاش دوباره Enter را فشار دهید، یا Esc برای github.com. علت‌های رایج: دامنه‌ای که اشتباه وارد شده یا قابل دسترسی نیست، کد منقضی‌شده، یا نداشتن دسترسی Copilot در آن میزبان."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  برای تلاش دوباره Enter را فشار دهید، یا Esc برای بازگشت."  # {Locked="Enter","Esc"}
 
 # ── نمای گفتگو (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "در حال فکر کردن…"
-# {Locked="Intelligent Terminal"} - نام محصول، ترجمه نکنید
-chat.welcome_title: "به Intelligent Terminal خوش آمدید!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "به پایانه هوشمند خوش آمدید!"
+chat.welcome_disclaimer: "پایانه هوشمند از AI استفاده می‌کند. خطاها را بررسی کنید."
 chat.plan_header: "طرح:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "خرابی فرمان اخیر به‌طور خودکار تشخیص داده شد"
+chat.turn_canceled: "(لغو شد)"
+chat.turn_executed: "→ اجرا شد: %{title}"
 
 # ── جای‌نگهدارهای ورودی (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "هرچیزی بپرسید، / برای دستورات.."  # {Locked="/"}
@@ -66,7 +66,7 @@ input.queue.removed: "پیام صف‌شده حذف شد: %{preview}"
 # queue is already at capacity (%{cap} entries). The user must wait for the
 # queue to drain or press Esc to remove queued items.
 input.queue.full: "صف پر است (%{cap}). منتظر عامل هوش مصنوعی بمانید یا Esc را فشار دهید تا موارد صف‌شده حذف شوند."  # {Locked="Esc"}
-
+input.image_attachments: "📎 تصاویر: %{items}"  # {Locked="📎","%{items}"}
 
 # ── پنجره بازشو دستورات (src/ui/command_popup.rs) ─────────────────────────────────
 # {Locked="/"} - پیشوند دستور اسلش، باید ASCII بماند
@@ -76,9 +76,22 @@ commands.help_header: "دستورات اسلش — / را در کادر ورود
 commands.help_escape_hint: "  //text     ارسال '/' تحت‌اللفظی (تجزیه‌کننده دستور را رد می‌کند)"  # {Locked="//text","/"}
 commands.help_close_hint: "  Esc        بستن این راهنما"  # {Locked="Esc"}
 
+# Slash-command summaries shown in the popup and /help overlay.
+# Command names (/help, /clear, /new, /restart, /stop, /sessions) stay in
+# English. Only the descriptions are localized.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "نمایش این فهرست دستورات"
+commands.clear.summary: "پاک کردن تاریخچه پیمایش گفتگو (نشست حفظ می‌شود)"
+commands.new.summary: "شروع یک نشست ACP تازه (حذف تاریخچه)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "راه‌اندازی مجدد عامل هوش مصنوعی"
+commands.stop.summary: "لغو درخواست در حال اجرا"
+commands.sessions.summary: "باز کردن انتخابگر نشست‌های تاریخی (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "عامل این پنل را انتخاب کنید (/agent <id> برای تغییر مستقیم)"  # {Locked="/agent","<id>"}
+
 # ── پنل پیشنهادات (src/ui/recommendations.rs) ───────────────────────────────
-# {Locked="Enter","Esc","↵"} - نام کلیدها و نماد کلید بازگشت، ترجمه نکنید
-recommendations.nav_hint: "(↑ ↓ ناوبری • Enter انتخاب • Esc لغو)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - نام کلیدها و نماد کلید بازگشت، ترجمه نکنید
+recommendations.nav_hint: "(↑ ↓ برای پیمایش • ← → برای جابه‌جایی بین دکمه‌ها • Enter برای انتخاب • Esc برای لغو)"
 recommendations.button_run_command: "[ اجرای دستور ]"
 recommendations.button_insert_in_terminal: "درج در ترمینال"
 recommendations.button_open_in_new_tab: "باز کردن در زبانه جدید ↵"
@@ -102,9 +115,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N برای پاسخ · تغییر اندازه برای کارت کامل]"  # {Locked="Y/N"}
 
 # ── وضعیت عامل هوش مصنوعی (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "نصب نشده — برای نصب خودکار انتخاب کنید"
 agent.status.not_found: "یافت نشد"
-agent.status.detected: "شناسایی شد"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - نام ابزارها و دستور، باید عیناً اجرا شوند
 agent.install.running_winget: "در حال اجرا: winget install GitHub.Copilot"
 agent.install.launch_failed: "راه‌اندازی winget ناموفق بود: %{error}"
@@ -115,25 +126,46 @@ agent.custom.auth_hint: "مطمئن شوید که %{name} نصب شده و در 
 
 # ── نمای عامل‌های هوش مصنوعی (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "در حال بارگذاری..."
-# {Locked="Enter","Shift+enter","Esc"} - ترکیب کلیدها، ترجمه نکنید
-agents.footer_hint: "(↑ ↓ ناوبری • Enter شروع نشست در زبانه جدید • Shift+enter شروع نشست در پنل عامل هوش مصنوعی • Esc خروج)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - ترکیب کلیدها، ترجمه نکنید
+agents.footer_hint: "(↑ ↓ ناوبری • Enter شروع نشست • Esc خروج • F5 تازه‌سازی • / جستجو)"
 agents.status.active: "فعال"
 agents.status.waiting_for_input: "در انتظار ورودی"
 agents.status.error: "خطا"
 agents.status.idle: "بیکار"
 
 # ── راهنمای خوشامدگویی چیدمان (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. نمایش/پنهان کردن پنل عامل هوش مصنوعی • Ctrl+Alt+/ نمایش/پنهان کردن نشست عامل هوش مصنوعی)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. نمایش/پنهان کردن پنل عامل هوش مصنوعی • Ctrl+Shift+/ نمایش/پنهان کردن نشست عامل هوش مصنوعی)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── وضعیت اتصال ────────────────────────────────────────────────────────
 connection.starting: "در حال راه‌اندازی عامل هوش مصنوعی..."
 connection.reconnecting: "در حال اتصال مجدد..."
+connection.connecting_activity: "در حال اتصال به عامل هوش مصنوعی…"
+connection.lost: "اتصال به عامل هوش مصنوعی قطع شد. برای اتصال مجدد، /restart را تایپ کنید."  # {Locked="/restart"}
 
 # ── پیام‌های سیستم (src/app.rs) ────────────────────────────────────────────────
+system.close_pane_hint: "برای بستن پنل، دوباره Ctrl+C را فشار دهید"  # {Locked="Ctrl+C"}
+system.selection_copied: "کپی شد"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "لغو شد."
 system.no_prompt_in_flight: "هیچ درخواستی در حال اجرا نیست."
 system.authentication_failed: "احراز هویت ناموفق بود"
-system.command_copied_retry: "دستور کپی شد — آن را در ترمینال دیگری اجرا کنید، سپس Enter را برای تلاش مجدد فشار دهید"  # {Locked="Enter"}
+system.stopped_max_tokens: "پاسخ پس از رسیدن به حد خروجی مدل قطع شد."
+system.stopped_max_turn_requests: "عامل پس از رسیدن به حد درخواست خود برای این نوبت متوقف شد."
+system.stopped_refusal: "عامل از ادامه‌دادن این درخواست خودداری کرد."
+system.agent_busy: "عامل در این زبانه مشغول است — منتظر بمانید تا درخواست فعلی تمام شود."
+system.image_clipboard_empty: "هیچ تصویری برای جای‌گذاری در کلیپ‌بورد نیست."
+system.image_not_supported: "این عامل هوش مصنوعی از ورودی تصویر پشتیبانی نمی‌کند."
+system.image_pasted: "تصویر پیوست شد (%{label}). برای ارسال، Enter را فشار دهید."  # {Locked="%{label}","Enter"}
+system.resuming_session: "در حال ازسرگیری جلسه %{session_id}..."
+system.unknown_command: "فرمان ناشناخته \"%{command}\" — به‌عنوان درخواست ارسال شد. برای فهرست، /help را تایپ کنید."  # {Locked="/help"} — slash-command name.
+system.busy_use_stop: "منتظر بمانید درخواست فعلی تمام شود، یا ابتدا /stop را اجرا کنید."  # {Locked="/stop"} — slash-command name.
+system.cannot_focus_session: "نمی‌توان روی جلسه %{session_id} تمرکز کرد: به نظر زنده است اما هنوز هیچ GUID صفحه‌ای به آن متصل نشده است. چند لحظه دیگر دوباره امتحان کنید."
+system.cannot_resume_no_load_session: "نمی‌توان در صفحه عامل ازسر گرفت: %{agent} قابلیت ACP `loadSession` را اعلام نکرده است. برای ازسرگیری در یک صفحه پایانه جدید، Enter (بدون Shift) را فشار دهید."  # {Locked="ACP","loadSession","Enter","Shift"} — protocol/UI terms.
+system.cannot_resume_no_resume_flag: "نمی‌توان جلسه %{agent} را ازسر گرفت: این عامل هیچ پرچمی به سبک `--resume` ندارد. برای تلاش جهت ازسرگیری داخل صفحه عامل از طریق ACP، Shift+Enter را فشار دهید."  # {Locked="--resume","Shift","Enter","ACP"} — flag and UI terms.
+system.cannot_resume_unknown_agent: "نمی‌توان جلسه %{session_id} را ازسر گرفت: عامل مبدأ آن برای این ساخت WTA ناشناخته است."
+system.cannot_resume_phantom_via_flag: "نمی‌توان جلسه %{agent} %{session_id} را ازسر گرفت: شروع شده بود اما هیچ گفت‌وگویی جمع نکرد، بنابراین خود %{agent} ازسرگیری را رد می‌کند. در حال حذف ردیف."
+system.cannot_resume_phantom_via_load: "نمی‌توان جلسه %{agent} %{session_id} را ازسر گرفت: شروع شده بود اما هیچ گفت‌وگویی جمع نکرد، بنابراین %{agent} بارگذاری را رد می‌کند. در حال حذف ردیف."
+system.fallback.this_agent: "این عامل"
+system.fallback.connected_agent: "عامل متصل"
 
 # ── خروجی CLI در زمان اجرا (src/main.rs) ────────────────────────────────────────
 output.no_windows: "هیچ پنجره‌ای یافت نشد."
@@ -171,3 +203,32 @@ hooks.installed_but_disabled: "⚠ نصب شده اما غیرفعال"
 hooks.not_installed: "✗ نصب نشده"
 hooks.uninstall_skipped: "رد شد (CLI در PATH نیست)"
 hooks.install_attempted: "تلاش نصب wt-agent-hooks انجام شد (بی‌توان). برای بررسی نتیجه `wta hooks status` را اجرا کنید. گزارش ردیابی: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+# ── Relative time and date formatting ───────────────────────────────────────
+time.just_now: "همین حالا"
+time.minute_singular: "1 دقیقه پیش"
+time.minutes_other: "%{count} دقیقه پیش"
+time.hour_singular: "1 ساعت پیش"
+time.hours_other: "%{count} ساعت پیش"
+time.day_singular: "1 روز پیش"
+time.days_other: "%{count} روز پیش"
+
+# ── اجرای توصیه (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "انتخاب %{choice} ناموفق بود: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "انتخاب عامل (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "هیچ CLI عاملی در این رایانه یافت نشد."  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "عامل ناشناخته یا غیرقابل دسترس %{agent} — برای دیدن فهرست در دسترس، /agent را تایپ کنید."  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "تغییر عامل در خارج از برگه Windows Terminal در دسترس نیست."
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "مدل این پنل را انتخاب کنید (/model <id> برای تغییر مستقیم)"  # {Locked="/model","<id>"}
+commands.move.summary: "انتقال پنل عامل این زبانه (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "انتخاب مدل (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "عامل هوش مصنوعی متصل هیچ مدل قابل انتخابی را اعلام نکرد."
+system.model_set: "مدل این پنل روی %{model} تنظیم شد."  # {Locked="%{model}"}
+system.model_unknown: "مدل ناشناخته %{model} — برای دیدن فهرست در دسترس، /model را تایپ کنید."  # {Locked="%{model}","/model"}

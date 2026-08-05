@@ -9,6 +9,7 @@
 
 #include "CTerminalHandoff.h"
 #include "../../types/inc/utils.hpp"
+#include "../inc/IntelligentTerminalPaths.h"
 
 #include "ConptyConnection.g.cpp"
 
@@ -63,6 +64,11 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             // The profile Guid does include the enclosing '{}'
             environment.as_map().insert_or_assign(L"WT_PROFILE_ID", Utils::GuidToString(_profileGuid));
 
+            // Shell integration is installed in user-wide profile files, so it
+            // needs an explicit host marker to avoid emitting our OSC sequences
+            // in other terminals that launch the same shell.
+            environment.as_map().insert_or_assign(L"INTELLIGENT_TERMINAL", L"1");
+
             // Protocol server credentials — read from the Terminal process env
             // (set by WindowEmperor::_initializeProtocolServer). These must be
             // injected here because regenerate() builds _initialEnv from the
@@ -71,6 +77,24 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                 wchar_t buf[512];
                 if (GetEnvironmentVariableW(L"WT_COM_CLSID", buf, ARRAYSIZE(buf)))
                     environment.as_map().insert_or_assign(L"WT_COM_CLSID", buf);
+            }
+
+            // Hand the WTA log directory to the agent CLIs' PowerShell hooks
+            // (send-event.ps1) that run inside this shell. They can't resolve
+            // the package-private path themselves — a hook process is
+            // unpackaged and only sees the un-redirected %LOCALAPPDATA%, with
+            // no way to learn the package family name — so we inject the
+            // already-resolved path here, the same way WT_COM_CLSID is. (The
+            // Rust side sets the same var in spawn.rs for agent-pane CLIs,
+            // which don't come through ConptyConnection.) Must be injected
+            // here for the same reason as WT_COM_CLSID: regenerate() builds
+            // _initialEnv from the registry, not the process environment block.
+            {
+                // Versioned dir so hook-trace.log lands in `logs\<pkgver>\`
+                // alongside the Rust and C++ logs (not the flat root).
+                const auto wtaLogDir = ::IntelligentTerminal::LogDirVersioned();
+                if (!wtaLogDir.empty())
+                    environment.as_map().insert_or_assign(L"WTA_HOOK_LOG_DIR", wtaLogDir.wstring());
             }
 
             // WSLENV is a colon-delimited list of environment variables (+flags) that should appear inside WSL
@@ -99,6 +123,7 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                 L"WT_SESSION",
                 L"WT_PROFILE_ID",
                 L"WT_COM_CLSID",
+                L"INTELLIGENT_TERMINAL",
             };
             // Misdiagnosis in MSVC 14.44.35207. No pointer arithmetic in sight.
 #pragma warning(suppress : 26481) // Don't use pointer arithmetic. Use span instead (bounds.1).

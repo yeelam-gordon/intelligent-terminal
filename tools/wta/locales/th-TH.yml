@@ -1,29 +1,23 @@
 # Setup screen titles
-# {Locked="Intelligent Terminal"} - ชื่อผลิตภัณฑ์ ห้ามแปล
-setup.title.first_run: "ยินดีต้อนรับสู่ Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "ไม่พบเอเจนต์"
 setup.title.agent_error: "การเชื่อมต่อเอเจนต์ล้มเหลว"
-setup.title.switch_agent: "สลับเอเจนต์"
 setup.title.not_available: "เอเจนต์ไม่พร้อมใช้งาน"
 setup.title.sign_in: "ต้องลงชื่อเข้าใช้"
 
 # %{agent} จะถูกแทนที่ด้วยชื่อที่แสดงของเอเจนต์ขณะรันไทม์
-setup.subtitle.copilot_missing: "เอเจนต์ \"%{agent}\" ของคุณยังไม่ได้ติดตั้ง ทำตามขั้นตอนด้านล่างเพื่อติดตั้ง หากต้องการสลับเอเจนต์ ให้ไปที่ Settings"
-setup.subtitle.agent_missing: "เอเจนต์ \"%{agent}\" ของคุณยังไม่ได้ติดตั้ง กรุณาติดตั้งใหม่ด้วยตนเอง แล้วลองอีกครั้ง หากต้องการสลับเอเจนต์ ให้ไปที่ Settings"
-setup.subtitle.copilot_auth: "เอเจนต์ \"%{agent}\" ของคุณต้องการการยืนยันตัวตน ทำตามขั้นตอนด้านล่างเพื่อลงชื่อเข้าใช้ หากต้องการสลับเอเจนต์ ให้ไปที่ Settings"
-setup.subtitle.agent_auth: "เอเจนต์ \"%{agent}\" ของคุณต้องการการยืนยันตัวตน กรุณาลงชื่อเข้าใช้ผ่าน CLI ของเอเจนต์ แล้วลองอีกครั้ง หากต้องการสลับเอเจนต์ ให้ไปที่ Settings"
+setup.subtitle.copilot_missing: "เอเจนต์ \"%{agent}\" ของคุณยังไม่ได้ติดตั้ง ทำตามขั้นตอนด้านล่างเพื่อติดตั้ง หากต้องการสลับเอเจนต์ ให้ไปที่ เทอร์มินัลอัจฉริยะ Settings > Agent"
+setup.subtitle.agent_missing: "เอเจนต์ \"%{agent}\" ของคุณยังไม่ได้ติดตั้ง กรุณาติดตั้งใหม่ด้วยตนเอง แล้วลองอีกครั้ง หากต้องการสลับเอเจนต์ ให้ไปที่ เทอร์มินัลอัจฉริยะ Settings > Agent"
+setup.subtitle.copilot_auth: "เอเจนต์ \"%{agent}\" ของคุณต้องการการยืนยันตัวตน ทำตามขั้นตอนด้านล่างเพื่อลงชื่อเข้าใช้ หากต้องการสลับเอเจนต์ ให้ไปที่ เทอร์มินัลอัจฉริยะ Settings > Agent"
+setup.subtitle.agent_auth: "เอเจนต์ \"%{agent}\" ของคุณต้องการการยืนยันตัวตน กรุณาลงชื่อเข้าใช้ผ่านเอเจนต์ แล้วเลือก \"ลงชื่อเข้าใช้แล้ว\" ด้านล่าง หากต้องการสลับเอเจนต์ ให้ไปที่ เทอร์มินัลอัจฉริยะ Settings > Agent"
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "เลือก CLI เอเจนต์เริ่มต้นที่คุณต้องการใช้ใน Intelligent Terminal คุณสามารถ"
-setup.description.fre_line2: "ไปที่ Settings เพื่อกำหนดค่าและตั้งค่าพื้นที่ทำงานของคุณ"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "ติดตั้ง %{agent} ใหม่"
-setup.option.reinstall_hint: "(จะติดตั้งโดยอัตโนมัติ)"
+setup.option.install: "ติดตั้ง %{agent}"
+setup.option.install_hint: "(จะติดตั้งโดยอัตโนมัติ)"
 setup.option.signin: "ลงชื่อเข้าใช้ %{agent}"
-setup.option.retry_detection: "ลองตรวจสอบอีกครั้ง"
-setup.option.retry_auth: "ลงชื่อเข้าใช้แล้ว — ลองเชื่อมต่ออีกครั้ง"
-setup.option.retry_connection: "ลองเชื่อมต่ออีกครั้ง"
-setup.option.switch_to: "สลับไปยัง %{agent}"
+setup.option.retry_detection: "ลองอีกครั้ง"
+setup.option.retry_auth: "ลงชื่อเข้าใช้แล้ว — ลองเชื่อมต่อใหม่"
 setup.status.installing: "กำลังติดตั้ง..."
 setup.status.install_failed: "ติดตั้งล้มเหลว: "
 setup.status.installing_winget: " กำลังติดตั้งผ่าน winget..."
@@ -35,25 +29,32 @@ auth.agent_selected_with_status: "CLI เอเจนต์ %{name} — "
 auth.checking_authentication: "  %{spinner} กำลังตรวจสอบการยืนยันตัวตน..."
 auth.waiting_for_authorization: "  %{spinner} กำลังรอการอนุญาต..."
 auth.code_copied_hint: "  คัดลอกรหัสไปยังคลิปบอร์ดแล้ว — วางในเบราว์เซอร์ของคุณ"
-auth.sign_in_prompt: "ลงชื่อเข้าใช้เพื่อใช้เอเจนต์ของคุณ:"
+auth.device_code_prompt: "ไปที่ %{url} แล้วป้อนรหัส: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  เชื่อมต่อ %{name} เพื่อเปิดใช้งานฟีเจอร์เอเจนต์"
-auth.button_sign_in_github: "[ ลงชื่อเข้าใช้ด้วย GitHub ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ ลงชื่อเข้าใช้ด้วย %{name} ]"
-auth.hint_footer: "  กด Enter เพื่อลงชื่อเข้าใช้, Esc เพื่อย้อนกลับ"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  Enter เพื่อลงชื่อเข้าใช้ · E สำหรับ GitHub Enterprise · Esc เพื่อย้อนกลับ"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  โดเมนองค์กร: "
+auth.enterprise_hint_footer: "  Enter เพื่อลงชื่อเข้าใช้ · Esc เพื่อใช้ github.com"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  กด Enter เพื่อลองอีกครั้ง หรือ Esc เพื่อใช้ github.com สาเหตุที่พบบ่อย: พิมพ์โดเมนผิดหรือเข้าถึงโดเมนไม่ได้ รหัสหมดอายุ หรือบัญชีของคุณไม่มีสิทธิ์เข้าถึง Copilot บนโฮสต์นั้น"  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  กด Enter เพื่อลองอีกครั้ง หรือ Esc เพื่อย้อนกลับ"  # {Locked="Enter","Esc"}
 
 # ── Chat view (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "กำลังคิด…"
-# {Locked="Intelligent Terminal"} - ชื่อผลิตภัณฑ์ ห้ามแปล
-chat.welcome_title: "ยินดีต้อนรับสู่ Intelligent Terminal!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "ยินดีต้อนรับสู่ เทอร์มินัลอัจฉริยะ!"
+chat.welcome_disclaimer: "เทอร์มินัลอัจฉริยะ ใช้ AI ตรวจสอบข้อผิดพลาด."
 chat.plan_header: "แผน:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "วินิจฉัยความล้มเหลวของคำสั่งล่าสุดโดยอัตโนมัติ"
+chat.turn_canceled: "(ยกเลิกแล้ว)"
+chat.turn_executed: "→ ดำเนินการแล้ว: %{title}"
 
 # ── Input placeholders (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "ถามอะไรก็ได้, / สำหรับคำสั่ง.."  # {Locked="/"}
 input.placeholder.connecting: "กำลังเชื่อมต่อ..."
 input.placeholder.disconnected: "ตัดการเชื่อมต่อ"
+input.image_attachments: "📎 รูปภาพ: %{items}"  # {Locked="📎","%{items}"}
 
 # ── Pending prompt queue (src/ui/queued_hint.rs, src/app.rs) ───────────────
 # Indicator shown above the input box while one or more prompts are queued
@@ -77,8 +78,8 @@ commands.help_escape_hint: "  //text     ส่ง '/' ตามตัวอั�
 commands.help_close_hint: "  Esc        ปิดหน้าต่างช่วยเหลือ"  # {Locked="Esc"}
 
 # ── Recommendations panel (src/ui/recommendations.rs) ───────────────────────
-# {Locked="Enter","Esc","↵"} - key names and Return-key glyph, do not translate
-recommendations.nav_hint: "(↑ ↓ เลื่อนเลือก • Enter เพื่อเลือก • Esc เพื่อยกเลิก)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - key names and Return-key glyph, do not translate
+recommendations.nav_hint: "(↑ ↓ เลื่อนเลือก • ← → สลับการกระทำ • Enter เพื่อเลือก • Esc เพื่อยกเลิก)"
 recommendations.button_run_command: "[ เรียกใช้คำสั่ง ]"
 recommendations.button_insert_in_terminal: "แทรกใน Terminal"
 recommendations.button_open_in_new_tab: "เปิดในแท็บใหม่ ↵"
@@ -102,9 +103,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N เพื่อตอบ · ปรับขนาดเพื่อดูการ์ดเต็ม]"  # {Locked="Y/N"}
 
 # ── Agent status (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "ยังไม่ได้ติดตั้ง — เลือกเพื่อติดตั้งโดยอัตโนมัติ"
 agent.status.not_found: "ไม่พบ"
-agent.status.detected: "ตรวจพบแล้ว"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - tool names and command, must run verbatim
 agent.install.running_winget: "กำลังเรียกใช้: winget install GitHub.Copilot"
 agent.install.launch_failed: "ไม่สามารถเปิด winget: %{error}"
@@ -115,25 +114,46 @@ agent.custom.auth_hint: "ตรวจสอบว่า %{name} ถูกติ�
 
 # ── Agents view (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "กำลังโหลด..."
-# {Locked="Enter","Shift+enter","Esc"} - key combinations, do not translate
-agents.footer_hint: "(↑ ↓ เลื่อนเลือก • Enter เพื่อเปิดเซสชันในแท็บใหม่ • Shift+enter เพื่อเปิดเซสชันในแผงเอเจนต์ • Esc เพื่อออก)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - key combinations, do not translate
+agents.footer_hint: "(↑ ↓ เลื่อนเลือก • Enter เพื่อเปิดเซสชัน • Esc เพื่อออก • F5 เพื่อรีเฟรช • / เพื่อค้นหา)"
 agents.status.active: "ใช้งานอยู่"
 agents.status.waiting_for_input: "รอข้อมูลป้อนเข้า"
 agents.status.error: "ข้อผิดพลาด"
 agents.status.idle: "ว่าง"
 
 # ── Layout welcome hint (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. แสดง/ซ่อนแผงเอเจนต์ • Ctrl+Alt+/ แสดง/ซ่อนเซสชันเอเจนต์)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. แสดง/ซ่อนแผงเอเจนต์ • Ctrl+Shift+/ แสดง/ซ่อนเซสชันเอเจนต์)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
 connection.starting: "กำลังเริ่มเอเจนต์..."
 connection.reconnecting: "กำลังเชื่อมต่อใหม่..."
+connection.connecting_activity: "กำลังเชื่อมต่อกับเอเจนต์…"
+connection.lost: "การเชื่อมต่อกับเอเจนต์ขาดหายไป พิมพ์ /restart เพื่อเชื่อมต่อใหม่"  # {Locked="/restart"}
 
 # ── System messages (src/app.rs) ────────────────────────────────────────────
+system.close_pane_hint: "กด Ctrl+C อีกครั้งเพื่อปิดแผง"  # {Locked="Ctrl+C"}
+system.selection_copied: "คัดลอกแล้ว"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "ยกเลิกแล้ว"
 system.no_prompt_in_flight: "ไม่มีพร้อมท์ที่กำลังดำเนินการ"
 system.authentication_failed: "การยืนยันตัวตนล้มเหลว"
-system.command_copied_retry: "คัดลอกคำสั่งแล้ว — เรียกใช้ในเทอร์มินัลอื่น แล้วกด Enter เพื่อลองอีกครั้ง"  # {Locked="Enter"}
+system.stopped_max_tokens: "การตอบกลับถูกตัดออกหลังจากถึงขีดจำกัดเอาต์พุตของโมเดล"
+system.stopped_max_turn_requests: "เอเจนต์หยุดลงหลังจากถึงขีดจำกัดคำขอสำหรับเทิร์นนี้"
+system.stopped_refusal: "เอเจนต์ปฏิเสธที่จะดำเนินการคำขอนี้ต่อ"
+system.agent_busy: "เอเจนต์กำลังทำงานอยู่ในแท็บนี้ — รอให้พรอมต์ปัจจุบันเสร็จก่อน"
+system.image_clipboard_empty: "ไม่มีรูปภาพในคลิปบอร์ดให้วาง"
+system.image_not_supported: "เอเจนต์นี้ไม่รองรับการป้อนรูปภาพ"
+system.image_pasted: "แนบรูปภาพแล้ว (%{label}) กด Enter เพื่อส่ง"  # {Locked="%{label}","Enter"}
+system.resuming_session: "กำลังดำเนินเซสชัน %{session_id} ต่อ..."
+system.unknown_command: "ไม่รู้จักคำสั่ง \"%{command}\" — ส่งเป็นพรอมต์แล้ว พิมพ์ /help เพื่อดูรายการ"  # {Locked="/help"}
+system.busy_use_stop: "รอให้พรอมต์ปัจจุบันเสร็จ หรือใช้ /stop ก่อน"  # {Locked="/stop"}
+system.cannot_focus_session: "ไม่สามารถโฟกัสเซสชัน %{session_id}: ดูเหมือนว่ายังทำงานอยู่ แต่ยังไม่ได้ผูก GUID ของแผง ลองอีกครั้งในอีกสักครู่"
+system.cannot_resume_no_load_session: "ไม่สามารถดำเนินการต่อในแผงเอเจนต์: %{agent} ไม่ได้ประกาศความสามารถ ACP `loadSession` กด Enter (โดยไม่กด Shift) เพื่อดำเนินการต่อในแผงเทอร์มินัลใหม่แทน"  # {Locked="ACP","loadSession","Enter","Shift"}
+system.cannot_resume_no_resume_flag: "ไม่สามารถดำเนินเซสชัน %{agent} ต่อ: เอเจนต์นี้ไม่มีแฟล็กแบบ `--resume` กด Shift+Enter เพื่อลองดำเนินการต่อภายในแผงเอเจนต์ผ่าน ACP แทน"  # {Locked="--resume","Shift","Enter","ACP"}
+system.cannot_resume_unknown_agent: "ไม่สามารถดำเนินเซสชัน %{session_id} ต่อ: ไม่รู้จักเอเจนต์ต้นทางในบิลด์นี้"
+system.cannot_resume_phantom_via_flag: "ไม่สามารถดำเนินเซสชัน %{agent} %{session_id} ต่อ: เซสชันนี้เริ่มแล้วแต่ไม่เคยมีการสนทนาสะสม ดังนั้น %{agent} เองจะปฏิเสธการดำเนินการต่อ กำลังลบแถว"
+system.cannot_resume_phantom_via_load: "ไม่สามารถดำเนินเซสชัน %{agent} %{session_id} ต่อ: เซสชันนี้เริ่มแล้วแต่ไม่เคยมีการสนทนาสะสม ดังนั้น %{agent} จะปฏิเสธการโหลด กำลังลบแถว"
+system.fallback.this_agent: "เอเจนต์นี้"
+system.fallback.connected_agent: "เอเจนต์ที่เชื่อมต่ออยู่"
 
 # ── Runtime CLI output (src/main.rs) ────────────────────────────────────────
 output.no_windows: "ไม่พบหน้าต่าง"
@@ -171,3 +191,45 @@ hooks.installed_but_disabled: "⚠ ติดตั้งแล้วแต่ถ
 hooks.not_installed: "✗ ยังไม่ได้ติดตั้ง"
 hooks.uninstall_skipped: "ข้ามแล้ว (CLI ไม่อยู่ใน PATH)"
 hooks.install_attempted: "พยายามติดตั้ง wt-agent-hooks แล้ว (idempotent) เรียกใช้ `wta hooks status` เพื่อตรวจสอบผลลัพธ์ ไฟล์บันทึก: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+
+# ── Relative time and date formatting ─────────────────────────────────────
+time.just_now: "เมื่อสักครู่"
+time.minute_singular: "%{count} นาทีที่แล้ว"
+time.minutes_other: "%{count} นาทีที่แล้ว"
+time.hour_singular: "%{count} ชั่วโมงที่แล้ว"
+time.hours_other: "%{count} ชั่วโมงที่แล้ว"
+time.day_singular: "%{count} วันที่แล้ว"
+time.days_other: "%{count} วันที่แล้ว"
+
+# ── Slash-command summaries (src/commands.rs) ─────────────────────────────
+# Command names (/help, /clear, etc.) stay English; descriptions translate.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "Show this command list"
+commands.clear.summary: "Clear the chat scrollback (keeps session)"
+commands.new.summary: "Start a fresh ACP session (drops history)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "Restart agent"
+commands.stop.summary: "Cancel the in-flight prompt"
+commands.sessions.summary: "Open the historical sessions picker (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "เลือกตัวแทนสำหรับแผงนี้ (/agent <id> เพื่อสลับโดยตรง)"  # {Locked="/agent","<id>"}
+
+# ── การดำเนินการคำแนะนำ (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "ตัวเลือก %{choice} ล้มเหลว: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "เลือกตัวแทน (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "ไม่พบ CLI ตัวแทนที่พร้อมใช้งานบนเครื่องนี้"  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "ไม่รู้จักหรือตัวแทนไม่พร้อมใช้งาน %{agent} — พิมพ์ /agent เพื่อดูรายการที่มีอยู่"  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "การสลับตัวแทนจะไม่พร้อมใช้งานภายนอกแท็บ Windows Terminal"
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "เลือกโมเดลสำหรับแผงนี้ (/model <id> เพื่อสลับโดยตรง)"  # {Locked="/model","<id>"}
+commands.move.summary: "ย้ายแผงเอเจนต์ของแท็บนี้ (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "เลือกโมเดล (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "เอเจนต์ที่เชื่อมต่ออยู่ไม่ได้ประกาศโมเดลที่เลือกได้"
+system.model_set: "ตั้งค่าโมเดลสำหรับแผงนี้เป็น %{model} แล้ว"  # {Locked="%{model}"}
+system.model_unknown: "ไม่รู้จักโมเดล %{model} — พิมพ์ /model เพื่อดูรายการที่มีอยู่"  # {Locked="%{model}","/model"}

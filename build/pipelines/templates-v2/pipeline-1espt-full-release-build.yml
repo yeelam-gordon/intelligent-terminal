@@ -78,6 +78,7 @@ extends:
     - 1ES.PT.ViaStartRight
     pool:
       name: SHINE-INT-L
+      demands: ImageOverride -equals SHINE-VS18-Latest
       os: windows
     sdl:
       tsa:
@@ -116,17 +117,21 @@ extends:
               removeAllNonSignedFiles: true # appease the overlords
               codeSign: ${{ parameters.codeSign }}
               signingIdentity: ${{ parameters.signingIdentity }}
-              beforeBuildSteps:
-                - template: ./build/pipelines/templates-v2/steps-setup-versioning.yml@self
-
-                - template: ./build/pipelines/templates-v2/steps-install-terrapin.yml@self
-
+              beforeRustBuildSteps:
+                # terminal-internals overlays the real telemetry header
+                # (src/inc/telemetry/ProjectTelemetry.h) that tools/wta/build.rs
+                # reads, so download it BEFORE the cargo build.
                 - task: UniversalPackages@0
                   displayName: Download terminal-internal Universal Package
                   inputs:
                     feedListDownload: 2b3f8893-a6e8-411f-b197-a9e05576da48
                     packageListDownload: e82d490c-af86-4733-9dc4-07b772033204
                     versionListDownload: ${{ parameters.terminalInternalPackageVersion }}
+                - template: ./build/pipelines/templates-v2/steps-setup-versioning.yml@self
+              beforeBuildSteps:
+                - template: ./build/pipelines/templates-v2/steps-install-terrapin.yml@self
+                  parameters:
+                    nugetFeed: "https://pkgs.dev.azure.com/microsoft/_packaging/WindowsTerminal/nuget/v3/index.json"
 
           - ${{ if eq(parameters.buildWPF, true) }}:
             # Add an Any CPU build flavor for the WPF control bits
@@ -149,9 +154,9 @@ extends:
                 removeAllNonSignedFiles: true # appease the overlords
                 codeSign: ${{ parameters.codeSign }}
                 signingIdentity: ${{ parameters.signingIdentity }}
-                beforeBuildSteps:
+                beforeRustBuildSteps:
                   - template: ./build/pipelines/templates-v2/steps-setup-versioning.yml@self
-                  # WPF doesn't need the localizations or the universal package, but if it does... put them here.
+                # WPF doesn't need the localizations or the universal package, but if it does... put them here.
 
       - stage: Package
         displayName: Package
@@ -162,6 +167,7 @@ extends:
               parameters:
                 pool:
                   name: SHINE-INT-S
+                  demands: ImageOverride -equals SHINE-VS18-Latest
                   os: windows
                 outerTemplateContext:
                   outputs:
@@ -182,6 +188,7 @@ extends:
               parameters:
                 pool:
                   name: SHINE-INT-S
+                  demands: ImageOverride -equals SHINE-VS18-Latest
                   os: windows
                 outerTemplateContext:
                   outputs:
@@ -200,6 +207,7 @@ extends:
               parameters:
                 pool:
                   name: SHINE-INT-S
+                  demands: ImageOverride -equals SHINE-VS18-Latest
                   os: windows
                 outerTemplateContext:
                   outputs:
@@ -224,6 +232,7 @@ extends:
             parameters:
               pool:
                 name: SHINE-INT-S
+                demands: ImageOverride -equals SHINE-VS18-Latest
                 os: windows
               includePublicSymbolServer: ${{ parameters.publishSymbolsToPublic }}
               symbolExpiryTime: ${{ parameters.symbolExpiryTime }}

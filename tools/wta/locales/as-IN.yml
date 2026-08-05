@@ -1,29 +1,23 @@
 # ছেটআপ স্ক্ৰীণ শিৰোনাম
-# {Locked="Intelligent Terminal"} - প্ৰডাক্টৰ নাম, অনুবাদ নকৰিব
-setup.title.first_run: "Intelligent Terminal লৈ স্বাগতম!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 setup.title.agent_missing: "এজেণ্ট পোৱা নগল"
 setup.title.agent_error: "এজেণ্ট সংযোগ বিফল হল"
-setup.title.switch_agent: "এজেণ্ট সলনি কৰক"
 setup.title.not_available: "এজেণ্ট উপলব্ধ নহয়"
 setup.title.sign_in: "চাইন ইন প্ৰয়োজন"
 
 # %{agent} ৰানটাইমত এজেণ্টৰ প্ৰদৰ্শন নামেৰে সলনি হয়।
-setup.subtitle.copilot_missing: "আপোনাৰ এজেণ্ট \"%{agent}\" ইনষ্টল কৰা হোৱা নাই। ইয়াক ইনষ্টল কৰিবলৈ তলৰ পদক্ষেপসমূহ অনুসৰণ কৰক। এজেণ্ট সলনি কৰিবলৈ Settings লৈ যাওক।"
-setup.subtitle.agent_missing: "আপোনাৰ এজেণ্ট \"%{agent}\" ইনষ্টল কৰা হোৱা নাই। অনুগ্ৰহ কৰি ইয়াক হাতেৰে পুনৰ ইনষ্টল কৰক, তাৰ পিছত পুনৰ চেষ্টা কৰক। এজেণ্ট সলনি কৰিবলৈ Settings লৈ যাওক।"
-setup.subtitle.copilot_auth: "আপোনাৰ এজেণ্ট \"%{agent}\" ৰ প্ৰমাণীকৰণ প্ৰয়োজন। চাইন ইন কৰিবলৈ তলৰ পদক্ষেপসমূহ অনুসৰণ কৰক। এজেণ্ট সলনি কৰিবলৈ Settings লৈ যাওক।"
-setup.subtitle.agent_auth: "আপোনাৰ এজেণ্ট \"%{agent}\" ৰ প্ৰমাণীকৰণ প্ৰয়োজন। অনুগ্ৰহ কৰি এজেণ্ট CLI ৰ জৰিয়তে চাইন ইন কৰক, তাৰ পিছত পুনৰ চেষ্টা কৰক। এজেণ্ট সলনি কৰিবলৈ Settings লৈ যাওক।"
+setup.subtitle.copilot_missing: "আপোনাৰ এজেণ্ট \"%{agent}\" ইনষ্টল কৰা হোৱা নাই। ইয়াক ইনষ্টল কৰিবলৈ তলৰ পদক্ষেপসমূহ অনুসৰণ কৰক। এজেণ্ট সলনি কৰিবলৈ ইন্টেলিজেন্ট টাৰ্মিনেল Settings > Agent লৈ যাওক।"
+setup.subtitle.agent_missing: "আপোনাৰ এজেণ্ট \"%{agent}\" ইনষ্টল কৰা হোৱা নাই। অনুগ্ৰহ কৰি ইয়াক হাতেৰে পুনৰ ইনষ্টল কৰক, তাৰ পিছত পুনৰ চেষ্টা কৰক। এজেণ্ট সলনি কৰিবলৈ ইন্টেলিজেন্ট টাৰ্মিনেল Settings > Agent লৈ যাওক।"
+setup.subtitle.copilot_auth: "আপোনাৰ এজেণ্ট \"%{agent}\" ৰ প্ৰমাণীকৰণ প্ৰয়োজন। চাইন ইন কৰিবলৈ তলৰ পদক্ষেপসমূহ অনুসৰণ কৰক। এজেণ্ট সলনি কৰিবলৈ ইন্টেলিজেন্ট টাৰ্মিনেল Settings > Agent লৈ যাওক।"
+setup.subtitle.agent_auth: "আপোনাৰ এজেণ্ট \"%{agent}\"-ৰ প্ৰমাণীকৰণৰ প্ৰয়োজন। অনুগ্ৰহ কৰি এজেণ্টৰ জৰিয়তে ছাইন ইন কৰক, তাৰ পিছত তলত \"মই চাইন ইন কৰিলোঁ\" নিৰ্বাচন কৰক। এজেণ্ট সলাবলৈ ইন্টেলিজেন্ট টাৰ্মিনেল Settings > Agent লৈ যাওক।"
 
-# {Locked="Intelligent Terminal"}
-setup.description.fre_line1: "Intelligent Terminal ত ব্যৱহাৰ কৰিবলৈ ডিফল্ট এজেণ্ট CLI বাছনি কৰক। আপুনি"
-setup.description.fre_line2: "আপোনাৰ ৱৰ্কস্পেচ কনফিগাৰ আৰু ছেটআপ কৰিবলৈ Settings লৈ যাব পাৰে।"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
 
-setup.option.reinstall: "%{agent} পুনৰ ইনষ্টল কৰক"
-setup.option.reinstall_hint: "(স্বয়ংক্ৰিয়ভাৱে ইনষ্টল হ'ব)"
+setup.option.install: "%{agent} ইনষ্টল কৰক"
+setup.option.install_hint: "(স্বয়ংক্ৰিয়ভাৱে ইনষ্টল হ'ব)"
 setup.option.signin: "%{agent} ত চাইন ইন কৰক"
-setup.option.retry_detection: "পুনৰ চিনাক্তকৰণ কৰক"
-setup.option.retry_auth: "মই চাইন ইন কৰিলোঁ — সংযোগ পুনৰ চেষ্টা কৰক"
-setup.option.retry_connection: "সংযোগ পুনৰ চেষ্টা কৰক"
-setup.option.switch_to: "%{agent} লৈ সলনি কৰক"
+setup.option.retry_detection: "পুনৰ চেষ্টা কৰক"
+setup.option.retry_auth: "মই চাইন ইন কৰিলোঁ — পুনৰ সংযোগ কৰিবলৈ চেষ্টা কৰক"
 setup.status.installing: "ইনষ্টল হৈ আছে..."
 setup.status.install_failed: "ইনষ্টল বিফল: "
 setup.status.installing_winget: " winget ৰ জৰিয়তে ইনষ্টল হৈ আছে..."
@@ -35,25 +29,33 @@ auth.agent_selected_with_status: "এজেণ্ট %{name} — "
 auth.checking_authentication: "  %{spinner} প্ৰমাণীকৰণ পৰীক্ষা কৰা হৈছে..."
 auth.waiting_for_authorization: "  %{spinner} অনুমোদনৰ বাবে অপেক্ষা কৰা হৈছে..."
 auth.code_copied_hint: "  ক'ড ক্লিপব'ৰ্ডলৈ কপি কৰা হৈছে — আপোনাৰ ব্ৰাউজাৰত পেষ্ট কৰক।"
-auth.sign_in_prompt: "আপোনাৰ এজেণ্ট ব্যৱহাৰ কৰিবলৈ চাইন ইন কৰক:"
+auth.device_code_prompt: "%{url} লৈ যাওক আৰু কোড প্ৰৱেশ কৰক: %{code}"  # Copilot device-flow sign-in progress; %{url} is the verification URL, %{code} is the device code
 auth.card_connect: "  এজেণ্ট বৈশিষ্ট্যসমূহ সক্ষম কৰিবলৈ %{name} সংযোগ কৰক"
-auth.button_sign_in_github: "[ GitHub ৰে চাইন ইন কৰক ]"  # {Locked="GitHub"}
-auth.button_sign_in_with: "[ %{name} ৰে চাইন ইন কৰক ]"
-auth.hint_footer: "  চাইন ইনৰ বাবে Enter টিপক, উভতি যাবলৈ Esc টিপক"  # {Locked="Enter","Esc"}
+auth.enterprise_prompt: "  ছাইন ইন কৰিবলৈ Enter · GitHub Enterprise ৰ বাবে E · উভতি যাবলৈ Esc"  # {Locked="Enter","E","Esc"}
+auth.enterprise_domain_label: "  Enterprise ড'মেইন: "
+auth.enterprise_hint_footer: "  ছাইন ইন কৰিবলৈ Enter · github.com ৰ বাবে Esc"  # {Locked="Enter","Esc","github.com"}
+auth.login_failed_help_enterprise: "  পুনৰ চেষ্টা কৰিবলৈ Enter টিপক, বা github.com ৰ বাবে Esc. সাধাৰণ কাৰণ: ভুলকৈ টাইপ কৰা বা পোৱা নাযোৱা ড'মেইন, মেয়াদ উকলি যোৱা ক'ড, বা সেই হ'ষ্টত Copilot অভিগম নথকা."  # {Locked="Enter","Esc","github.com","Copilot"}
+auth.login_failed_help_default: "  পুনৰ চেষ্টা কৰিবলৈ Enter টিপক, বা উভতি যাবলৈ Esc."  # {Locked="Enter","Esc"}
 
 # ── চাট দৃশ্য (src/ui/chat.rs) ──────────────────────────────────────────────
 chat.activity_thinking: "চিন্তা কৰি আছে…"
-# {Locked="Intelligent Terminal"} - প্ৰডাক্টৰ নাম, অনুবাদ নকৰিব
-chat.welcome_title: "Intelligent Terminal লৈ স্বাগতম!"
+# {Locked=qps-ploc,qps-ploca,qps-plocm}
+chat.welcome_title: "ইন্টেলিজেন্ট টাৰ্মিনেল লৈ স্বাগতম!"
+chat.welcome_disclaimer: "ইন্টেলিজেন্ট টাৰ্মিনেল-এ AI ব্যৱহাৰ কৰে। ভুলৰ বাবে পৰীক্ষা কৰক।"
 chat.plan_header: "পৰিকল্পনা:"
 chat.plan_marker_completed: "[x]"  # {Locked}
 chat.plan_marker_in_progress: "[>]"  # {Locked}
 chat.plan_marker_pending: "[ ]"  # {Locked}
+chat.autofix_prompt_label: "শেহতীয়া আদেশ বিফলতা স্বয়ংক্ৰিয়ভাৱে নিৰ্ণয় কৰা হৈছে"
+chat.turn_canceled: "(বাতিল কৰা হৈছে)"
+chat.turn_executed: "→ সম্পাদন কৰা হ’ল: %{title}"
 
 # ── ইনপুট প্লেচহ'ল্ডাৰ (src/ui/input.rs) ────────────────────────────────────
 input.placeholder.connected: "যিকোনো কথা সুধিব, / কমাণ্ডৰ বাবে.."  # {Locked="/"}
 input.placeholder.connecting: "সংযোগ হৈ আছে..."
 input.placeholder.disconnected: "বিচ্ছিন্ন"
+# Summary of attached images; keep 📎 and %{items} verbatim.
+input.image_attachments: "📎 ছবিসমূহ: %{items}"  # {Locked="📎","%{items}"}
 
 # ── অপেক্ষাৰত প্ৰম্প্ট শাৰী (src/ui/queued_hint.rs, src/app.rs) ───────────────
 # এটা বা ততোধিক প্ৰম্প্ট শাৰীত থাকিলে আৰু এজেণ্টৰ বৰ্তমান টাৰ্ন শেষ হোৱাৰ বাবে
@@ -76,9 +78,22 @@ commands.help_header: "শ্লেশ কমাণ্ড — ইনপুট �
 commands.help_escape_hint: "  //text     আক্ষৰিক '/' পঠিয়াওক (কমাণ্ড পাৰ্ছাৰ এস্কেপ কৰে)"  # {Locked="//text","/"}
 commands.help_close_hint: "  Esc        এই সহায় বন্ধ কৰক"  # {Locked="Esc"}
 
+# Slash-command summaries shown in the popup and /help overlay.
+# Command names (/help, /clear, /new, /restart, /stop, /sessions) stay in
+# English. Only the descriptions are localized.
+# {Locked="ACP","Ctrl+Shift+/"} - protocol name and shortcut, do not translate
+commands.help.summary: "এই কমাণ্ড তালিকাখন দেখুৱাওক"
+commands.clear.summary: "চেট স্ক্ৰলবেক পৰিষ্কাৰ কৰক (ছেশ্যন ৰাখে)"
+commands.new.summary: "নতুন ACP ছেশ্যন আৰম্ভ কৰক (ইতিহাস আঁতৰায়)"  # {Locked="ACP"}
+commands.fix.summary: "Diagnose the active terminal and suggest a fix (/fix <hint>)"  # {Locked="/fix","<hint>"}
+commands.restart.summary: "এজেণ্ট পুনৰাৰম্ভ কৰক"
+commands.stop.summary: "চলি থকা প্ৰম্প্ট বাতিল কৰক"
+commands.sessions.summary: "ঐতিহাসিক ছেশ্যন পিকাৰ খোলক (Ctrl+Shift+/)"  # {Locked="Ctrl+Shift+/"}
+commands.agent.summary: "এই পেনৰ বাবে এজেণ্ট বাছনি কৰক (পোনপটীয়াকৈ সলাবলৈ /agent <id>)"  # {Locked="/agent","<id>"}
+
 # ── পৰামৰ্শ পেনেল (src/ui/recommendations.rs) ───────────────────────────────
-# {Locked="Enter","Esc","↵"} - কী নাম আৰু Return-কী গ্লিফ, অনুবাদ নকৰিব
-recommendations.nav_hint: "(↑ ↓ নেভিগেট কৰক • Enter বাছনি কৰক • Esc বাতিল কৰক)"
+# {Locked="Enter","Esc","↵","↑","↓","←","→"} - কী নাম আৰু Return-কী গ্লিফ, অনুবাদ নকৰিব
+recommendations.nav_hint: "(↑ ↓ নেভিগেট কৰিবলৈ • ← → বুটাম সলাবলৈ • Enter বাছনি কৰিবলৈ • Esc বাতিল কৰিবলৈ)"
 recommendations.button_run_command: "[ কমাণ্ড চলাওক ]"
 recommendations.button_insert_in_terminal: "টাৰ্মিনেলত সন্নিবেশ কৰক"
 recommendations.button_open_in_new_tab: "নতুন টেবত খোলক ↵"
@@ -102,9 +117,7 @@ permission.compact.prefix: "[!] "  # {Locked}
 permission.compact.hint: "[Y/N উত্তৰ দিয়ক · সম্পূৰ্ণ কাৰ্ড চাবলৈ আকাৰ সলনি কৰক]"  # {Locked="Y/N"}
 
 # ── এজেণ্ট স্থিতি (src/agent_check.rs) ───────────────────────────────────────
-agent.status.not_installed_auto: "ইনষ্টল কৰা হোৱা নাই — স্বয়ংক্ৰিয়ভাৱে ইনষ্টল কৰিবলৈ বাছনি কৰক"
 agent.status.not_found: "পোৱা নগল"
-agent.status.detected: "চিনাক্ত হৈছে"
 # {Locked="winget","GitHub.Copilot","GitHub","Copilot"} - সঁজুলিৰ নাম আৰু কমাণ্ড, যথাস্থিতি চলাব লাগিব
 agent.install.running_winget: "চলি আছে: winget install GitHub.Copilot"
 agent.install.launch_failed: "winget আৰম্ভ কৰাত বিফল: %{error}"
@@ -115,25 +128,47 @@ agent.custom.auth_hint: "%{name} ইনষ্টল কৰা হৈছে আ�
 
 # ── এজেণ্ট দৃশ্য (src/ui/agents_view.rs) ─────────────────────────────────────
 agents.loading: "ল'ড হৈ আছে..."
-# {Locked="Enter","Shift+enter","Esc"} - কী সংমিশ্ৰণ, অনুবাদ নকৰিব
-agents.footer_hint: "(↑ ↓ নেভিগেট কৰক • Enter নতুন টেবত ছেশ্বন আৰম্ভ কৰক • Shift+enter এজেণ্ট পেনত ছেশ্বন আৰম্ভ কৰক • Esc ওলাই যাওক)"
+# {Locked="Enter","Esc","F5","↑","↓","/"} - কী সংমিশ্ৰণ, অনুবাদ নকৰিব
+agents.footer_hint: "(↑ ↓ নেভিগেট কৰক • Enter ছেশ্বন আৰম্ভ কৰক • Esc ওলাই যাওক • F5 ৰিফ্ৰেশ কৰক • / সন্ধান কৰক)"
 agents.status.active: "সক্ৰিয়"
 agents.status.waiting_for_input: "ইনপুটৰ বাবে অপেক্ষা"
 agents.status.error: "ত্ৰুটি"
 agents.status.idle: "নিষ্ক্ৰিয়"
 
 # ── লেআউট স্বাগতম সংকেত (src/ui/layout.rs) ──────────────────────────────────
-layout.welcome_hint: "  (Ctrl+Shift+. এজেণ্ট পেন দেখুৱাওক/লুকুৱাওক • Ctrl+Alt+/ এজেণ্ট ছেশ্বন দেখুৱাওক/লুকুৱাওক)"  # {Locked="Ctrl+Shift+.","Ctrl+Alt+/"}
+layout.welcome_hint: "  (Ctrl+Shift+. এজেণ্ট পেন দেখুৱাওক/লুকুৱাওক • Ctrl+Shift+/ এজেণ্ট ছেশ্বন দেখুৱাওক/লুকুৱাওক)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── সংযোগ স্থিতি ────────────────────────────────────────────────────────
 connection.starting: "এজেণ্ট আৰম্ভ হৈ আছে..."
 connection.reconnecting: "পুনৰ সংযোগ হৈ আছে..."
+connection.connecting_activity: "এজেণ্টলৈ সংযোগ হৈ আছে…"
+connection.lost: "এজেণ্টৰ সৈতে সংযোগ হেৰাই গ'ল। পুনৰ সংযোগ কৰিবলৈ /restart টাইপ কৰক।"  # {Locked="/restart"}
 
 # ── ছিষ্টেম বাৰ্তা (src/app.rs) ────────────────────────────────────────────────
+system.close_pane_hint: "পেন বন্ধ কৰিবলৈ Ctrl+C আকৌ টিপক"  # {Locked="Ctrl+C"}
+system.selection_copied: "কপি কৰা হৈছে"  # Brief hint shown after selected terminal text is copied
 system.cancelled: "বাতিল কৰা হৈছে।"
 system.no_prompt_in_flight: "প্ৰগতিত কোনো প্ৰমপ্ট নাই।"
 system.authentication_failed: "প্ৰমাণীকৰণ বিফল"
-system.command_copied_retry: "কমাণ্ড কপি কৰা হৈছে — ইয়াক আন এটা টাৰ্মিনেলত চলাওক, তাৰ পিছত পুনৰ চেষ্টাৰ বাবে Enter টিপক"  # {Locked="Enter"}
+system.stopped_max_tokens: "মডেলৰ আউটপুট সীমাত উপনীত হোৱাৰ পিছত প্ৰতিক্ৰিয়াটো কাটি পেলোৱা হ’ল।"
+system.stopped_max_turn_requests: "এই পালিৰ বাবে অনুৰোধ সীমাত উপনীত হোৱাৰ পিছত এজেণ্টটো বন্ধ হ’ল।"
+system.stopped_refusal: "এজেণ্টে এই অনুৰোধটো আগবঢ়াই নিয়াত অমান্তি হ’ল।"
+system.agent_busy: "এই টেবত Agent ব্যস্ত — বৰ্তমানৰ প্ৰম্প্ট শেষ হোৱালৈ অপেক্ষা কৰক।"
+# Image paste messages; "agent" refers to an AI agent. Keep Enter and %{label} verbatim.
+system.image_clipboard_empty: "পেষ্ট কৰিবলৈ ক্লিপব’ৰ্ডত কোনো ছবি নাই।"
+system.image_not_supported: "এই এজেণ্টে ছবি ইনপুট সমৰ্থন নকৰে।"
+system.image_pasted: "ছবি সংযুক্ত কৰা হৈছে (%{label})। পঠিয়াবলৈ Enter টিপক।"  # {Locked="%{label}","Enter"}
+system.resuming_session: "সত্ৰ %{session_id} পুনৰাৰম্ভ কৰা হৈছে..."
+system.unknown_command: "অজানা কমাণ্ড \"%{command}\" — প্ৰম্প্ট হিচাপে পঠিওৱা হ'ল। তালিকাৰ বাবে /help টাইপ কৰক।"  # {Locked="/help"} — slash-command name.
+system.busy_use_stop: "বৰ্তমানৰ প্ৰম্প্ট শেষ হোৱালৈ অপেক্ষা কৰক, অথবা আগতে /stop কৰক।"  # {Locked="/stop"} — slash-command name.
+system.cannot_focus_session: "সত্ৰ %{session_id} ফোকাচ কৰিব নোৱাৰি: ই live যেন লাগে কিন্তু এতিয়াও কোনো pane GUID বান্ধা হোৱা নাই। অলপ পাছত পুনৰ চেষ্টা কৰক।"
+system.cannot_resume_no_load_session: "agent pane-ত পুনৰাৰম্ভ কৰিব নোৱাৰি: %{agent}-এ ACP `loadSession` ক্ষমতা ঘোষণা কৰা নাই। তাৰ সলনি নতুন terminal pane-ত পুনৰাৰম্ভ কৰিবলৈ Enter (Shift নোহোৱাকৈ) টিপক।"  # {Locked="ACP","loadSession","Enter","Shift"} — protocol/UI terms.
+system.cannot_resume_no_resume_flag: "%{agent} সত্ৰ পুনৰাৰম্ভ কৰিব নোৱাৰি: এই agent-ৰ `--resume`-ধৰণৰ flag নাই। তাৰ সলনি ACP-ৰ জৰিয়তে agent pane-ৰ ভিতৰত পুনৰাৰম্ভ কৰিবলৈ Shift+Enter টিপি চেষ্টা কৰক।"  # {Locked="--resume","Shift","Enter","ACP"} — flag and UI terms.
+system.cannot_resume_unknown_agent: "সত্ৰ %{session_id} পুনৰাৰম্ভ কৰিব নোৱাৰি: ইয়াৰ উৎস agent এই WTA build-ৰ বাবে অজানা।"
+system.cannot_resume_phantom_via_flag: "%{agent} সত্ৰ %{session_id} পুনৰাৰম্ভ কৰিব নোৱাৰি: ই আৰম্ভ হৈছিল কিন্তু কোনো কথোপকথন সঞ্চিত হোৱা নাই, সেয়ে %{agent} নিজেই resume নাকচ কৰিব। শাৰী আঁতৰোৱা হৈছে।"
+system.cannot_resume_phantom_via_load: "%{agent} সত্ৰ %{session_id} পুনৰাৰম্ভ কৰিব নোৱাৰি: ই আৰম্ভ হৈছিল কিন্তু কোনো কথোপকথন সঞ্চিত হোৱা নাই, সেয়ে %{agent}-এ load নাকচ কৰিব। শাৰী আঁতৰোৱা হৈছে।"
+system.fallback.this_agent: "এই agent"
+system.fallback.connected_agent: "সংযুক্ত agent"
 
 # ── ৰানটাইম CLI আউটপুট (src/main.rs) ────────────────────────────────────────
 output.no_windows: "কোনো উইণ্ড' পোৱা নগল।"
@@ -171,3 +206,33 @@ hooks.installed_but_disabled: "⚠ ইনষ্টল কৰা হৈছে ক
 hooks.not_installed: "✗ ইনষ্টল কৰা হোৱা নাই"
 hooks.uninstall_skipped: "এৰি দিয়া হৈছে (CLI PATH ত নাই)"
 hooks.install_attempted: "wt-agent-hooks ইনষ্টল চেষ্টা কৰা হৈছে (আইডেম্পটেণ্ট)। ফলাফল পৰীক্ষা কৰিবলৈ `wta hooks status` চলাওক। ট্ৰেচ লগ: %LOCALAPPDATA%\\IntelligentTerminal\\logs\\wta-install-hooks.log"
+
+# ── Relative time and date formatting ─────────────────────────────────────
+time.just_now: "এতিয়াই"
+time.minute_singular: "%{count} মিনিট আগতে"
+time.minutes_other: "%{count} মিনিট আগতে"
+time.hour_singular: "%{count} ঘণ্টা আগতে"
+time.hours_other: "%{count} ঘণ্টা আগতে"
+time.day_singular: "%{count} দিন আগতে"
+time.days_other: "%{count} দিন আগতে"
+
+# ── পৰামৰ্শ কাৰ্যকৰকৰণ (src/coordinator.rs) ───────────────────────────
+system.choice_execution_failed: "পছন্দ %{choice} ব্যৰ্থ হ'ল: %{error}"
+
+# ── Agent picker (src/ui/agent_popup.rs) ────────────────────────────────────
+# {Locked="↑","↓","Enter","Esc"} - key names, do not translate
+agent_picker.title: "এজেণ্ট বাছনি কৰক (↑ ↓ • Enter • Esc)"  # Agent means an AI coding agent
+# Shown when no policy-allowed AI agent CLI is installed on the machine.
+system.no_agents: "এই মেচিনত কোনো উপলব্ধ এজেণ্ট CLI পোৱা নগ’ল।"  # {Locked="CLI"}
+# {agent} is the unrecognized text the user typed after /agent.
+system.agent_unknown: "অজ্ঞাত এজেণ্ট %{agent} — উপলব্ধ তালিকা চাবলৈ /agent টাইপ কৰক।"  # {Locked="/agent"}
+# Shown only when /agent is used outside a Windows Terminal-owned agent pane.
+system.agent_switch_unavailable: "উইণ্ড’জ টাৰ্মিনেল টেবৰ বাহিৰত এজেণ্ট সলনি কৰা উপলব্ধ নহয়।"
+
+# ── Model picker (/model) ───────────────────────────────────────────────────
+commands.model.summary: "এই পেনৰ বাবে মডেল বাছনি কৰক (পোনপটীয়াকৈ সলাবলৈ /model <id>)"  # {Locked="/model","<id>"}
+commands.move.summary: "এই টেবৰ এজেণ্ট পেন স্থানান্তৰ কৰক (/move <position>)"  # {Locked="/move","<position>"}
+model_picker.title: "মডেল বাছনি কৰক (↑ ↓ • Enter • Esc)"  # {Locked="↑","↓","Enter","Esc"}
+system.no_models: "সংযুক্ত এজেণ্টে কোনো বাছনিযোগ্য মডেল ঘোষণা কৰা নাই।"
+system.model_set: "এই পেনৰ বাবে মডেল %{model} লৈ ছেট কৰা হ'ল।"  # {Locked="%{model}"}
+system.model_unknown: "অজ্ঞাত মডেল %{model} — উপলব্ধ তালিকা চাবলৈ /model টাইপ কৰক।"  # {Locked="%{model}","/model"}
