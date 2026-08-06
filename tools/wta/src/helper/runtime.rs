@@ -479,11 +479,12 @@ async fn run_acp_app(
             // kills the agent child process, drops the connection, and
             // respawns from scratch. State is cleaned up on both sides.
             let (restart_tx, restart_rx) = tokio::sync::mpsc::unbounded_channel();
-            // reset_tab_session channel: App emits a DropSessionRequest when
-            // WT tells us to release a tab's binding (Ctrl+C×2 hide path).
-            // ACP client removes the SessionId from tab_to_session and
-            // cancels any in-flight prompt for it; the next prompt on that
-            // tab lazily creates a fresh session.
+            // reset_tab_session channel: App emits a tab-targeted
+            // DropSessionRequest when WT tells us to release a tab's binding
+            // (Ctrl+C×2 hide path). Stale lazy attachments use an exact
+            // session target so a tab rekey cannot leave them behind. The ACP
+            // client cancels in-flight prompts; the next tab prompt lazily
+            // creates a fresh session.
             let (drop_session_tx, drop_session_rx) = tokio::sync::mpsc::unbounded_channel();
             // tab-drag rename channel: App emits a RenameSessionRequest when
             // WT mints a new stable tab id for an existing tab (cross-window

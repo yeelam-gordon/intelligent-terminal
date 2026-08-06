@@ -256,19 +256,23 @@ pub struct LoadSessionForTab {
     pub cwd: Option<String>,
 }
 
-/// Drop the ACP session binding for a tab WITHOUT immediately creating a
-/// replacement. Emitted by the Ctrl+C×2 close-pane path when the agent
-/// pane is being hidden on a tab while other tabs still need it: we
-/// release this tab's SessionId so the next prompt on this tab lazily
-/// spawns a fresh session (handled by [`dispatch_prompt_body`]'s
-/// lazy-create branch).
+/// Drop an ACP session binding WITHOUT immediately creating a replacement.
+///
+/// Tab-targeted drops release whichever session is currently bound to the
+/// tab, preserving the Ctrl+C×2 and tab-close behavior. Session-targeted
+/// drops release one exact ACP session, including every tab binding that
+/// points at it. The latter is required for stale lazy attachments: their
+/// source tab may have been renamed or rebound before the attachment arrives.
 ///
 /// Distinct from [`NewSessionForTab`], which atomically swaps in a new
 /// session — we don't want to pay the new_session round-trip until the
 /// user actually sends a prompt.
-#[derive(Debug, Clone)]
-pub struct DropSessionRequest {
-    pub tab_id: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DropSessionRequest {
+    /// Release the session currently bound to this tab.
+    Tab { tab_id: String },
+    /// Release this exact ACP session, regardless of its current tab binding.
+    Session { session_id: String },
 }
 
 /// Rekey the `tab_to_session` binding when WT mints a new stable tab id
@@ -3018,11 +3022,15 @@ fn dispatch_new_session(
     });
 }
 
-/// Drop a tab's ACP session binding without creating a replacement
-/// (Ctrl+C×2 close-pane path). Signals any in-flight prompt for that
-/// session to bail out of `conn.prompt().await`, forgets its template
-/// memo, and best-effort notifies the agent via `session/cancel`.
-/// No-op when the tab holds no session. Called by
+/// Drop an ACP session binding without creating a replacement. Tab targets
+/// retain the Ctrl+C×2 close-pane behavior; session targets clean stale lazy
+/// attachments after their tab has been renamed, rebound, or removed.
+///
+/// The resolved session is removed from every `tab_to_session` entry that
+/// owns it, then its in-flight prompt is cancelled, its template memo is
+/// forgotten, and the agent receives a best-effort `session/cancel`.
+/// A missing tab target is a no-op, while a session target still performs
+/// cleanup even if it no longer has a tab binding. Called by
 /// `run_acp_client_over_pipe`.
 fn dispatch_drop_session(
     req: DropSessionRequest,
@@ -3031,26 +3039,52 @@ fn dispatch_drop_session(
     template_memo: &TemplateMemo,
     cancel_signals: &CancelSignals,
 ) {
-    tracing::info!(
-        target: "acp_drop_session",
-        tab = %req.tab_id,
-        "drop_session requested (no replacement)"
-    );
+    match &req {
+        DropSessionRequest::Tab { tab_id } => tracing::info!(
+            target: "acp_drop_session",
+            tab_id = %tab_id,
+            "tab-targeted drop_session requested (no replacement)"
+        ),
+        DropSessionRequest::Session { session_id } => tracing::info!(
+            target: "acp_drop_session",
+            session_id = %session_id,
+            "session-targeted drop_session requested (no replacement)"
+        ),
+    }
     let conn = conn.clone();
     let tab_to_session = Arc::clone(tab_to_session);
     let template_memo = template_memo.clone();
     let cancel_signals = Arc::clone(cancel_signals);
     tokio::task::spawn_local(async move {
-        let old_sid: Option<acp::schema::v1::SessionId> = {
+        let (old_sid, bindings_removed) = {
             let mut g = tab_to_session.lock().await;
-            g.remove(&req.tab_id)
+            let session_id = match req {
+                DropSessionRequest::Tab { tab_id } => g.get(&tab_id).cloned(),
+                DropSessionRequest::Session { session_id } => {
+                    Some(acp::schema::v1::SessionId::new(session_id))
+                }
+            };
+            let bindings_removed = session_id
+                .as_ref()
+                .map(|session_id| {
+                    let count = g
+                        .values()
+                        .filter(|bound_session_id| *bound_session_id == session_id)
+                        .count();
+                    g.retain(|_, bound_session_id| bound_session_id != session_id);
+                    count
+                })
+                .unwrap_or_default();
+            (session_id, bindings_removed)
         };
         if let Some(old) = old_sid {
-            // Signal any in-flight prompt for this session to bail out of
-            // conn.prompt().await immediately, then send a session/cancel
-            // to the agent. Mirrors the new_session cancel path, minus the
-            // new_session round-trip.
             let old_str = old.to_string();
+            tracing::info!(
+                target: "acp_drop_session",
+                session_id = %old_str,
+                bindings_removed,
+                "dropping session: forgetting memo and cancelling in-flight prompts"
+            );
             crate::protocol::acp::model_select::forget_session(&old_str);
             template_memo.forget(&old_str).await;
             cancel_signals_for_session(&cancel_signals, &old_str);
@@ -3060,7 +3094,8 @@ fn dispatch_drop_session(
             {
                 tracing::warn!(
                     target: "acp_drop_session",
-                    tab = %req.tab_id,
+                    session_id = %old_str,
+                    bindings_removed,
                     error = ?e,
                     "session/cancel after drop failed (likely unsupported)"
                 );

@@ -5099,7 +5099,7 @@ impl App {
         // behind on the CLI side — `tab_sessions` and `session_to_tab`
         // are cleaned above but the ACP layer's own `tab_to_session`
         // map and the agent's session state are not.
-        let _ = self.drop_session_tx.send(DropSessionRequest {
+        let _ = self.drop_session_tx.send(DropSessionRequest::Tab {
             tab_id: closed_tab_id.to_string(),
         });
 
@@ -5315,7 +5315,7 @@ impl App {
         self.session_to_tab.retain(|_, t| t != tab_id);
 
         // Ask the ACP client task to release the binding for this tab.
-        let _ = self.drop_session_tx.send(DropSessionRequest {
+        let _ = self.drop_session_tx.send(DropSessionRequest::Tab {
             tab_id: tab_id.to_string(),
         });
 

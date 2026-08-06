@@ -255,8 +255,8 @@ impl App {
                             prompt_id,
                             "dropping obsolete lazy session attachment"
                         );
-                        let _ = self.drop_session_tx.send(DropSessionRequest {
-                            tab_id: tab_id.clone(),
+                        let _ = self.drop_session_tx.send(DropSessionRequest::Session {
+                            session_id: session_id.clone(),
                         });
                         return;
                     };

@@ -88,6 +88,42 @@ pub(super) fn test_app_with_prompt_rx() -> (
     (app, prompt_rx)
 }
 
+/// Test app plus its drop receiver, for stale-attachment tests that must
+/// assert the exact cleanup target sent to the ACP client.
+fn test_app_with_drop_session_rx() -> (
+    App,
+    tokio::sync::mpsc::UnboundedReceiver<crate::protocol::acp::client::DropSessionRequest>,
+) {
+    let (prompt_tx, _prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (recommendation_tx, _recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (permission_tx, _permission_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (cancel_tx, _cancel_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (new_session_tx, _new_session_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (load_session_tx, _load_session_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (drop_session_tx, drop_session_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (rename_session_tx, _rename_session_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (restart_tx, _restart_rx) = tokio::sync::mpsc::unbounded_channel();
+    let debug_capture = Arc::new(AtomicBool::new(false));
+    let (master_tx, _master_rx) = tokio::sync::mpsc::unbounded_channel();
+    let app = App::new(
+        prompt_tx,
+        recommendation_tx,
+        permission_tx,
+        cancel_tx,
+        new_session_tx,
+        load_session_tx,
+        drop_session_tx,
+        rename_session_tx,
+        restart_tx,
+        master_tx,
+        debug_capture,
+        true,
+        false,
+        Arc::new(crate::shell::ShellManager::new()),
+    );
+    (app, drop_session_rx)
+}
+
 fn agent_paste_params(window_id: &str, tab_id: &str) -> serde_json::Value {
     json!({
         "window_id": window_id,
@@ -1330,8 +1366,8 @@ fn load_session_passes_through_when_owner_tab_id_unset() {
 // ─── SessionAttached load-target gating (Plan-C race fix) ───────────────
 
 #[test]
-fn cancelled_prompt_rejects_its_late_lazy_session_attachment() {
-    let mut app = test_app();
+fn cancelled_prompt_rejects_its_late_lazy_session_attachment_with_session_drop() {
+    let (mut app, mut drop_session_rx) = test_app_with_drop_session_rx();
     app.current_tab_mut().turn = TurnState::Submitted(SubmittedPrompt {
         id: 41,
         text: "cancel me".into(),
@@ -1351,6 +1387,15 @@ fn cancelled_prompt_rejects_its_late_lazy_session_attachment() {
 
     assert!(app.current_tab().session_id.is_none());
     assert!(!app.session_to_tab.contains_key("obsolete-session"));
+    assert_eq!(
+        drop_session_rx
+            .try_recv()
+            .expect("stale attachment must trigger ACP cleanup"),
+        crate::protocol::acp::client::DropSessionRequest::Session {
+            session_id: "obsolete-session".to_string(),
+        },
+        "stale lazy attachments must clean up by immutable session id, not tab id"
+    );
 }
 
 /// After a load_session sets the replay window open, an unrelated

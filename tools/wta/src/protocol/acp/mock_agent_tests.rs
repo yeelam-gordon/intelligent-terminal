@@ -1355,10 +1355,10 @@ async fn dispatch_prompt_drops_a_pre_attach_cancel_before_session_creation() {
         .await;
 }
 
-/// `dispatch_drop_session` must unbind the tab's session, fire its in-flight
-/// cancel signal, and be a no-op for a tab that holds no session.
+/// A tab-targeted `dispatch_drop_session` must unbind the tab's session, fire
+/// its in-flight cancel signal, and be a no-op for a tab that holds no session.
 #[tokio::test]
-async fn dispatch_drop_session_unbinds_and_fires_cancel_then_ignores_missing() {
+async fn dispatch_tab_session_drop_unbinds_and_fires_cancel_then_ignores_missing() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -1385,7 +1385,7 @@ async fn dispatch_drop_session_unbinds_and_fires_cancel_then_ignores_missing() {
                 );
 
             dispatch_drop_session(
-                DropSessionRequest {
+                DropSessionRequest::Tab {
                     tab_id: "t1".to_string(),
                 },
                 &h.conn,
@@ -1415,7 +1415,7 @@ async fn dispatch_drop_session_unbinds_and_fires_cancel_then_ignores_missing() {
 
             // No-op: dropping an unbound tab leaves the map empty, no panic.
             dispatch_drop_session(
-                DropSessionRequest {
+                DropSessionRequest::Tab {
                     tab_id: "unbound".to_string(),
                 },
                 &h.conn,
@@ -1427,6 +1427,149 @@ async fn dispatch_drop_session_unbinds_and_fires_cancel_then_ignores_missing() {
                 tokio::task::yield_now().await;
             }
             assert!(tab_to_session.lock().await.is_empty());
+        })
+        .await;
+}
+
+/// A session-targeted drop must survive a tab rekey and clear every stale
+/// binding for that exact session without disturbing a different session.
+#[tokio::test]
+async fn dispatch_session_drop_after_rekey_removes_owned_bindings_and_cancels() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let h = connect_for_dispatch(MockBehavior::Reply);
+            let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
+            let memo = TemplateMemo::default();
+            let stale_sid = acp::schema::v1::SessionId::new("sess-stale");
+            let unrelated_sid = acp::schema::v1::SessionId::new("sess-unrelated");
+
+            tab_to_session
+                .lock()
+                .await
+                .insert("old-tab".to_string(), stale_sid.clone());
+            dispatch_rename_session(
+                RenameSessionRequest {
+                    old_tab_id: "old-tab".to_string(),
+                    new_tab_id: "new-tab".to_string(),
+                },
+                &tab_to_session,
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if tab_to_session.lock().await.get("new-tab") == Some(&stale_sid) {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("rekey must complete before the session-targeted drop");
+
+            {
+                let mut bindings = tab_to_session.lock().await;
+                bindings.insert("stale-alias".to_string(), stale_sid.clone());
+                bindings.insert("unrelated-tab".to_string(), unrelated_sid.clone());
+            }
+            let (stale_tx, stale_rx) = oneshot::channel::<()>();
+            cancel_signals.lock().unwrap().insert(
+                91,
+                CancelSignal {
+                    session_id: Some(stale_sid.to_string()),
+                    sender: stale_tx,
+                },
+            );
+
+            dispatch_drop_session(
+                DropSessionRequest::Session {
+                    session_id: stale_sid.to_string(),
+                },
+                &h.conn,
+                &tab_to_session,
+                &memo,
+                &cancel_signals,
+            );
+
+            tokio::time::timeout(std::time::Duration::from_secs(5), stale_rx)
+                .await
+                .expect("session-targeted drop must cancel the stale in-flight prompt")
+                .expect("stale cancel sender must fire");
+            let bindings = tab_to_session.lock().await;
+            assert!(
+                !bindings.contains_key("new-tab") && !bindings.contains_key("stale-alias"),
+                "all bindings owned by the stale session must be removed after rekey"
+            );
+            assert_eq!(
+                bindings.get("unrelated-tab"),
+                Some(&unrelated_sid),
+                "session-targeted drop must preserve unrelated bindings"
+            );
+        })
+        .await;
+}
+
+/// An unmatched stale session drop still performs cleanup for that session
+/// but must not remove a newer binding or cancel its in-flight prompt.
+#[tokio::test]
+async fn dispatch_unmatched_session_drop_preserves_newer_unrelated_state() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let h = connect_for_dispatch(MockBehavior::Reply);
+            let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
+            let memo = TemplateMemo::default();
+            let stale_sid = acp::schema::v1::SessionId::new("sess-stale");
+            let newer_sid = acp::schema::v1::SessionId::new("sess-newer");
+            tab_to_session
+                .lock()
+                .await
+                .insert("rekeyed-tab".to_string(), newer_sid.clone());
+
+            let (stale_tx, stale_rx) = oneshot::channel::<()>();
+            let (newer_tx, _newer_rx) = oneshot::channel::<()>();
+            {
+                let mut signals = cancel_signals.lock().unwrap();
+                signals.insert(
+                    101,
+                    CancelSignal {
+                        session_id: Some(stale_sid.to_string()),
+                        sender: stale_tx,
+                    },
+                );
+                signals.insert(
+                    102,
+                    CancelSignal {
+                        session_id: Some(newer_sid.to_string()),
+                        sender: newer_tx,
+                    },
+                );
+            }
+
+            dispatch_drop_session(
+                DropSessionRequest::Session {
+                    session_id: stale_sid.to_string(),
+                },
+                &h.conn,
+                &tab_to_session,
+                &memo,
+                &cancel_signals,
+            );
+
+            tokio::time::timeout(std::time::Duration::from_secs(5), stale_rx)
+                .await
+                .expect("unmatched session target must still run stale-session cleanup")
+                .expect("stale cancel sender must fire");
+            assert_eq!(
+                tab_to_session.lock().await.get("rekeyed-tab"),
+                Some(&newer_sid),
+                "a stale session target must not remove a newer tab binding"
+            );
+            assert!(
+                cancel_signals.lock().unwrap().contains_key(&102),
+                "a stale session target must not cancel a newer prompt"
+            );
         })
         .await;
 }
