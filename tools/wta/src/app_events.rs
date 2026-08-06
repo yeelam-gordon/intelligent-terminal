@@ -264,6 +264,9 @@ impl App {
                     tab.pack_replayed_messages_into_turns();
                     tab.loading_session = false;
                     tab.loading_target_session_id = None;
+                    if !tab.pending_prompts.is_empty() {
+                        tab.queue_paused = true;
+                    }
                     tab.scroll_to_bottom();
                 }
                 // Per-session model lists could differ — surface the new
@@ -343,6 +346,10 @@ impl App {
                 tab.timing_note = None;
                 tab.turn = TurnState::Idle;
                 tab.active_direct_proposal_id = None;
+                tab.autofix.deferred = None;
+                if !tab.pending_prompts.is_empty() {
+                    tab.queue_paused = true;
+                }
                 tab.messages.push(ChatMessage::Error(message));
                 tab.scroll_to_bottom();
             }
@@ -507,6 +514,7 @@ impl App {
                     tab.activity_frame = 0;
                     tab.timing_note = None;
                     tab.turn = TurnState::Idle;
+                    tab.autofix.deferred = None;
                     // Suppress only an *identical* consecutive error, not any
                     // trailing error. When the master/agent dies, two errors can
                     // arrive: the raw transport error (returned as-is) and the
@@ -653,6 +661,41 @@ impl App {
             AppEvent::ExecutionInfo(message) => {
                 self.push_execution_info(message);
                 self.current_tab_mut().scroll_to_bottom();
+            }
+            AppEvent::RecommendationExecutionCompleted {
+                tab_id,
+                prompt_id,
+                result,
+            } => {
+                let ready = {
+                    let tab = self.tab_mut(&tab_id);
+                    match &tab.turn {
+                        TurnState::Surfaced {
+                            prompt,
+                            outcome: TurnOutcome::ExecutingRecommendation,
+                            end_pending,
+                        } if prompt.id == prompt_id => {
+                            let prompt = prompt.clone();
+                            let end_pending = *end_pending;
+                            tab.turn = TurnState::Surfaced {
+                                prompt,
+                                outcome: TurnOutcome::Empty,
+                                end_pending,
+                            };
+                            result.is_ok()
+                        }
+                        _ => false,
+                    }
+                };
+                match result {
+                    Ok(()) if ready => {
+                        self.dispatch_after_recommendation_execution(&tab_id);
+                    }
+                    Ok(()) => {}
+                    Err(_) => {
+                        self.pause_queued_dispatch(&tab_id, None);
+                    }
+                }
             }
             AppEvent::AgentThoughtChunk { session_id, text } => {
                 // Late chunk after cancel / completion is dropped by

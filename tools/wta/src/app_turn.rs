@@ -573,6 +573,7 @@ impl App {
         // so we can stamp the chat history with an "executed" marker after
         // dispatch.
         let executed_title = choice.title.clone();
+        let executed_choice = choice.choice;
         let direct_proposal_id = self
             .session_tab(session_id)
             .active_direct_proposal_id
@@ -580,6 +581,12 @@ impl App {
         let insert_only =
             self.session_tab(session_id).selected_button == 1 && self.is_send_choice(&choice);
         let target_tab = self.tab_for_session(session_id);
+        let prompt_id = self
+            .session_tab(session_id)
+            .turn
+            .prompt()
+            .map(|prompt| prompt.id)
+            .expect("recommendation turn has a prompt");
         let context = self
             .session_tab(session_id)
             .turn
@@ -601,6 +608,8 @@ impl App {
                 choice,
                 insert_only,
                 context,
+                tab_id: target_tab.clone(),
+                prompt_id,
             })
             .is_ok();
         if let Some(claim) = confirmation_claim {
@@ -614,6 +623,20 @@ impl App {
                 self.turn_cancel(session_id);
                 return;
             }
+        }
+        if !dispatched {
+            self.pause_queued_dispatch(&target_tab, None);
+            self.session_tab_mut(session_id)
+                .messages
+                .push(ChatMessage::Error(
+                    t!(
+                        "system.choice_execution_failed",
+                        choice = executed_choice,
+                        error = "recommendation executor is unavailable"
+                    )
+                    .into_owned(),
+                ));
+            return;
         }
         if self
             .session_tab(session_id)
@@ -650,7 +673,7 @@ impl App {
         // commit pending turn (in case eager surface staged one).
         tab.turn = TurnState::Surfaced {
             prompt,
-            outcome: TurnOutcome::Empty,
+            outcome: TurnOutcome::ExecutingRecommendation,
             end_pending,
         };
 
@@ -740,6 +763,7 @@ impl App {
             }
         }
         tab.autofix.pane_id = None;
+        tab.autofix.deferred = None;
         tab.selected_recommendation = 0;
         tab.selected_button = 0;
         tab.recommendation_focus = RecommendationFocus::Button;

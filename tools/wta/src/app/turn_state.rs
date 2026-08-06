@@ -66,6 +66,9 @@ pub enum TurnOutcome {
     Recommendation(RecommendationSet),
     /// Prose / explain text has been committed to `completed_turns`.
     ChatTurn,
+    /// A selected recommendation is executing on the coordinator. The ACP
+    /// turn is complete, but FIFO prompts must wait for the action result.
+    ExecutingRecommendation,
     /// No visible response (cancelled, or model returned nothing parseable).
     Empty,
 }
@@ -94,6 +97,10 @@ impl TurnState {
     pub fn accepts_new_prompt(&self) -> bool {
         match self {
             TurnState::Idle => true,
+            TurnState::Surfaced {
+                outcome: TurnOutcome::ExecutingRecommendation,
+                ..
+            } => false,
             TurnState::Surfaced { end_pending, .. } => !*end_pending,
             _ => false,
         }

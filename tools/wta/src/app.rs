@@ -3530,6 +3530,9 @@ impl App {
             AppEvent::AgentBusy { .. } => "agent_busy",
             AppEvent::TabRenamed { .. } => "tab_renamed",
             AppEvent::ExecutionInfo(_) => "execution_info",
+            AppEvent::RecommendationExecutionCompleted { .. } => {
+                "recommendation_execution_completed"
+            }
             AppEvent::AgentThoughtChunk { .. } => "agent_thought_chunk",
             AppEvent::AgentMessageChunk { .. } => "agent_message_chunk",
             AppEvent::UserMessageReplayChunk { .. } => "user_message_replay_chunk",

@@ -284,9 +284,10 @@ pub struct TabSession {
     /// Prompts accepted while this tab was busy. They are dispatched FIFO when
     /// the turn returns to an accepting state; Esc removes the newest item.
     pub(crate) pending_prompts: VecDeque<QueuedPrompt>,
-    /// A queued prompt handed to ACP but not yet terminally completed. Keeping
-    /// it lets AgentBusy and recoverable errors restore FIFO order instead of
-    /// losing work after optimistic local submission.
+    /// Every prompt handed to ACP but not yet terminally completed. Keeping
+    /// direct and queued submissions alike lets AgentBusy and recoverable
+    /// errors restore the complete text/image payload instead of losing an
+    /// optimistic local submission.
     pub(crate) queued_dispatch: Option<QueuedDispatch>,
     /// Errors pause automatic queue progression. A subsequent typed Enter is
     /// an explicit user decision to resume FIFO dispatch.
@@ -451,6 +452,7 @@ impl TabSession {
         self.pending_prompts.clear();
         self.queued_dispatch = None;
         self.queue_paused = false;
+        self.autofix.deferred = None;
         self.tool_calls.clear();
         self.permission.clear();
         self.activity_frame = 0;

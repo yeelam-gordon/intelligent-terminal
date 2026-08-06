@@ -108,14 +108,15 @@ fn is_redundant_startup_model_error(
 /// or doesn't honor cancel.
 #[derive(Debug, Clone)]
 pub struct CancelRequest {
-    pub tab_id: String,
     pub session_id: Option<String>,
     pub prompt_id: u64,
 }
 
 type CancelSignalKey = (String, u64);
 type CancelSignals = Arc<Mutex<HashMap<CancelSignalKey, tokio::sync::oneshot::Sender<()>>>>;
-type CancelledPrompts = Arc<Mutex<HashSet<(String, u64)>>>;
+/// Prompt ids are process-global and immutable. Do not key pre-attach
+/// cancellation by tab id: tab rename can occur while `session/new` awaits.
+type CancelledPrompts = Arc<Mutex<HashSet<u64>>>;
 
 fn cancel_signals_for_session(cancel_signals: &CancelSignals, session_id: &str) {
     let keys: Vec<CancelSignalKey> = cancel_signals
@@ -2970,17 +2971,12 @@ fn dispatch_cancel(
     cancelled_prompts: &CancelledPrompts,
 ) {
     let CancelRequest {
-        tab_id,
         session_id,
         prompt_id,
     } = req;
-    cancelled_prompts
-        .lock()
-        .unwrap()
-        .insert((tab_id.clone(), prompt_id));
+    cancelled_prompts.lock().unwrap().insert(prompt_id);
     tracing::info!(
         target: "acp_cancel",
-        tab_id = %tab_id,
         session_id = ?session_id,
         prompt_id,
         "cancel requested"
@@ -3083,7 +3079,7 @@ fn dispatch_prompt(
     if cancelled_prompts
         .lock()
         .unwrap()
-        .remove(&(tab_key.clone(), prompt.id))
+        .remove(&prompt.id)
     {
         tracing::debug!(target: "acp_cancel", tab_id = %tab_key, prompt_id = prompt.id, "discarding prompt cancelled before dispatch");
         return;
@@ -3196,7 +3192,7 @@ async fn dispatch_prompt_body(
             if cancelled_prompts_task
                 .lock()
                 .unwrap()
-                .remove(&(tab_key_task.clone(), prompt.id))
+                .remove(&prompt.id)
             {
                 in_flight_tabs_task.lock().unwrap().remove(&tab_key_task);
                 tracing::debug!(target: "acp_cancel", tab_id = %tab_key_task, prompt_id = prompt.id, "discarding prompt cancelled while creating a session");
@@ -3337,7 +3333,7 @@ async fn dispatch_prompt_body(
     if cancelled_prompts_task
         .lock()
         .unwrap()
-        .remove(&(tab_key_task.clone(), prompt.id))
+        .remove(&prompt.id)
     {
         in_flight_tabs_task.lock().unwrap().remove(&tab_key_task);
         cancel_signals_task
@@ -3383,7 +3379,7 @@ async fn dispatch_prompt_body(
                     cancelled_prompts_task
                         .lock()
                         .unwrap()
-                        .remove(&(tab_key_task.clone(), prompt.id));
+                        .remove(&prompt.id);
                 },
             )
             .await;
@@ -3407,7 +3403,7 @@ async fn dispatch_prompt_body(
             cancelled_prompts_task
                 .lock()
                 .unwrap()
-                .remove(&(tab_key_task.clone(), prompt.id));
+                .remove(&prompt.id);
             let _ = event_tx_task.send(AppEvent::AgentMessageEnd {
                 session_id: prompt_session_id_str.clone(),
             });

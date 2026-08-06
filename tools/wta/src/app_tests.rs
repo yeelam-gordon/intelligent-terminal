@@ -7624,6 +7624,8 @@ fn recommendation_card_enter_wins_over_draft_input() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = test_app();
     app.state = ConnectionState::Connected;
+    let (recommendation_tx, _recommendation_rx) = tokio::sync::mpsc::unbounded_channel();
+    app.recommendation_tx = recommendation_tx;
     app.current_tab_mut().session_id = Some(DEFAULT_TAB_ID.into());
     stage_surfaced_recommendation(&mut app, vec![send_choice("pane-A", "ls")], 0, None);
     app.current_tab_mut().input = "/help".into();

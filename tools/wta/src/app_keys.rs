@@ -766,9 +766,8 @@ impl App {
                             } else {
                                 "Executing"
                             };
-                            self.push_execution_info(format!("{} choice {}.", label, label_choice));
+                            self.push_execution_info(format!("{} choice {}.", label, label_choice)                            );
                             self.turn_execute_card(&session_id);
-                            self.dispatch_after_recommendation_execution(&session_id);
                         }
                     }
                     return;
@@ -840,11 +839,21 @@ impl App {
                     }
                     let submitted = SubmittedPrompt {
                         id: prompt.id,
-                        text: display_text,
+                        text: display_text.clone(),
                         submitted_at_unix_s: prompt.submitted_at_unix_s,
                         context: TurnContext::default(),
                         autofix: None,
                     };
+                    let tab_id = self.active_tab_key().to_string();
+                    self.tab_mut(&tab_id).queued_dispatch =
+                        Some(super::tab_state::QueuedDispatch {
+                            prompt_id: prompt.id,
+                            prompt: super::tab_state::QueuedPrompt::new(
+                                text,
+                                display_text,
+                                prompt.images.clone(),
+                            ),
+                        });
                     self.turn_submit_prompt(&session_id, submitted);
                     let _ = self.prompt_tx.send(prompt);
                 }

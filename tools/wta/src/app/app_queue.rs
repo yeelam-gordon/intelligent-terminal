@@ -192,13 +192,14 @@ impl App {
             .queued_dispatch
             .as_ref()
             .is_some_and(|dispatch| prompt_id.is_none() || Some(dispatch.prompt_id) == prompt_id);
-        if !matches {
-            return false;
+        if matches {
+            let dispatch = tab.queued_dispatch.take().expect("matched dispatch");
+            tab.pending_prompts.push_front(dispatch.prompt);
         }
-        let dispatch = tab.queued_dispatch.take().expect("matched dispatch");
-        tab.pending_prompts.push_front(dispatch.prompt);
-        tab.queue_paused = true;
-        true
+        if !tab.pending_prompts.is_empty() {
+            tab.queue_paused = true;
+        }
+        matches
     }
 
     /// Roll back an ACP-side busy rejection. The rejected queued prompt was
@@ -233,7 +234,6 @@ impl App {
         }
 
         let prompt_id = self.current_tab().turn.prompt().map(|prompt| prompt.id);
-        let tab_id = self.active_tab_key().to_string();
         if let Some(prompt_id) = prompt_id {
             let tab = self.current_tab_mut();
             if tab
@@ -247,13 +247,11 @@ impl App {
         let session_id = self.current_tab().session_id.clone();
         if let Some(session_id) = session_id.as_ref() {
             let _ = self.cancel_tx.send(CancelRequest {
-                tab_id,
                 session_id: Some(session_id.clone()),
                 prompt_id: prompt_id.expect("in-flight turn has a prompt id"),
             });
         } else if let Some(prompt_id) = prompt_id {
             let _ = self.cancel_tx.send(CancelRequest {
-                tab_id,
                 session_id: None,
                 prompt_id,
             });
@@ -610,6 +608,45 @@ mod tests {
     }
 
     #[test]
+    fn load_success_and_failure_pause_until_explicit_fifo_resume() {
+        for load_succeeds in [true, false] {
+            let (mut app, mut prompt_rx) = connected_app();
+            {
+                let tab = app.current_tab_mut();
+                tab.loading_session = true;
+                tab.loading_target_session_id = Some("loaded-session".into());
+                tab.pending_prompts.push_back(QueuedPrompt::new(
+                    "queued during load".into(),
+                    "queued during load".into(),
+                    vec![],
+                ));
+            }
+            if load_succeeds {
+                app.handle_event(AppEvent::SessionAttached {
+                    tab_id: DEFAULT_TAB_ID.to_string(),
+                    session_id: "loaded-session".into(),
+                    available_models: vec![],
+                    current_model_id: None,
+                });
+            } else {
+                app.handle_event(AppEvent::TabError {
+                    tab_id: DEFAULT_TAB_ID.to_string(),
+                    message: "load failed".into(),
+                });
+            }
+            assert!(app.current_tab().queue_paused);
+            assert!(prompt_rx.try_recv().is_err());
+
+            enter(&mut app, "explicit resume");
+            assert_eq!(
+                prompt_rx.try_recv().unwrap().text,
+                "queued during load",
+                "case load_succeeds={load_succeeds}"
+            );
+        }
+    }
+
+    #[test]
     fn queued_input_never_bypasses_fifo_head() {
         let (mut app, mut prompt_rx) = connected_app();
         app.current_tab_mut()
@@ -625,20 +662,77 @@ mod tests {
     }
 
     #[test]
-    fn recommendation_execution_is_an_explicit_queue_drain_point() {
+    fn direct_agent_busy_rolls_back_text_and_attachments_for_fifo_retry() {
+        let (mut app, mut prompt_rx) = connected_app();
+        let image = PastedImage {
+            data_base64: "aGVsbG8=".into(),
+            mime_type: "image/png".into(),
+            label: "image.png".into(),
+        };
+        app.current_tab_mut().insert_image_attachment(image.clone());
+        enter(&mut app, "describe");
+        let first = prompt_rx.try_recv().expect("direct prompt dispatched");
+        let prompt_id = app.current_tab().turn.prompt().unwrap().id;
+        assert_eq!(first.images, vec![image.clone()]);
+
+        app.handle_event(AppEvent::AgentBusy {
+            tab_id: DEFAULT_TAB_ID.to_string(),
+            prompt_id,
+        });
+        assert!(app.current_tab().queue_paused);
+        assert_eq!(app.current_tab().pending_prompts.len(), 1);
+
+        enter(&mut app, "explicit resume");
+        let retried = prompt_rx.try_recv().expect("rolled-back prompt retried first");
+        assert_eq!(retried.text, "describe");
+        assert_eq!(retried.images, vec![image]);
+    }
+
+    #[test]
+    fn recommendation_execution_acknowledgement_gates_queue_drain() {
         let (mut app, mut prompt_rx) = connected_app();
         app.current_tab_mut()
             .pending_prompts
             .push_back(QueuedPrompt::new("Q2".into(), "Q2".into(), vec![]));
         app.current_tab_mut().turn = TurnState::Surfaced {
             prompt: submitted(1, "Q1"),
-            outcome: TurnOutcome::Empty,
+            outcome: TurnOutcome::ExecutingRecommendation,
             end_pending: false,
         };
 
-        app.dispatch_after_recommendation_execution(DEFAULT_TAB_ID);
+        app.handle_event(AppEvent::Tick);
+        assert!(prompt_rx.try_recv().is_err(), "pending coordinator work blocks FIFO");
+        app.handle_event(AppEvent::RecommendationExecutionCompleted {
+            tab_id: DEFAULT_TAB_ID.to_string(),
+            prompt_id: 1,
+            result: Ok(()),
+        });
 
         assert_eq!(prompt_rx.try_recv().unwrap().text, "Q2");
+    }
+
+    #[test]
+    fn failed_recommendation_execution_pauses_queue() {
+        let (mut app, mut prompt_rx) = connected_app();
+        app.current_tab_mut()
+            .pending_prompts
+            .push_back(QueuedPrompt::new("Q2".into(), "Q2".into(), vec![]));
+        app.current_tab_mut().turn = TurnState::Surfaced {
+            prompt: submitted(1, "Q1"),
+            outcome: TurnOutcome::ExecutingRecommendation,
+            end_pending: false,
+        };
+
+        app.handle_event(AppEvent::RecommendationExecutionCompleted {
+            tab_id: DEFAULT_TAB_ID.to_string(),
+            prompt_id: 1,
+            result: Err("executor failed".into()),
+        });
+        app.handle_event(AppEvent::Tick);
+
+        assert!(app.current_tab().queue_paused);
+        assert_eq!(app.current_tab().pending_prompts.len(), 1);
+        assert!(prompt_rx.try_recv().is_err());
     }
 
     #[test]
@@ -686,5 +780,24 @@ mod tests {
             app.current_tab().autofix.bar_snapshot,
             AutofixBarSnapshot::Detected { .. }
         ));
+    }
+
+    #[test]
+    fn deferred_autofix_is_cleared_by_cancel_and_session_reset() {
+        let (mut app, _prompt_rx) = connected_app();
+        app.current_tab_mut().autofix.deferred = Some(super::super::autofix::DeferredAutofix {
+            pane_id: "pane".into(),
+            summary: "failure".into(),
+        });
+        app.current_tab_mut().turn = TurnState::Submitted(submitted(1, "active"));
+        app.turn_cancel(DEFAULT_TAB_ID);
+        assert!(app.current_tab().autofix.deferred.is_none());
+
+        app.current_tab_mut().autofix.deferred = Some(super::super::autofix::DeferredAutofix {
+            pane_id: "pane".into(),
+            summary: "failure".into(),
+        });
+        app.current_tab_mut().clear_chat_history();
+        assert!(app.current_tab().autofix.deferred.is_none());
     }
 }

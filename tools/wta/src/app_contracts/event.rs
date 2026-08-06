@@ -83,6 +83,13 @@ pub enum AppEvent {
         new_window_id: Option<String>,
     },
     ExecutionInfo(String),
+    /// Result of an asynchronous recommendation action. Queue progression is
+    /// tab-scoped and only resumes after this acknowledgement succeeds.
+    RecommendationExecutionCompleted {
+        tab_id: String,
+        prompt_id: u64,
+        result: Result<(), String>,
+    },
     AgentThoughtChunk {
         session_id: String,
         text: String,

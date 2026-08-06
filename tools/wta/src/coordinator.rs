@@ -110,6 +110,10 @@ pub struct ChoiceExecution {
     pub insert_only: bool,
     /// Host-owned context associated with the turn that produced this choice.
     pub context: TurnContext,
+    /// Owning agent-pane tab and turn identity. The executor is asynchronous,
+    /// so its result must be routed back without consulting mutable focus.
+    pub tab_id: String,
+    pub prompt_id: u64,
 }
 
 pub fn default_supported_delegate_agents() -> Vec<SupportedDelegateAgent> {
@@ -311,9 +315,20 @@ pub async fn run_recommendation_executor(
             Err(err) => Err(err),
         };
         match result {
-            Ok(()) => {}
+            Ok(()) => {
+                let _ = event_tx.send(AppEvent::RecommendationExecutionCompleted {
+                    tab_id: exec.tab_id,
+                    prompt_id: exec.prompt_id,
+                    result: Ok(()),
+                });
+            }
             Err(err) => {
                 let err_str = format!("{:#}", err);
+                let _ = event_tx.send(AppEvent::RecommendationExecutionCompleted {
+                    tab_id: exec.tab_id,
+                    prompt_id: exec.prompt_id,
+                    result: Err(err_str.clone()),
+                });
                 let _ = event_tx.send(AppEvent::SystemMessage(
                     t!(
                         "system.choice_execution_failed",

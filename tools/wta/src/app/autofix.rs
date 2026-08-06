@@ -231,6 +231,7 @@ impl App {
         let new_gen = {
             let tab = self.tab_mut(&target_tab_id);
             tab.autofix.generation = tab.autofix.generation.wrapping_add(1);
+            tab.autofix.deferred = None;
             // A new analysis supersedes any leftover suggestion. The C++ side
             // will swap to Pending on the new pending event below; emitting an
             // explicit cleared first would create a flicker.
@@ -462,7 +463,6 @@ impl App {
                 }
             ) {
                 self.turn_execute_card(&sid);
-                self.dispatch_after_recommendation_execution(&sid);
                 true
             } else {
                 false
@@ -472,6 +472,12 @@ impl App {
         };
         let choice_label = choice.choice;
         if !routed {
+            let prompt_id = self
+                .current_tab()
+                .turn
+                .prompt()
+                .map(|prompt| prompt.id)
+                .unwrap_or_default();
             let autofix = &mut self.current_tab_mut().autofix;
             autofix.pane_id = None;
             autofix.armed_at = None;
@@ -482,6 +488,8 @@ impl App {
                     choice,
                     insert_only: false,
                     context: TurnContext::with_target_pane(armed_pane),
+                    tab_id: active_tab.clone(),
+                    prompt_id,
                 });
         }
         self.push_execution_info(format!("Auto-executing choice {}.", choice_label));

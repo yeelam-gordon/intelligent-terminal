@@ -43,12 +43,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .back()
         .map(|p| p.collapsed_text())
         .unwrap_or_default();
-    let text = t!(
-        "input.queue.indicator",
-        count = count,
-        preview = preview
-    )
-    .into_owned();
+    let text = t!("input.queue.indicator", count = count, preview = preview).into_owned();
     // The render line below adds up to `HORIZONTAL_PADDING` cells at the
     // locale's leading edge, so the truncation budget is `area.width - padding`. In
     // very narrow panes (`area.width < HORIZONTAL_PADDING + 1`) we'd
@@ -59,24 +54,22 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let budget = if area.width == 0 {
         0
     } else {
-        (area.width as usize).saturating_sub(HORIZONTAL_PADDING as usize).max(1)
+        (area.width as usize)
+            .saturating_sub(HORIZONTAL_PADDING as usize)
+            .max(1)
     };
     let truncated = truncate_to_width(&text, budget);
     // Clamp the leading-edge padding to whatever room is left after the
     // truncated body — in very narrow terminals padding shrinks to 0 so the
     // marker stays visible.
-    let padding_width = (area.width as usize).saturating_sub(
-        unicode_width::UnicodeWidthStr::width(truncated.as_str()),
-    );
+    let padding_width = (area.width as usize)
+        .saturating_sub(unicode_width::UnicodeWidthStr::width(truncated.as_str()));
     let text = pad_indicator(
         &truncated,
         padding_width.min(HORIZONTAL_PADDING as usize),
         crate::rtl::is_current_locale_rtl(),
     );
-    let line = Line::from(Span::styled(
-        text,
-        theme::DIM,
-    ));
+    let line = Line::from(Span::styled(text, theme::DIM));
     frame.render_widget(
         Paragraph::new(line).alignment(crate::rtl::text_alignment()),
         area,
@@ -144,8 +137,11 @@ mod tests {
         // 4 chars are emitted before `…` is appended.
         assert!(out.ends_with('…'), "got: {out}");
         assert!(out.chars().count() <= 5);
-        assert_eq!(unicode_width::UnicodeWidthStr::width(out.as_str()), 5,
-            "result must fill exactly the requested width when content overflows");
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width(out.as_str()),
+            5,
+            "result must fill exactly the requested width when content overflows"
+        );
     }
 
     #[test]
@@ -181,7 +177,10 @@ mod tests {
             width <= 1,
             "truncated string {out:?} has display width {width}, expected ≤ 1"
         );
-        assert!(out.contains('…'), "must keep the ellipsis marker; got {out:?}");
+        assert!(
+            out.contains('…'),
+            "must keep the ellipsis marker; got {out:?}"
+        );
     }
 
     #[test]

@@ -23,6 +23,7 @@ use crate::app_contracts::{AppEvent, PlanEntry, PlanEntryStatus};
 use crate::protocol::acp::conn;
 use crate::protocol::acp::prompt_builder::TemplateMemo;
 use crate::protocol::acp::turn_metrics::PromptTimingState;
+use crate::pane_context::PaneContext;
 use crate::shell::ShellManager;
 use agent_client_protocol as acp;
 use std::collections::{HashMap, HashSet};
@@ -1245,7 +1246,6 @@ async fn dispatch_cancel_fires_local_signal_and_removes_registry_entry() {
 
             dispatch_cancel(
                 CancelRequest {
-                    tab_id: "tab-cancel".to_string(),
                     session_id: Some("sess-cancel".to_string()),
                     prompt_id: 7,
                 },
@@ -1278,7 +1278,6 @@ async fn dispatch_cancel_fires_local_signal_and_removes_registry_entry() {
             // Cancelling an unknown session is a harmless no-op (no panic).
             dispatch_cancel(
                 CancelRequest {
-                    tab_id: "tab-ghost".to_string(),
                     session_id: Some("ghost".to_string()),
                     prompt_id: 8,
                 },
@@ -1306,10 +1305,21 @@ async fn dispatch_prompt_drops_a_pre_attach_cancel_before_session_creation() {
             cancelled_prompts
                 .lock()
                 .unwrap()
-                .insert(("0".to_string(), 42));
+                .insert(42);
 
+            let mut prompt = test_prompt(42, "cancel before attach", false);
+            // Simulate a tab rename between submit and cancellation. The
+            // immutable prompt id, not this mutable routing label, owns the
+            // cancellation marker.
+            prompt.pane_context = Some(PaneContext {
+                pane_id: None,
+                tab_id: Some("renamed-tab".into()),
+                window_id: None,
+                cwd: None,
+                source_pane_id: None,
+            });
             dispatch_prompt(
-                test_prompt(42, "cancel before attach", false),
+                prompt,
                 &h.conn,
                 &tab_to_session,
                 &memo,
