@@ -36,6 +36,8 @@ pub struct ProbeResult {
 /// pane (e.g. `"copilot --acp --stdio"`,
 /// `"npx -y @zed-industries/claude-code-acp"`).
 pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
+    const PROBE_TOTAL_TIMEOUT: Duration = Duration::from_secs(40);
+    let deadline = std::time::Instant::now() + PROBE_TOTAL_TIMEOUT;
     let mut spawned = spawn_agent_process(agent_cmd, None)?;
     tracing::debug!(
         "probe spawned: program={} is_npx={} pid={:?}",
@@ -82,11 +84,11 @@ pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
                 .title("WTA Model Probe"),
         );
     let init_started = std::time::Instant::now();
-    let init_result = tokio::time::timeout(
-        Duration::from_secs(init_timeout_secs),
-        conn.initialize(init_req),
-    )
-    .await;
+    let init_budget = deadline
+        .checked_duration_since(std::time::Instant::now())
+        .unwrap_or_default()
+        .min(Duration::from_secs(init_timeout_secs));
+    let init_result = tokio::time::timeout(init_budget, conn.initialize(init_req)).await;
     if matches!(init_result, Ok(Ok(_))) {
         stderr_log.mark_initialized();
     } else {
@@ -120,64 +122,54 @@ pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
 
     let reported_cwd = std::env::current_dir().unwrap_or_default();
     let cwd = crate::protocol::acp::cwd_format::pick_value(Some(&reported_cwd));
-    let cwd_format = crate::protocol::acp::cwd_format::detect_agent_format(
+    let cwd_target = crate::protocol::acp::cwd_format::detect_agent_format(
         &conn,
         &init_resp,
-        Duration::from_secs(5),
+        deadline
+            .checked_duration_since(std::time::Instant::now())
+            .unwrap_or_default()
+            .min(Duration::from_secs(5)),
+    )
+    .await
+    .map(crate::protocol::acp::cwd_format::CwdTarget::Detected)
+    .unwrap_or(crate::protocol::acp::cwd_format::CwdTarget::Unknown);
+    let cwd_attempts = crate::protocol::acp::cwd_format::build_attempts(&cwd, cwd_target);
+    let session_started = std::time::Instant::now();
+    let session_result = crate::protocol::acp::cwd_format::run_cwd_attempts(
+        &cwd_attempts,
+        deadline,
+        |cwd| conn.new_session(acp::schema::v1::NewSessionRequest::new(cwd)),
     )
     .await;
-    let cwd_attempts = crate::protocol::acp::cwd_format::build_attempts(&cwd, cwd_format);
-    let session_started = std::time::Instant::now();
-    let mut attempts = cwd_attempts.iter().enumerate();
-    let session_result = loop {
-        let (attempt_index, cwd) = attempts
-            .next()
-            .expect("cwd attempts always contain at least one value");
-        let result = tokio::time::timeout(
-            Duration::from_secs(10),
-            conn.new_session(acp::schema::v1::NewSessionRequest::new(cwd.clone())),
-        )
-        .await;
-        match &result {
-            Ok(Err(error))
-                if attempt_index + 1 < cwd_attempts.len()
-                    && crate::protocol::acp::cwd_format::looks_like_cwd_error(&format!(
-                        "{error:#}"
-                    )) =>
-            {
-                tracing::info!(
-                    target: "acp_cwd",
-                    op = "probe_models",
-                    cwd_attempt = attempt_index + 1,
-                    "agent rejected cwd; retrying in another namespace"
-                );
-            }
-            _ => break result,
-        }
-    };
     let session_id = session_result
         .as_ref()
         .ok()
-        .and_then(|inner| inner.as_ref().ok())
-        .map(|resp| resp.session_id.to_string());
+        .map(|(resp, _)| resp.session_id.to_string());
     crate::telemetry::log_acp_new_session_complete(
         session_id.as_deref(),
         session_started.elapsed().as_secs_f64() * 1000.0,
-        matches!(session_result, Ok(Ok(_))),
+        session_result.is_ok(),
         "Probe",
         match &session_result {
-            Ok(Ok(_)) => "",
-            Ok(Err(_)) => "AcpError",
-            Err(_) => "Timeout",
+            Ok(_) => "",
+            Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Agent(_)) => "AcpError",
+            Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Timeout) => "Timeout",
         },
         match &session_result {
-            Ok(Err(e)) => e.code.into(),
+            Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Agent(e)) => e.code.into(),
             _ => 0,
         },
     );
     let session_resp = session_result
-        .map_err(|_| anyhow!("new_session timed out after 10s during probe"))?
-        .map_err(|e| anyhow!("new_session failed: {}", e))?;
+        .map_err(|failure| match failure {
+            crate::protocol::acp::cwd_format::CwdAttemptFailure::Agent(error) => {
+                anyhow!("new_session failed: {error}")
+            }
+            crate::protocol::acp::cwd_format::CwdAttemptFailure::Timeout => {
+                anyhow!("new_session timed out within 40s probe budget")
+            }
+        })?
+        .0;
 
     let (available_models, current_model_id) =
         crate::protocol::acp::model_select::models_from_new_session(&session_resp);

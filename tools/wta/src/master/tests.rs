@@ -6,6 +6,7 @@
 
 use super::*;
 use acp::schema::v1::{ContentChunk, SessionId, SessionNotification, SessionUpdate};
+use std::path::Path;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 #[derive(Clone)]
@@ -206,6 +207,33 @@ fn unknown_or_custom_id_falls_back_to_trusted_default() {
         assert_eq!(cmd, DEFAULT_CMD, "requested={requested}");
         assert_eq!(id.as_deref(), Some("copilot"));
     }
+}
+
+#[test]
+fn custom_default_preserves_explicit_wsl_source_for_terminal_requests() {
+    let (command, agent_id, source) = resolve_agent_selection(
+        "wsl.exe -d Ubuntu -- /home/me/bin/custom-agent --acp",
+        Some("custom:local"),
+        None,
+        Some("custom:local"),
+        None,
+        Some("wsl"),
+        Some("Ubuntu"),
+        HelperId(1),
+    );
+    assert_eq!(
+        command,
+        "wsl.exe -d Ubuntu -- /home/me/bin/custom-agent --acp",
+        "the master must continue to use its trusted configured command"
+    );
+    assert_eq!(agent_id.as_deref(), Some("custom:local"));
+    assert_eq!(
+        source,
+        crate::agent_source::AgentSource::Wsl {
+            distro: "Ubuntu".to_string()
+        },
+        "the helper's explicit profile backend must reach both agent spawn and ShellManager"
+    );
 }
 
 #[test]
@@ -624,6 +652,22 @@ fn is_already_loaded_error_matches_message_and_data() {
     assert!(is_already_loaded_error(&in_data));
     let unrelated = acp::Error::new(-32603, "no helper bound to session_id");
     assert!(!is_already_loaded_error(&unrelated));
+}
+
+#[test]
+fn orphan_rebind_preserves_existing_registry_cwd() {
+    let existing = crate::session_registry::SessionInfo::new(
+        SessionId::new("existing"),
+        PathBuf::from("/home/me/project"),
+    );
+    assert_eq!(
+        resumed_registry_cwd(Path::new(r"C:\Windows\System32"), Some(&existing), true),
+        PathBuf::from("/home/me/project")
+    );
+    assert_eq!(
+        resumed_registry_cwd(Path::new("/mnt/c/project"), Some(&existing), false),
+        PathBuf::from("/mnt/c/project")
+    );
 }
 
 /// `reap_agent` must drop only the dead agent's orphan sessions, leaving

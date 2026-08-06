@@ -33,6 +33,7 @@
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::{future::Future, time::Instant};
 
 use agent_client_protocol as acp;
 
@@ -43,6 +44,19 @@ use super::conn;
 pub enum PathFormat {
     Windows,
     Posix,
+}
+
+/// Confidence and namespace of the agent receiving the ACP request.
+///
+/// An explicit source comes from the profile-selected backend and is
+/// authoritative. A detected source comes from historical `session/list`
+/// rows, which can be stale, so its candidate ladder keeps the opposite
+/// namespace available after a proven cwd rejection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CwdTarget {
+    Explicit(PathFormat),
+    Detected(PathFormat),
+    Unknown,
 }
 
 /// Classify a path's namespace: POSIX if it starts with `/`, Windows
@@ -58,16 +72,46 @@ pub fn classify(path: &Path) -> PathFormat {
     }
 }
 
-/// Learn the agent's namespace from the cwd values it reports in
-/// `session/list`. Returns the first non-empty entry's format, or `None`
-/// when the list is empty (caller then tries both formats).
+/// Learn the agent's namespace from `session/list` cwd values.
+///
+/// Every non-empty row must be an unambiguous absolute path in the same
+/// namespace. Mixed histories and UNC/relative values return `None` so the
+/// caller keeps both namespace candidates available.
 pub fn detect_format<'a>(
     session_cwd_values: impl IntoIterator<Item = &'a str>,
 ) -> Option<PathFormat> {
-    session_cwd_values
-        .into_iter()
-        .find(|c| !c.trim().is_empty())
-        .map(|c| classify(Path::new(c)))
+    let mut detected = None;
+    for cwd in session_cwd_values {
+        let cwd = cwd.trim();
+        if cwd.is_empty() {
+            continue;
+        }
+        let format = classify_session_cwd(cwd)?;
+        if detected.is_some_and(|previous| previous != format) {
+            return None;
+        }
+        detected = Some(format);
+    }
+    detected
+}
+
+fn classify_session_cwd(cwd: &str) -> Option<PathFormat> {
+    // `//server/share` is ambiguous between a POSIX implementation-defined
+    // path and a forward-slash Windows UNC spelling. `\\server\share` and
+    // WSL UNC paths likewise identify a host-side transport, not the
+    // namespace an ACP agent accepts. Do not let any of them lock in a target.
+    if cwd.starts_with("//") || cwd.starts_with(r"\\") {
+        return None;
+    }
+    if cwd.starts_with('/') {
+        return Some(PathFormat::Posix);
+    }
+    let bytes = cwd.as_bytes();
+    (bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/'))
+    .then_some(PathFormat::Windows)
 }
 
 /// Ask a connected agent which cwd namespace it uses, when it advertises
@@ -112,14 +156,14 @@ pub(crate) async fn detect_agent_format(
     detect_format(cwd_values.iter().map(String::as_str))
 }
 
-/// Choose the source cwd value, dropping junk launcher dirs (`System32`,
-/// `Windows`) and empty values down to [`user_profile_dir`] (USERPROFILE →
-/// Windows-only HOME → `%SystemDrive%\`). The result may itself be Windows
-/// or POSIX — a WSL-integrated pane reports a POSIX `$PWD` — which is fine:
-/// the converters are idempotent.
+/// Choose the source cwd value, preserving every non-empty reported path.
+///
+/// `C:\Windows\System32` is a legitimate user-selected cwd; C++ now supplies
+/// the source pane's cwd explicitly, so treating it as junk would corrupt a
+/// real session. Empty remains the only fallback case.
 pub fn pick_value(candidate: Option<&Path>) -> PathBuf {
     if let Some(p) = candidate {
-        if !p.as_os_str().is_empty() && !is_junk(p) {
+        if !p.as_os_str().is_empty() {
             return p.to_path_buf();
         }
     }
@@ -192,26 +236,31 @@ pub(crate) fn to_wsl_format(distro: &str, path: &Path) -> Option<PathBuf> {
         .then(|| to_linux_format(Path::new(raw)))
 }
 
-/// Ordered list of cwd values to try against `session/new`, given the source
-/// `value` and the (possibly unknown) agent `target` format. Normally one
-/// entry; the extra rungs only matter on the rare empty-`session/list` /
-/// wrong-guess path. De-duplicated, order-preserving.
-pub fn build_attempts(value: &Path, target: Option<PathFormat>) -> Vec<PathBuf> {
+/// Ordered, bounded cwd candidates. The list is capped at two entries:
+/// compatibility fallback must not turn a single ACP request into an
+/// unbounded sequence of potentially side-effecting `session/new` calls.
+pub fn build_attempts(value: &Path, target: CwdTarget) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let mut push = |p: PathBuf| {
-        if !out.contains(&p) {
+        if out.len() < 2 && !out.contains(&p) {
             out.push(p);
         }
     };
     match target {
-        Some(PathFormat::Windows) => push(to_windows_format(value)),
-        Some(PathFormat::Posix) => {
+        CwdTarget::Explicit(PathFormat::Windows) => push(to_windows_format(value)),
+        CwdTarget::Explicit(PathFormat::Posix) => {
             push(to_linux_format(value));
             push(PathBuf::from("/tmp"));
         }
-        None => {
-            // Target unknown: try the value in its own format first, then the
-            // opposite, then a safe floor for each namespace.
+        CwdTarget::Detected(PathFormat::Windows) => {
+            push(to_windows_format(value));
+            push(to_linux_format(value));
+        }
+        CwdTarget::Detected(PathFormat::Posix) => {
+            push(to_linux_format(value));
+            push(to_windows_format(value));
+        }
+        CwdTarget::Unknown => {
             match classify(value) {
                 PathFormat::Posix => {
                     push(to_linux_format(value));
@@ -222,35 +271,67 @@ pub fn build_attempts(value: &Path, target: Option<PathFormat>) -> Vec<PathBuf> 
                     push(to_linux_format(value));
                 }
             }
-            push(PathBuf::from("/tmp"));
         }
     }
     out
 }
 
-/// True when an error string looks like a cwd rejection (bad namespace /
-/// nonexistent dir) — the signal to retry with the next candidate cwd.
-/// Matches agents' own wording, e.g. copilot's "Directory path must be
-/// absolute" / "Directory does not exist or cannot be accessed".
-///
-/// A rejection phrase alone isn't enough: words like "absolute" or "does not
-/// exist" also appear in unrelated agent errors (missing model, resource
-/// lookups), and retrying those down the cwd ladder is wasted work. So we
-/// additionally require a directory/path/cwd context before treating the error
-/// as retryable.
-pub fn looks_like_cwd_error(haystack: &str) -> bool {
-    let h = haystack.to_ascii_lowercase();
-    let has_path_context = h.contains("directory")
-        || h.contains("path")
-        || h.contains("cwd")
-        || h.contains("working dir");
-    if !has_path_context {
-        return false;
+/// Failure from a bounded [`run_cwd_attempts`] operation.
+#[derive(Debug)]
+pub enum CwdAttemptFailure {
+    Agent(acp::Error),
+    Timeout,
+}
+
+/// Run one ACP operation against the cwd candidate ladder under one absolute
+/// deadline. A retry is allowed only for a deterministic preflight cwd
+/// rejection tied to the attempted path or an explicit cwd/directory field.
+pub async fn run_cwd_attempts<T, F, Fut>(
+    attempts: &[PathBuf],
+    deadline: Instant,
+    mut operation: F,
+) -> Result<(T, PathBuf), CwdAttemptFailure>
+where
+    F: FnMut(PathBuf) -> Fut,
+    Fut: Future<Output = acp::Result<T>>,
+{
+    for (index, cwd) in attempts.iter().enumerate() {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or(CwdAttemptFailure::Timeout)?;
+        match tokio::time::timeout(remaining, operation(cwd.clone())).await {
+            Ok(Ok(value)) => return Ok((value, cwd.clone())),
+            Ok(Err(error))
+                if index + 1 < attempts.len() && is_retryable_cwd_rejection(&error, cwd) =>
+            {
+                continue;
+            }
+            Ok(Err(error)) => return Err(CwdAttemptFailure::Agent(error)),
+            Err(_) => return Err(CwdAttemptFailure::Timeout),
+        }
     }
-    h.contains("absolute")
-        || h.contains("does not exist")
-        || h.contains("cannot be accessed")
-        || h.contains("not a directory")
+    unreachable!("cwd candidate builder always returns at least one path")
+}
+
+fn is_retryable_cwd_rejection(error: &acp::Error, attempted: &Path) -> bool {
+    let data = error.data.as_ref().map(ToString::to_string).unwrap_or_default();
+    let evidence = format!("{} {data}", error.message).to_ascii_lowercase();
+    let attempted = attempted.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+    let normalized_evidence = evidence.replace('\\', "/");
+    let references_attempt = !attempted.is_empty() && normalized_evidence.contains(&attempted);
+    let declares_cwd = evidence.contains("cwd")
+        || evidence.contains("working directory")
+        || evidence.contains("current directory")
+        || evidence.contains("directory path");
+    let deterministic_rejection = evidence.contains("must be absolute")
+        || evidence.contains("not absolute")
+        || evidence.contains("not a directory")
+        || evidence.contains("no such file or directory")
+        || evidence.contains("does not exist")
+        || evidence.contains("cannot be accessed")
+        || evidence.contains("invalid working directory")
+        || evidence.contains("failed to set current directory");
+    deterministic_rejection && (references_attempt || declares_cwd)
 }
 
 // --- internals ---------------------------------------------------------
@@ -516,24 +597,23 @@ mod tests {
     }
 
     #[test]
-    fn pick_value_drops_junk() {
+    fn pick_value_preserves_legitimate_system32() {
         let _g = scoped_env(&[
             ("SystemRoot", r"C:\Windows"),
             ("USERPROFILE", r"C:\Users\tester"),
         ]);
         assert_eq!(
             pick_value(Some(Path::new(r"C:\WINDOWS\system32"))),
-            PathBuf::from(r"C:\Users\tester")
+            PathBuf::from(r"C:\WINDOWS\system32")
         );
         assert_eq!(
             pick_value(Some(Path::new(r"C:\Windows"))),
-            PathBuf::from(r"C:\Users\tester")
+            PathBuf::from(r"C:\Windows")
         );
         assert_eq!(pick_value(None), PathBuf::from(r"C:\Users\tester"));
-        // verbatim/extended-length junk is also detected
         assert_eq!(
             pick_value(Some(Path::new(r"\\?\C:\WINDOWS\system32"))),
-            PathBuf::from(r"C:\Users\tester")
+            PathBuf::from(r"\\?\C:\WINDOWS\system32")
         );
         // real paths pass through (windows or posix)
         assert_eq!(
@@ -607,34 +687,62 @@ mod tests {
     }
 
     #[test]
-    fn looks_like_cwd_error_requires_path_context() {
-        // Real agent cwd rejections (carry a directory/path context) → retry.
-        assert!(looks_like_cwd_error(
-            "Directory path must be absolute: C:\\WINDOWS\\system32"
+    fn session_history_requires_unambiguous_consensus() {
+        assert_eq!(
+            detect_format([r"C:\repo", r"D:\work"]),
+            Some(PathFormat::Windows)
+        );
+        assert_eq!(
+            detect_format(["/home/me", "/mnt/c/repo"]),
+            Some(PathFormat::Posix)
+        );
+        assert_eq!(detect_format([r"C:\repo", "/home/me"]), None);
+        assert_eq!(detect_format(["//server/share", "/home/me"]), None);
+        assert_eq!(detect_format([r"\\server\share", r"C:\repo"]), None);
+        assert_eq!(detect_format(["relative/path"]), None);
+    }
+
+    #[test]
+    fn cwd_retry_requires_preflight_evidence_for_attempted_path() {
+        let attempted = Path::new(r"C:\WINDOWS\system32");
+        assert!(is_retryable_cwd_rejection(
+            &acp::Error::new(-32603, "Directory path must be absolute: C:\\WINDOWS\\system32"),
+            attempted,
         ));
-        assert!(looks_like_cwd_error(
-            "Directory does not exist or cannot be accessed"
+        assert!(is_retryable_cwd_rejection(
+            &acp::Error::new(-32603, "Invalid working directory"),
+            attempted,
         ));
-        assert!(looks_like_cwd_error("cwd is not a directory"));
-        // Unrelated errors that merely mention a rejection word but have no
-        // path/directory/cwd context → NOT retried.
-        assert!(!looks_like_cwd_error("The requested model does not exist"));
-        assert!(!looks_like_cwd_error(
-            "absolute URL required for the resource endpoint"
+        assert!(is_retryable_cwd_rejection(
+            &acp::Error::new(-32603, "ENOENT: no such file or directory, chdir 'C:\\WINDOWS\\system32'"),
+            attempted,
         ));
-        assert!(!looks_like_cwd_error("authentication required"));
+        assert!(!is_retryable_cwd_rejection(
+            &acp::Error::new(-32603, "The requested model does not exist"),
+            attempted,
+        ));
+        assert!(!is_retryable_cwd_rejection(
+            &acp::Error::new(-32603, "absolute URL required for endpoint"),
+            attempted,
+        ));
     }
 
     #[test]
     fn build_attempts_linux_target() {
         // windows value, linux agent → /mnt then /tmp
         assert_eq!(
-            build_attempts(Path::new(r"Q:\repo"), Some(PathFormat::Posix)),
+            build_attempts(
+                Path::new(r"Q:\repo"),
+                CwdTarget::Explicit(PathFormat::Posix),
+            ),
             vec![PathBuf::from("/mnt/q/repo"), PathBuf::from("/tmp")]
         );
         // posix value, linux agent → as-is then /tmp
         assert_eq!(
-            build_attempts(Path::new("/home/u"), Some(PathFormat::Posix)),
+            build_attempts(
+                Path::new("/home/u"),
+                CwdTarget::Explicit(PathFormat::Posix),
+            ),
             vec![PathBuf::from("/home/u"), PathBuf::from("/tmp")]
         );
     }
@@ -643,12 +751,18 @@ mod tests {
     fn build_attempts_windows_target() {
         let _g = scoped_env(&[("USERPROFILE", r"C:\Users\tester")]);
         assert_eq!(
-            build_attempts(Path::new(r"Q:\repo"), Some(PathFormat::Windows)),
+            build_attempts(
+                Path::new(r"Q:\repo"),
+                CwdTarget::Explicit(PathFormat::Windows),
+            ),
             vec![PathBuf::from(r"Q:\repo")]
         );
         // posix value, windows agent → converts (/mnt) or USERPROFILE
         assert_eq!(
-            build_attempts(Path::new("/mnt/c/x"), Some(PathFormat::Windows)),
+            build_attempts(
+                Path::new("/mnt/c/x"),
+                CwdTarget::Explicit(PathFormat::Windows),
+            ),
             vec![PathBuf::from(r"C:\x")]
         );
     }
@@ -656,25 +770,79 @@ mod tests {
     #[test]
     fn build_attempts_unknown_target_tries_both() {
         let _g = scoped_env(&[("USERPROFILE", r"C:\Users\tester")]);
-        // windows value, unknown → windows, then linux, then /tmp
-        let got = build_attempts(Path::new(r"Q:\repo"), None);
+        // Unknown remains bounded to the original and opposite namespace.
+        let got = build_attempts(Path::new(r"Q:\repo"), CwdTarget::Unknown);
         assert_eq!(
             got,
             vec![
                 PathBuf::from(r"Q:\repo"),
                 PathBuf::from("/mnt/q/repo"),
-                PathBuf::from("/tmp"),
             ]
         );
-        // posix value, unknown → linux first, then windows, then /tmp
-        let got2 = build_attempts(Path::new("/home/u"), None);
+        let got2 = build_attempts(Path::new("/home/u"), CwdTarget::Unknown);
         assert_eq!(
             got2,
             vec![
                 PathBuf::from("/home/u"),
                 PathBuf::from(r"C:\Users\tester"),
-                PathBuf::from("/tmp"),
             ]
         );
+    }
+
+    #[test]
+    fn detected_target_keeps_opposite_namespace_as_fallback() {
+        assert_eq!(
+            build_attempts(
+                Path::new(r"C:\repo"),
+                CwdTarget::Detected(PathFormat::Windows),
+            ),
+            vec![PathBuf::from(r"C:\repo"), PathBuf::from("/mnt/c/repo")]
+        );
+    }
+
+    #[tokio::test]
+    async fn attempts_share_one_deadline_and_stop_on_timeout() {
+        let attempts = vec![PathBuf::from(r"C:\repo"), PathBuf::from("/mnt/c/repo")];
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_operation = std::sync::Arc::clone(&calls);
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let result = run_cwd_attempts(&attempts, deadline, move |_cwd| {
+            let calls = std::sync::Arc::clone(&calls_for_operation);
+            async move {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                Err::<(), _>(acp::Error::new(-32603, "Invalid working directory"))
+            }
+        })
+        .await;
+
+        assert!(matches!(result, Err(CwdAttemptFailure::Timeout)));
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the second candidate receives only the first candidate's remaining budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_cwd_errors_are_never_retried() {
+        let attempts = vec![PathBuf::from(r"C:\repo"), PathBuf::from("/mnt/c/repo")];
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_operation = std::sync::Arc::clone(&calls);
+        let result = run_cwd_attempts(
+            &attempts,
+            Instant::now() + Duration::from_secs(1),
+            move |_cwd| {
+                let calls = std::sync::Arc::clone(&calls_for_operation);
+                async move {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err::<(), _>(acp::Error::new(-32603, "agent is temporarily unavailable"))
+                }
+            },
+        )
+        .await;
+
+        assert!(matches!(result, Err(CwdAttemptFailure::Agent(_))));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

@@ -390,7 +390,7 @@ struct AgentCli {
 
 #[derive(Default)]
 struct CwdFormatState {
-    format: Option<crate::protocol::acp::cwd_format::PathFormat>,
+    target: Option<crate::protocol::acp::cwd_format::CwdTarget>,
     detected: bool,
 }
 
@@ -399,7 +399,9 @@ impl CwdFormatState {
         match source {
             crate::agent_source::AgentSource::Host => Self::default(),
             crate::agent_source::AgentSource::Wsl { .. } => Self {
-                format: Some(crate::protocol::acp::cwd_format::PathFormat::Posix),
+                target: Some(crate::protocol::acp::cwd_format::CwdTarget::Explicit(
+                    crate::protocol::acp::cwd_format::PathFormat::Posix,
+                )),
                 detected: true,
             },
         }
@@ -410,35 +412,55 @@ impl AgentCli {
     /// Learn an opaque agent launcher's cwd namespace once. `session/list`
     /// reflects the process that actually received the ACP connection, so it
     /// handles `wsl.exe`, `.cmd`, and other wrappers without parsing them.
-    async fn cwd_format(&self) -> Option<crate::protocol::acp::cwd_format::PathFormat> {
+    async fn cwd_target(
+        &self,
+        deadline: std::time::Instant,
+    ) -> crate::protocol::acp::cwd_format::CwdTarget {
         let mut state = self.cwd_format.lock().await;
         if !state.detected {
             state.detected = true;
-            state.format = crate::protocol::acp::cwd_format::detect_agent_format(
+            let remaining = deadline
+                .checked_duration_since(std::time::Instant::now())
+                .unwrap_or_default();
+            state.target = crate::protocol::acp::cwd_format::detect_agent_format(
                 &self.conn,
                 &self.cached_init_resp,
-                std::time::Duration::from_secs(5),
+                remaining.min(std::time::Duration::from_secs(5)),
             )
-            .await;
+            .await
+            .map(crate::protocol::acp::cwd_format::CwdTarget::Detected);
             tracing::debug!(
                 target: "master",
                 agent = %self.cmd_key,
-                cwd_format = ?state.format,
+                cwd_target = ?state.target,
                 "detected agent cwd namespace"
             );
         }
-        state.format
+        state
+            .target
+            .unwrap_or(crate::protocol::acp::cwd_format::CwdTarget::Unknown)
     }
 
-    async fn cwd_attempts(&self, reported: &std::path::Path) -> Vec<PathBuf> {
+    async fn cwd_attempts(
+        &self,
+        reported: &std::path::Path,
+        deadline: std::time::Instant,
+    ) -> Vec<PathBuf> {
         let value = crate::protocol::acp::cwd_format::pick_value(Some(reported));
-        crate::protocol::acp::cwd_format::build_attempts(&value, self.cwd_format().await)
+        crate::protocol::acp::cwd_format::build_attempts(&value, self.cwd_target(deadline).await)
     }
 
     async fn record_cwd_success(&self, cwd: &std::path::Path) {
         let mut state = self.cwd_format.lock().await;
         state.detected = true;
-        state.format = Some(crate::protocol::acp::cwd_format::classify(cwd));
+        if !matches!(
+            state.target,
+            Some(crate::protocol::acp::cwd_format::CwdTarget::Explicit(_))
+        ) {
+            state.target = Some(crate::protocol::acp::cwd_format::CwdTarget::Detected(
+                crate::protocol::acp::cwd_format::classify(cwd),
+            ));
+        }
     }
 }
 
@@ -533,11 +555,25 @@ fn is_already_loaded_error(err: &acp::Error) -> bool {
     if msg.contains("already loaded") {
         return true;
     }
+
     err.data
         .as_ref()
         .and_then(|d| d.as_str())
         .map(|s| s.to_ascii_lowercase().contains("already loaded"))
         .unwrap_or(false)
+}
+
+fn resumed_registry_cwd(
+    effective_cwd: &std::path::Path,
+    existing: Option<&crate::session_registry::SessionInfo>,
+    reused_existing_session: bool,
+) -> PathBuf {
+    if reused_existing_session {
+        if let Some(existing) = existing {
+            return existing.cwd.clone();
+        }
+    }
+    effective_cwd.to_path_buf()
 }
 
 impl MasterClient {
@@ -1010,77 +1046,59 @@ impl HelperHandler {
     ) -> acp::Result<(acp::schema::v1::NewSessionResponse, PathBuf)> {
         let timeout_secs = timeout.as_secs();
         let started = std::time::Instant::now();
+        let deadline = started + timeout;
         let agent = self.resolved_agent("new_session")?;
-        let cwd_attempts = agent.cwd_attempts(&args.cwd).await;
-        let mut attempts = cwd_attempts.iter().enumerate();
-        let mut successful_cwd = None;
-        let result = loop {
-            let (attempt_index, cwd) = attempts
-                .next()
-                .expect("cwd attempts always contain at least one value");
-            let mut request = args.clone();
-            request.cwd = cwd.clone();
-            let result = tokio::time::timeout(timeout, agent.conn.new_session(request)).await;
-            match &result {
-                Ok(Ok(_)) => {
-                    agent.record_cwd_success(cwd).await;
-                    successful_cwd = Some(cwd.clone());
-                    break result;
-                }
-                Ok(Err(error))
-                    if crate::protocol::acp::cwd_format::looks_like_cwd_error(&format!(
-                        "{error:#}"
-                    )) && attempt_index + 1 < cwd_attempts.len() =>
-                {
-                    tracing::info!(
-                        target: "master",
-                        step = "helper→agent",
-                        op = "new_session",
-                        helper_id = ?self.helper_id,
-                        cwd_attempt = attempt_index + 1,
-                        "agent rejected cwd; retrying in another namespace"
-                    );
-                    continue;
-                }
-                _ => break result,
-            }
-        };
+        let cwd_attempts = agent.cwd_attempts(&args.cwd, deadline).await;
+        let result = crate::protocol::acp::cwd_format::run_cwd_attempts(
+            &cwd_attempts,
+            deadline,
+            |cwd| {
+                let mut request = args.clone();
+                request.cwd = cwd;
+                agent.conn.new_session(request)
+            },
+        )
+        .await;
         let session_id = result
             .as_ref()
             .ok()
-            .and_then(|inner| inner.as_ref().ok())
-            .map(|resp| resp.session_id.to_string());
+            .map(|(resp, _)| resp.session_id.to_string());
         let (failure_kind, acp_error_code) = match &result {
-            Ok(Ok(_)) => ("", 0),
-            Ok(Err(e)) => ("AcpError", e.code.into()),
-            Err(_) => ("Timeout", 0),
+            Ok(_) => ("", 0),
+            Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Agent(e)) => {
+                ("AcpError", e.code.into())
+            }
+            Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Timeout) => ("Timeout", 0),
         };
         crate::telemetry::log_acp_new_session_complete(
             session_id.as_deref(),
             started.elapsed().as_secs_f64() * 1000.0,
-            matches!(result, Ok(Ok(_))),
+            result.is_ok(),
             "MasterForward",
             failure_kind,
             acp_error_code,
         );
-        let response = result.map_err(|_| {
-            let message = format!("agent CLI session/new timed out after {timeout_secs}s");
-            tracing::error!(
-                target: "master",
-                step = "helper→agent",
-                op = "new_session",
-                helper_id = ?self.helper_id,
-                timeout_secs,
-                "agent CLI session/new timed out"
-            );
-            acp::Error::new(-32603, message.clone()).data(serde_json::json!({
-                "message": message
-            }))
-        })??;
-        Ok((
-            response,
-            successful_cwd.expect("successful session/new has a selected cwd"),
-        ))
+        match result {
+            Ok((response, cwd)) => {
+                agent.record_cwd_success(&cwd).await;
+                Ok((response, cwd))
+            }
+            Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Agent(error)) => Err(error),
+            Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Timeout) => {
+                let message = format!("agent CLI session/new timed out after {timeout_secs}s");
+                tracing::error!(
+                    target: "master",
+                    step = "helper→agent",
+                    op = "new_session",
+                    helper_id = ?self.helper_id,
+                    timeout_secs,
+                    "agent CLI session/new timed out"
+                );
+                Err(acp::Error::new(-32603, message.clone()).data(serde_json::json!({
+                    "message": message
+                })))
+            }
+        }
     }
 
     /// Forward `session/load` through the same namespace negotiation as
@@ -1091,35 +1109,29 @@ impl HelperHandler {
         agent: &AgentCli,
         args: acp::schema::v1::LoadSessionRequest,
     ) -> acp::Result<(acp::schema::v1::LoadSessionResponse, PathBuf)> {
-        let cwd_attempts = agent.cwd_attempts(&args.cwd).await;
-        for (attempt_index, cwd) in cwd_attempts.iter().enumerate() {
-            let mut request = args.clone();
-            request.cwd = cwd.clone();
-            match agent.conn.load_session(request).await {
-                Ok(response) => {
-                    agent.record_cwd_success(cwd).await;
-                    return Ok((response, cwd.clone()));
-                }
-                Err(error)
-                    if attempt_index + 1 < cwd_attempts.len()
-                        && crate::protocol::acp::cwd_format::looks_like_cwd_error(&format!(
-                            "{error:#}"
-                        )) =>
-                {
-                    tracing::info!(
-                        target: "master",
-                        step = "helper→agent",
-                        op = "load_session",
-                        helper_id = ?self.helper_id,
-                        session_id = %args.session_id,
-                        cwd_attempt = attempt_index + 1,
-                        "agent rejected cwd; retrying in another namespace"
-                    );
-                }
-                Err(error) => return Err(error),
+        const SESSION_LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+        let deadline = std::time::Instant::now() + SESSION_LOAD_TIMEOUT;
+        let cwd_attempts = agent.cwd_attempts(&args.cwd, deadline).await;
+        match crate::protocol::acp::cwd_format::run_cwd_attempts(
+            &cwd_attempts,
+            deadline,
+            |cwd| {
+                let mut request = args.clone();
+                request.cwd = cwd;
+                agent.conn.load_session(request)
+            },
+        )
+        .await
+        {
+            Ok((response, cwd)) => {
+                agent.record_cwd_success(&cwd).await;
+                Ok((response, cwd))
+            }
+            Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Agent(error)) => Err(error),
+            Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Timeout) => {
+                Err(acp::Error::new(-32603, "agent CLI session/load timed out after 60s"))
             }
         }
-        unreachable!("cwd attempts always contain at least one value")
     }
 }
 
@@ -1392,6 +1404,7 @@ impl HelperHandler {
         // Both a re-bind and a real `session/load` resume the session; only a
         // genuine load failure rolls back. Resolve the response, then register
         // the resumed row once for either success path.
+        let mut reused_existing_session = is_orphan_rebind;
         let resp = if is_orphan_rebind {
             tracing::info!(
                 target: "master",
@@ -1412,6 +1425,7 @@ impl HelperHandler {
                 // this master): the CLI reports "already loaded", so re-bind
                 // onto the pre-registered routing just like the fast path.
                 Err(err) if is_already_loaded_error(&err) => {
+                    reused_existing_session = true;
                     tracing::info!(
                         target: "master",
                         step = "helper→agent",
@@ -1462,6 +1476,10 @@ impl HelperHandler {
         // a naked `SessionInfo::new` upsert would blank them to "—" in the
         // session-management view).
         if let Some(existing) = self.state.registry.lookup(&session_id).await {
+            // Rebind paths never sent a cwd to the CLI. Preserve the
+            // authoritative value recorded when the session was created
+            // instead of overwriting it with this helper's raw cwd.
+            info.cwd = resumed_registry_cwd(&info.cwd, Some(&existing), reused_existing_session);
             if info.title.is_none() {
                 info.title = existing.title;
             }
@@ -2333,10 +2351,25 @@ fn resolve_agent_selection(
         );
     }
 
+    let default_is_custom = default_id
+        .is_some_and(|id| id.trim_start().to_ascii_lowercase().starts_with("custom:"));
+    let requested_is_custom = requested
+        .as_deref()
+        .is_some_and(|id| id.starts_with("custom:"));
+    let fallback_source = if default_is_custom || requested_is_custom {
+        // A custom default command is trusted from the master's argv. Its
+        // source is the profile-selected helper backend, so preserve an
+        // explicit WSL placement for both agent spawn and ShellManager.
+        crate::agent_source::AgentSource::from_wire(requested_source, requested_wsl_distro)
+    } else {
+        // Never let a denied built-in selection steer the trusted fallback
+        // command into an attacker-selected distro.
+        crate::agent_source::AgentSource::Host
+    };
     (
         default_cmd.to_string(),
         default_id.map(str::to_string),
-        crate::agent_source::AgentSource::Host,
+        fallback_source,
     )
 }
 

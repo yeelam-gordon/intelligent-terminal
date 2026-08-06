@@ -2050,6 +2050,20 @@ namespace winrt::TerminalApp::implementation
                 {
                     agentCliPath = _ResolveAgentCliPathForId(effectiveAgentId, effectiveModel, {});
                 }
+                else if (_IsCustomAgentId(effectiveAgentId) &&
+                         effectiveAgentId == globals.EffectiveAcpAgent())
+                {
+                    // A profile backend can place the globally configured
+                    // custom command in a specific WSL distro. Per-profile
+                    // command lines are not trusted over the helper pipe, so
+                    // only the globally configured custom id may select this
+                    // path; the trusted global setting remains the command
+                    // line we launch.
+                    agentCliPath = _ResolveAgentCliPathForId(
+                        effectiveAgentId,
+                        effectiveModel,
+                        globals.AcpCustomCommand());
+                }
                 if (backend->source == ::Microsoft::Terminal::Settings::Model::AgentPaneBackendSource::Wsl)
                 {
                     const auto shellName = tab->GetActiveTerminalControl().ShellName();
@@ -2317,7 +2331,11 @@ namespace winrt::TerminalApp::implementation
                 startingDirectory = winrt::hstring{ homePath };
             }
         }
-        if (effectiveAgentSource == L"wsl" && !startingDirectory.empty())
+        // The helper forwards this source-pane cwd to the shared master for
+        // every source. The master owns the agent namespace decision, so a
+        // custom command explicitly configured for WSL needs the same context
+        // as a built-in WSL backend.
+        if (!startingDirectory.empty())
         {
             appendHelperFlagValue(L"--agent-source-cwd", startingDirectory);
         }
