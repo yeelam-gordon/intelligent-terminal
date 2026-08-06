@@ -21,9 +21,9 @@
 //!    list is empty or unsupported the target is unknown and the caller
 //!    tries both formats.
 //!
-//! 2. **Source value** — the cwd we start from ([`pick_value`]) — drops
-//!    "junk" launcher dirs (`System32`, `Windows`) and empty values down to
-//!    `%USERPROFILE%`, so we never seed a session in System32.
+//! 2. **Source value** — the cwd we start from ([`pick_value`]) preserves
+//!    every captured pane cwd, including a legitimate `System32`; only an
+//!    absent value falls back to `%USERPROFILE%`.
 //!
 //! 3. **Conversion** is done by two *idempotent* converters,
 //!    [`to_windows_format`] / [`to_linux_format`]: passing a path that is

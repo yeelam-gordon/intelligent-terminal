@@ -2331,7 +2331,7 @@ pub async fn run_acp_client_over_pipe(
                     &event_tx,
                     true,
                     true,
-                    std::time::Duration::from_secs(60),
+                    None,
                 );
             }
             Some(req) = drop_session_rx.recv() => {
@@ -2573,8 +2573,9 @@ fn dispatch_master_ext_request(
 /// `use_load_failure_handler` selects the richer [`handle_load_failure`]
 /// (restore prior binding / boot-time fallback `new_session`); when
 /// `false`, a load failure instead surfaces a plain `TabError`.
-/// `timeout` bounds the `session/load` call (60s in production; injectable
-/// for tests).
+/// `timeout` is test-only. In helper→master mode, master owns the one 60s
+/// end-to-end deadline so the helper cannot fall back to `session/new` while
+/// a late master `session/load` still succeeds.
 #[allow(clippy::too_many_arguments)]
 fn dispatch_load_session(
     req: LoadSessionForTab,
@@ -2584,7 +2585,7 @@ fn dispatch_load_session(
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     inject_pane_meta: bool,
     use_load_failure_handler: bool,
-    timeout: std::time::Duration,
+    timeout: Option<std::time::Duration>,
 ) {
     tracing::info!(
         target: "acp_load_session",
@@ -2592,7 +2593,7 @@ fn dispatch_load_session(
         session_id = %req.session_id,
         inject_pane_meta,
         use_load_failure_handler,
-        timeout_ms = timeout.as_millis() as u64,
+        timeout_ms = ?timeout.map(|value| value.as_millis() as u64),
         "load_session requested"
     );
     let conn = conn.clone();
@@ -2635,13 +2636,41 @@ fn dispatch_load_session(
         if inject_pane_meta {
             inject_wta_pane_meta(&mut load_req.meta);
         }
-        // `session/load` may replay history before returning, so on large
-        // session stores the call can take a while; the timeout ceiling
-        // keeps us from hanging forever if the agent never responds.
-        let load_result = tokio::time::timeout(timeout, conn.load_session(load_req)).await;
+        let load_result = if let Some(timeout) = timeout {
+            match tokio::time::timeout(timeout, conn.load_session(load_req)).await {
+                Ok(result) => result,
+                Err(_) => {
+                    let human_timeout = if timeout.as_secs() >= 1 {
+                        format!("{}s", timeout.as_secs())
+                    } else {
+                        format!("{}ms", timeout.as_millis())
+                    };
+                    let message = format!(
+                        "Resume timed out after {human_timeout} — the agent \
+                         did not respond to `session/load`."
+                    );
+                    dispatch_load_failure(
+                        use_load_failure_handler,
+                        old_sid.as_ref(),
+                        &req.tab_id,
+                        &cwd,
+                        &conn,
+                        &tab_to_session,
+                        &event_tx,
+                        message,
+                    )
+                    .await;
+                    return;
+                }
+            }
+        } else {
+            // The pipe's master is the single owner of the production
+            // deadline. It returns the definitive success/failure outcome.
+            conn.load_session(load_req).await
+        };
 
         match load_result {
-            Ok(Ok(resp)) => {
+            Ok(resp) => {
                 tracing::info!(
                     target: "acp_load_session",
                     tab = %req.tab_id,
@@ -2677,7 +2706,7 @@ fn dispatch_load_session(
                     current_model_id,
                 });
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 tracing::warn!(
                     target: "acp_load_session",
                     tab = %req.tab_id,
@@ -2691,34 +2720,6 @@ fn dispatch_load_session(
                      session id (CLI mismatch), or `session/load` \
                      is unsupported.",
                     e
-                );
-                dispatch_load_failure(
-                    use_load_failure_handler,
-                    old_sid.as_ref(),
-                    &req.tab_id,
-                    &cwd,
-                    &conn,
-                    &tab_to_session,
-                    &event_tx,
-                    message,
-                )
-                .await;
-            }
-            Err(_) => {
-                tracing::warn!(
-                    target: "acp_load_session",
-                    tab = %req.tab_id,
-                    session_id = %req.session_id,
-                    "load_session timed out"
-                );
-                let human_timeout = if timeout.as_secs() >= 1 {
-                    format!("{}s", timeout.as_secs())
-                } else {
-                    format!("{}ms", timeout.as_millis())
-                };
-                let message = format!(
-                    "Resume timed out after {human_timeout} — the agent \
-                     did not respond to `session/load`."
                 );
                 dispatch_load_failure(
                     use_load_failure_handler,

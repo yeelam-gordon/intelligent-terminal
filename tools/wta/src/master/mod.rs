@@ -304,7 +304,7 @@ struct MasterStateInner {
     /// drops just that agent's set on CLI death, so a crashed-and-respawned
     /// CLI under the same command line never re-binds to a session it never
     /// had — such a resume falls back to a real `session/load` from disk.
-    orphaned_sessions: Mutex<HashMap<AgentCmdKey, HashSet<acp::schema::v1::SessionId>>>,
+    orphaned_sessions: Mutex<HashMap<AgentCmdKey, HashMap<acp::schema::v1::SessionId, OrphanedSession>>>,
     /// #266 born-bound sessions (WTA-launched delegate/resume — copilot/claude/
     /// gemini). **Binding-only**: unlike `hook_owned`, the file watcher may
     /// still supply STATUS for these when no real hook is installed
@@ -386,6 +386,13 @@ struct AgentCli {
     /// crashed-and-respawned CLI under the same command line never inherits
     /// another instance's stale orphan sessions.
     cmd_key: AgentCmdKey,
+}
+
+#[derive(Clone)]
+struct OrphanedSession {
+    session_id: acp::schema::v1::SessionId,
+    cwd: Option<PathBuf>,
+    title: Option<String>,
 }
 
 #[derive(Default)]
@@ -1394,12 +1401,13 @@ impl HelperHandler {
         // turn now streams its `session/update`s to this new helper. Scoped
         // to `agent.cmd_key` so we only re-bind sessions this exact CLI still
         // holds (a crashed+respawned CLI's set was dropped by `reap_agent`).
-        let is_orphan_rebind = {
+        let orphaned_session = {
             let mut orphans = self.state.orphaned_sessions.lock().await;
             orphans
                 .get_mut(&agent.cmd_key)
-                .is_some_and(|set| set.remove(&session_id))
+                .and_then(|sessions| sessions.remove(&session_id))
         };
+        let is_orphan_rebind = orphaned_session.is_some();
 
         // Both a re-bind and a real `session/load` resume the session; only a
         // genuine load failure rolls back. Resolve the response, then register
@@ -1485,6 +1493,14 @@ impl HelperHandler {
             }
             if info.updated_at.is_none() {
                 info.updated_at = existing.updated_at;
+            }
+        }
+        else if let Some(orphan) = orphaned_session {
+            if let Some(cwd) = orphan.cwd {
+                info.cwd = cwd;
+            }
+            if info.title.is_none() {
+                info.title = orphan.title;
             }
         }
         self.state.registry.upsert(info.clone()).await;
@@ -2917,9 +2933,9 @@ async fn serve_helper(
             };
             if still_live {
                 let mut orphans = state.orphaned_sessions.lock().await;
-                let set = orphans.entry(key).or_default();
-                for sid in &victims {
-                    set.insert(sid.clone());
+                let sessions = orphans.entry(key).or_default();
+                for victim in &victims {
+                    sessions.insert(victim.session_id.clone(), victim.clone());
                 }
             }
         }
@@ -2993,7 +3009,7 @@ fn build_restart_agent_pane_event(
 async fn drop_sessions_for_helper(
     state: &MasterStateInner,
     helper_id: HelperId,
-) -> Vec<acp::schema::v1::SessionId> {
+) -> Vec<OrphanedSession> {
     // Collect the owned SessionIds first so we can drop them from the
     // live registry too. Single pass through `session_to_helper` while
     // we already hold its lock; the corresponding `registry.remove`
@@ -3014,7 +3030,14 @@ async fn drop_sessions_for_helper(
             pending_usage.remove(session_id);
         }
     }
+    let mut dropped = Vec::with_capacity(victims.len());
     for sid in &victims {
+        let snapshot = state.registry.lookup(sid).await;
+        dropped.push(OrphanedSession {
+            session_id: sid.clone(),
+            cwd: snapshot.as_ref().map(|info| info.cwd.clone()),
+            title: snapshot.and_then(|info| info.title),
+        });
         state.registry.remove(sid).await;
         // Broadcast removal so every still-attached helper drops the
         // row from its mirror. The disconnecting helper itself has
@@ -3033,7 +3056,7 @@ async fn drop_sessions_for_helper(
         )
         .await;
     }
-    victims
+    dropped
 }
 
 /// Fan an ACP `ExtNotification` out to every currently-attached helper.

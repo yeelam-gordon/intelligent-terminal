@@ -1498,7 +1498,7 @@ async fn dispatch_load_session_binds_and_emits_attached() {
                 &h.event_tx,
                 false,
                 false,
-                std::time::Duration::from_secs(5),
+                Some(std::time::Duration::from_secs(5)),
             );
 
             match tokio::time::timeout(std::time::Duration::from_secs(5), event_rx.recv()).await {
@@ -1546,7 +1546,7 @@ async fn dispatch_load_session_failure_inline_emits_tab_error() {
                 &h.event_tx,
                 false,
                 false,
-                std::time::Duration::from_secs(5),
+                Some(std::time::Duration::from_secs(5)),
             );
 
             match tokio::time::timeout(std::time::Duration::from_secs(5), event_rx.recv()).await {
@@ -1600,7 +1600,7 @@ async fn dispatch_load_session_failure_handler_restores_prior_binding() {
                 &h.event_tx,
                 false,
                 true,
-                std::time::Duration::from_secs(5),
+                Some(std::time::Duration::from_secs(5)),
             );
 
             match tokio::time::timeout(std::time::Duration::from_secs(5), event_rx.recv()).await {
@@ -1649,7 +1649,7 @@ async fn dispatch_load_session_timeout_emits_tab_error() {
                 &h.event_tx,
                 false,
                 false,
-                std::time::Duration::from_millis(50),
+                Some(std::time::Duration::from_millis(50)),
             );
 
             match tokio::time::timeout(std::time::Duration::from_secs(5), event_rx.recv()).await {
@@ -1665,6 +1665,50 @@ async fn dispatch_load_session_timeout_emits_tab_error() {
             assert!(
                 tab_to_session.lock().await.is_empty(),
                 "timed-out load must leave the tab unbound"
+            );
+        })
+        .await;
+}
+
+/// Pipe mode deliberately has no helper-side load timeout: master owns the
+/// 60s end-to-end deadline and its result is authoritative. This guards the
+/// old race where helper fallback `session/new` could overlap a late load.
+#[tokio::test]
+async fn dispatch_load_session_without_local_timeout_waits_for_master_result() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let h = connect_for_dispatch(MockBehavior::Reply);
+            h.slow_load.store(true, Ordering::SeqCst);
+            let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+            let cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+            let mut event_rx = h.event_rx;
+
+            dispatch_load_session(
+                LoadSessionForTab {
+                    tab_id: "t1".to_string(),
+                    session_id: "hist-sess-7".to_string(),
+                    cwd: None,
+                },
+                &h.conn,
+                &tab_to_session,
+                &cancel_signals,
+                &h.event_tx,
+                true,
+                true,
+                None,
+            );
+
+            match tokio::time::timeout(std::time::Duration::from_secs(2), event_rx.recv()).await {
+                Ok(Some(AppEvent::SessionAttached { session_id, .. })) => {
+                    assert_eq!(session_id, "hist-sess-7");
+                }
+                _ => panic!("expected the late master load result, not helper fallback"),
+            }
+            assert_eq!(
+                tab_to_session.lock().await.get("t1").map(|sid| sid.to_string()),
+                Some("hist-sess-7".to_string())
             );
         })
         .await;

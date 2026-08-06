@@ -94,15 +94,15 @@ pub fn active_pane_wsl_distro(active: Option<&serde_json::Value>) -> Option<&str
 
 /// Resolve the cwd sent to an ACP agent running in `source`.
 ///
-/// Host agents preserve the pre-WSL-backend behavior and use WTA's own cwd.
-/// WSL agents require an absolute POSIX path, so translate the common WT
-/// forms and resolve `~`/relative paths against the distro's real `$HOME`.
+/// Host/opaque agents preserve the captured source-pane cwd unchanged. WSL
+/// agents require an absolute POSIX path, so translate the common WT forms
+/// and resolve `~`/relative paths against the distro's real `$HOME`.
 pub async fn resolve_source_cwd(source: &AgentSource, reported: Option<&str>) -> Option<String> {
+    let reported = reported.map(str::trim).filter(|cwd| !cwd.is_empty());
     let AgentSource::Wsl { distro } = source else {
-        return None;
+        return reported.map(str::to_string);
     };
 
-    let reported = reported.map(str::trim).filter(|cwd| !cwd.is_empty());
     if let Some(cwd) = reported.and_then(|cwd| {
         crate::protocol::acp::cwd_format::to_wsl_format(distro, std::path::Path::new(cwd))
     }) {
@@ -178,6 +178,12 @@ mod tests {
             active_pane_wsl_distro(Some(&serde_json::json!({ "shell": "pwsh.exe" }))),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn host_source_preserves_captured_project_cwd_for_opaque_wrappers() {
+        let cwd = resolve_source_cwd(&AgentSource::Host, Some(r"Q:\repo\project")).await;
+        assert_eq!(cwd.as_deref(), Some(r"Q:\repo\project"));
     }
 
     #[test]

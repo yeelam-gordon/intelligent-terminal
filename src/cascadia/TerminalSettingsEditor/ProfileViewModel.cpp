@@ -111,6 +111,21 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         if (!wslDistro.empty())
         {
+            // A user-configured custom ACP command has no probeable builtin
+            // executable id, but it can explicitly target this profile's
+            // distro. Offer that backend alongside discovered builtins so a
+            // manual `wsl:<distro>:custom:<name>` setting remains selectable
+            // and is not mislabeled as unavailable.
+            if (globalId.starts_with(L"custom:"))
+            {
+                entries.emplace_back(winrt::make<implementation::AgentEntry>(
+                    winrt::hstring{ Backend::AgentPaneBackend::Wsl(wslDistro, globalId) },
+                    winrt::hstring{ RS_fmt(
+                        L"Profile_AgentPaneBackend_AgentFormat",
+                        std::wstring{ std::wstring_view{ _AgentDisplayName(globalId) } },
+                        std::wstring{ wslDistro }) },
+                    true));
+            }
             for (const auto& agent : allowedAgents)
             {
                 if (std::find(

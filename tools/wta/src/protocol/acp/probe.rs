@@ -36,7 +36,9 @@ pub struct ProbeResult {
 /// pane (e.g. `"copilot --acp --stdio"`,
 /// `"npx -y @zed-industries/claude-code-acp"`).
 pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
-    const PROBE_TOTAL_TIMEOUT: Duration = Duration::from_secs(40);
+    // C++ terminates this probe at 40s. Keep a cleanup/log-flush margin so
+    // WTA reports its own timeout and drops the child before that outer kill.
+    const PROBE_TOTAL_TIMEOUT: Duration = Duration::from_secs(35);
     let deadline = std::time::Instant::now() + PROBE_TOTAL_TIMEOUT;
     let mut spawned = spawn_agent_process(agent_cmd, None)?;
     tracing::debug!(
@@ -166,7 +168,7 @@ pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
                 anyhow!("new_session failed: {error}")
             }
             crate::protocol::acp::cwd_format::CwdAttemptFailure::Timeout => {
-                anyhow!("new_session timed out within 40s probe budget")
+                anyhow!("new_session timed out within 35s probe budget")
             }
         })?
         .0;
