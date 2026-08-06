@@ -442,12 +442,6 @@ struct OrphanedSession {
     title: Option<String>,
 }
 
-#[derive(Default)]
-struct CwdFormatState {
-    target: Option<crate::protocol::acp::cwd_format::CwdTarget>,
-    detected: bool,
-}
-
 #[derive(Clone, Debug)]
 struct NativeCloudCatalog {
     models: Vec<crate::app::AcpModelInfo>,
