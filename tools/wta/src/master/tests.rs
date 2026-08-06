@@ -933,11 +933,25 @@ async fn reap_agent_drops_only_its_own_orphans() {
         orphans
             .entry(key_a.clone())
             .or_default()
-            .insert(SessionId::new("a-sess"));
+            .insert(
+                SessionId::new("a-sess"),
+                OrphanedSession {
+                    session_id: SessionId::new("a-sess"),
+                    cwd: None,
+                    title: None,
+                },
+            );
         orphans
             .entry(key_b.clone())
             .or_default()
-            .insert(SessionId::new("b-sess"));
+            .insert(
+                SessionId::new("b-sess"),
+                OrphanedSession {
+                    session_id: SessionId::new("b-sess"),
+                    cwd: None,
+                    title: None,
+                },
+            );
     }
     // reap only acts when the key is a live pool entry.
     {
@@ -953,7 +967,7 @@ async fn reap_agent_drops_only_its_own_orphans() {
     assert!(
         orphans
             .get(&key_b)
-            .is_some_and(|s| s.contains(&SessionId::new("b-sess"))),
+            .is_some_and(|s| s.contains_key(&SessionId::new("b-sess"))),
         "a co-resident agent's orphans must be untouched"
     );
 }
@@ -1595,8 +1609,8 @@ async fn drop_sessions_for_helper_retains_only_other_helpers() {
 
     let dropped = drop_sessions_for_helper(&state, HelperId(1)).await;
     assert_eq!(dropped.len(), 2);
-    assert!(dropped.contains(&SessionId::new("a1")));
-    assert!(dropped.contains(&SessionId::new("a2")));
+    assert!(dropped.iter().any(|session| session.session_id == SessionId::new("a1")));
+    assert!(dropped.iter().any(|session| session.session_id == SessionId::new("a2")));
 
     let map = state.session_to_helper.lock().await;
     assert!(!map.contains_key(&SessionId::new("a1")));
