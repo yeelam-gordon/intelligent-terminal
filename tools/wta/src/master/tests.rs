@@ -2156,6 +2156,30 @@ async fn new_session_timeout_is_enforced_by_master_forwarder() {
         .await;
 }
 
+#[test]
+fn load_session_cwd_conversion_is_single_attempt_and_namespace_aware() {
+    use crate::protocol::acp::cwd_format::{CwdTarget, PathFormat};
+
+    assert_eq!(
+        convert_cwd_for_single_attempt(
+            Path::new(r"C:\repo"),
+            CwdTarget::Explicit(PathFormat::Posix),
+        ),
+        PathBuf::from("/mnt/c/repo")
+    );
+    assert_eq!(
+        convert_cwd_for_single_attempt(
+            Path::new("/mnt/c/repo"),
+            CwdTarget::Detected(PathFormat::Windows),
+        ),
+        PathBuf::from(r"C:\repo")
+    );
+    assert_eq!(
+        convert_cwd_for_single_attempt(Path::new(r"C:\repo"), CwdTarget::Unknown),
+        PathBuf::from(r"C:\repo")
+    );
+}
+
 #[tokio::test]
 async fn failed_pending_session_cleanup_retires_close_marked_recovery_state() {
     let state = make_state();
