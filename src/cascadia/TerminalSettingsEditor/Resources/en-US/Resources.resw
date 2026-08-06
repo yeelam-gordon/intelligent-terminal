@@ -3019,4 +3019,48 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
     <value>Hooks installation failed. Check %LOCALAPPDATA%\IntelligentTerminal\logs\wta-install-hooks.log for details.</value>
     <comment>Failure summary shown when installing agent session tracking hooks fails. {Locked="Hooks","%LOCALAPPDATA%","IntelligentTerminal","logs","wta-install-hooks.log"}</comment>
   </data>
+  <data name="AIAgents_CustomModels.Header" xml:space="preserve">
+    <value>BYOM providers</value>
+    <comment>Section header for user-configured model providers. {Locked="BYOM"}</comment>
+  </data>
+  <data name="AIAgents_CustomModels.HelpText" xml:space="preserve">
+    <value>Use an OpenAI-compatible Chat Completions API endpoint. Supports GitHub Copilot and OpenCode.</value>
+    <comment>{Locked="OpenAI","Chat Completions API","GitHub Copilot","OpenCode"} Explains the API shape and agents supported by the shared custom provider.</comment>
+  </data>
+  <data name="AIAgents_CustomProviderUnsupportedForAgent" xml:space="preserve">
+    <value>{0} does not support custom OpenAI-compatible Chat Completions providers. Saved providers remain available when you switch to GitHub Copilot or OpenCode.</value>
+    <comment>{Locked="OpenAI","Chat Completions","GitHub Copilot","OpenCode"} {0} is replaced with the current AI agent display name. Explains that saved providers remain available for supported agents.</comment>
+  </data>
+  <data name="AIAgents_CustomProviderRemove.Content" xml:space="preserve">
+    <value>Remove</value>
+    <comment>Button that removes a custom model provider.</comment>
+  </data>
+  <data name="AIAgents_CustomProviderBaseUrl.Header" xml:space="preserve">
+    <value>Base URL</value>
+    <comment>Header for the custom provider endpoint input. {Locked="URL"}</comment>
+  </data>
+  <data name="AIAgents_CustomModelId.Header" xml:space="preserve">
+    <value>Model ID</value>
+    <comment>Header for the custom provider model identifier input. {Locked="ID"}</comment>
+  </data>
+  <data name="AIAgents_CustomProviderAdd.Content" xml:space="preserve">
+    <value>Add New</value>
+    <comment>Button that starts adding a custom model provider.</comment>
+  </data>
+  <data name="AIAgents_CustomProviderSave.Content" xml:space="preserve">
+    <value>Save</value>
+    <comment>Button that saves a new custom model provider.</comment>
+  </data>
+  <data name="AIAgents_CustomProviderCancel.Content" xml:space="preserve">
+    <value>Cancel</value>
+    <comment>Button that cancels adding a provider.</comment>
+  </data>
+  <data name="AIAgents_BYOKModelDisplayName" xml:space="preserve">
+    <value>{} (custom provider)</value>
+    <comment>{Locked="{}","custom provider"} {} is replaced with the provider-specific model identifier.</comment>
+  </data>
+  <data name="AIAgents_OpenAICompatibleModelDescription" xml:space="preserve">
+    <value>{} | {} | OpenAI-compatible</value>
+    <comment>{Locked="{}","OpenAI"} The first {} is replaced with the provider name; the second is replaced with its location.</comment>
+  </data>
 </root>
