@@ -2009,6 +2009,7 @@ pub async fn run_acp_client_over_pipe(
                     info.title = wire.title.clone();
                     info.updated_at = wire.updated_at.clone();
                     info.pane_session_id = wta.pane_session_id;
+                    info.agent_cmd_key = wta.agent_cmd_key.unwrap_or_default();
                     info
                 })
                 .collect();
@@ -2672,6 +2673,7 @@ fn dispatch_load_session(
                         &cwd,
                         &conn,
                         &tab_to_session,
+                        &session_id,
                         &event_tx,
                         message,
                     )
@@ -2743,6 +2745,7 @@ fn dispatch_load_session(
                     &cwd,
                     &conn,
                     &tab_to_session,
+                    &session_id,
                     &event_tx,
                     message,
                 )
@@ -2764,6 +2767,7 @@ async fn dispatch_load_failure(
     cwd: &std::path::Path,
     conn: &conn::ClientLink,
     tab_to_session: &Arc<tokio::sync::Mutex<HashMap<String, acp::schema::v1::SessionId>>>,
+    provisional_sid: &acp::schema::v1::SessionId,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     message: String,
 ) {
@@ -2779,6 +2783,15 @@ async fn dispatch_load_failure(
         )
         .await;
     } else {
+        // `dispatch_load_session` reserved the requested id before awaiting
+        // so prompt/autofix cannot create a second session mid-load. Clear
+        // only that reservation on a direct-path failure: a concurrent
+        // successful bind must never be removed by this stale failure.
+        let mut bindings = tab_to_session.lock().await;
+        if bindings.get(tab_id) == Some(provisional_sid) {
+            bindings.remove(tab_id);
+        }
+        drop(bindings);
         // TabError routes to the specific new tab (the historical session
         // has no live session_id we could thread through AgentError, and
         // AgentError with session_id=None would land in the currently-
@@ -3969,12 +3982,13 @@ mod tests {
         async fn session_removed_translates_to_alive_session_removed_event() {
             let (client, mut rx) = make_client();
             let sid = acp::schema::v1::SessionId::new("sess-dead".to_string());
-            let ext = build_session_removed_notification(&sid);
+            let key = crate::session_registry::SessionKey::unscoped(sid.clone());
+            let ext = build_session_removed_notification(&key);
 
             client.ext_notification(ext).await.unwrap();
 
             match rx.try_recv() {
-                Ok(AppEvent::AliveSessionRemoved(got)) => assert_eq!(got, sid),
+                Ok(AppEvent::AliveSessionRemoved(got)) => assert_eq!(got, key),
                 other => panic!(
                     "expected AliveSessionRemoved, got something else: {}",
                     match &other {

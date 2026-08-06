@@ -71,5 +71,13 @@ namespace Microsoft::Terminal::Settings::Model
         {
             return L"wsl:" + std::wstring{ distro } + L":" + std::wstring{ agentId };
         }
+
+        // `WSL` was formerly a Settings UI probe placeholder, never a
+        // resolved distribution name. Do not serialize it into a backend id:
+        // a selected `wsl:WSL:custom:...` cannot be launched.
+        static bool IsResolvedWslDistro(const std::wstring_view distro) noexcept
+        {
+            return !distro.empty() && distro != L"WSL";
+        }
     };
 }

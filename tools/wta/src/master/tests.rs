@@ -8,6 +8,14 @@ use super::*;
 use acp::schema::v1::{ContentChunk, SessionId, SessionNotification, SessionUpdate};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
+fn unscoped_key(sid: &SessionId) -> crate::session_registry::SessionKey {
+    crate::session_registry::SessionKey::unscoped(sid.clone())
+}
+
+fn scoped_key(agent_cmd_key: &str, sid: &SessionId) -> crate::session_registry::SessionKey {
+    crate::session_registry::SessionKey::new(agent_cmd_key, sid.clone())
+}
+
 #[derive(Clone)]
 struct PendingNewSessionAgent;
 
@@ -418,7 +426,7 @@ fn allowed_ids_absent_is_no_policy_present_but_empty_is_block_all() {
     assert_eq!(set, allow_set(&["gemini", "copilot"]));
     // Unknown ids mixed with a real id: only the real id survives.
     let mixed = normalize_allowed_agent_ids(&["custom:myapp".to_string(), "claude".to_string()])
-    .expect("one real id survives");
+        .expect("one real id survives");
     assert_eq!(mixed, allow_set(&["claude"]));
 
     // End-to-end through resolve_agent_selection:
@@ -561,7 +569,7 @@ fn client_connection_to_pending_new_session_agent() -> conn::ClientLink {
                     let m = m.clone();
                     async move {
                         use acp::schema::v1::{AgentResponse as R, ClientRequest as Q};
-            match req {
+                        match req {
                             Q::InitializeRequest(a) => conn::respond_enum(
                                 responder,
                                 m.initialize(a).await.map(R::InitializeResponse),
@@ -574,8 +582,8 @@ fn client_connection_to_pending_new_session_agent() -> conn::ClientLink {
                                 responder,
                                 m.new_session(a).await.map(R::NewSessionResponse),
                             ),
-                _ => responder.respond_with_error(acp::Error::method_not_found()),
-            }
+                            _ => responder.respond_with_error(acp::Error::method_not_found()),
+                        }
                     }
                 }
             },
@@ -883,6 +891,7 @@ async fn request_permission_for_orphaned_session_returns_cancelled_not_error() {
     let state = make_state();
     let client = MasterClient {
         state: Arc::clone(&state),
+        agent_cmd_key: String::new(),
     };
     // No routing entry for this session — it's orphaned.
     let req = RequestPermissionRequest::new(
@@ -930,28 +939,22 @@ async fn reap_agent_drops_only_its_own_orphans() {
     let key_b = "gemini --acp".to_string();
     {
         let mut orphans = state.orphaned_sessions.lock().await;
-        orphans
-            .entry(key_a.clone())
-            .or_default()
-            .insert(
-                SessionId::new("a-sess"),
-                OrphanedSession {
-                    session_id: SessionId::new("a-sess"),
-                    cwd: None,
-                    title: None,
-                },
-            );
-        orphans
-            .entry(key_b.clone())
-            .or_default()
-            .insert(
-                SessionId::new("b-sess"),
-                OrphanedSession {
-                    session_id: SessionId::new("b-sess"),
-                    cwd: None,
-                    title: None,
-                },
-            );
+        orphans.entry(key_a.clone()).or_default().insert(
+            SessionId::new("a-sess"),
+            OrphanedSession {
+                session_id: SessionId::new("a-sess"),
+                cwd: None,
+                title: None,
+            },
+        );
+        orphans.entry(key_b.clone()).or_default().insert(
+            SessionId::new("b-sess"),
+            OrphanedSession {
+                session_id: SessionId::new("b-sess"),
+                cwd: None,
+                title: None,
+            },
+        );
     }
     // reap only acts when the key is a live pool entry.
     {
@@ -1011,47 +1014,47 @@ async fn prompt_forward_survives_reentrant_permission() {
                 let (ar, aw) = tokio::io::split(mock_agent_pipe);
                 let builder =
                     acp::Agent
-                    .builder()
-                    .name("mock-reentrant-agent")
-                    .on_receive_request(
-                        move |req: ClientRequest,
-                              responder,
-                              cx: acp::ConnectionTo<acp::Client>| async move {
-                            match req {
-                                ClientRequest::PromptRequest(a) => {
-                                    let sid = a.session_id.clone();
-                                    tokio::task::spawn_local(async move {
-                                        let perm = RequestPermissionRequest::new(
-                                            sid,
-                                            ToolCallUpdate::new(
-                                                ToolCallId::new("tool-1"),
-                                                ToolCallUpdateFields::new()
-                                                    .title("Run: echo hi"),
-                                            ),
-                                            vec![PermissionOption::new(
-                                                PermissionOptionId::new("allow-once"),
-                                                "Allow once",
-                                                PermissionOptionKind::AllowOnce,
-                                            )],
-                                        );
-                                        // block_task from a spawned task is safe.
-                                        let _ = cx.send_request(perm).block_task().await;
-                                        let _ = conn::respond_enum(
-                                            responder,
-                                            Ok(AgentResponse::PromptResponse(
-                                                PromptResponse::new(StopReason::EndTurn),
-                                            )),
-                                        );
-                                    });
-                                    Ok(())
-                                }
+                        .builder()
+                        .name("mock-reentrant-agent")
+                        .on_receive_request(
+                            move |req: ClientRequest,
+                                  responder,
+                                  cx: acp::ConnectionTo<acp::Client>| async move {
+                                match req {
+                                    ClientRequest::PromptRequest(a) => {
+                                        let sid = a.session_id.clone();
+                                        tokio::task::spawn_local(async move {
+                                            let perm = RequestPermissionRequest::new(
+                                                sid,
+                                                ToolCallUpdate::new(
+                                                    ToolCallId::new("tool-1"),
+                                                    ToolCallUpdateFields::new()
+                                                        .title("Run: echo hi"),
+                                                ),
+                                                vec![PermissionOption::new(
+                                                    PermissionOptionId::new("allow-once"),
+                                                    "Allow once",
+                                                    PermissionOptionKind::AllowOnce,
+                                                )],
+                                            );
+                                            // block_task from a spawned task is safe.
+                                            let _ = cx.send_request(perm).block_task().await;
+                                            let _ = conn::respond_enum(
+                                                responder,
+                                                Ok(AgentResponse::PromptResponse(
+                                                    PromptResponse::new(StopReason::EndTurn),
+                                                )),
+                                            );
+                                        });
+                                        Ok(())
+                                    }
                                     _ => {
                                         responder.respond_with_error(acp::Error::method_not_found())
                                     }
-                            }
-                        },
-                        acp::on_receive_request!(),
-                    );
+                                }
+                            },
+                            acp::on_receive_request!(),
+                        );
                 let (_agent_link, agent_io) =
                     conn::spawn_agent(builder, conn::byte_streams(aw.compat_write(), ar.compat()));
                 tokio::task::spawn_local(async move {
@@ -1063,6 +1066,7 @@ async fn prompt_forward_survives_reentrant_permission() {
             // reentrant request_permission back out to the owning helper.
             let master_client = MasterClient {
                 state: Arc::clone(&state),
+                agent_cmd_key: String::new(),
             };
             let agent_conn = {
                 let (cr, cw) = tokio::io::split(master_agent_pipe);
@@ -1156,7 +1160,7 @@ async fn prompt_forward_survives_reentrant_permission() {
             // Route the session so the agent's reentrant request_permission
             // reaches the mock helper.
             state.session_to_helper.lock().await.insert(
-                sid.clone(),
+                unscoped_key(&sid),
                 HelperRoute {
                     helper_id: HelperId(1),
                     notif_tx,
@@ -1175,16 +1179,16 @@ async fn prompt_forward_survives_reentrant_permission() {
                         move |req: AgentRequest, responder, _cx| async move {
                             match req {
                                 AgentRequest::RequestPermissionRequest(_a) => conn::respond_enum(
-                                        responder,
-                                        Ok(ClientResponse::RequestPermissionResponse(
-                                            RequestPermissionResponse::new(
-                                                RequestPermissionOutcome::Selected(
-                                                    SelectedPermissionOutcome::new(
-                                                        PermissionOptionId::new("allow-once"),
-                                                    ),
+                                    responder,
+                                    Ok(ClientResponse::RequestPermissionResponse(
+                                        RequestPermissionResponse::new(
+                                            RequestPermissionOutcome::Selected(
+                                                SelectedPermissionOutcome::new(
+                                                    PermissionOptionId::new("allow-once"),
                                                 ),
                                             ),
-                                        )),
+                                        ),
+                                    )),
                                 ),
                                 _ => responder.respond_with_error(acp::Error::method_not_found()),
                             }
@@ -1253,8 +1257,242 @@ fn make_usage_notif(sid: &SessionId, used: u64) -> SessionNotification {
 async fn route(state: &Arc<MasterStateInner>, notif: SessionNotification) {
     let client = MasterClient {
         state: Arc::clone(state),
+        agent_cmd_key: String::new(),
     };
     client.session_notification(notif).await.unwrap();
+}
+
+#[tokio::test]
+async fn colliding_raw_session_ids_route_to_their_own_agent_helpers() {
+    let state = make_state();
+    let sid = SessionId::new("shared-raw-id");
+    let (a_tx, mut a_rx) = mpsc::channel(NOTIF_CHANNEL_CAPACITY);
+    let (b_tx, mut b_rx) = mpsc::channel(NOTIF_CHANNEL_CAPACITY);
+    {
+        let mut routes = state.session_to_helper.lock().await;
+        routes.insert(
+            scoped_key("agent-a", &sid),
+            HelperRoute {
+                helper_id: HelperId(1),
+                notif_tx: a_tx,
+                forwarder: None,
+                consecutive_drops: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            },
+        );
+        routes.insert(
+            scoped_key("agent-b", &sid),
+            HelperRoute {
+                helper_id: HelperId(2),
+                notif_tx: b_tx,
+                forwarder: None,
+                consecutive_drops: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            },
+        );
+    }
+
+    MasterClient {
+        state: Arc::clone(&state),
+        agent_cmd_key: "agent-a".to_string(),
+    }
+    .session_notification(make_notif(&sid))
+    .await
+    .unwrap();
+    assert!(a_rx.try_recv().is_ok(), "agent A must reach helper A");
+    assert!(b_rx.try_recv().is_err(), "agent A must not reach helper B");
+
+    MasterClient {
+        state: Arc::clone(&state),
+        agent_cmd_key: "agent-b".to_string(),
+    }
+    .session_notification(make_notif(&sid))
+    .await
+    .unwrap();
+    assert!(b_rx.try_recv().is_ok(), "agent B must reach helper B");
+}
+
+#[tokio::test]
+async fn same_raw_id_rebind_and_disconnect_are_scoped_to_one_agent() {
+    use crate::session_registry::SessionInfo;
+    use std::path::PathBuf;
+
+    let state = make_state();
+    let sid = SessionId::new("shared-raw-id");
+    let key_a = scoped_key("agent-a", &sid);
+    let key_b = scoped_key("agent-b", &sid);
+    let (a_tx, _a_rx) = mpsc::channel(NOTIF_CHANNEL_CAPACITY);
+    let (b_tx, _b_rx) = mpsc::channel(NOTIF_CHANNEL_CAPACITY);
+    let (a_rebound_tx, _a_rebound_rx) = mpsc::channel(NOTIF_CHANNEL_CAPACITY);
+
+    bind_session_route(
+        &state,
+        key_a.clone(),
+        HelperRoute {
+            helper_id: HelperId(1),
+            notif_tx: a_tx,
+            forwarder: None,
+            consecutive_drops: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        },
+    )
+    .await;
+    bind_session_route(
+        &state,
+        key_b.clone(),
+        HelperRoute {
+            helper_id: HelperId(2),
+            notif_tx: b_tx,
+            forwarder: None,
+            consecutive_drops: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        },
+    )
+    .await;
+    // Mirrors `load_session` rebinding an orphan under agent A: it must
+    // replace only A's route, never B's identical raw ACP id.
+    bind_session_route(
+        &state,
+        key_a.clone(),
+        HelperRoute {
+            helper_id: HelperId(3),
+            notif_tx: a_rebound_tx,
+            forwarder: None,
+            consecutive_drops: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        },
+    )
+    .await;
+    state
+        .registry
+        .upsert(
+            SessionInfo::new(sid.clone(), PathBuf::from("/agent-a")).with_agent_cmd_key("agent-a"),
+        )
+        .await;
+    state
+        .registry
+        .upsert(
+            SessionInfo::new(sid.clone(), PathBuf::from("/agent-b")).with_agent_cmd_key("agent-b"),
+        )
+        .await;
+
+    assert_eq!(
+        state.session_to_helper.lock().await[&key_a].helper_id,
+        HelperId(3)
+    );
+    assert_eq!(
+        state.session_to_helper.lock().await[&key_b].helper_id,
+        HelperId(2)
+    );
+    assert!(
+        !unbind_session_route_if_owned(&state, &key_a, HelperId(1)).await,
+        "a failed older load must not roll back agent A's newer rebind"
+    );
+    assert_eq!(
+        state.session_to_helper.lock().await[&key_a].helper_id,
+        HelperId(3)
+    );
+
+    drop_sessions_for_helper(&state, HelperId(3)).await;
+    assert!(
+        state.registry.lookup_key(&key_a).await.is_none(),
+        "disconnecting agent A's rebound helper removes only agent A's row"
+    );
+    assert!(
+        state.registry.lookup_key(&key_b).await.is_some(),
+        "agent B's colliding raw id survives agent A's disconnect"
+    );
+    assert!(
+        state.session_to_helper.lock().await.contains_key(&key_b),
+        "agent B's route survives agent A's disconnect"
+    );
+}
+
+#[tokio::test]
+async fn reaping_one_agent_preserves_a_colliding_sibling_route_and_row() {
+    use crate::session_registry::SessionInfo;
+    use std::path::PathBuf;
+
+    let state = make_state();
+    let sid = SessionId::new("shared-raw-id");
+    let key_a = scoped_key("agent-a", &sid);
+    let key_b = scoped_key("agent-b", &sid);
+    let (a_tx, _a_rx) = mpsc::channel(NOTIF_CHANNEL_CAPACITY);
+    let (b_tx, _b_rx) = mpsc::channel(NOTIF_CHANNEL_CAPACITY);
+    {
+        let mut routes = state.session_to_helper.lock().await;
+        for (key, helper_id, tx) in [
+            (key_a.clone(), HelperId(1), a_tx),
+            (key_b.clone(), HelperId(2), b_tx),
+        ] {
+            routes.insert(
+                key,
+                HelperRoute {
+                    helper_id,
+                    notif_tx: tx,
+                    forwarder: None,
+                    consecutive_drops: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                },
+            );
+        }
+    }
+    for (agent_cmd_key, cwd) in [("agent-a", "/agent-a"), ("agent-b", "/agent-b")] {
+        state
+            .registry
+            .upsert(
+                SessionInfo::new(sid.clone(), PathBuf::from(cwd))
+                    .with_agent_cmd_key(agent_cmd_key),
+            )
+            .await;
+    }
+    state.agents.lock().await.insert(
+        "agent-a".to_string(),
+        Arc::new(tokio::sync::OnceCell::new()),
+    );
+
+    reap_agent(&state, &"agent-a".to_string()).await;
+
+    assert!(state.registry.lookup_key(&key_a).await.is_none());
+    assert!(state.registry.lookup_key(&key_b).await.is_some());
+    let routes = state.session_to_helper.lock().await;
+    assert!(!routes.contains_key(&key_a));
+    assert!(routes.contains_key(&key_b));
+}
+
+#[tokio::test]
+async fn sessions_list_preserves_colliding_raw_ids_with_agent_identity() {
+    use crate::session_registry::{self, SessionInfo};
+    use std::path::PathBuf;
+
+    let state = make_state();
+    let sid = SessionId::new("shared-raw-id");
+    state
+        .registry
+        .upsert(
+            SessionInfo::new(sid.clone(), PathBuf::from("/agent-a")).with_agent_cmd_key("agent-a"),
+        )
+        .await;
+    state
+        .registry
+        .upsert(
+            SessionInfo::new(sid.clone(), PathBuf::from("/agent-b")).with_agent_cmd_key("agent-b"),
+        )
+        .await;
+
+    let response = handle_sessions_list(
+        &state,
+        &session_registry::SessionsListParams { rescan: false },
+    )
+    .await
+    .unwrap();
+    let mut rows = session_registry::parse_sessions_list_response(&response.0)
+        .unwrap()
+        .sessions;
+    rows.sort_by(|left, right| left.agent_cmd_key.cmp(&right.agent_cmd_key));
+
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row.session_id == sid));
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.agent_cmd_key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["agent-a", "agent-b"]
+    );
 }
 
 /// New `session_notification`s for a registered SessionId reach
@@ -1271,7 +1509,7 @@ async fn session_notification_routes_to_owning_helper() {
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            sid1.clone(),
+            unscoped_key(&sid1),
             HelperRoute {
                 helper_id: HelperId(1),
                 notif_tx: tx1,
@@ -1280,7 +1518,7 @@ async fn session_notification_routes_to_owning_helper() {
             },
         );
         map.insert(
-            sid2.clone(),
+            unscoped_key(&sid2),
             HelperRoute {
                 helper_id: HelperId(2),
                 notif_tx: tx2,
@@ -1309,7 +1547,7 @@ async fn session_notification_drops_entry_on_send_failure() {
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            sid.clone(),
+            unscoped_key(&sid),
             HelperRoute {
                 helper_id: HelperId(7),
                 notif_tx: tx,
@@ -1324,7 +1562,7 @@ async fn session_notification_drops_entry_on_send_failure() {
 
     let map = state.session_to_helper.lock().await;
     assert!(
-        !map.contains_key(&sid),
+        !map.contains_key(&unscoped_key(&sid)),
         "send failure should have removed the routing entry"
     );
 }
@@ -1338,7 +1576,7 @@ async fn session_notification_drops_entry_on_send_failure() {
 ///   4. Master finally tries `try_send` on the snapshotted (now
 ///      Closed) sender → `TrySendError::Closed`.
 ///
-/// Before the fix the cleanup path would `map.remove(&sid)`
+/// Before the fix the cleanup path would `map.remove(&unscoped_key(&sid))`
 /// unconditionally and clobber helper B's freshly-installed route.
 /// With the fix it compares `helper_id` and leaves the new entry
 /// alone.
@@ -1359,7 +1597,7 @@ async fn session_notification_preserves_rebound_route_on_closed() {
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            sid.clone(),
+            unscoped_key(&sid),
             HelperRoute {
                 helper_id: HelperId(1),
                 notif_tx: tx_a.clone(),
@@ -1384,7 +1622,7 @@ async fn session_notification_preserves_rebound_route_on_closed() {
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            sid.clone(),
+            unscoped_key(&sid),
             HelperRoute {
                 helper_id: HelperId(2),
                 notif_tx: tx_b,
@@ -1404,16 +1642,18 @@ async fn session_notification_preserves_rebound_route_on_closed() {
     }
     {
         let mut map = state.session_to_helper.lock().await;
-        match map.get(&sid) {
+        match map.get(&unscoped_key(&sid)) {
             Some(current) if current.helper_id == snap_helper_a => {
-                map.remove(&sid);
+                map.remove(&unscoped_key(&sid));
             }
             _ => {} // identity mismatch — leave new route intact
         }
     }
 
     let map = state.session_to_helper.lock().await;
-    let current = map.get(&sid).expect("helper B's route must survive");
+    let current = map
+        .get(&unscoped_key(&sid))
+        .expect("helper B's route must survive");
     assert_eq!(
         current.helper_id,
         HelperId(2),
@@ -1435,7 +1675,7 @@ async fn session_notification_drops_on_full_channel() {
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            sid.clone(),
+            unscoped_key(&sid),
             HelperRoute {
                 helper_id: HelperId(9),
                 notif_tx: tx.clone(),
@@ -1452,7 +1692,7 @@ async fn session_notification_drops_on_full_channel() {
     // Routing entry survives Full (only Closed removes it).
     let map = state.session_to_helper.lock().await;
     assert!(
-        map.contains_key(&sid),
+        map.contains_key(&unscoped_key(&sid)),
         "Full (not Closed) must NOT remove the routing entry"
     );
 }
@@ -1465,7 +1705,7 @@ async fn session_notification_coalesces_context_without_dropping_pending_cost() 
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            sid.clone(),
+            unscoped_key(&sid),
             HelperRoute {
                 helper_id: HelperId(10),
                 notif_tx: tx.clone(),
@@ -1491,7 +1731,9 @@ async fn session_notification_coalesces_context_without_dropping_pending_cost() 
 
     assert_eq!(tx.capacity(), 0);
     let pending = state.pending_usage.lock().await;
-    let (owner, notification) = pending.get(&sid).expect("latest usage retained");
+    let (owner, notification) = pending
+        .get(&unscoped_key(&sid))
+        .expect("latest usage retained");
     assert_eq!(*owner, HelperId(10));
     match &notification.update {
         SessionUpdate::UsageUpdate(update) => {
@@ -1514,7 +1756,7 @@ async fn rebinding_session_clears_previous_helpers_pending_usage() {
 
     bind_session_route(
         &state,
-        sid.clone(),
+        unscoped_key(&sid),
         HelperRoute {
             helper_id: HelperId(1),
             notif_tx: tx_a,
@@ -1524,11 +1766,15 @@ async fn rebinding_session_clears_previous_helpers_pending_usage() {
     )
     .await;
     route(&state, make_usage_notif(&sid, 25)).await;
-    assert!(state.pending_usage.lock().await.contains_key(&sid));
+    assert!(state
+        .pending_usage
+        .lock()
+        .await
+        .contains_key(&unscoped_key(&sid)));
 
     bind_session_route(
         &state,
-        sid.clone(),
+        unscoped_key(&sid),
         HelperRoute {
             helper_id: HelperId(2),
             notif_tx: tx_b,
@@ -1538,9 +1784,13 @@ async fn rebinding_session_clears_previous_helpers_pending_usage() {
     )
     .await;
 
-    assert!(!state.pending_usage.lock().await.contains_key(&sid));
+    assert!(!state
+        .pending_usage
+        .lock()
+        .await
+        .contains_key(&unscoped_key(&sid)));
     assert_eq!(
-        state.session_to_helper.lock().await[&sid].helper_id,
+        state.session_to_helper.lock().await[&unscoped_key(&sid)].helper_id,
         HelperId(2)
     );
 }
@@ -1570,7 +1820,7 @@ async fn drop_sessions_for_helper_retains_only_other_helpers() {
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            SessionId::new("a1"),
+            crate::session_registry::SessionKey::unscoped(SessionId::new("a1")),
             HelperRoute {
                 helper_id: HelperId(1),
                 notif_tx: tx_a.clone(),
@@ -1579,7 +1829,7 @@ async fn drop_sessions_for_helper_retains_only_other_helpers() {
             },
         );
         map.insert(
-            SessionId::new("a2"),
+            crate::session_registry::SessionKey::unscoped(SessionId::new("a2")),
             HelperRoute {
                 helper_id: HelperId(1),
                 notif_tx: tx_a,
@@ -1588,7 +1838,7 @@ async fn drop_sessions_for_helper_retains_only_other_helpers() {
             },
         );
         map.insert(
-            SessionId::new("b1"),
+            crate::session_registry::SessionKey::unscoped(SessionId::new("b1")),
             HelperRoute {
                 helper_id: HelperId(2),
                 notif_tx: tx_b,
@@ -1597,7 +1847,7 @@ async fn drop_sessions_for_helper_retains_only_other_helpers() {
             },
         );
         map.insert(
-            SessionId::new("c1"),
+            crate::session_registry::SessionKey::unscoped(SessionId::new("c1")),
             HelperRoute {
                 helper_id: HelperId(3),
                 notif_tx: tx_c,
@@ -1609,14 +1859,18 @@ async fn drop_sessions_for_helper_retains_only_other_helpers() {
 
     let dropped = drop_sessions_for_helper(&state, HelperId(1)).await;
     assert_eq!(dropped.len(), 2);
-    assert!(dropped.iter().any(|session| session.session_id == SessionId::new("a1")));
-    assert!(dropped.iter().any(|session| session.session_id == SessionId::new("a2")));
+    assert!(dropped
+        .iter()
+        .any(|session| session.session_id == SessionId::new("a1")));
+    assert!(dropped
+        .iter()
+        .any(|session| session.session_id == SessionId::new("a2")));
 
     let map = state.session_to_helper.lock().await;
-    assert!(!map.contains_key(&SessionId::new("a1")));
-    assert!(!map.contains_key(&SessionId::new("a2")));
-    assert!(map.contains_key(&SessionId::new("b1")));
-    assert!(map.contains_key(&SessionId::new("c1")));
+    assert!(!map.contains_key(&unscoped_key(&SessionId::new("a1"))));
+    assert!(!map.contains_key(&unscoped_key(&SessionId::new("a2"))));
+    assert!(map.contains_key(&unscoped_key(&SessionId::new("b1"))));
+    assert!(map.contains_key(&unscoped_key(&SessionId::new("c1"))));
 }
 
 /// Companion invariant to `drop_sessions_for_helper_retains_only_other_helpers`:
@@ -1640,7 +1894,7 @@ async fn drop_sessions_for_helper_also_clears_registry() {
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            sid_a.clone(),
+            unscoped_key(&sid_a),
             HelperRoute {
                 helper_id: HelperId(1),
                 notif_tx: tx_a,
@@ -1649,7 +1903,7 @@ async fn drop_sessions_for_helper_also_clears_registry() {
             },
         );
         map.insert(
-            sid_b.clone(),
+            unscoped_key(&sid_b),
             HelperRoute {
                 helper_id: HelperId(2),
                 notif_tx: tx_b,
@@ -1737,7 +1991,7 @@ async fn broadcast_ext_to_helpers_prunes_dead_subscribers() {
 
     broadcast_ext_to_helpers(
         &state,
-        build_session_removed_notification(&SessionId::new("zzz")),
+        build_session_removed_notification(&unscoped_key(&SessionId::new("zzz"))),
     )
     .await;
 
@@ -1764,7 +2018,7 @@ async fn drop_sessions_for_helper_broadcasts_session_removed_to_peers() {
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            sid_a.clone(),
+            unscoped_key(&sid_a),
             HelperRoute {
                 helper_id: HelperId(1),
                 notif_tx: notif_tx1.clone(),
@@ -1773,7 +2027,7 @@ async fn drop_sessions_for_helper_broadcasts_session_removed_to_peers() {
             },
         );
         map.insert(
-            sid_b.clone(),
+            unscoped_key(&sid_b),
             HelperRoute {
                 helper_id: HelperId(1),
                 notif_tx: notif_tx1,
@@ -1802,7 +2056,7 @@ async fn drop_sessions_for_helper_broadcasts_session_removed_to_peers() {
     let mut got: Vec<acp::schema::v1::SessionId> = Vec::new();
     while let Ok(ext) = ext_rx2.try_recv() {
         match session_registry::parse_ext_notification(&ext) {
-            session_registry::WtaExtNotification::SessionRemoved(sid) => got.push(sid),
+            session_registry::WtaExtNotification::SessionRemoved(key) => got.push(key.session_id),
             session_registry::WtaExtNotification::SessionsChanged => {}
             other => panic!("expected SessionRemoved or SessionsChanged, got {other:?}"),
         }
@@ -1823,6 +2077,7 @@ async fn route_for_unknown_session_id_returns_internal_error() {
     let state = make_state();
     let client = MasterClient {
         state: Arc::clone(&state),
+        agent_cmd_key: String::new(),
     };
     let err = client
         .route_for(&SessionId::new("ghost"), "request_permission")
@@ -1844,7 +2099,7 @@ async fn route_for_none_forwarder_returns_internal_error() {
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            SessionId::new("orphan"),
+            crate::session_registry::SessionKey::unscoped(SessionId::new("orphan")),
             HelperRoute {
                 helper_id: HelperId(42),
                 notif_tx: tx,
@@ -1855,6 +2110,7 @@ async fn route_for_none_forwarder_returns_internal_error() {
     }
     let client = MasterClient {
         state: Arc::clone(&state),
+        agent_cmd_key: String::new(),
     };
     let err = client
         .route_for(&SessionId::new("orphan"), "create_terminal")
@@ -1873,6 +2129,7 @@ async fn master_client_create_terminal_unknown_session_returns_internal_error() 
     let state = make_state();
     let client = MasterClient {
         state: Arc::clone(&state),
+        agent_cmd_key: String::new(),
     };
     let req = acp::schema::v1::CreateTerminalRequest::new(
         SessionId::new("nobody-home"),
@@ -1901,8 +2158,8 @@ async fn sessions_list_handler_returns_registry_snapshot_payload() {
         &state,
         &session_registry::SessionsListParams { rescan: false },
     )
-        .await
-        .expect("sessions/list succeeds");
+    .await
+    .expect("sessions/list succeeds");
     let parsed = session_registry::parse_sessions_list_response(&resp.0).expect("response parses");
 
     assert_eq!(parsed.sessions, vec![row]);
@@ -1920,12 +2177,12 @@ async fn drop_sessions_for_helper_broadcasts_sessions_changed() {
     {
         let mut map = state.session_to_helper.lock().await;
         map.insert(
-            sid.clone(),
+            unscoped_key(&sid),
             HelperRoute {
-            helper_id: HelperId(1),
-            notif_tx,
-            forwarder: None,
-            consecutive_drops: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                helper_id: HelperId(1),
+                notif_tx,
+                forwarder: None,
+                consecutive_drops: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             },
         );
     }

@@ -415,7 +415,17 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         const auto commandline = std::wstring{ Commandline() };
         if (::Microsoft::Terminal::ShellIntegration::IsWslProfile(commandline))
         {
-            _RebuildAgentBackendLists(L"WSL", {});
+            // Resolve the distro before adding any WSL backend entries. The
+            // old placeholder label was also used as the serialized backend
+            // id, so choosing a custom entry during the probe could persist
+            // `wsl:WSL:custom:...` instead of a launchable distro.
+            const auto distro =
+                ::Microsoft::Terminal::ShellIntegration::Wsl::ResolveDistroName(commandline);
+            _RebuildAgentBackendLists(
+                ::Microsoft::Terminal::Settings::Model::AgentPaneBackend::IsResolvedWslDistro(distro) ?
+                    std::wstring_view{ distro } :
+                    std::wstring_view{},
+                {});
             _ProbeWslAgentPaneBackendsAsync(commandline, generation);
         }
         else
@@ -477,7 +487,11 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         co_await wil::resume_foreground(dispatcher);
         if (generation == _agentPaneBackendProbeGeneration)
         {
-            _RebuildAgentBackendLists(distro, availableAgents);
+            _RebuildAgentBackendLists(
+                ::Microsoft::Terminal::Settings::Model::AgentPaneBackend::IsResolvedWslDistro(distro) ?
+                    std::wstring_view{ distro } :
+                    std::wstring_view{},
+                availableAgents);
         }
     }
 

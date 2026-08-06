@@ -1296,8 +1296,11 @@ namespace winrt::TerminalApp::implementation
         // For custom agents, pass the full command so WTA can launch it.
         if (_IsCustomAgentId(delegateAgent))
         {
-            const auto customCmd = globals.DelegateCustomCommand();
-            if (!customCmd.empty()) return customCmd;
+            // Do not fall back to the `custom:<name>` selector. A profile can
+            // choose only the matching trusted effective global custom id;
+            // the executable command itself must always come from that
+            // global setting.
+            return globals.DelegateCustomCommand();
         }
         return delegateAgent;
     }

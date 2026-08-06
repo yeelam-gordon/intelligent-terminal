@@ -721,6 +721,9 @@ namespace SettingsModelUnitTests
         VERIFY_ARE_EQUAL(
             L"wsl:Ubuntu:custom:my-agent",
             AgentPaneBackend::Wsl(L"Ubuntu", L"custom:my-agent"));
+        VERIFY_IS_FALSE(AgentPaneBackend::IsResolvedWslDistro(L"WSL"));
+        VERIFY_IS_FALSE(AgentPaneBackend::IsResolvedWslDistro(L""));
+        VERIFY_IS_TRUE(AgentPaneBackend::IsResolvedWslDistro(L"Ubuntu"));
         VERIFY_IS_FALSE(AgentPaneBackend::Parse(L"wsl::copilot").has_value());
     }
 }

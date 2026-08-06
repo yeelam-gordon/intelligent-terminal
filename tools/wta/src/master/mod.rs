@@ -68,13 +68,12 @@ pub(crate) mod config;
 
 use config::MasterConfig;
 
-/// Opaque identifier for a helper connection. Used in logs only;
-/// routing keys off `acp::schema::v1::SessionId`.
+/// Opaque identifier for a helper connection. Used in logs only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct HelperId(u64);
 
-/// Per-session routing entry. Owned by `session_to_helper` and
-/// keyed by `acp::schema::v1::SessionId`.
+/// Per-session routing entry. Owned by `session_to_helper` and keyed by the
+/// master-derived `(AgentCmdKey, SessionId)` pair.
 ///
 /// Two reverse paths share this entry:
 ///   * `notif_tx`: master's `Client::session_notification` posts here;
@@ -143,12 +142,15 @@ struct MasterStateInner {
     /// `await`-blocking the agent CLI's I/O loop — head-of-line
     /// blocking would freeze notification delivery for every other
     /// helper sharing this master.
-    session_to_helper: Mutex<HashMap<acp::schema::v1::SessionId, HelperRoute>>,
+    session_to_helper: Mutex<HashMap<crate::session_registry::SessionKey, HelperRoute>>,
     /// Latest Usage waiting for its owning helper. Context is replaced by
     /// SessionId while an omitted optional cost is retained from an
     /// undelivered prior update.
     pending_usage: Mutex<
-        HashMap<acp::schema::v1::SessionId, (HelperId, acp::schema::v1::SessionNotification)>,
+        HashMap<
+            crate::session_registry::SessionKey,
+            (HelperId, acp::schema::v1::SessionNotification),
+        >,
     >,
     usage_generation: watch::Sender<u64>,
     /// Authoritative live-session set, owned by master. Mirrors what
@@ -308,7 +310,8 @@ struct MasterStateInner {
     /// drops just that agent's set on CLI death, so a crashed-and-respawned
     /// CLI under the same command line never re-binds to a session it never
     /// had — such a resume falls back to a real `session/load` from disk.
-    orphaned_sessions: Mutex<HashMap<AgentCmdKey, HashMap<acp::schema::v1::SessionId, OrphanedSession>>>,
+    orphaned_sessions:
+        Mutex<HashMap<AgentCmdKey, HashMap<acp::schema::v1::SessionId, OrphanedSession>>>,
     /// #266 born-bound sessions (WTA-launched delegate/resume — copilot/claude/
     /// gemini). **Binding-only**: unlike `hook_owned`, the file watcher may
     /// still supply STATUS for these when no real hook is installed
@@ -343,14 +346,35 @@ struct MasterStateInner {
 
 async fn bind_session_route(
     state: &MasterStateInner,
-    session_id: acp::schema::v1::SessionId,
+    session_key: crate::session_registry::SessionKey,
     route: HelperRoute,
 ) -> usize {
     let mut routes = state.session_to_helper.lock().await;
     let mut pending_usage = state.pending_usage.lock().await;
-    pending_usage.remove(&session_id);
-    routes.insert(session_id, route);
+    pending_usage.remove(&session_key);
+    routes.insert(session_key, route);
     routes.len()
+}
+
+/// Remove a provisional route only when it still belongs to the helper that
+/// installed it. A second helper can rebind the same session while a
+/// `session/load` is in flight; the first helper's failure must not erase that
+/// newer route.
+async fn unbind_session_route_if_owned(
+    state: &MasterStateInner,
+    session_key: &crate::session_registry::SessionKey,
+    helper_id: HelperId,
+) -> bool {
+    let mut routes = state.session_to_helper.lock().await;
+    if routes
+        .get(session_key)
+        .is_some_and(|route| route.helper_id == helper_id)
+    {
+        routes.remove(session_key);
+        true
+    } else {
+        false
+    }
 }
 
 /// Canonical key for the agent-CLI pool: authoritative agent identity,
@@ -630,6 +654,10 @@ pub(crate) struct HelperRecoveryMeta {
 #[derive(Clone)]
 struct MasterClient {
     state: Arc<MasterStateInner>,
+    /// The single agent connection that invokes this client callback. ACP
+    /// carries only a raw SessionId, so every inbound callback must restore
+    /// this pool key before routing.
+    agent_cmd_key: AgentCmdKey,
 }
 
 impl MasterClient {
@@ -645,9 +673,11 @@ impl MasterClient {
         sid: &acp::schema::v1::SessionId,
         op: &'static str,
     ) -> acp::Result<(HelperId, conn::AgentLink)> {
+        let session_key =
+            crate::session_registry::SessionKey::new(self.agent_cmd_key.clone(), sid.clone());
         let entry = {
             let map = self.state.session_to_helper.lock().await;
-            map.get(sid).cloned()
+            map.get(&session_key).cloned()
         };
         match entry {
             Some(HelperRoute {
@@ -663,6 +693,7 @@ impl MasterClient {
                 tracing::error!(
                     target: "master",
                     op = op,
+                    agent_cmd_key = %self.agent_cmd_key,
                     session_id = ?sid,
                     helper_id = ?helper_id,
                     "routing entry has no forwarder — bug; routing entry should always carry the helper's AgentSideConnection",
@@ -674,6 +705,7 @@ impl MasterClient {
                 tracing::warn!(
                     target: "master",
                     op = op,
+                    agent_cmd_key = %self.agent_cmd_key,
                     session_id = ?sid,
                     "agent CLI sent request for unknown SessionId — no helper to route to",
                 );
@@ -754,6 +786,8 @@ impl MasterClient {
         args: acp::schema::v1::SessionNotification,
     ) -> acp::Result<()> {
         let sid = args.session_id.clone();
+        let session_key =
+            crate::session_registry::SessionKey::new(self.agent_cmd_key.clone(), sid.clone());
         // Discriminator for "what KIND of notification this is" — useful
         // when scrolling logs to see prompt/turn lifecycle without
         // tracing the full payload.
@@ -775,7 +809,7 @@ impl MasterClient {
         // would silently break notification delivery for B.
         let route = {
             let map = self.state.session_to_helper.lock().await;
-            map.get(&sid).map(|r| {
+            map.get(&session_key).map(|r| {
                 (
                     r.helper_id,
                     r.notif_tx.clone(),
@@ -789,7 +823,7 @@ impl MasterClient {
                 if kind == "usage_update" {
                     let mut args = args;
                     let mut pending = self.state.pending_usage.lock().await;
-                    if let Some((pending_owner, pending_notification)) = pending.get(&sid) {
+                    if let Some((pending_owner, pending_notification)) = pending.get(&session_key) {
                         if *pending_owner == snap_helper_id {
                             if let (
                                 acp::schema::v1::SessionUpdate::UsageUpdate(previous),
@@ -802,7 +836,7 @@ impl MasterClient {
                             }
                         }
                     }
-                    pending.insert(sid.clone(), (snap_helper_id, args));
+                    pending.insert(session_key.clone(), (snap_helper_id, args));
                     drop(pending);
                     self.state
                         .usage_generation
@@ -881,9 +915,9 @@ impl MasterClient {
                         // lifetime (monotonic counter), so equality is
                         // a sufficient identity check.
                         let mut map = self.state.session_to_helper.lock().await;
-                        match map.get(&sid) {
+                        match map.get(&session_key) {
                             Some(current) if current.helper_id == snap_helper_id => {
-                                map.remove(&sid);
+                                map.remove(&session_key);
                                 tracing::warn!(
                                     target: "master",
                                     session_id = ?sid,
@@ -1182,16 +1216,13 @@ impl HelperHandler {
             &cwd,
             crate::protocol::acp::cwd_format::CwdTarget::Unknown,
         );
-        let result = crate::protocol::acp::cwd_format::run_cwd_attempts(
-            &attempts,
-            deadline,
-            |cwd| {
+        let result =
+            crate::protocol::acp::cwd_format::run_cwd_attempts(&attempts, deadline, |cwd| {
                 let mut request = args.clone();
                 request.cwd = cwd;
                 agent.conn.new_session(request)
-            },
-        )
-        .await;
+            })
+            .await;
         let session_id = result
             .as_ref()
             .ok()
@@ -1216,9 +1247,11 @@ impl HelperHandler {
             Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Agent(error)) => Err(error),
             Err(crate::protocol::acp::cwd_format::CwdAttemptFailure::Timeout) => {
                 let message = format!("agent CLI session/new timed out after {timeout_secs}s");
-                Err(acp::Error::new(-32603, message.clone()).data(serde_json::json!({
-                    "message": message
-                })))
+                Err(
+                    acp::Error::new(-32603, message.clone()).data(serde_json::json!({
+                        "message": message
+                    })),
+                )
             }
         }
     }
@@ -1335,8 +1368,8 @@ impl HelperHandler {
                     %error,
                     "failed to serialize private cloud model catalog metadata"
                 );
-        Ok(agent.cached_init_resp.clone())
-    }
+                Ok(agent.cached_init_resp.clone())
+            }
         }
     }
 
@@ -1391,11 +1424,15 @@ impl HelperHandler {
         let (available_models, current_model_id) =
             crate::protocol::acp::model_select::models_from_new_session(&resp);
         let forwarder = self.forwarder_for_route("new_session")?;
+        let session_key = crate::session_registry::SessionKey::new(
+            agent.cmd_key.clone(),
+            resp.session_id.clone(),
+        );
         // Record routing entry BEFORE returning so the helper can't
         // race a session/update notification.
         let registry_size = bind_session_route(
             &self.state,
-            resp.session_id.clone(),
+            session_key.clone(),
             HelperRoute {
                 helper_id: self.helper_id,
                 notif_tx: self.notif_tx.clone(),
@@ -1410,6 +1447,7 @@ impl HelperHandler {
         // can't deadlock against `drop_sessions_for_helper`.
         let mut info =
             crate::session_registry::SessionInfo::new(resp.session_id.clone(), cwd_for_registry);
+        info.agent_cmd_key = agent.cmd_key.clone();
         info.pane_session_id = wta_meta.pane_session_id;
         // Stamp the row as a Live agent-pane session. Without this, the
         // row lands in master's registry with status=cli_source=origin=None,
@@ -1512,10 +1550,12 @@ impl HelperHandler {
         // atomically; on failure we just unregister routing without
         // any peer-visible flicker.
         let agent = self.resolved_agent("load_session")?;
+        let session_key =
+            crate::session_registry::SessionKey::new(agent.cmd_key.clone(), session_id.clone());
         let forwarder = self.forwarder_for_route("load_session")?;
         bind_session_route(
             &self.state,
-            session_id.clone(),
+            session_key.clone(),
             HelperRoute {
                 helper_id: self.helper_id,
                 notif_tx: self.notif_tx.clone(),
@@ -1577,10 +1617,12 @@ impl HelperHandler {
                     // needs touching — we never wrote to `registry` and we
                     // never broadcast `session_added`, so peers never saw
                     // this row.
-                    {
-                        let mut map = self.state.session_to_helper.lock().await;
-                        map.remove(&session_id);
-                    }
+                    unbind_session_route_if_owned(
+                        &self.state,
+                        &session_key,
+                        self.helper_id,
+                    )
+                    .await;
                     tracing::warn!(
                         target: "master",
                         helper_id = ?self.helper_id,
@@ -1612,6 +1654,7 @@ impl HelperHandler {
         // and orphan-re-bind paths.
         let mut info =
             crate::session_registry::SessionInfo::new(session_id.clone(), cwd_for_registry);
+        info.agent_cmd_key = agent.cmd_key.clone();
         info.pane_session_id = wta_meta.pane_session_id;
         info.status = Some(crate::agent_sessions::AgentStatus::Idle);
         info.cli_source = agent.cli_source.clone();
@@ -1626,15 +1669,14 @@ impl HelperHandler {
         // (master seeds the registry at startup with disk-derived chat titles;
         // a naked `SessionInfo::new` upsert would blank them to "—" in the
         // session-management view).
-        if let Some(existing) = self.state.registry.lookup(&session_id).await {
+        if let Some(existing) = self.state.registry.lookup_key(&session_key).await {
             if info.title.is_none() {
                 info.title = existing.title;
             }
             if info.updated_at.is_none() {
                 info.updated_at = existing.updated_at;
             }
-        }
-        else if let Some(orphan) = orphaned_session {
+        } else if let Some(orphan) = orphaned_session {
             if let Some(cwd) = orphan.cwd {
                 info.cwd = cwd;
             }
@@ -1643,6 +1685,19 @@ impl HelperHandler {
             }
         }
         self.state.registry.upsert(info.clone()).await;
+        // A load/rebind is just as live as session/new. Keep every helper's
+        // mirror keyed by the same composite identity before the requesting
+        // helper can receive replay notifications.
+        crate::master::broadcast_ext_to_helpers(
+            &self.state,
+            crate::session_registry::build_session_added_notification(&info),
+        )
+        .await;
+        crate::master::broadcast_ext_to_helpers(
+            &self.state,
+            crate::session_registry::build_sessions_changed_notification(),
+        )
+        .await;
         // Refresh crash-recovery metadata so a later resume targets this session.
         {
             let mut meta = self.state.helper_meta.lock().await;
@@ -2612,7 +2667,7 @@ async fn spawn_one_agent(
         source,
         ChildEnvironmentPolicy::ApplySharedProvider,
     )
-        .with_context(|| format!("failed to spawn agent CLI: {agent_cmd}"))?;
+    .with_context(|| format!("failed to spawn agent CLI: {agent_cmd}"))?;
     tracing::info!(
         target: "master",
         program = %spawn_result.resolved_program,
@@ -2645,6 +2700,7 @@ async fn spawn_one_agent(
 
     let client = MasterClient {
         state: Arc::clone(state),
+        agent_cmd_key: key.clone(),
     };
     let builder = acp::Client
         .builder()
@@ -2902,11 +2958,43 @@ async fn reap_agent(state: &Arc<MasterStateInner>, key: &AgentCmdKey) {
         // `session/load` (reloading from disk) instead of re-binding to a
         // session the new CLI never had. Other agents' orphans are untouched.
         state.orphaned_sessions.lock().await.remove(key);
+        drop_sessions_for_agent(state, key).await;
         tracing::info!(
             target: "master",
             agent = %key,
             "dead agent removed from pool; next pane for this agent will respawn it"
         );
+    }
+}
+
+/// Purge only the routes and registry rows owned by a dead pooled agent.
+/// A raw SessionId is not sufficient here: different agent processes may
+/// legitimately use the same id, so reaping one must never orphan a healthy
+/// sibling's helper route or session-list row.
+async fn drop_sessions_for_agent(state: &MasterStateInner, agent_cmd_key: &AgentCmdKey) {
+    let victims: Vec<crate::session_registry::SessionKey> = {
+        let mut routes = state.session_to_helper.lock().await;
+        let victims = routes
+            .keys()
+            .filter(|key| key.agent_cmd_key == *agent_cmd_key)
+            .cloned()
+            .collect::<Vec<_>>();
+        routes.retain(|key, _| key.agent_cmd_key != *agent_cmd_key);
+        victims
+    };
+    {
+        let mut pending = state.pending_usage.lock().await;
+        for key in &victims {
+            pending.remove(key);
+        }
+    }
+    for key in victims {
+        state.registry.remove_key(&key).await;
+        broadcast_ext_to_helpers(
+            state,
+            crate::session_registry::build_session_removed_notification(&key),
+        )
+        .await;
     }
 }
 
@@ -2989,7 +3077,7 @@ async fn serve_helper(
                     let h = h.clone();
                     async move {
                         use acp::schema::v1::{AgentResponse as R, ClientRequest as Q};
-            match req {
+                        match req {
                             Q::InitializeRequest(a) => conn::respond_enum(
                                 responder,
                                 h.initialize(a).await.map(R::InitializeResponse),
@@ -3020,13 +3108,13 @@ async fn serve_helper(
                                 responder,
                                 h.list_sessions(a).await.map(R::ListSessionsResponse),
                             ),
-                Q::PromptRequest(a) => h.prompt(a, responder).await,
+                            Q::PromptRequest(a) => h.prompt(a, responder).await,
                             Q::ExtMethodRequest(a) => conn::respond_enum(
                                 responder,
                                 h.ext_method(a).await.map(R::ExtMethodResponse),
                             ),
-                _ => responder.respond_with_error(acp::Error::method_not_found()),
-            }
+                            _ => responder.respond_with_error(acp::Error::method_not_found()),
+                        }
                     }
                 }
             },
@@ -3041,7 +3129,7 @@ async fn serve_helper(
                         if let acp::schema::v1::ClientNotification::CancelNotification(n) = notif {
                             let _ = h.cancel(n).await;
                         }
-            Ok(())
+                        Ok(())
                     }
                 }
             },
@@ -3251,7 +3339,7 @@ fn build_restart_agent_pane_event(
 }
 
 /// Remove every `session_to_helper` entry owned by `helper_id` and return
-/// the dropped `SessionId`s (used for the `sessions_dropped` disconnect
+/// the dropped composite session keys (used for the `sessions_dropped` disconnect
 /// log line). Factored out of `serve_helper` so the cleanup is
 /// unit-testable without a real named pipe.
 async fn drop_sessions_for_helper(
@@ -3263,30 +3351,30 @@ async fn drop_sessions_for_helper(
     // we already hold its lock; the corresponding `registry.remove`
     // calls happen after we release `session_to_helper` to keep with
     // the lock ordering doc'd on `MasterStateInner::registry`.
-    let victims: Vec<acp::schema::v1::SessionId> = {
+    let victims: Vec<crate::session_registry::SessionKey> = {
         let mut map = state.session_to_helper.lock().await;
         let victims = map
             .iter()
-            .filter_map(|(sid, route)| (route.helper_id == helper_id).then(|| sid.clone()))
+            .filter_map(|(key, route)| (route.helper_id == helper_id).then(|| key.clone()))
             .collect::<Vec<_>>();
         map.retain(|_, route| route.helper_id != helper_id);
         victims
     };
     {
         let mut pending_usage = state.pending_usage.lock().await;
-        for session_id in &victims {
-            pending_usage.remove(session_id);
+        for session_key in &victims {
+            pending_usage.remove(session_key);
         }
     }
     let mut dropped = Vec::with_capacity(victims.len());
-    for sid in &victims {
-        let snapshot = state.registry.lookup(sid).await;
+    for session_key in &victims {
+        let snapshot = state.registry.lookup_key(session_key).await;
         dropped.push(OrphanedSession {
-            session_id: sid.clone(),
+            session_id: session_key.session_id.clone(),
             cwd: snapshot.as_ref().map(|info| info.cwd.clone()),
             title: snapshot.and_then(|info| info.title),
         });
-        state.registry.remove(sid).await;
+        state.registry.remove_key(session_key).await;
         // Broadcast removal so every still-attached helper drops the
         // row from its mirror. The disconnecting helper itself has
         // (almost always) already been removed from
@@ -3295,7 +3383,7 @@ async fn drop_sessions_for_helper(
         // peers it should reach.
         broadcast_ext_to_helpers(
             state,
-            crate::session_registry::build_session_removed_notification(sid),
+            crate::session_registry::build_session_removed_notification(session_key),
         )
         .await;
         broadcast_ext_to_helpers(
@@ -3419,8 +3507,8 @@ async fn host_history_via_acp(
     // Master routes every session/new, so its live `session_to_helper` keys are the
     // authoritative live-pane set — union them in to close that race.
     let mut idx = crate::agent_pane_origin::load_default_set();
-    for sid in state.session_to_helper.lock().await.keys() {
-        idx.insert(sid.0.to_string());
+    for key in state.session_to_helper.lock().await.keys() {
+        idx.insert(key.session_id.0.to_string());
     }
     Some(crate::session_history::classify_and_map(
         &sessions,
@@ -4111,7 +4199,7 @@ async fn refresh_synthetic_titles_from(
             continue;
         }
         if let Some(title) = titles.get(row.session_id.0.as_ref()) {
-            if reg.upgrade_title_if_synthetic(&row.session_id, title).await {
+            if reg.upgrade_title_if_synthetic_key(&row.key(), title).await {
                 changed = true;
             }
         }

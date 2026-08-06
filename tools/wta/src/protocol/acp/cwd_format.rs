@@ -568,6 +568,27 @@ mod tests {
     }
 
     #[test]
+    fn to_wsl_format_converts_generic_wsl_unc_forms_for_selected_distro() {
+        for source in [
+            r"\\wsl.localhost\Fedora-40\home\me\project",
+            r"\\wsl$\Fedora-40\home\me\project",
+            r"\\?\UNC\wsl.localhost\Fedora-40\home\me\project",
+            r"\\?\UNC\wsl$\Fedora-40\home\me\project",
+        ] {
+            assert_eq!(
+                to_wsl_format("Fedora-40", Path::new(source)),
+                Some(PathBuf::from("/home/me/project")),
+                "must convert generic WSL UNC cwd `{source}`"
+            );
+        }
+        assert_eq!(
+            to_wsl_format("Fedora-40", Path::new(r"\\wsl$\Ubuntu\home\me")),
+            None,
+            "a different distro's cwd must not cross into the selected agent"
+        );
+    }
+
+    #[test]
     fn to_windows_is_idempotent_and_converts() {
         let _g = scoped_env(&[("USERPROFILE", r"C:\Users\tester")]);
         // already windows → unchanged
