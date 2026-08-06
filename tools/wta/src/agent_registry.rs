@@ -32,6 +32,14 @@ pub enum AcpAuthFlow {
     InProtocol,
 }
 
+/// How an agent consumes Intelligent Terminal's shared BYOK provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ByokMode {
+    Unsupported,
+    CopilotProviderEnvironment,
+    OpenCodeConfigContent,
+}
+
 /// Complete profile for a known agent CLI.
 #[derive(Debug, Clone)]
 pub struct AgentProfile {
@@ -59,6 +67,8 @@ pub struct AgentProfile {
     pub acp_model_flags: &'static [&'static str],
     /// Authentication flow required for ACP sessions.
     pub acp_auth_flow: AcpAuthFlow,
+    /// Whether and how this agent consumes the shared BYOK provider.
+    pub byok_mode: ByokMode,
 
     // ── Delegate mode ──
     /// How the agent CLI accepts a startup prompt.
@@ -97,6 +107,7 @@ pub const KNOWN_AGENTS: &[AgentProfile] = &[
         acp_launch_command: "",
         acp_model_flags: &["--model", "-m"],
         acp_auth_flow: AcpAuthFlow::External,
+        byok_mode: ByokMode::CopilotProviderEnvironment,
         delegate_prompt_flag: PromptFlag::Flag("-i"),
         model_flags: &["--model", "-m"],
         install_hint: "npm install -g @github/copilot",
@@ -119,6 +130,7 @@ pub const KNOWN_AGENTS: &[AgentProfile] = &[
         acp_launch_command: "npx -y @agentclientprotocol/claude-agent-acp@0.59.0",
         acp_model_flags: &[],
         acp_auth_flow: AcpAuthFlow::External,
+        byok_mode: ByokMode::Unsupported,
         delegate_prompt_flag: PromptFlag::Positional,
         model_flags: &[],
         install_hint: "npm install -g @anthropic-ai/claude-code",
@@ -138,6 +150,7 @@ pub const KNOWN_AGENTS: &[AgentProfile] = &[
         acp_launch_command: "npx -y @agentclientprotocol/codex-acp@1.1.4",
         acp_model_flags: &[],
         acp_auth_flow: AcpAuthFlow::External,
+        byok_mode: ByokMode::Unsupported,
         delegate_prompt_flag: PromptFlag::Positional,
         model_flags: &[],
         install_hint: "npm install -g @openai/codex",
@@ -158,6 +171,7 @@ pub const KNOWN_AGENTS: &[AgentProfile] = &[
         acp_launch_command: "",
         acp_model_flags: &["--model", "-m"],
         acp_auth_flow: AcpAuthFlow::InProtocol,
+        byok_mode: ByokMode::Unsupported,
         delegate_prompt_flag: PromptFlag::Positional,
         model_flags: &["--model", "-m"],
         install_hint: "npm install -g @google/gemini-cli",
@@ -177,6 +191,7 @@ pub const KNOWN_AGENTS: &[AgentProfile] = &[
         // interactive TUI accepts `--model` and an initial `--prompt`.
         acp_model_flags: &[],
         acp_auth_flow: AcpAuthFlow::External,
+        byok_mode: ByokMode::OpenCodeConfigContent,
         delegate_prompt_flag: PromptFlag::Flag("--prompt"),
         model_flags: &["--model", "-m"],
         install_hint: "npm install -g opencode-ai",
@@ -196,6 +211,7 @@ pub const DEFAULT_PROFILE: AgentProfile = AgentProfile {
     acp_launch_command: "",
     acp_model_flags: &[],
     acp_auth_flow: AcpAuthFlow::None,
+    byok_mode: ByokMode::Unsupported,
     delegate_prompt_flag: PromptFlag::Flag("-i"),
     model_flags: &["--model", "-m"],
     install_hint: "",
@@ -516,12 +532,36 @@ mod tests {
     #[test]
     fn is_cli_available_returns_false_for_obviously_bogus_name() {
         // A 64-char random-looking name will not exist on any sane PATH.
-        assert!(!is_cli_available("zzzzz_does_not_exist_anywhere_qqqqq_82h3kf9"));
+        assert!(!is_cli_available(
+            "zzzzz_does_not_exist_anywhere_qqqqq_82h3kf9"
+        ));
+    }
+
+    #[test]
+    fn byok_modes_are_declared_per_agent() {
+        assert_eq!(
+            lookup_profile_by_id("copilot").byok_mode,
+            ByokMode::CopilotProviderEnvironment
+        );
+        assert_eq!(
+            lookup_profile_by_id("opencode").byok_mode,
+            ByokMode::OpenCodeConfigContent
+        );
+        for agent in ["claude", "codex", "gemini", "unknown"] {
+            assert_eq!(
+                lookup_profile_by_id(agent).byok_mode,
+                ByokMode::Unsupported,
+                "{agent} must not receive shared BYOK configuration"
+            );
+        }
     }
 
     #[test]
     fn resolve_agent_id_from_cmd_recognises_bare_names_with_flags() {
-        assert_eq!(resolve_agent_id_from_cmd("copilot --acp --stdio"), "copilot");
+        assert_eq!(
+            resolve_agent_id_from_cmd("copilot --acp --stdio"),
+            "copilot"
+        );
         assert_eq!(resolve_agent_id_from_cmd("gemini --acp"), "gemini");
         assert_eq!(resolve_agent_id_from_cmd("opencode acp"), "opencode");
         assert_eq!(resolve_agent_id_from_cmd("claude --resume foo"), "claude");
@@ -548,7 +588,9 @@ mod tests {
         );
         // Adapter prefix with extra trailing args still resolves.
         assert_eq!(
-            resolve_agent_id_from_cmd("npx -y @agentclientprotocol/claude-agent-acp@0.59.0 --debug"),
+            resolve_agent_id_from_cmd(
+                "npx -y @agentclientprotocol/claude-agent-acp@0.59.0 --debug"
+            ),
             "claude",
         );
         assert_eq!(

@@ -92,10 +92,7 @@ struct PromptUsageIdentity {
     reporter_id: Option<String>,
 }
 
-fn is_redundant_startup_model_error(
-    identity: &PromptUsageIdentity,
-    error: &acp::Error,
-) -> bool {
+fn is_redundant_startup_model_error(identity: &PromptUsageIdentity, error: &acp::Error) -> bool {
     identity.family_id.as_deref() == Some(crate::agent_registry::GEMINI_AGENT_ID)
         && identity.reporter_id.as_deref() == Some("gemini-cli")
         && error.code == acp::ErrorCode::MethodNotFound
@@ -384,8 +381,7 @@ struct ClientState {
     prompt_timing: Arc<PromptTimingState>,
     provider_probe_capture: ProviderProbeCapture,
     standard_usage_sessions: Mutex<HashSet<String>>,
-    proposal_channels:
-        Arc<crate::agent_tools::action_proposal::channel::ProposalChannelManager>,
+    proposal_channels: Arc<crate::agent_tools::action_proposal::channel::ProposalChannelManager>,
     hidden_tool_calls: std::sync::Mutex<HashSet<(String, String)>>,
 }
 
@@ -666,10 +662,8 @@ fn looks_like_proposal_command(command: &str) -> bool {
 
 impl WtaClient {
     async fn dispatch_session_notification(&self, args: acp::schema::v1::SessionNotification) {
-        let usage_session_id = matches!(
-            &args.update,
-            acp::schema::v1::SessionUpdate::UsageUpdate(_)
-        )
+        let usage_session_id =
+            matches!(&args.update, acp::schema::v1::SessionUpdate::UsageUpdate(_))
         .then(|| args.session_id.0.to_string());
 
         if self.session_notification(args).await.is_err() {
@@ -899,9 +893,7 @@ impl WtaClient {
         if kind != "usage_update" {
             acp_trace_content(&format!("session_notification update: {:?}", args.update));
         }
-        self.state
-            .prompt_timing
-            .observe_session_update(&sid, kind);
+        self.state.prompt_timing.observe_session_update(&sid, kind);
         match args.update {
             acp::schema::v1::SessionUpdate::UserMessageChunk(chunk) => {
                 // Replayed historical user prompt from `session/load`.
@@ -1217,6 +1209,33 @@ impl WtaClient {
     /// surfacing the error here would tear down the connection on what
     /// is by definition optional, advisory data.
     async fn ext_notification(&self, args: acp::schema::v1::ExtNotification) -> acp::Result<()> {
+        if let Some(catalog) =
+            crate::protocol::acp::model_select::parse_wta_cloud_catalog_notification(&args)
+        {
+            match catalog {
+                Ok(catalog) => {
+                    tracing::info!(
+                        target: "cloud_models",
+                        source = ?catalog.source,
+                        model_count = catalog.models.len(),
+                        "received asynchronous native cloud model catalog from master"
+                    );
+                    let _ = self
+                        .state
+                        .event_tx
+                        .send(AppEvent::CloudModelsAvailable(catalog.models));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "cloud_models",
+                        %error,
+                        "dropping malformed asynchronous cloud model catalog"
+                    );
+                }
+            }
+            return Ok(());
+        }
+
         use crate::session_registry::{parse_ext_notification, WtaExtNotification};
         match parse_ext_notification(&args) {
             WtaExtNotification::SessionAdded(info) => {
@@ -1343,9 +1362,7 @@ async fn probe_private_usage(
         }
     }
 
-    if snapshot.context.is_none()
-        && snapshot.cost.is_none()
-        && snapshot.provider_metrics.is_empty()
+    if snapshot.context.is_none() && snapshot.cost.is_none() && snapshot.provider_metrics.is_empty()
     {
         return Ok(None);
     }
@@ -1584,6 +1601,7 @@ async fn handle_load_failure(
 pub async fn run_acp_client_over_pipe(
     pipe_name: String,
     acp_model_override: Option<String>,
+    supplied_cloud_models: Vec<AcpModelInfo>,
     // Per-tab agent identity. Forwarded to the multi-agent master in the
     // `initialize` handshake's `_meta.wta.agent_id` so master selects and
     // reconstructs the matching agent CLI for THIS tab from the id alone
@@ -1607,8 +1625,7 @@ pub async fn run_acp_client_over_pipe(
     shell_mgr: Arc<ShellManager>,
     wt_connected: bool,
     post_login_reconnect: bool,
-    proposal_channels:
-        Arc<crate::agent_tools::action_proposal::channel::ProposalChannelManager>,
+    proposal_channels: Arc<crate::agent_tools::action_proposal::channel::ProposalChannelManager>,
 ) -> Result<()> {
     let startup_probe = StartupProbe::new();
     let usage_family_id = agent_id.as_deref().and_then(|agent_id| {
@@ -1780,7 +1797,9 @@ pub async fn run_acp_client_over_pipe(
             use acp::schema::v1::AgentNotification as N;
             match notif {
                 N::SessionNotification(n) => c.dispatch_session_notification(n).await,
-                N::ExtNotification(n) => { let _ = c.ext_notification(n).await; }
+                            N::ExtNotification(n) => {
+                                let _ = c.ext_notification(n).await;
+                            }
                 _ => {}
             }
             Ok(())
@@ -1828,12 +1847,25 @@ pub async fn run_acp_client_over_pipe(
 
     // Initialize — same as the child-process path. We use a 60s timeout
     // here because the first helper to connect to a fresh master may
-    // ride along with the master's own agent CLI spawn (especially the
-    // npx adapter cold start). After the first init, subsequent inits
-    // are fast because master just re-forwards.
+    // ride along with the master's real agent CLI spawn (especially the
+    // npx adapter cold start). Clean cloud discovery runs asynchronously
+    // after that initialize and is delivered later, so it never consumes
+    // this timeout budget. Subsequent inits are cached replays.
     let _ = event_tx.send(AppEvent::ConnectionStage("Initializing ACP...".to_string()));
     startup_probe.log("Initializing ACP (over pipe)");
     let init_started = std::time::Instant::now();
+    let supplied_cloud_models = if matches!(&agent_source, crate::agent_source::AgentSource::Host) {
+        supplied_cloud_models
+    } else {
+        if !supplied_cloud_models.is_empty() {
+            tracing::warn!(
+                target: "cloud_models",
+                agent_source = %agent_source,
+                "ignoring Host startup cloud catalog for WSL helper"
+            );
+        }
+        Vec::new()
+    };
     let init_request = {
         let mut req = acp::schema::v1::InitializeRequest::new(acp::schema::ProtocolVersion::V1)
             .client_capabilities(acp::schema::v1::ClientCapabilities::new().terminal(true))
@@ -1859,11 +1891,26 @@ pub async fn run_acp_client_over_pipe(
                 // to the default anyway. Sending `None` makes that fallback
                 // silent (master applies its own `--agent` default).
                 agent_id: usage_family_id.clone(),
-                model: acp_model_override
-                    .clone()
-                    .filter(|s| !s.trim().is_empty()),
+                model: acp_model_override.clone().filter(|s| !s.trim().is_empty()),
                 agent_source: Some(agent_source.kind().to_string()),
                 wsl_distro: agent_source.distro().map(str::to_string),
+                cloud_models: if supplied_cloud_models.is_empty() {
+                    None
+                } else {
+                    match serde_json::to_string(&supplied_cloud_models) {
+                        Ok(models) => Some(models),
+                        Err(error) => {
+                            tracing::warn!(
+                                target: "cloud_models",
+                                %error,
+                                "failed to serialize helper cloud model catalog metadata"
+                            );
+                            None
+                        }
+                    }
+                },
+                cloud_models_source: (!supplied_cloud_models.is_empty())
+                    .then(|| "helper".to_string()),
                 ..Default::default()
             },
         );
@@ -1872,7 +1919,7 @@ pub async fn run_acp_client_over_pipe(
     let init_future = conn.initialize(init_request);
     let init_result = tokio::time::timeout(std::time::Duration::from_secs(60), init_future).await;
     log_acp_initialize_timeout_result("HelperPipe", init_started, &init_result);
-    let init_resp = init_result
+    let mut init_resp = init_result
         .map_err(|_| {
             tracing::error!(
                 target: "helper",
@@ -1895,6 +1942,19 @@ pub async fn run_acp_client_over_pipe(
             );
             anyhow::anyhow!("initialize over master pipe failed: {}", e)
         })?;
+    let cloud_catalog =
+        crate::protocol::acp::model_select::extract_wta_cloud_catalog(&mut init_resp.meta);
+    if matches!(&agent_source, crate::agent_source::AgentSource::Host)
+        && !cloud_catalog.models.is_empty()
+    {
+        tracing::info!(
+            target: "cloud_models",
+            source = ?cloud_catalog.source,
+            model_count = cloud_catalog.models.len(),
+            "received native cloud model catalog from master"
+        );
+        let _ = event_tx.send(AppEvent::CloudModelsAvailable(cloud_catalog.models));
+    }
     let prompt_usage_identity = PromptUsageIdentity {
         family_id: usage_family_id,
         reporter_id: init_resp.agent_info.as_ref().map(|info| info.name.clone()),
@@ -2690,7 +2750,6 @@ fn dispatch_load_session(
                         session_id.0.as_ref(),
                         &resp,
                     );
-                //
                 // Resume is intentionally silent: no "Session loaded" note
                 // and no "Resuming…" marker (see the `load_session` handler),
                 // so a resumed pane presents exactly like a normal connection.
@@ -2892,7 +2951,7 @@ fn dispatch_new_session(
             );
             crate::agent_pane_origin::append_default(new_sid.0.as_ref(), pane_for_index);
         }
-        let (per_tab_models, per_tab_current) =
+        let (available_models, current_model_id) =
             crate::protocol::acp::model_select::models_from_new_session(&new_session);
 
         {
@@ -2903,8 +2962,8 @@ fn dispatch_new_session(
         let _ = event_tx.send(AppEvent::SessionAttached {
             tab_id: req.tab_id.clone(),
             session_id: new_sid.to_string(),
-            available_models: per_tab_models,
-            current_model_id: per_tab_current,
+            available_models,
+            current_model_id,
         });
     });
 }
@@ -3068,8 +3127,7 @@ fn dispatch_prompt(
     wt_connected: bool,
     is_agent_pane: bool,
     proposal_commands_supported: bool,
-    proposal_channels:
-        &Arc<crate::agent_tools::action_proposal::channel::ProposalChannelManager>,
+    proposal_channels: &Arc<crate::agent_tools::action_proposal::channel::ProposalChannelManager>,
 ) {
     let tab_key = prompt
         .pane_context
@@ -3152,8 +3210,7 @@ async fn dispatch_prompt_body(
     wt_connected: bool,
     is_agent_pane: bool,
     proposal_commands_supported: bool,
-    proposal_channels:
-        Arc<crate::agent_tools::action_proposal::channel::ProposalChannelManager>,
+    proposal_channels: Arc<crate::agent_tools::action_proposal::channel::ProposalChannelManager>,
 ) {
     // Resolve (or lazily create) the ACP session for this tab.
     let prompt_session_id = {
@@ -3213,13 +3270,13 @@ async fn dispatch_prompt_body(
                 );
                 crate::agent_pane_origin::append_default(new_sid.0.as_ref(), pane_for_index);
             }
-            let (per_tab_models, per_tab_current) =
+            let (available_models, current_model_id) =
                 crate::protocol::acp::model_select::models_from_new_session(&new_session);
             let _ = event_tx_task.send(AppEvent::SessionAttached {
                 tab_id: tab_key_task.clone(),
                 session_id: new_sid.to_string(),
-                available_models: per_tab_models,
-                current_model_id: per_tab_current,
+                available_models,
+                current_model_id,
             });
             g.insert(tab_key_task.clone(), new_sid.clone());
             new_sid
@@ -3507,9 +3564,8 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_proposal_permission_is_silent_and_arms_payload() {
-        let manager = Arc::new(
-            crate::agent_tools::action_proposal::channel::ProposalChannelManager::new(),
-        );
+        let manager =
+            Arc::new(crate::agent_tools::action_proposal::channel::ProposalChannelManager::new());
         let payload = r#"{"schema_version":1,"origin":"terminal_agent","choices":[{"choice":1,"title":"run test","rationale":"","actions":[{"type":"send","input":"cargo test"}]}]}"#;
         let channel = manager
             .issue("proposal-session".into(), 1, None, false)
@@ -3539,9 +3595,8 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_proposal_permission_is_cancelled_when_arming_fails() {
-        let manager = Arc::new(
-            crate::agent_tools::action_proposal::channel::ProposalChannelManager::new(),
-        );
+        let manager =
+            Arc::new(crate::agent_tools::action_proposal::channel::ProposalChannelManager::new());
         let payload = r#"{"schema_version":1,"origin":"terminal_agent","choices":[{"choice":1,"title":"run test","rationale":"","actions":[{"type":"send","input":"cargo test"}]}]}"#;
         let channel = manager
             .issue("different-session".into(), 1, None, false)
@@ -3574,9 +3629,8 @@ mod tests {
 
     #[tokio::test]
     async fn noncanonical_proposal_permission_is_silently_cancelled() {
-        let manager = Arc::new(
-            crate::agent_tools::action_proposal::channel::ProposalChannelManager::new(),
-        );
+        let manager =
+            Arc::new(crate::agent_tools::action_proposal::channel::ProposalChannelManager::new());
         let channel = manager
             .issue("proposal-session".into(), 1, None, false)
             .unwrap();
