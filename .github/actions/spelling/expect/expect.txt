@@ -23,8 +23,10 @@ AFX
 AHelper
 ahicon
 ahz
+aic
 AImpl
 AInplace
+aiu
 ALIGNRIGHT
 allocing
 allsigned
@@ -525,6 +527,7 @@ EOK
 EPres
 EQU
 ERASEBKGND
+EReport
 ERRORONEXIT
 espt
 esrp
@@ -816,6 +819,7 @@ INVALIDARG
 INVALIDATERECT
 ipch
 ipsp
+ITE
 iterm
 itermcolors
 itf
@@ -1106,6 +1110,7 @@ nonspace
 NOOWNERZORDER
 NOPAINT
 noprofile
+norc
 NOREDRAW
 NOREMOVE
 NOREPOSITION

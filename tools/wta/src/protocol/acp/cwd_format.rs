@@ -32,6 +32,11 @@
 //!    format.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use agent_client_protocol as acp;
+
+use super::conn;
 
 /// A path's namespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +70,48 @@ pub fn detect_format<'a>(
         .map(|c| classify(Path::new(c)))
 }
 
+/// Ask a connected agent which cwd namespace it uses, when it advertises
+/// `session/list`. An empty list and an unsupported/failed call are both
+/// deliberately unknown; callers retain their retry fallback in either case.
+pub(crate) async fn detect_agent_format(
+    conn: &conn::ClientLink,
+    init: &acp::schema::v1::InitializeResponse,
+    timeout: Duration,
+) -> Option<PathFormat> {
+    if init.agent_capabilities.session_capabilities.list.is_none() {
+        return None;
+    }
+    let response = match tokio::time::timeout(
+        timeout,
+        conn.list_sessions(acp::schema::v1::ListSessionsRequest::new()),
+    )
+    .await
+    {
+        Ok(Ok(response)) => response,
+        Ok(Err(error)) => {
+            tracing::debug!(
+                target: "acp_cwd",
+                %error,
+                "agent session/list unavailable while detecting cwd namespace"
+            );
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!(
+                target: "acp_cwd",
+                "agent session/list timed out while detecting cwd namespace"
+            );
+            return None;
+        }
+    };
+    let cwd_values: Vec<String> = response
+        .sessions
+        .iter()
+        .map(|session| session.cwd.to_string_lossy().into_owned())
+        .collect();
+    detect_format(cwd_values.iter().map(String::as_str))
+}
+
 /// Choose the source cwd value, dropping junk launcher dirs (`System32`,
 /// `Windows`) and empty values down to [`user_profile_dir`] (USERPROFILE →
 /// Windows-only HOME → `%SystemDrive%\`). The result may itself be Windows
@@ -88,7 +135,9 @@ pub fn pick_value(candidate: Option<&Path>) -> PathBuf {
 pub fn to_windows_format(path: &Path) -> PathBuf {
     match classify(path) {
         PathFormat::Windows => path.to_path_buf(),
-        PathFormat::Posix => mnt_to_windows(&path.to_string_lossy()).unwrap_or_else(user_profile_dir),
+        PathFormat::Posix => {
+            mnt_to_windows(&path.to_string_lossy()).unwrap_or_else(user_profile_dir)
+        }
     }
 }
 
@@ -102,6 +151,45 @@ pub fn to_linux_format(path: &Path) -> PathBuf {
         PathFormat::Posix => path.to_path_buf(),
         PathFormat::Windows => PathBuf::from(windows_to_mnt(&path.to_string_lossy())),
     }
+}
+
+/// Convert a Terminal-reported path to the POSIX namespace of `distro`.
+///
+/// Unlike [`to_linux_format`], this recognizes the UNC forms Terminal reports
+/// for a WSL pane and validates that they belong to the selected distro before
+/// stripping their Windows-side namespace. Relative paths deliberately return
+/// `None`: the caller resolves them against the distro's real `$HOME`.
+pub(crate) fn to_wsl_format(distro: &str, path: &Path) -> Option<PathBuf> {
+    let raw = path.to_string_lossy();
+    let raw = raw.trim();
+    if raw == "~" || raw.starts_with("~/") {
+        return None;
+    }
+
+    let normalized = raw.replace('\\', "/");
+    for root in [
+        format!("//wsl.localhost/{distro}"),
+        format!("//wsl$/{distro}"),
+        format!("//?/UNC/wsl.localhost/{distro}"),
+        format!("//?/UNC/wsl$/{distro}"),
+    ] {
+        if normalized.eq_ignore_ascii_case(&root) {
+            return Some(PathBuf::from("/"));
+        }
+        let prefix = format!("{root}/");
+        if normalized.len() >= prefix.len()
+            && normalized[..prefix.len()].eq_ignore_ascii_case(&prefix)
+        {
+            return Some(PathBuf::from(format!("/{}", &normalized[prefix.len()..])));
+        }
+    }
+    if raw.starts_with('/') {
+        return Some(PathBuf::from(raw));
+    }
+
+    let bytes = normalized.as_bytes();
+    (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/')
+        .then(|| to_linux_format(Path::new(raw)))
 }
 
 /// Ordered list of cwd values to try against `session/new`, given the source
@@ -331,7 +419,10 @@ mod tests {
         assert_eq!(classify(Path::new("C:")), PathFormat::Windows);
         assert_eq!(classify(Path::new(r"\\server\share")), PathFormat::Windows);
         assert_eq!(classify(Path::new(r"\\?\C:\foo")), PathFormat::Windows);
-        assert_eq!(classify(Path::new(r"\\wsl$\Ubuntu\home\u")), PathFormat::Windows);
+        assert_eq!(
+            classify(Path::new(r"\\wsl$\Ubuntu\home\u")),
+            PathFormat::Windows
+        );
         assert_eq!(classify(Path::new(r"relative\path")), PathFormat::Windows);
     }
 
@@ -346,7 +437,10 @@ mod tests {
             Some(PathFormat::Windows)
         );
         // Leading empty/blank entries are skipped; first real one decides.
-        assert_eq!(detect_format(["", "   ", "/home/u"]), Some(PathFormat::Posix));
+        assert_eq!(
+            detect_format(["", "   ", "/home/u"]),
+            Some(PathFormat::Posix)
+        );
         // Empty list / all-blank → unknown.
         assert_eq!(detect_format(Vec::<&str>::new()), None);
         assert_eq!(detect_format(["", "  "]), None);
@@ -366,7 +460,10 @@ mod tests {
     #[test]
     fn to_linux_is_idempotent_and_converts() {
         // already posix → unchanged
-        assert_eq!(to_linux_format(Path::new("/home/u")), PathBuf::from("/home/u"));
+        assert_eq!(
+            to_linux_format(Path::new("/home/u")),
+            PathBuf::from("/home/u")
+        );
         // windows drive → /mnt
         assert_eq!(
             to_linux_format(Path::new(r"C:\Users\me")),
@@ -420,7 +517,10 @@ mod tests {
 
     #[test]
     fn pick_value_drops_junk() {
-        let _g = scoped_env(&[("SystemRoot", r"C:\Windows"), ("USERPROFILE", r"C:\Users\tester")]);
+        let _g = scoped_env(&[
+            ("SystemRoot", r"C:\Windows"),
+            ("USERPROFILE", r"C:\Users\tester"),
+        ]);
         assert_eq!(
             pick_value(Some(Path::new(r"C:\WINDOWS\system32"))),
             PathBuf::from(r"C:\Users\tester")

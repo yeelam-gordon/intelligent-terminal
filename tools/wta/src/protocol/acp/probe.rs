@@ -22,7 +22,7 @@ use serde::Serialize;
 use std::time::Duration;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::app::AcpModelInfo;
+use crate::app_contracts::AcpModelInfo;
 use crate::protocol::acp::conn;
 use crate::protocol::acp::spawn::{spawn_agent_process, AgentStderrLog};
 
@@ -44,7 +44,12 @@ pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
         spawned.child.id()
     );
 
-    let outgoing = spawned.child.stdin.take().expect("stdin piped").compat_write();
+    let outgoing = spawned
+        .child
+        .stdin
+        .take()
+        .expect("stdin piped")
+        .compat_write();
     let incoming = spawned.child.stdout.take().expect("stdout piped").compat();
     let stderr_log = AgentStderrLog::new(spawned.label().to_string());
     let stderr_task = spawned
@@ -53,8 +58,10 @@ pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
         .take()
         .map(|stderr| stderr_log.drain(stderr));
 
-    let (conn, handle_io) =
-        conn::spawn_client(acp::Client.builder().name("wta-probe"), conn::byte_streams(outgoing, incoming));
+    let (conn, handle_io) = conn::spawn_client(
+        acp::Client.builder().name("wta-probe"),
+        conn::byte_streams(outgoing, incoming),
+    );
 
     tokio::task::spawn_local(async move {
         if let Err(e) = handle_io.await {
@@ -101,7 +108,7 @@ pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
             _ => 0,
         },
     );
-    let _init_resp = init_result
+    let init_resp = init_result
         .map_err(|_| {
             anyhow!(
                 "ACP initialize timed out after {}s during probe (agent={})",
@@ -111,13 +118,43 @@ pub async fn probe_models(agent_cmd: &str) -> Result<ProbeResult> {
         })?
         .map_err(|e| anyhow!("initialize failed: {}", e))?;
 
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let session_started = std::time::Instant::now();
-    let session_result = tokio::time::timeout(
-        Duration::from_secs(10),
-        conn.new_session(acp::schema::v1::NewSessionRequest::new(cwd)),
+    let reported_cwd = std::env::current_dir().unwrap_or_default();
+    let cwd = crate::protocol::acp::cwd_format::pick_value(Some(&reported_cwd));
+    let cwd_format = crate::protocol::acp::cwd_format::detect_agent_format(
+        &conn,
+        &init_resp,
+        Duration::from_secs(5),
     )
     .await;
+    let cwd_attempts = crate::protocol::acp::cwd_format::build_attempts(&cwd, cwd_format);
+    let session_started = std::time::Instant::now();
+    let mut attempts = cwd_attempts.iter().enumerate();
+    let session_result = loop {
+        let (attempt_index, cwd) = attempts
+            .next()
+            .expect("cwd attempts always contain at least one value");
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            conn.new_session(acp::schema::v1::NewSessionRequest::new(cwd.clone())),
+        )
+        .await;
+        match &result {
+            Ok(Err(error))
+                if attempt_index + 1 < cwd_attempts.len()
+                    && crate::protocol::acp::cwd_format::looks_like_cwd_error(&format!(
+                        "{error:#}"
+                    )) =>
+            {
+                tracing::info!(
+                    target: "acp_cwd",
+                    op = "probe_models",
+                    cwd_attempt = attempt_index + 1,
+                    "agent rejected cwd; retrying in another namespace"
+                );
+            }
+            _ => break result,
+        }
+    };
     let session_id = session_result
         .as_ref()
         .ok()
@@ -197,7 +234,12 @@ pub async fn probe_sessions(agent_cmd: &str) -> Result<SessionProbeResult> {
         spawned.child.id()
     );
 
-    let outgoing = spawned.child.stdin.take().expect("stdin piped").compat_write();
+    let outgoing = spawned
+        .child
+        .stdin
+        .take()
+        .expect("stdin piped")
+        .compat_write();
     let incoming = spawned.child.stdout.take().expect("stdout piped").compat();
     let stderr_log = AgentStderrLog::new(spawned.label().to_string());
     let stderr_task = spawned
@@ -206,8 +248,10 @@ pub async fn probe_sessions(agent_cmd: &str) -> Result<SessionProbeResult> {
         .take()
         .map(|stderr| stderr_log.drain(stderr));
 
-    let (conn, handle_io) =
-        conn::spawn_client(acp::Client.builder().name("wta-probe-sessions"), conn::byte_streams(outgoing, incoming));
+    let (conn, handle_io) = conn::spawn_client(
+        acp::Client.builder().name("wta-probe-sessions"),
+        conn::byte_streams(outgoing, incoming),
+    );
     tokio::task::spawn_local(async move {
         if let Err(e) = handle_io.await {
             tracing::warn!("session probe handle_io failed: {:#}", e);

@@ -58,6 +58,10 @@ pub struct WtaMeta {
     /// model later via `setSessionModel`). Carried as its own field
     /// because the master no longer trusts `agent_cmd` to carry it.
     pub model: Option<String>,
+    /// Execution environment selected for this tab (`host` or `wsl`).
+    pub agent_source: Option<String>,
+    /// WSL distribution paired with `agent_source=wsl`.
+    pub wsl_distro: Option<String>,
     /// The WT tab StableId (`--owner-tab-id`) of the agent pane that
     /// owns this session. Carried so master can address per-tab events
     /// (notably `restart_agent_pane` on helper crash recovery) by the
@@ -83,6 +87,8 @@ impl WtaMeta {
             && blank(&self.agent_cmd)
             && blank(&self.agent_id)
             && blank(&self.model)
+            && blank(&self.agent_source)
+            && blank(&self.wsl_distro)
             && blank(&self.owner_tab_id)
     }
 }
@@ -127,6 +133,8 @@ pub fn extract_wta_meta(meta: &mut Option<acp::schema::v1::Meta>) -> WtaMeta {
         agent_cmd: str_field("agent_cmd"),
         agent_id: str_field("agent_id"),
         model: str_field("model"),
+        agent_source: str_field("agent_source"),
+        wsl_distro: str_field("wsl_distro"),
         owner_tab_id: str_field("owner_tab_id"),
     }
 }
@@ -161,6 +169,8 @@ pub fn inject_wta_meta(meta: &mut Option<acp::schema::v1::Meta>, wta: &WtaMeta) 
     put("agent_cmd", &wta.agent_cmd);
     put("agent_id", &wta.agent_id);
     put("model", &wta.model);
+    put("agent_source", &wta.agent_source);
+    put("wsl_distro", &wta.wsl_distro);
     put("owner_tab_id", &wta.owner_tab_id);
     // Every field was absent/whitespace-only after filtering — nothing
     // meaningful to attach, so don't litter the wire with an empty
@@ -1141,7 +1151,13 @@ pub(crate) fn title_is_synthetic(info: &SessionInfo) -> bool {
         .unwrap_or("");
     match info.title.as_deref() {
         None | Some("") => true,
-        Some(t) => t == cwd_leaf,
+        Some(t) => {
+            t == cwd_leaf
+                || info
+                    .cli_source
+                    .as_ref()
+                    .is_some_and(|cli| crate::agent_sessions::title_is_placeholder(cli, t))
+        }
     }
 }
 
@@ -1349,13 +1365,20 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
             pane_session_id,
             cwd,
             title,
-        } => SessionEvent::SessionStarted {
-            key,
-            cli_source,
-            pane_session_id: pane_key(&pane_session_id),
-            cwd,
-            title,
-        },
+        } => {
+            let title = if crate::agent_sessions::title_is_placeholder(&cli_source, &title) {
+                String::new()
+            } else {
+                title
+            };
+            SessionEvent::SessionStarted {
+                key,
+                cli_source,
+                pane_session_id: pane_key(&pane_session_id),
+                cwd,
+                title,
+            }
+        }
         SessionEvent::ConnectionFailed {
             pane_session_id,
             reason,
@@ -1931,11 +1954,25 @@ mod tests {
     }
 
     #[test]
-    fn title_is_synthetic_detects_missing_empty_and_cwd_basename() {
+    fn title_is_synthetic_detects_missing_empty_cwd_and_opencode_placeholder() {
         assert!(title_is_synthetic(&info_with("s-none", "/repo/proj", None)));
         assert!(title_is_synthetic(&info_with("s-empty", "/repo/proj", Some(""))));
         assert!(title_is_synthetic(&info_with("s-leaf", "/repo/proj", Some("proj"))));
         assert!(!title_is_synthetic(&info_with("s-real", "/repo/proj", Some("Real Title"))));
+
+        let mut opencode = info_with(
+            "s-opencode",
+            "/repo/proj",
+            Some("New session - 2026-07-23T01:14:00.422Z"),
+        );
+        opencode.cli_source = Some(CliSource::OpenCode);
+        assert!(title_is_synthetic(&opencode));
+
+        opencode.cli_source = Some(CliSource::Copilot);
+        assert!(
+            !title_is_synthetic(&opencode),
+            "provider-specific placeholders must not hide a real title from another CLI"
+        );
     }
 
     #[test]
@@ -3309,9 +3346,11 @@ mod tests {
         // fields, including `model` (which used to ride inside
         // `agent_cmd` and now travels on its own).
         let original = WtaMeta {
-            agent_cmd: Some("npx -y @agentclientprotocol/claude-agent-acp".to_string()),
+            agent_cmd: Some("npx -y @agentclientprotocol/claude-agent-acp@0.59.0".to_string()),
             agent_id: Some("gemini".to_string()),
             model: Some("gemini-2.5-pro".to_string()),
+            agent_source: Some("wsl".to_string()),
+            wsl_distro: Some("Ubuntu".to_string()),
             ..Default::default()
         };
         let mut meta: Option<acp::schema::v1::Meta> = None;
@@ -3359,6 +3398,8 @@ mod tests {
                 agent_cmd: Some(String::new()),
                 agent_id: Some("\t".to_string()),
                 model: Some(" ".to_string()),
+                agent_source: Some(" ".to_string()),
+                wsl_distro: Some("\t".to_string()),
                 owner_tab_id: Some("\n".to_string()),
             },
         );
@@ -3394,6 +3435,8 @@ mod tests {
                 agent_cmd: Some(String::new()),
                 agent_id: Some("\t".to_string()),
                 model: Some(" ".to_string()),
+                agent_source: Some(" ".to_string()),
+                wsl_distro: Some("\t".to_string()),
                 owner_tab_id: Some("\n".to_string()),
             }
             .is_empty(),

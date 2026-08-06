@@ -83,13 +83,15 @@ namespace winrt::TerminalApp::implementation
     void AgentPaneContent::UpdateAgentStatus(const winrt::hstring& name,
                                              const winrt::hstring& version,
                                              const winrt::hstring& model,
-                                             const winrt::hstring& state)
+                                             const winrt::hstring& state,
+                                             const winrt::hstring& backend)
     {
         const bool nameChanged = _agentName != name;
         _agentName = name;
         _agentVersion = version;
         _agentModel = model;
         _agentState = state;
+        _agentBackend = backend;
         _refreshLabel();
         if (nameChanged)
         {
@@ -171,6 +173,11 @@ namespace winrt::TerminalApp::implementation
         StateChanged.raise(*this, nullptr);
     }
 
+    bool AgentPaneContent::ApplyAgentUsage(const Json::Value& usage)
+    {
+        return ::TerminalApp::AgentUsage::TryUpdateCache(_agentUsage, usage);
+    }
+
     void AgentPaneContent::SetAgentPanePosition(const winrt::hstring& position)
     {
         if (_agentPanePosition == position)
@@ -231,6 +238,11 @@ namespace winrt::TerminalApp::implementation
         else
         {
             text = std::wstring{ _agentName };
+            if (!_agentBackend.empty())
+            {
+                text += L" \u00B7 ";
+                text += _agentBackend;
+            }
             if (!_agentVersion.empty())
             {
                 text += L" ";
