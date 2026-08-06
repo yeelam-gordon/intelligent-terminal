@@ -759,7 +759,18 @@ impl App {
                 }
                 tab.pending_user_replay.push_str(&text);
             }
-            AppEvent::AgentMessageEnd { session_id } => {
+            AppEvent::AgentMessageEnd {
+                session_id,
+                prompt_id,
+            } => {
+                if self
+                    .session_tab(&session_id)
+                    .turn
+                    .prompt()
+                    .is_none_or(|prompt| prompt.id != prompt_id)
+                {
+                    return;
+                }
                 if let Some(summary) = self.session_completion_latency_summary(&session_id) {
                     self.push_execution_info(summary);
                 }
@@ -768,8 +779,17 @@ impl App {
             }
             AppEvent::AgentTurnCompleted {
                 session_id,
+                prompt_id,
                 soft_stop,
             } => {
+                if self
+                    .session_tab(&session_id)
+                    .turn
+                    .prompt()
+                    .is_none_or(|prompt| prompt.id != prompt_id)
+                {
+                    return;
+                }
                 let completed_before = self.session_tab(&session_id).completed_turns.len();
                 if let Some(summary) = self.session_completion_latency_summary(&session_id) {
                     self.push_execution_info(summary);

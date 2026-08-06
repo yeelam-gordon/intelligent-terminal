@@ -283,6 +283,7 @@ async fn complete_prompt_request<T, F>(
     prompt_timing: &PromptTimingState,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     session_id: String,
+    prompt_id: u64,
     before_terminal_event: F,
 ) where
     F: FnOnce(),
@@ -318,6 +319,7 @@ async fn complete_prompt_request<T, F>(
             before_terminal_event();
             let _ = event_tx.send(AppEvent::AgentTurnCompleted {
                 session_id,
+                prompt_id,
                 soft_stop,
             });
         }
@@ -3213,9 +3215,12 @@ async fn dispatch_prompt_body(
     proposal_channels: Arc<crate::agent_tools::action_proposal::channel::ProposalChannelManager>,
 ) {
     // Resolve (or lazily create) the ACP session for this tab.
+    let existing_session = {
+        let g = tab_to_session_task.lock().await;
+        g.get(&tab_key_task).cloned()
+    };
     let prompt_session_id = {
-        let mut g = tab_to_session_task.lock().await;
-        if let Some(sid) = g.get(&tab_key_task) {
+        if let Some(sid) = existing_session {
             sid.clone()
         } else {
             let cwd = prompt
@@ -3278,7 +3283,10 @@ async fn dispatch_prompt_body(
                 available_models,
                 current_model_id,
             });
-            g.insert(tab_key_task.clone(), new_sid.clone());
+            tab_to_session_task
+                .lock()
+                .await
+                .insert(tab_key_task.clone(), new_sid.clone());
             new_sid
         }
     };
@@ -3427,6 +3435,7 @@ async fn dispatch_prompt_body(
                 &prompt_timing_task,
                 &event_tx_task,
                 prompt_session_id_str.clone(),
+                prompt.id,
                 || {
                     in_flight_tabs_task.lock().unwrap().remove(&tab_key_task);
                     cancel_signals_task
@@ -3463,6 +3472,7 @@ async fn dispatch_prompt_body(
                 .remove(&prompt.id);
             let _ = event_tx_task.send(AppEvent::AgentMessageEnd {
                 session_id: prompt_session_id_str.clone(),
+                prompt_id: prompt.id,
             });
             false
         }
@@ -3854,6 +3864,7 @@ mod tests {
             &prompt_timing,
             &event_tx,
             "test-session".to_string(),
+            1,
             move || {
                 released_for_callback.store(true, std::sync::atomic::Ordering::Relaxed);
             },
@@ -3864,6 +3875,7 @@ mod tests {
             Ok(AppEvent::AgentTurnCompleted {
                 session_id,
                 soft_stop: None,
+                ..
             }) => {
                 assert_eq!(session_id, "test-session");
             }
@@ -3888,6 +3900,7 @@ mod tests {
             &prompt_timing,
             &event_tx,
             "test-session".to_string(),
+            1,
             || {},
         )
         .await;
@@ -3896,6 +3909,7 @@ mod tests {
             Ok(AppEvent::AgentTurnCompleted {
                 session_id,
                 soft_stop: Some(SoftStopReason::Refusal),
+                ..
             }) => {
                 assert_eq!(session_id, "test-session");
             }
@@ -3916,6 +3930,7 @@ mod tests {
             &prompt_timing,
             &event_tx,
             "test-session".to_string(),
+            1,
             || {},
         )
         .await;

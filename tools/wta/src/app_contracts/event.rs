@@ -108,12 +108,14 @@ pub enum AppEvent {
     },
     AgentMessageEnd {
         session_id: String,
+        prompt_id: u64,
     },
     /// Successful ACP terminal completion. Carries soft-stop metadata in the
     /// same event so queued prompts cannot begin between final turn state and
     /// its terminal annotation.
     AgentTurnCompleted {
         session_id: String,
+        prompt_id: u64,
         soft_stop: Option<crate::protocol::acp::soft_stop::SoftStopReason>,
     },
     TimingMetric {

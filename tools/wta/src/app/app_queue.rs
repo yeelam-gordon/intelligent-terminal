@@ -317,6 +317,7 @@ mod tests {
 
         app.handle_event(AppEvent::AgentTurnCompleted {
             session_id: DEFAULT_TAB_ID.to_string(),
+            prompt_id: app.current_tab().turn.prompt().unwrap().id,
             soft_stop: None,
         });
         let second = prompt_rx
@@ -334,6 +335,7 @@ mod tests {
 
         app.handle_event(AppEvent::AgentTurnCompleted {
             session_id: DEFAULT_TAB_ID.to_string(),
+            prompt_id: app.current_tab().turn.prompt().unwrap().id,
             soft_stop: None,
         });
         assert_eq!(
@@ -744,6 +746,7 @@ mod tests {
 
         app.handle_event(AppEvent::AgentTurnCompleted {
             session_id: DEFAULT_TAB_ID.to_string(),
+            prompt_id: app.current_tab().turn.prompt().unwrap().id,
             soft_stop: Some(crate::protocol::acp::soft_stop::SoftStopReason::MaxTokens),
         });
 
