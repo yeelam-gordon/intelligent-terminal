@@ -14,9 +14,9 @@
 
 use super::{
     dispatch_cancel, dispatch_drop_session, dispatch_load_session, dispatch_master_ext_request,
-    dispatch_new_session, dispatch_prompt, dispatch_rename_session, CancelRequest,
-    DropSessionRequest, LoadSessionForTab, MasterExtRequest, NewSessionForTab, PromptSubmission,
-    RenameSessionRequest,
+    dispatch_new_session, dispatch_prompt, dispatch_rename_session, CancelRequest, CancelledPrompts,
+    CancelSignals, DropSessionRequest, LoadSessionForTab, MasterExtRequest, NewSessionForTab,
+    PromptSubmission, RenameSessionRequest,
 };
 use super::{ClientState, PromptUsageIdentity, ProviderProbeCapture, WtaClient};
 use crate::app_contracts::{AppEvent, PlanEntry, PlanEntryStatus};
@@ -724,13 +724,15 @@ fn connect_for_dispatch(behavior: MockBehavior) -> DispatchHarness {
 fn fresh_dispatch_state() -> (
     Arc<tokio::sync::Mutex<HashMap<String, acp::schema::v1::SessionId>>>,
     Arc<std::sync::Mutex<HashSet<String>>>,
-    Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<()>>>>,
+    CancelSignals,
+    CancelledPrompts,
     TemplateMemo,
 ) {
     (
         Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         Arc::new(std::sync::Mutex::new(HashSet::new())),
         Arc::new(std::sync::Mutex::new(HashMap::new())),
+        Arc::new(std::sync::Mutex::new(HashSet::new())),
         TemplateMemo::default(),
     )
 }
@@ -755,7 +757,8 @@ async fn dispatch_prompt_busy_tab_emits_agent_busy_and_drops() {
     local
         .run_until(async {
             let h = connect_for_dispatch(MockBehavior::Reply);
-            let (tab_to_session, in_flight, cancel_signals, memo) = fresh_dispatch_state();
+            let (tab_to_session, in_flight, cancel_signals, cancelled_prompts, memo) =
+                fresh_dispatch_state();
             // A turn is already running for the default tab ("0").
             in_flight.lock().unwrap().insert("0".to_string());
             let mut event_rx = h.event_rx;
@@ -767,6 +770,7 @@ async fn dispatch_prompt_busy_tab_emits_agent_busy_and_drops() {
                 &memo,
                 &in_flight,
                 &cancel_signals,
+                &cancelled_prompts,
                 &h.event_tx,
                 &h.shell_mgr,
                 &h.prompt_timing,
@@ -779,7 +783,10 @@ async fn dispatch_prompt_busy_tab_emits_agent_busy_and_drops() {
             );
 
             match tokio::time::timeout(std::time::Duration::from_secs(2), event_rx.recv()).await {
-                Ok(Some(AppEvent::AgentBusy { tab_id })) => assert_eq!(tab_id, "0"),
+                Ok(Some(AppEvent::AgentBusy { tab_id, prompt_id })) => {
+                    assert_eq!(tab_id, "0");
+                    assert_eq!(prompt_id, 1);
+                }
                 Ok(_) => panic!("expected AgentBusy, got a different event"),
                 _ => panic!("expected AgentBusy, got nothing"),
             }
@@ -812,7 +819,8 @@ async fn dispatch_prompt_round_trips_through_agent() {
                 .await
                 .expect("initialize failed");
 
-            let (tab_to_session, in_flight, cancel_signals, memo) = fresh_dispatch_state();
+            let (tab_to_session, in_flight, cancel_signals, cancelled_prompts, memo) =
+                fresh_dispatch_state();
             let mut event_rx = h.event_rx;
 
             dispatch_prompt(
@@ -822,6 +830,7 @@ async fn dispatch_prompt_round_trips_through_agent() {
                 &memo,
                 &in_flight,
                 &cancel_signals,
+                &cancelled_prompts,
                 &h.event_tx,
                 &h.shell_mgr,
                 &h.prompt_timing,
@@ -865,12 +874,12 @@ async fn dispatch_prompt_round_trips_through_agent() {
             // present by the time the reply arrives.
             assert!(tab_to_session.lock().await.contains_key("0"));
 
-            // in-flight is cleared at turn *completion* (AgentMessageEnd), which
+            // in-flight is cleared at terminal completion, which
             // lands after the first chunk — pump until then before asserting.
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 loop {
                     match event_rx.recv().await {
-                        Some(AppEvent::AgentMessageEnd { .. }) => break,
+                        Some(AppEvent::AgentTurnCompleted { .. }) => break,
                         Some(_) => continue,
                         None => panic!("event channel closed before turn end"),
                     }
@@ -899,7 +908,8 @@ async fn dispatch_prompt_does_not_advertise_host_proposals_to_wsl_agents() {
                 .await
                 .expect("initialize failed");
 
-            let (tab_to_session, in_flight, cancel_signals, memo) = fresh_dispatch_state();
+            let (tab_to_session, in_flight, cancel_signals, cancelled_prompts, memo) =
+                fresh_dispatch_state();
             let mut event_rx = h.event_rx;
             dispatch_prompt(
                 test_prompt(1, "hello from WSL", false),
@@ -908,6 +918,7 @@ async fn dispatch_prompt_does_not_advertise_host_proposals_to_wsl_agents() {
                 &memo,
                 &in_flight,
                 &cancel_signals,
+                &cancelled_prompts,
                 &h.event_tx,
                 &h.shell_mgr,
                 &h.prompt_timing,
@@ -969,7 +980,8 @@ async fn dispatch_prompt_sends_clipboard_image_to_agent() {
                 .await
                 .expect("initialize failed");
 
-            let (tab_to_session, in_flight, cancel_signals, memo) = fresh_dispatch_state();
+            let (tab_to_session, in_flight, cancel_signals, cancelled_prompts, memo) =
+                fresh_dispatch_state();
             let mut event_rx = h.event_rx;
 
             // The user typed text *and* pasted an image, then pressed Enter.
@@ -983,6 +995,7 @@ async fn dispatch_prompt_sends_clipboard_image_to_agent() {
                 &memo,
                 &in_flight,
                 &cancel_signals,
+                &cancelled_prompts,
                 &h.event_tx,
                 &h.shell_mgr,
                 &h.prompt_timing,
@@ -998,7 +1011,7 @@ async fn dispatch_prompt_sends_clipboard_image_to_agent() {
             tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 loop {
                     match event_rx.recv().await {
-                        Some(AppEvent::AgentMessageEnd { .. }) => break,
+                        Some(AppEvent::AgentTurnCompleted { .. }) => break,
                         Some(_) => continue,
                         None => panic!("event channel closed before turn end"),
                     }
@@ -1041,7 +1054,8 @@ async fn dispatch_prompt_new_session_failure_emits_error_and_releases_slot() {
             // Make the mock reject session establishment.
             h.fail_new_session.store(true, Ordering::SeqCst);
 
-            let (tab_to_session, in_flight, cancel_signals, memo) = fresh_dispatch_state();
+            let (tab_to_session, in_flight, cancel_signals, cancelled_prompts, memo) =
+                fresh_dispatch_state();
             let mut event_rx = h.event_rx;
 
             dispatch_prompt(
@@ -1051,6 +1065,7 @@ async fn dispatch_prompt_new_session_failure_emits_error_and_releases_slot() {
                 &memo,
                 &in_flight,
                 &cancel_signals,
+                &cancelled_prompts,
                 &h.event_tx,
                 &h.shell_mgr,
                 &h.prompt_timing,
@@ -1100,7 +1115,8 @@ async fn dispatch_prompt_autofix_uses_autofix_template() {
                 .await
                 .expect("initialize failed");
 
-            let (tab_to_session, in_flight, cancel_signals, memo) = fresh_dispatch_state();
+            let (tab_to_session, in_flight, cancel_signals, cancelled_prompts, memo) =
+                fresh_dispatch_state();
             let mut event_rx = h.event_rx;
 
             dispatch_prompt(
@@ -1110,6 +1126,7 @@ async fn dispatch_prompt_autofix_uses_autofix_template() {
                 &memo,
                 &in_flight,
                 &cancel_signals,
+                &cancelled_prompts,
                 &h.event_tx,
                 &h.shell_mgr,
                 &h.prompt_timing,
@@ -1213,41 +1230,105 @@ async fn dispatch_cancel_fires_local_signal_and_removes_registry_entry() {
     local
         .run_until(async {
             let h = connect_for_dispatch(MockBehavior::Reply);
-            let cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>> =
-                Arc::new(Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
+            let cancelled_prompts: CancelledPrompts = Arc::new(Mutex::new(HashSet::new()));
             let (tx, rx) = oneshot::channel::<()>();
             cancel_signals
                 .lock()
                 .unwrap()
-                .insert("sess-cancel".to_string(), tx);
+                .insert(("sess-cancel".to_string(), 7), tx);
+            let (tx_next, mut rx_next) = oneshot::channel::<()>();
+            cancel_signals
+                .lock()
+                .unwrap()
+                .insert(("sess-cancel".to_string(), 8), tx_next);
 
             dispatch_cancel(
                 CancelRequest {
-                    session_id: "sess-cancel".to_string(),
+                    tab_id: "tab-cancel".to_string(),
+                    session_id: Some("sess-cancel".to_string()),
+                    prompt_id: 7,
                 },
                 &h.conn,
                 &cancel_signals,
+                &cancelled_prompts,
             );
 
             // The local oneshot is fired synchronously inside dispatch_cancel.
             assert!(rx.await.is_ok(), "local cancel signal must be fired");
             assert!(
-                !cancel_signals.lock().unwrap().contains_key("sess-cancel"),
+                !cancel_signals
+                    .lock()
+                    .unwrap()
+                    .contains_key(&("sess-cancel".to_string(), 7)),
                 "the fired signal must be removed from the registry"
+            );
+            assert!(
+                cancel_signals
+                    .lock()
+                    .unwrap()
+                    .contains_key(&("sess-cancel".to_string(), 8)),
+                "cleanup for prompt 7 must not remove prompt 8 on the same session"
+            );
+            assert!(
+                rx_next.try_recv().is_err(),
+                "the next prompt's cancellation sender must remain live"
             );
 
             // Cancelling an unknown session is a harmless no-op (no panic).
             dispatch_cancel(
                 CancelRequest {
-                    session_id: "ghost".to_string(),
+                    tab_id: "tab-ghost".to_string(),
+                    session_id: Some("ghost".to_string()),
+                    prompt_id: 8,
                 },
                 &h.conn,
                 &cancel_signals,
+                &cancelled_prompts,
             );
             // Let the best-effort agent-notify subtask run.
             for _ in 0..10 {
                 tokio::task::yield_now().await;
             }
+
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn dispatch_prompt_drops_a_pre_attach_cancel_before_session_creation() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let h = connect_for_dispatch(MockBehavior::Reply);
+            let (tab_to_session, in_flight, cancel_signals, cancelled_prompts, memo) =
+                fresh_dispatch_state();
+            cancelled_prompts
+                .lock()
+                .unwrap()
+                .insert(("0".to_string(), 42));
+
+            dispatch_prompt(
+                test_prompt(42, "cancel before attach", false),
+                &h.conn,
+                &tab_to_session,
+                &memo,
+                &in_flight,
+                &cancel_signals,
+                &cancelled_prompts,
+                &h.event_tx,
+                &h.shell_mgr,
+                &h.prompt_timing,
+                &h.client,
+                &PromptUsageIdentity::default(),
+                false,
+                false,
+                true,
+                &h.proposal_channels,
+            );
+
+            assert!(in_flight.lock().unwrap().is_empty());
+            assert!(h.seen_prompts.lock().unwrap().is_empty());
         })
         .await;
 }
@@ -1261,8 +1342,7 @@ async fn dispatch_drop_session_unbinds_and_fires_cancel_then_ignores_missing() {
         .run_until(async {
             let h = connect_for_dispatch(MockBehavior::Reply);
             let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-            let cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>> =
-                Arc::new(Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
             let memo = TemplateMemo::default();
 
             let sid = acp::schema::v1::SessionId::new("sess-drop");
@@ -1271,7 +1351,10 @@ async fn dispatch_drop_session_unbinds_and_fires_cancel_then_ignores_missing() {
                 .await
                 .insert("t1".to_string(), sid.clone());
             let (tx, rx) = oneshot::channel::<()>();
-            cancel_signals.lock().unwrap().insert(sid.to_string(), tx);
+            cancel_signals
+                .lock()
+                .unwrap()
+                .insert((sid.to_string(), 1), tx);
 
             dispatch_drop_session(
                 DropSessionRequest {
@@ -1295,7 +1378,10 @@ async fn dispatch_drop_session_unbinds_and_fires_cancel_then_ignores_missing() {
                 "drop must unbind the tab's session"
             );
             assert!(
-                !cancel_signals.lock().unwrap().contains_key("sess-drop"),
+                !cancel_signals
+                    .lock()
+                    .unwrap()
+                    .contains_key(&("sess-drop".to_string(), 1)),
                 "drop must remove the cancel signal from the registry"
             );
 
@@ -1326,8 +1412,7 @@ async fn dispatch_new_session_creates_binds_and_emits_attached() {
         .run_until(async {
             let h = connect_for_dispatch(MockBehavior::Reply);
             let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-            let cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>> =
-                Arc::new(Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
             let memo = TemplateMemo::default();
             let mut event_rx = h.event_rx;
 
@@ -1374,8 +1459,7 @@ async fn dispatch_new_session_failure_emits_agent_error_and_leaves_unbound() {
             let h = connect_for_dispatch(MockBehavior::Reply);
             h.fail_new_session.store(true, Ordering::SeqCst);
             let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-            let cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>> =
-                Arc::new(Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
             let memo = TemplateMemo::default();
             let mut event_rx = h.event_rx;
 
@@ -1420,8 +1504,7 @@ async fn dispatch_new_session_replaces_old_and_fires_its_cancel() {
         .run_until(async {
             let h = connect_for_dispatch(MockBehavior::Reply);
             let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-            let cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>> =
-                Arc::new(Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
             let memo = TemplateMemo::default();
             let mut event_rx = h.event_rx;
 
@@ -1434,7 +1517,7 @@ async fn dispatch_new_session_replaces_old_and_fires_its_cancel() {
             cancel_signals
                 .lock()
                 .unwrap()
-                .insert(old.to_string(), tx_old);
+                .insert((old.to_string(), 1), tx_old);
 
             dispatch_new_session(
                 NewSessionForTab {
@@ -1482,8 +1565,7 @@ async fn dispatch_load_session_binds_and_emits_attached() {
         .run_until(async {
             let h = connect_for_dispatch(MockBehavior::Reply);
             let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-            let cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>> =
-                Arc::new(Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
             let mut event_rx = h.event_rx;
 
             dispatch_load_session(
@@ -1530,8 +1612,7 @@ async fn dispatch_load_session_failure_inline_emits_tab_error() {
             let h = connect_for_dispatch(MockBehavior::Reply);
             h.fail_load_session.store(true, Ordering::SeqCst);
             let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-            let cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>> =
-                Arc::new(Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
             let mut event_rx = h.event_rx;
 
             dispatch_load_session(
@@ -1578,8 +1659,7 @@ async fn dispatch_load_session_failure_handler_restores_prior_binding() {
             let h = connect_for_dispatch(MockBehavior::Reply);
             h.fail_load_session.store(true, Ordering::SeqCst);
             let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-            let cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>> =
-                Arc::new(Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
             let mut event_rx = h.event_rx;
 
             let old = acp::schema::v1::SessionId::new("old-sess");
@@ -1633,8 +1713,7 @@ async fn dispatch_load_session_timeout_emits_tab_error() {
             let h = connect_for_dispatch(MockBehavior::Reply);
             h.slow_load.store(true, Ordering::SeqCst);
             let tab_to_session = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-            let cancel_signals: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>> =
-                Arc::new(Mutex::new(HashMap::new()));
+            let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
             let mut event_rx = h.event_rx;
 
             dispatch_load_session(

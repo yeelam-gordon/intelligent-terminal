@@ -1,6 +1,6 @@
 //! One-row "Queued (N): preview" indicator rendered directly above the input
-//! box whenever the current tab has pending prompts. See `App::drain_pending_prompts`
-//! and the Enter / Esc handlers in `app.rs` for the producer side.
+//! box whenever the current tab has pending prompts. See `app_queue.rs` and
+//! the Enter / Esc handlers for the producer side.
 
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -18,11 +18,8 @@ pub(crate) fn queue_hint_height(app: &App) -> u16 {
     }
 }
 
-/// Two-cell left indent that the hint row prepends, matching the visual
-/// alignment of other transient-hint rows (welcome hint, queue-removed
-/// toast). The truncation budget for the preview text subtracts this many
-/// cells from `area.width` so the indented line never overflows the
-/// available row width.
+/// Two-cell leading-edge indent matching other transient hints. In RTL
+/// locales the leading edge is the right, so the padding follows the text.
 const HORIZONTAL_PADDING: u16 = 2;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
@@ -52,8 +49,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         preview = preview
     )
     .into_owned();
-    // The render line below prepends up to `HORIZONTAL_PADDING` cells of
-    // left padding, so the truncation budget is `area.width - padding`. In
+    // The render line below adds up to `HORIZONTAL_PADDING` cells at the
+    // locale's leading edge, so the truncation budget is `area.width - padding`. In
     // very narrow panes (`area.width < HORIZONTAL_PADDING + 1`) we'd
     // otherwise pass 0 to `truncate_to_width` and get an empty string,
     // making the indicator a row of pure padding. Floor the budget at 1
@@ -65,18 +62,34 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         (area.width as usize).saturating_sub(HORIZONTAL_PADDING as usize).max(1)
     };
     let truncated = truncate_to_width(&text, budget);
-    // Clamp the left padding to whatever room is left after the truncated
-    // body — in very narrow terminals padding shrinks to 0 so the marker
-    // stays visible.
-    let prefix_width = (area.width as usize).saturating_sub(
+    // Clamp the leading-edge padding to whatever room is left after the
+    // truncated body — in very narrow terminals padding shrinks to 0 so the
+    // marker stays visible.
+    let padding_width = (area.width as usize).saturating_sub(
         unicode_width::UnicodeWidthStr::width(truncated.as_str()),
     );
-    let prefix = " ".repeat(prefix_width.min(HORIZONTAL_PADDING as usize));
+    let text = pad_indicator(
+        &truncated,
+        padding_width.min(HORIZONTAL_PADDING as usize),
+        crate::rtl::is_current_locale_rtl(),
+    );
     let line = Line::from(Span::styled(
-        format!("{prefix}{truncated}"),
+        text,
         theme::DIM,
     ));
-    frame.render_widget(Paragraph::new(line), area);
+    frame.render_widget(
+        Paragraph::new(line).alignment(crate::rtl::text_alignment()),
+        area,
+    );
+}
+
+fn pad_indicator(text: &str, padding_width: usize, rtl: bool) -> String {
+    let padding = " ".repeat(padding_width);
+    if rtl {
+        format!("{text}{padding}")
+    } else {
+        format!("{padding}{text}")
+    }
 }
 
 fn truncate_to_width(text: &str, max_cells: usize) -> String {
@@ -117,7 +130,7 @@ fn truncate_to_width(text: &str, max_cells: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_to_width;
+    use super::{pad_indicator, truncate_to_width};
 
     #[test]
     fn truncate_under_width_keeps_string() {
@@ -180,5 +193,11 @@ mod tests {
         let width = unicode_width::UnicodeWidthStr::width(out.as_str());
         assert!(width <= 2, "got {out:?} width {width}");
         assert!(out.contains('…'));
+    }
+
+    #[test]
+    fn rtl_indicator_padding_uses_the_right_leading_edge() {
+        assert_eq!(pad_indicator("Queued", 2, false), "  Queued");
+        assert_eq!(pad_indicator("בתור", 2, true), "בתור  ");
     }
 }

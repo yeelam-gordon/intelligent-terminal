@@ -49,6 +49,11 @@ impl QueuedPrompt {
     }
 }
 
+pub(crate) struct QueuedDispatch {
+    pub(crate) prompt_id: u64,
+    pub(crate) prompt: QueuedPrompt,
+}
+
 /// Bounds the cached queue preview independently of the prompt itself. The
 /// final display-cell clipping happens in `ui::queued_hint`.
 const COLLAPSED_PREVIEW_CAP: usize = 256;
@@ -279,6 +284,13 @@ pub struct TabSession {
     /// Prompts accepted while this tab was busy. They are dispatched FIFO when
     /// the turn returns to an accepting state; Esc removes the newest item.
     pub(crate) pending_prompts: VecDeque<QueuedPrompt>,
+    /// A queued prompt handed to ACP but not yet terminally completed. Keeping
+    /// it lets AgentBusy and recoverable errors restore FIFO order instead of
+    /// losing work after optimistic local submission.
+    pub(crate) queued_dispatch: Option<QueuedDispatch>,
+    /// Errors pause automatic queue progression. A subsequent typed Enter is
+    /// an explicit user decision to resume FIFO dispatch.
+    pub(crate) queue_paused: bool,
 
     // Streaming state
     pub pending_agent_response: String,
@@ -437,6 +449,8 @@ impl TabSession {
     pub fn clear_chat_history(&mut self) {
         self.messages.clear();
         self.pending_prompts.clear();
+        self.queued_dispatch = None;
+        self.queue_paused = false;
         self.tool_calls.clear();
         self.permission.clear();
         self.activity_frame = 0;

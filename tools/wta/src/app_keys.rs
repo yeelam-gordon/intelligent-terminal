@@ -768,6 +768,7 @@ impl App {
                             };
                             self.push_execution_info(format!("{} choice {}.", label, label_choice));
                             self.turn_execute_card(&session_id);
+                            self.dispatch_after_recommendation_execution(&session_id);
                         }
                     }
                     return;
@@ -795,6 +796,7 @@ impl App {
                     if !self.current_tab().turn.accepts_new_prompt()
                         || !self.current_tab().permission.is_empty()
                         || self.current_tab().loading_session
+                        || !self.current_tab().pending_prompts.is_empty()
                     {
                         self.enqueue_current_prompt();
                         return;

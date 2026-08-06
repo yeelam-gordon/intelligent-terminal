@@ -108,7 +108,29 @@ fn is_redundant_startup_model_error(
 /// or doesn't honor cancel.
 #[derive(Debug, Clone)]
 pub struct CancelRequest {
-    pub session_id: String,
+    pub tab_id: String,
+    pub session_id: Option<String>,
+    pub prompt_id: u64,
+}
+
+type CancelSignalKey = (String, u64);
+type CancelSignals = Arc<Mutex<HashMap<CancelSignalKey, tokio::sync::oneshot::Sender<()>>>>;
+type CancelledPrompts = Arc<Mutex<HashSet<(String, u64)>>>;
+
+fn cancel_signals_for_session(cancel_signals: &CancelSignals, session_id: &str) {
+    let keys: Vec<CancelSignalKey> = cancel_signals
+        .lock()
+        .unwrap()
+        .keys()
+        .filter(|(known_session_id, _)| known_session_id == session_id)
+        .cloned()
+        .collect();
+    let mut signals = cancel_signals.lock().unwrap();
+    for key in keys {
+        if let Some(signal) = signals.remove(&key) {
+            let _ = signal.send(());
+        }
+    }
 }
 
 /// User-initiated request to spin up a fresh ACP session for a given tab,
@@ -296,17 +318,10 @@ async fn complete_prompt_request<T, F>(
             // first, or the newly dispatched prompt would be rejected as
             // AgentBusy and leave the local turn state out of sync.
             before_terminal_event();
-            let _ = event_tx.send(AppEvent::AgentMessageEnd {
-                session_id: session_id.clone(),
+            let _ = event_tx.send(AppEvent::AgentTurnCompleted {
+                session_id,
+                soft_stop,
             });
-            // A successful turn can still end on a soft stop (truncation /
-            // request-budget / refusal). It is NOT a connection failure — the
-            // session stays Connected — so it rides its own event and only
-            // appends an informational line AFTER `AgentMessageEnd` has flushed
-            // the agent's streamed content.
-            if let Some(reason) = soft_stop {
-                let _ = event_tx.send(AppEvent::AgentSoftStop { session_id, reason });
-            }
         }
         Err(e) => {
             let error_message = e.to_string();
@@ -2237,8 +2252,8 @@ pub async fn run_acp_client_over_pipe(
     let template_memo = TemplateMemo::default();
     let in_flight_tabs: Arc<std::sync::Mutex<HashSet<String>>> =
         Arc::new(std::sync::Mutex::new(HashSet::new()));
-    let cancel_signals: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>> =
-        Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let cancel_signals: CancelSignals = Arc::new(Mutex::new(HashMap::new()));
+    let cancelled_prompts: CancelledPrompts = Arc::new(Mutex::new(HashSet::new()));
 
     let conn = Arc::new(conn);
 
@@ -2316,7 +2331,7 @@ pub async fn run_acp_client_over_pipe(
                 crate::wt_protocol_events::send(evt.to_string());
             }
             Some(req) = cancel_rx.recv() => {
-                dispatch_cancel(req, &conn, &cancel_signals);
+                dispatch_cancel(req, &conn, &cancel_signals, &cancelled_prompts);
             }
             Some(req) = new_session_rx.recv() => {
                 dispatch_new_session(
@@ -2357,6 +2372,7 @@ pub async fn run_acp_client_over_pipe(
                     &template_memo,
                     &in_flight_tabs,
                     &cancel_signals,
+                    &cancelled_prompts,
                     &event_tx,
                     &shell_mgr,
                     &prompt_timing,
@@ -2589,7 +2605,7 @@ fn dispatch_load_session(
     req: LoadSessionForTab,
     conn: &conn::ClientLink,
     tab_to_session: &Arc<tokio::sync::Mutex<HashMap<String, acp::schema::v1::SessionId>>>,
-    cancel_signals: &Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    cancel_signals: &CancelSignals,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     inject_pane_meta: bool,
     use_load_failure_handler: bool,
@@ -2625,9 +2641,7 @@ fn dispatch_load_session(
 
         if let Some(ref old) = old_sid {
             let old_str = old.to_string();
-            if let Some(sig) = cancel_signals.lock().unwrap().remove(&old_str) {
-                let _ = sig.send(());
-            }
+            cancel_signals_for_session(&cancel_signals, &old_str);
             let _ = conn
                 .cancel(acp::schema::v1::CancelNotification::new(old.clone()))
                 .await;
@@ -2799,7 +2813,7 @@ fn dispatch_new_session(
     conn: &conn::ClientLink,
     tab_to_session: &Arc<tokio::sync::Mutex<HashMap<String, acp::schema::v1::SessionId>>>,
     template_memo: &TemplateMemo,
-    cancel_signals: &Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    cancel_signals: &CancelSignals,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     is_agent_pane: bool,
     inject_pane_meta: bool,
@@ -2831,9 +2845,7 @@ fn dispatch_new_session(
             let old_str = old.to_string();
             crate::protocol::acp::model_select::forget_session(&old_str);
             template_memo.forget(&old_str).await;
-            if let Some(sig) = cancel_signals.lock().unwrap().remove(&old_str) {
-                let _ = sig.send(());
-            }
+            cancel_signals_for_session(&cancel_signals, &old_str);
             let _ = conn
                 .cancel(acp::schema::v1::CancelNotification::new(old.clone()))
                 .await;
@@ -2907,7 +2919,7 @@ fn dispatch_drop_session(
     conn: &conn::ClientLink,
     tab_to_session: &Arc<tokio::sync::Mutex<HashMap<String, acp::schema::v1::SessionId>>>,
     template_memo: &TemplateMemo,
-    cancel_signals: &Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    cancel_signals: &CancelSignals,
 ) {
     tracing::info!(
         target: "acp_drop_session",
@@ -2931,9 +2943,7 @@ fn dispatch_drop_session(
             let old_str = old.to_string();
             crate::protocol::acp::model_select::forget_session(&old_str);
             template_memo.forget(&old_str).await;
-            if let Some(sig) = cancel_signals.lock().unwrap().remove(&old_str) {
-                let _ = sig.send(());
-            }
+            cancel_signals_for_session(&cancel_signals, &old_str);
             if let Err(e) = conn
                 .cancel(acp::schema::v1::CancelNotification::new(old.clone()))
                 .await
@@ -2956,13 +2966,35 @@ fn dispatch_drop_session(
 fn dispatch_cancel(
     req: CancelRequest,
     conn: &conn::ClientLink,
-    cancel_signals: &Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    cancel_signals: &CancelSignals,
+    cancelled_prompts: &CancelledPrompts,
 ) {
-    let session_id_str = req.session_id.clone();
-    tracing::info!(target: "acp_cancel", session_id = %session_id_str, "cancel requested");
+    let CancelRequest {
+        tab_id,
+        session_id,
+        prompt_id,
+    } = req;
+    cancelled_prompts
+        .lock()
+        .unwrap()
+        .insert((tab_id.clone(), prompt_id));
+    tracing::info!(
+        target: "acp_cancel",
+        tab_id = %tab_id,
+        session_id = ?session_id,
+        prompt_id,
+        "cancel requested"
+    );
     // Local oneshot first — it's the critical path for breaking the
     // spawned prompt task out of conn.prompt().
-    if let Some(sig) = cancel_signals.lock().unwrap().remove(&session_id_str) {
+    let Some(session_id_str) = session_id else {
+        return;
+    };
+    if let Some(sig) = cancel_signals
+        .lock()
+        .unwrap()
+        .remove(&(session_id_str.clone(), prompt_id))
+    {
         let _ = sig.send(());
     }
     // Best-effort agent notification. Spawned so the loop stays
@@ -3030,7 +3062,8 @@ fn dispatch_prompt(
     tab_to_session: &Arc<tokio::sync::Mutex<HashMap<String, acp::schema::v1::SessionId>>>,
     template_memo: &TemplateMemo,
     in_flight_tabs: &Arc<std::sync::Mutex<HashSet<String>>>,
-    cancel_signals: &Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    cancel_signals: &CancelSignals,
+    cancelled_prompts: &CancelledPrompts,
     event_tx: &mpsc::UnboundedSender<AppEvent>,
     shell_mgr: &Arc<ShellManager>,
     prompt_timing: &Arc<PromptTimingState>,
@@ -3047,12 +3080,21 @@ fn dispatch_prompt(
         .as_ref()
         .and_then(|c| c.tab_id.clone())
         .unwrap_or_else(|| "0".to_string());
+    if cancelled_prompts
+        .lock()
+        .unwrap()
+        .remove(&(tab_key.clone(), prompt.id))
+    {
+        tracing::debug!(target: "acp_cancel", tab_id = %tab_key, prompt_id = prompt.id, "discarding prompt cancelled before dispatch");
+        return;
+    }
 
     {
         let mut g = in_flight_tabs.lock().unwrap();
         if !g.insert(tab_key.clone()) {
             let _ = event_tx.send(AppEvent::AgentBusy {
                 tab_id: tab_key.clone(),
+                prompt_id: prompt.id,
             });
             return;
         }
@@ -3063,6 +3105,7 @@ fn dispatch_prompt(
     let template_memo_task = template_memo.clone();
     let in_flight_tabs_task = Arc::clone(in_flight_tabs);
     let cancel_signals_task = Arc::clone(cancel_signals);
+    let cancelled_prompts_task = Arc::clone(cancelled_prompts);
     let event_tx_task = event_tx.clone();
     let shell_mgr_task = Arc::clone(shell_mgr);
     let prompt_timing_task = Arc::clone(prompt_timing);
@@ -3078,6 +3121,7 @@ fn dispatch_prompt(
         template_memo_task,
         in_flight_tabs_task,
         cancel_signals_task,
+        cancelled_prompts_task,
         event_tx_task,
         shell_mgr_task,
         prompt_timing_task,
@@ -3101,7 +3145,8 @@ async fn dispatch_prompt_body(
     tab_to_session_task: Arc<tokio::sync::Mutex<HashMap<String, acp::schema::v1::SessionId>>>,
     template_memo: TemplateMemo,
     in_flight_tabs_task: Arc<std::sync::Mutex<HashSet<String>>>,
-    cancel_signals_task: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    cancel_signals_task: CancelSignals,
+    cancelled_prompts_task: CancelledPrompts,
     event_tx_task: mpsc::UnboundedSender<AppEvent>,
     shell_mgr_task: Arc<ShellManager>,
     prompt_timing_task: Arc<PromptTimingState>,
@@ -3148,6 +3193,15 @@ async fn dispatch_prompt_body(
                 }
             };
             let new_sid = new_session.session_id.clone();
+            if cancelled_prompts_task
+                .lock()
+                .unwrap()
+                .remove(&(tab_key_task.clone(), prompt.id))
+            {
+                in_flight_tabs_task.lock().unwrap().remove(&tab_key_task);
+                tracing::debug!(target: "acp_cancel", tab_id = %tab_key_task, prompt_id = prompt.id, "discarding prompt cancelled while creating a session");
+                return;
+            }
             if is_agent_pane {
                 let pane_session_id = std::env::var("WT_SESSION").unwrap_or_default();
                 let pane_for_index = if pane_session_id.is_empty() {
@@ -3272,14 +3326,26 @@ async fn dispatch_prompt_body(
         },
     );
 
-    // Register a cancel oneshot for this prompt. The cancel
-    // listener picks the sender out by session_id and signals it
+    // Register a cancel oneshot for this exact prompt. A later queued turn can
+    // share the same ACP session, so session id alone is not a safe key.
     // when the user presses Ctrl+C.
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     cancel_signals_task
         .lock()
         .unwrap()
-        .insert(prompt_session_id_str.clone(), cancel_tx);
+        .insert((prompt_session_id_str.clone(), prompt.id), cancel_tx);
+    if cancelled_prompts_task
+        .lock()
+        .unwrap()
+        .remove(&(tab_key_task.clone(), prompt.id))
+    {
+        in_flight_tabs_task.lock().unwrap().remove(&tab_key_task);
+        cancel_signals_task
+            .lock()
+            .unwrap()
+            .remove(&(prompt_session_id_str.clone(), prompt.id));
+        return;
+    }
 
     // Build the prompt content: the (templated) text block, followed by any
     // images pasted via Alt+V as ACP `ContentBlock::Image` blocks. Images ride
@@ -3310,6 +3376,14 @@ async fn dispatch_prompt_body(
                 prompt_session_id_str.clone(),
                 || {
                     in_flight_tabs_task.lock().unwrap().remove(&tab_key_task);
+                    cancel_signals_task
+                        .lock()
+                        .unwrap()
+                        .remove(&(prompt_session_id_str.clone(), prompt.id));
+                    cancelled_prompts_task
+                        .lock()
+                        .unwrap()
+                        .remove(&(tab_key_task.clone(), prompt.id));
                 },
             )
             .await;
@@ -3326,6 +3400,14 @@ async fn dispatch_prompt_body(
                 Some("cancelled"),
             );
             in_flight_tabs_task.lock().unwrap().remove(&tab_key_task);
+            cancel_signals_task
+                .lock()
+                .unwrap()
+                .remove(&(prompt_session_id_str.clone(), prompt.id));
+            cancelled_prompts_task
+                .lock()
+                .unwrap()
+                .remove(&(tab_key_task.clone(), prompt.id));
             let _ = event_tx_task.send(AppEvent::AgentMessageEnd {
                 session_id: prompt_session_id_str.clone(),
             });
@@ -3366,7 +3448,7 @@ async fn dispatch_prompt_body(
     cancel_signals_task
         .lock()
         .unwrap()
-        .remove(&prompt_session_id_str);
+        .remove(&(prompt_session_id_str, prompt.id));
     in_flight_tabs_task.lock().unwrap().remove(&tab_key_task);
 }
 
@@ -3710,7 +3792,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn successful_prompt_completion_emits_message_end_only() {
+    async fn successful_prompt_completion_emits_composite_terminal_event() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let prompt_timing = PromptTimingState::default();
         let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3729,21 +3811,24 @@ mod tests {
         .await;
 
         match event_rx.try_recv() {
-            Ok(AppEvent::AgentMessageEnd { session_id }) => {
+            Ok(AppEvent::AgentTurnCompleted {
+                session_id,
+                soft_stop: None,
+            }) => {
                 assert_eq!(session_id, "test-session");
             }
-            Ok(_) => panic!("expected AgentMessageEnd"),
-            Err(err) => panic!("expected AgentMessageEnd, got channel error: {err}"),
+            Ok(_) => panic!("expected AgentTurnCompleted"),
+            Err(err) => panic!("expected AgentTurnCompleted, got channel error: {err}"),
         }
         assert!(
             released.load(std::sync::atomic::Ordering::Relaxed),
-            "the per-tab slot must be released before AgentMessageEnd wakes the queue drain"
+            "the per-tab slot must be released before terminal completion wakes the queue drain"
         );
         assert!(event_rx.try_recv().is_err());
     }
 
     #[tokio::test]
-    async fn soft_stop_emits_message_end_then_soft_stop() {
+    async fn soft_stop_is_carried_by_the_terminal_completion_event() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let prompt_timing = PromptTimingState::default();
 
@@ -3757,22 +3842,15 @@ mod tests {
         )
         .await;
 
-        // Order matters: the turn-closing AgentMessageEnd must land first so the
-        // soft-stop notice appends after the agent's streamed content.
         match event_rx.try_recv() {
-            Ok(AppEvent::AgentMessageEnd { session_id }) => {
+            Ok(AppEvent::AgentTurnCompleted {
+                session_id,
+                soft_stop: Some(SoftStopReason::Refusal),
+            }) => {
                 assert_eq!(session_id, "test-session");
             }
-            Ok(_) => panic!("expected AgentMessageEnd first"),
-            Err(err) => panic!("expected AgentMessageEnd first, got channel error: {err}"),
-        }
-        match event_rx.try_recv() {
-            Ok(AppEvent::AgentSoftStop { session_id, reason }) => {
-                assert_eq!(session_id, "test-session");
-                assert_eq!(reason, SoftStopReason::Refusal);
-            }
-            Ok(_) => panic!("expected AgentSoftStop second"),
-            Err(err) => panic!("expected AgentSoftStop second, got channel error: {err}"),
+            Ok(_) => panic!("expected composite terminal completion"),
+            Err(err) => panic!("expected terminal completion, got channel error: {err}"),
         }
         assert!(event_rx.try_recv().is_err());
     }

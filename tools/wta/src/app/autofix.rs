@@ -45,6 +45,16 @@ pub struct TabAutofixState {
     /// the user. Cleared when the echo A arrives, or when the state
     /// transitions out (set_bar_snapshot → Idle).
     pub trigger_echo_pane: Option<String>,
+    /// Latest failure observed while another turn owns this helper's
+    /// single-flight ACP slot. Promoted to a visible Detected pill after the
+    /// current turn reaches a stable terminal state; never silently dropped.
+    pub deferred: Option<DeferredAutofix>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeferredAutofix {
+    pub pane_id: String,
+    pub summary: String,
 }
 
 /// Snapshot of the bottom-bar autofix state for one tab. Mirrors the
@@ -196,14 +206,20 @@ impl App {
                     &notification.summary,
                 );
             } else {
-                // Different pane while busy: drop. The user can Esc the
-                // current autofix to free the slot if they want this one.
+                // Different pane while busy: preserve the latest failure for
+                // explicit review once the current single-flight turn ends.
+                // Running it immediately would overwrite the active turn;
+                // silently dropping it loses a user-visible failure.
+                self.tab_mut(&target_tab_id).autofix.deferred = Some(DeferredAutofix {
+                    pane_id: notification.pane_id.clone(),
+                    summary: notification.summary.clone(),
+                });
                 tracing::info!(
                     target: "autofix",
                     pane_id = %notification.pane_id,
                     tab_id = %target_tab_id,
                     armed_pane = ?armed_pane_dbg,
-                    "skipping autofix: previous turn still in-flight",
+                    "deferring autofix until the active turn reaches a stable state",
                 );
             }
             return;
@@ -446,6 +462,7 @@ impl App {
                 }
             ) {
                 self.turn_execute_card(&sid);
+                self.dispatch_after_recommendation_execution(&sid);
                 true
             } else {
                 false
@@ -490,6 +507,13 @@ impl App {
         // via `emit_autofix_state_result`, never through here.)
         self.tab_mut(target_tab_id).autofix.suggested_pane_id = None;
         self.set_bar_snapshot(target_tab_id, AutofixBarSnapshot::Idle);
+    }
+
+    pub(super) fn promote_deferred_autofix(&mut self, tab_id: &str) {
+        let deferred = self.tab_mut(tab_id).autofix.deferred.take();
+        if let Some(deferred) = deferred {
+            self.emit_autofix_state_detected(tab_id, &deferred.pane_id, &deferred.summary);
+        }
     }
 
     /// Store a fresh bar snapshot on the target tab and, if that tab is

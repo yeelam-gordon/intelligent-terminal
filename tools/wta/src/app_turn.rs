@@ -746,6 +746,12 @@ impl App {
         tab.rec_scroll.reset();
         tab.activity_frame = 0;
         tab.turn = TurnState::Idle;
+        // Cancellation and card dismissal never auto-run queued work. Keep
+        // it visible but require a later typed Enter to explicitly resume
+        // FIFO progression.
+        if !tab.pending_prompts.is_empty() {
+            tab.queue_paused = true;
+        }
         tab.pending_terminal_action_proposal = None;
         tab.active_direct_proposal_id = None;
         if let Some(proposal_id) = direct_proposal_id.as_deref() {

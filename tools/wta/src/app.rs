@@ -3534,6 +3534,7 @@ impl App {
             AppEvent::AgentMessageChunk { .. } => "agent_message_chunk",
             AppEvent::UserMessageReplayChunk { .. } => "user_message_replay_chunk",
             AppEvent::AgentMessageEnd { .. } => "agent_message_end",
+            AppEvent::AgentTurnCompleted { .. } => "agent_turn_completed",
             AppEvent::TimingMetric { .. } => "timing_metric",
             AppEvent::ToolCall { .. } => "tool_call",
             AppEvent::ToolCallUpdate { .. } => "tool_call_update",

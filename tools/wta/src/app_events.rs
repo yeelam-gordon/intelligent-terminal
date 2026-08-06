@@ -10,11 +10,6 @@ use super::*;
 impl App {
     pub(super) fn handle_event(&mut self, event: AppEvent) {
         self.handle_event_inner(event);
-        // Centralize the queue drain after every UI or ACP event. This covers
-        // normal completion, errors, cancellations, recommendation actions,
-        // and session-load transitions without scattering transition-specific
-        // dispatch calls through the state machine.
-        self.drain_pending_prompts();
     }
 
     fn handle_event_inner(&mut self, event: AppEvent) {
@@ -366,8 +361,13 @@ impl App {
             } => {
                 self.apply_prompt_target_resolved(tab_id, prompt_id, pane_id);
             }
-            AppEvent::AgentBusy { tab_id } => {
+            AppEvent::AgentBusy { tab_id, prompt_id } => {
+                let rolled_back = self.rollback_queued_dispatch(&tab_id, prompt_id);
                 let tab = self.tab_mut(&tab_id);
+                if !rolled_back && tab.turn.prompt().is_some_and(|prompt| prompt.id == prompt_id)
+                {
+                    tab.turn = TurnState::Idle;
+                }
                 tab.messages
                     .push(ChatMessage::System(t!("system.agent_busy").into_owned()));
                 tab.scroll_to_bottom();
@@ -498,10 +498,12 @@ impl App {
                         self.state = ConnectionState::Failed(message.clone());
                         self.publish_agent_status();
                     }
-                    let tab = match session_id.as_deref() {
-                        Some(sid) => self.session_tab_mut(sid),
-                        None => self.current_tab_mut(),
-                    };
+                    let target_tab = session_id
+                        .as_deref()
+                        .map(|sid| self.tab_for_session(sid))
+                        .unwrap_or_else(|| self.active_tab_key().to_string());
+                    self.pause_queued_dispatch(&target_tab, None);
+                    let tab = self.tab_mut(&target_tab);
                     tab.activity_frame = 0;
                     tab.timing_note = None;
                     tab.turn = TurnState::Idle;
@@ -704,6 +706,49 @@ impl App {
                 }
                 self.turn_close(&session_id);
                 self.session_tab_mut(&session_id).scroll_to_bottom();
+            }
+            AppEvent::AgentTurnCompleted {
+                session_id,
+                soft_stop,
+            } => {
+                let completed_before = self.session_tab(&session_id).completed_turns.len();
+                if let Some(summary) = self.session_completion_latency_summary(&session_id) {
+                    self.push_execution_info(summary);
+                }
+                self.turn_close(&session_id);
+                if let Some(reason) = soft_stop {
+                    use crate::protocol::acp::soft_stop::SoftStopReason;
+                    let message = match reason {
+                        SoftStopReason::MaxTokens => t!("system.stopped_max_tokens"),
+                        SoftStopReason::MaxTurnRequests => t!("system.stopped_max_turn_requests"),
+                        SoftStopReason::Refusal => t!("system.stopped_refusal"),
+                    }
+                    .into_owned();
+                    let tab = self.session_tab_mut(&session_id);
+                    if tab.completed_turns.len() > completed_before {
+                        tab.completed_turns
+                            .last_mut()
+                            .expect("turn close appended a completed turn")
+                            .details
+                            .push(ChatMessage::System(message));
+                    } else if let Some(prompt) = tab.turn.prompt() {
+                        let label = if prompt.autofix.is_some() {
+                            t!("chat.autofix_prompt_label").into_owned()
+                        } else {
+                            prompt.text.clone()
+                        };
+                        tab.completed_turns.push(CompletedTurn {
+                            prompt: label,
+                            details: vec![ChatMessage::System(message)],
+                            expanded: true,
+                            trailing_marker: None,
+                        });
+                    } else {
+                        tab.messages.push(ChatMessage::System(message));
+                    }
+                }
+                self.session_tab_mut(&session_id).scroll_to_bottom();
+                self.dispatch_after_successful_turn(&session_id);
             }
             AppEvent::TimingMetric { session_id, note } => {
                 self.session_tab_mut(&session_id).timing_note = Some(note);
