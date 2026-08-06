@@ -27,6 +27,9 @@ pub enum AppEvent {
     SessionAttached {
         tab_id: String,
         session_id: String,
+        /// `Some` only when a lazy attach was created for this prompt.
+        /// Reducers accept it only while that exact prompt is still active.
+        prompt_id: Option<u64>,
         available_models: Vec<AcpModelInfo>,
         current_model_id: Option<String>,
     },
@@ -70,6 +73,9 @@ pub enum AppEvent {
     },
     AgentError {
         session_id: Option<String>,
+        /// Present only for a failure of a specific submitted prompt. This
+        /// lets the App drop an error after cancel/resubmit or a tab drag.
+        prompt_id: Option<u64>,
         failure: crate::protocol::acp::failure::AgentFailure,
         message: String,
     },
@@ -87,11 +93,12 @@ pub enum AppEvent {
         new_window_id: Option<String>,
     },
     ExecutionInfo(String),
-    /// Result of an asynchronous recommendation action. Queue progression is
-    /// tab-scoped and only resumes after this acknowledgement succeeds.
+    /// Result of an asynchronous recommendation action. `tab_id` is
+    /// contextual only; exact acknowledgement routing uses `execution`.
     RecommendationExecutionCompleted {
         tab_id: String,
-        prompt_id: u64,
+        execution: crate::coordinator::RecommendationExecutionIdentity,
+        choice: usize,
         result: Result<(), String>,
     },
     AgentThoughtChunk {

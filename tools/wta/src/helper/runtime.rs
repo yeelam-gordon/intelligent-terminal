@@ -627,6 +627,7 @@ async fn run_acp_app(
                 );
                 let _ = event_tx.send(app::AppEvent::AgentError {
                     session_id: None,
+                    prompt_id: None,
                     failure: protocol::acp::failure::AgentFailure::TransportLost,
                     message: t!("connection.lost").into_owned(),
                 });
@@ -737,6 +738,7 @@ async fn run_acp_app(
                         );
                         let _ = event_tx_for_pipe.send(app::AppEvent::AgentError {
                             session_id: None,
+                            prompt_id: None,
                             failure,
                             message: format!("helper ACP transport failed: {e:#}"),
                         });

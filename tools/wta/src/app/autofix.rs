@@ -176,13 +176,19 @@ impl App {
             let tab = self.tab_mut(&target_tab_id);
             let same = tab.autofix.pane_id.as_deref() == Some(notification.pane_id.as_str());
             let busy = !tab.turn.is_idle()
-                && !matches!(
+                && (matches!(
+                    tab.turn,
+                    TurnState::Surfaced {
+                        outcome: TurnOutcome::ExecutingRecommendation { .. },
+                        ..
+                    }
+                ) || !matches!(
                     tab.turn,
                     TurnState::Surfaced {
                         end_pending: false,
                         ..
                     }
-                );
+                ));
             (same, busy, tab.autofix.pane_id.clone())
         };
 
@@ -472,25 +478,52 @@ impl App {
         };
         let choice_label = choice.choice;
         if !routed {
-            let prompt_id = self
-                .current_tab()
-                .turn
-                .prompt()
-                .map(|prompt| prompt.id)
-                .unwrap_or_default();
-            let autofix = &mut self.current_tab_mut().autofix;
-            autofix.pane_id = None;
-            autofix.armed_at = None;
-            self.clear_recommendations();
-            let _ = self
+            // A recommendation can arrive before the lazy ACP attachment.
+            // It still needs the same local execution gate as the
+            // session-backed path, or another autofix could overwrite it.
+            let execution = {
+                let tab = self.current_tab_mut();
+                let TurnState::Surfaced {
+                    prompt,
+                    outcome: TurnOutcome::Recommendation(_),
+                    end_pending,
+                } = std::mem::replace(&mut tab.turn, TurnState::Idle)
+                else {
+                    return;
+                };
+                let execution =
+                    crate::coordinator::RecommendationExecutionIdentity::new(prompt.id);
+                tab.autofix.pane_id = None;
+                tab.autofix.armed_at = None;
+                tab.selected_recommendation = 0;
+                tab.selected_button = 0;
+                tab.recommendation_focus = RecommendationFocus::Button;
+                tab.rec_scroll.reset();
+                tab.active_direct_proposal_id = None;
+                tab.turn = TurnState::Surfaced {
+                    prompt,
+                    outcome: TurnOutcome::ExecutingRecommendation { execution },
+                    end_pending,
+                };
+                execution
+            };
+            let dispatched = self
                 .recommendation_tx
                 .send(crate::coordinator::ChoiceExecution {
                     choice,
                     insert_only: false,
                     context: TurnContext::with_target_pane(armed_pane),
                     tab_id: active_tab.clone(),
-                    prompt_id,
-                });
+                    execution,
+                })
+                .is_ok();
+            if !dispatched {
+                self.complete_recommendation_execution(
+                    execution,
+                    choice_label,
+                    Err("recommendation executor is unavailable".to_string()),
+                );
+            }
         }
         self.push_execution_info(format!("Auto-executing choice {}.", choice_label));
         self.emit_autofix_state_cleared(&active_tab);

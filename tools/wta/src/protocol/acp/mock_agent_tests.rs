@@ -14,9 +14,9 @@
 
 use super::{
     dispatch_cancel, dispatch_drop_session, dispatch_load_session, dispatch_master_ext_request,
-    dispatch_new_session, dispatch_prompt, dispatch_rename_session, CancelRequest, CancelledPrompts,
-    CancelSignals, DropSessionRequest, LoadSessionForTab, MasterExtRequest, NewSessionForTab,
-    PromptSubmission, RenameSessionRequest,
+    dispatch_new_session, dispatch_prompt, dispatch_rename_session, CancelRequest, CancelSignal,
+    CancelledPrompts, CancelSignals, DropSessionRequest, LoadSessionForTab, MasterExtRequest,
+    NewSessionForTab, PromptSubmission, RenameSessionRequest,
 };
 use super::{ClientState, PromptUsageIdentity, ProviderProbeCapture, WtaClient};
 use crate::app_contracts::{AppEvent, PlanEntry, PlanEntryStatus};
@@ -1237,12 +1237,24 @@ async fn dispatch_cancel_fires_local_signal_and_removes_registry_entry() {
             cancel_signals
                 .lock()
                 .unwrap()
-                .insert(("sess-cancel".to_string(), 7), tx);
+                .insert(
+                    7,
+                    CancelSignal {
+                        session_id: Some("sess-cancel".to_string()),
+                        sender: tx,
+                    },
+                );
             let (tx_next, mut rx_next) = oneshot::channel::<()>();
             cancel_signals
                 .lock()
                 .unwrap()
-                .insert(("sess-cancel".to_string(), 8), tx_next);
+                .insert(
+                    8,
+                    CancelSignal {
+                        session_id: Some("sess-cancel".to_string()),
+                        sender: tx_next,
+                    },
+                );
 
             dispatch_cancel(
                 CancelRequest {
@@ -1260,14 +1272,14 @@ async fn dispatch_cancel_fires_local_signal_and_removes_registry_entry() {
                 !cancel_signals
                     .lock()
                     .unwrap()
-                    .contains_key(&("sess-cancel".to_string(), 7)),
+                    .contains_key(&7),
                 "the fired signal must be removed from the registry"
             );
             assert!(
                 cancel_signals
                     .lock()
                     .unwrap()
-                    .contains_key(&("sess-cancel".to_string(), 8)),
+                    .contains_key(&8),
                 "cleanup for prompt 7 must not remove prompt 8 on the same session"
             );
             assert!(
@@ -1364,7 +1376,13 @@ async fn dispatch_drop_session_unbinds_and_fires_cancel_then_ignores_missing() {
             cancel_signals
                 .lock()
                 .unwrap()
-                .insert((sid.to_string(), 1), tx);
+                .insert(
+                    1,
+                    CancelSignal {
+                        session_id: Some(sid.to_string()),
+                        sender: tx,
+                    },
+                );
 
             dispatch_drop_session(
                 DropSessionRequest {
@@ -1391,7 +1409,7 @@ async fn dispatch_drop_session_unbinds_and_fires_cancel_then_ignores_missing() {
                 !cancel_signals
                     .lock()
                     .unwrap()
-                    .contains_key(&("sess-drop".to_string(), 1)),
+                    .contains_key(&1),
                 "drop must remove the cancel signal from the registry"
             );
 
@@ -1527,7 +1545,13 @@ async fn dispatch_new_session_replaces_old_and_fires_its_cancel() {
             cancel_signals
                 .lock()
                 .unwrap()
-                .insert((old.to_string(), 1), tx_old);
+                .insert(
+                    1,
+                    CancelSignal {
+                        session_id: Some(old.to_string()),
+                        sender: tx_old,
+                    },
+                );
 
             dispatch_new_session(
                 NewSessionForTab {

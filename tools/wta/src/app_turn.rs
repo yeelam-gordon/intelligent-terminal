@@ -602,42 +602,7 @@ impl App {
         } else {
             None
         };
-        let dispatched = self
-            .recommendation_tx
-            .send(crate::coordinator::ChoiceExecution {
-                choice,
-                insert_only,
-                context,
-                tab_id: target_tab.clone(),
-                prompt_id,
-            })
-            .is_ok();
-        if let Some(claim) = confirmation_claim {
-            let status = if dispatched {
-                crate::agent_tools::action_proposal::channel::ProposalFinalStatus::Confirmed
-            } else {
-                crate::agent_tools::action_proposal::channel::ProposalFinalStatus::Unavailable
-            };
-            self.proposal_channels.finalize_confirmation(claim, status);
-            if !dispatched {
-                self.turn_cancel(session_id);
-                return;
-            }
-        }
-        if !dispatched {
-            self.pause_queued_dispatch(&target_tab, None);
-            self.session_tab_mut(session_id)
-                .messages
-                .push(ChatMessage::Error(
-                    t!(
-                        "system.choice_execution_failed",
-                        choice = executed_choice,
-                        error = "recommendation executor is unavailable"
-                    )
-                    .into_owned(),
-                ));
-            return;
-        }
+        let execution = crate::coordinator::RecommendationExecutionIdentity::new(prompt_id);
         if self
             .session_tab(session_id)
             .turn
@@ -673,7 +638,7 @@ impl App {
         // commit pending turn (in case eager surface staged one).
         tab.turn = TurnState::Surfaced {
             prompt,
-            outcome: TurnOutcome::ExecutingRecommendation,
+            outcome: TurnOutcome::ExecutingRecommendation { execution },
             end_pending,
         };
 
@@ -681,6 +646,32 @@ impl App {
         // card had pinned. The C++ side falls back to source-of-agent.
         let target_tab = self.tab_for_session(session_id);
         self.recompute_chip_override(&target_tab);
+
+        let dispatched = self
+            .recommendation_tx
+            .send(crate::coordinator::ChoiceExecution {
+                choice,
+                insert_only,
+                context,
+                tab_id: target_tab,
+                execution,
+            })
+            .is_ok();
+        if let Some(claim) = confirmation_claim {
+            let status = if dispatched {
+                crate::agent_tools::action_proposal::channel::ProposalFinalStatus::Confirmed
+            } else {
+                crate::agent_tools::action_proposal::channel::ProposalFinalStatus::Unavailable
+            };
+            self.proposal_channels.finalize_confirmation(claim, status);
+        }
+        if !dispatched {
+            self.complete_recommendation_execution(
+                execution,
+                executed_choice,
+                Err("recommendation executor is unavailable".to_string()),
+            );
+        }
     }
 
     /// User pressed Esc — cancel the in-flight turn. Bumps

@@ -1,5 +1,8 @@
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -110,10 +113,31 @@ pub struct ChoiceExecution {
     pub insert_only: bool,
     /// Host-owned context associated with the turn that produced this choice.
     pub context: TurnContext,
-    /// Owning agent-pane tab and turn identity. The executor is asynchronous,
-    /// so its result must be routed back without consulting mutable focus.
+    /// Contextual tab key retained for tracing. It can change during a tab
+    /// drag, so acknowledgement routing must use `execution`.
     pub tab_id: String,
+    pub execution: RecommendationExecutionIdentity,
+}
+
+/// Stable identity for one recommendation execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecommendationExecutionIdentity {
     pub prompt_id: u64,
+    pub execution_id: u64,
+}
+
+impl RecommendationExecutionIdentity {
+    pub fn new(prompt_id: u64) -> Self {
+        Self {
+            prompt_id,
+            execution_id: next_execution_id(),
+        }
+    }
+}
+
+pub fn next_execution_id() -> u64 {
+    static NEXT_EXECUTION_ID: AtomicU64 = AtomicU64::new(1);
+    NEXT_EXECUTION_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 pub fn default_supported_delegate_agents() -> Vec<SupportedDelegateAgent> {
@@ -318,7 +342,8 @@ pub async fn run_recommendation_executor(
             Ok(()) => {
                 let _ = event_tx.send(AppEvent::RecommendationExecutionCompleted {
                     tab_id: exec.tab_id,
-                    prompt_id: exec.prompt_id,
+                    execution: exec.execution,
+                    choice: exec.choice.choice,
                     result: Ok(()),
                 });
             }
@@ -326,17 +351,10 @@ pub async fn run_recommendation_executor(
                 let err_str = format!("{:#}", err);
                 let _ = event_tx.send(AppEvent::RecommendationExecutionCompleted {
                     tab_id: exec.tab_id,
-                    prompt_id: exec.prompt_id,
+                    execution: exec.execution,
+                    choice: exec.choice.choice,
                     result: Err(err_str.clone()),
                 });
-                let _ = event_tx.send(AppEvent::SystemMessage(
-                    t!(
-                        "system.choice_execution_failed",
-                        choice = exec.choice.choice,
-                        error = err_str.as_str()
-                    )
-                    .into_owned(),
-                ));
             }
         }
     }

@@ -8,7 +8,7 @@
 //! This module is pure data + small pure helpers. All transitions and side
 //! effects live on `App` methods in `app.rs`.
 
-use crate::coordinator::RecommendationSet;
+use crate::coordinator::{RecommendationExecutionIdentity, RecommendationSet};
 use crate::turn_context::TurnContext;
 
 /// Per-tab turn state.
@@ -68,7 +68,9 @@ pub enum TurnOutcome {
     ChatTurn,
     /// A selected recommendation is executing on the coordinator. The ACP
     /// turn is complete, but FIFO prompts must wait for the action result.
-    ExecutingRecommendation,
+    ExecutingRecommendation {
+        execution: RecommendationExecutionIdentity,
+    },
     /// No visible response (cancelled, or model returned nothing parseable).
     Empty,
 }
@@ -98,7 +100,7 @@ impl TurnState {
         match self {
             TurnState::Idle => true,
             TurnState::Surfaced {
-                outcome: TurnOutcome::ExecutingRecommendation,
+                outcome: TurnOutcome::ExecutingRecommendation { .. },
                 ..
             } => false,
             TurnState::Surfaced { end_pending, .. } => !*end_pending,

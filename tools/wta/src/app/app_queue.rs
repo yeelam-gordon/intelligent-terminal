@@ -179,9 +179,80 @@ impl App {
     /// A recommendation action is an explicit successful resolution of the
     /// card that blocked FIFO progression. Only after `turn_execute_card`
     /// has transitioned the card to its terminal outcome may Q2 begin.
-    pub(super) fn dispatch_after_recommendation_execution(&mut self, session_id: &str) {
-        let tab_id = self.tab_for_session(session_id);
-        self.dispatch_next_queued_prompt(&tab_id);
+    pub(super) fn dispatch_after_recommendation_execution(&mut self, tab_id: &str) {
+        self.promote_deferred_autofix(tab_id);
+        self.dispatch_next_queued_prompt(tab_id);
+    }
+
+    /// Apply one coordinator completion to its exact in-flight recommendation.
+    ///
+    /// A tab drag can rekey the contextual tab ID while the coordinator runs,
+    /// so only the immutable prompt/execution pair can mutate turn state.
+    pub(super) fn complete_recommendation_execution(
+        &mut self,
+        execution: crate::coordinator::RecommendationExecutionIdentity,
+        choice: usize,
+        result: Result<(), String>,
+    ) -> bool {
+        let target_tab = self.tab_sessions.iter().find_map(|(tab_id, tab)| {
+            matches!(
+                &tab.turn,
+                TurnState::Surfaced {
+                    outcome: TurnOutcome::ExecutingRecommendation {
+                        execution: active_execution,
+                    },
+                    ..
+                } if *active_execution == execution
+            )
+            .then(|| tab_id.clone())
+        });
+        let Some(target_tab) = target_tab else {
+            return false;
+        };
+
+        {
+            let tab = self.tab_mut(&target_tab);
+            let TurnState::Surfaced {
+                prompt,
+                outcome:
+                    TurnOutcome::ExecutingRecommendation {
+                        execution: active_execution,
+                    },
+                end_pending,
+            } = &tab.turn
+            else {
+                return false;
+            };
+            if *active_execution != execution {
+                return false;
+            }
+            tab.turn = TurnState::Surfaced {
+                prompt: prompt.clone(),
+                outcome: TurnOutcome::Empty,
+                end_pending: *end_pending,
+            };
+        }
+
+        match result {
+            Ok(()) => self.dispatch_after_recommendation_execution(&target_tab),
+            Err(error) => {
+                self.pause_queued_dispatch(&target_tab, None);
+                {
+                    let tab = self.tab_mut(&target_tab);
+                    tab.messages.push(ChatMessage::Error(
+                        t!(
+                            "system.choice_execution_failed",
+                            choice = choice,
+                            error = error.as_str()
+                        )
+                        .into_owned(),
+                    ));
+                    tab.scroll_to_bottom();
+                }
+                self.promote_deferred_autofix(&target_tab);
+            }
+        }
+        true
     }
 
     /// Keep queued work intact after a recoverable dispatch failure. The next
@@ -293,6 +364,16 @@ mod tests {
             submitted_at_unix_s: 0.0,
             context: TurnContext::default(),
             autofix: None,
+        }
+    }
+
+    fn execution(
+        prompt_id: u64,
+        execution_id: u64,
+    ) -> crate::coordinator::RecommendationExecutionIdentity {
+        crate::coordinator::RecommendationExecutionIdentity {
+            prompt_id,
+            execution_id,
         }
     }
 
@@ -547,8 +628,10 @@ mod tests {
         app.current_tab_mut()
             .pending_prompts
             .push_back(QueuedPrompt::new("stale".into(), "stale".into(), vec![]));
+        app.current_tab_mut().queue_paused = true;
         app.current_tab_mut().clear_chat_history();
         assert!(app.current_tab().pending_prompts.is_empty());
+        assert!(!app.current_tab().queue_paused);
     }
 
     #[test]
@@ -596,6 +679,7 @@ mod tests {
 
         app.handle_event(AppEvent::AgentError {
             session_id: None,
+            prompt_id: None,
             failure: crate::protocol::acp::failure::AgentFailure::Protocol {
                 code: -32603,
                 message: "temporary failure".into(),
@@ -627,6 +711,7 @@ mod tests {
                 app.handle_event(AppEvent::SessionAttached {
                     tab_id: DEFAULT_TAB_ID.to_string(),
                     session_id: "loaded-session".into(),
+                    prompt_id: None,
                     available_models: vec![],
                     current_model_id: None,
                 });
@@ -685,7 +770,9 @@ mod tests {
         assert_eq!(app.current_tab().pending_prompts.len(), 1);
 
         enter(&mut app, "explicit resume");
-        let retried = prompt_rx.try_recv().expect("rolled-back prompt retried first");
+        let retried = prompt_rx
+            .try_recv()
+            .expect("rolled-back prompt retried first");
         assert_eq!(retried.text, "describe");
         assert_eq!(retried.images, vec![image]);
     }
@@ -698,15 +785,21 @@ mod tests {
             .push_back(QueuedPrompt::new("Q2".into(), "Q2".into(), vec![]));
         app.current_tab_mut().turn = TurnState::Surfaced {
             prompt: submitted(1, "Q1"),
-            outcome: TurnOutcome::ExecutingRecommendation,
+            outcome: TurnOutcome::ExecutingRecommendation {
+                execution: execution(1, 1),
+            },
             end_pending: false,
         };
 
         app.handle_event(AppEvent::Tick);
-        assert!(prompt_rx.try_recv().is_err(), "pending coordinator work blocks FIFO");
+        assert!(
+            prompt_rx.try_recv().is_err(),
+            "pending coordinator work blocks FIFO"
+        );
         app.handle_event(AppEvent::RecommendationExecutionCompleted {
             tab_id: DEFAULT_TAB_ID.to_string(),
-            prompt_id: 1,
+            execution: execution(1, 1),
+            choice: 1,
             result: Ok(()),
         });
 
@@ -721,13 +814,16 @@ mod tests {
             .push_back(QueuedPrompt::new("Q2".into(), "Q2".into(), vec![]));
         app.current_tab_mut().turn = TurnState::Surfaced {
             prompt: submitted(1, "Q1"),
-            outcome: TurnOutcome::ExecutingRecommendation,
+            outcome: TurnOutcome::ExecutingRecommendation {
+                execution: execution(1, 2),
+            },
             end_pending: false,
         };
 
         app.handle_event(AppEvent::RecommendationExecutionCompleted {
             tab_id: DEFAULT_TAB_ID.to_string(),
-            prompt_id: 1,
+            execution: execution(1, 2),
+            choice: 1,
             result: Err("executor failed".into()),
         });
         app.handle_event(AppEvent::Tick);
@@ -735,6 +831,293 @@ mod tests {
         assert!(app.current_tab().queue_paused);
         assert_eq!(app.current_tab().pending_prompts.len(), 1);
         assert!(prompt_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn recommendation_acknowledgements_follow_execution_not_renamed_tab_id() {
+        let (mut app, mut prompt_rx) = connected_app();
+        app.tab_id = Some("old-tab".into());
+        app.owner_tab_id = Some("old-tab".into());
+        {
+            let tab = app.tab_mut("old-tab");
+            tab.pending_prompts
+                .push_back(QueuedPrompt::new("Q2".into(), "Q2".into(), vec![]));
+            tab.turn = TurnState::Surfaced {
+                prompt: submitted(41, "Q1"),
+                outcome: TurnOutcome::ExecutingRecommendation {
+                    execution: execution(41, 81),
+                },
+                end_pending: false,
+            };
+        }
+
+        app.handle_event(AppEvent::TabRenamed {
+            old_tab_id: "old-tab".into(),
+            new_tab_id: "new-tab".into(),
+            new_window_id: Some("window-2".into()),
+        });
+        app.handle_event(AppEvent::RecommendationExecutionCompleted {
+            tab_id: "old-tab".into(),
+            execution: execution(41, 81),
+            choice: 1,
+            result: Ok(()),
+        });
+
+        assert!(!app.tab_sessions.contains_key("old-tab"));
+        assert_eq!(prompt_rx.try_recv().unwrap().text, "Q2");
+        assert!(matches!(
+            app.tab_sessions["new-tab"].turn,
+            TurnState::Submitted(_)
+        ));
+    }
+
+    #[test]
+    fn failed_recommendation_acknowledgement_after_rename_pauses_only_owner() {
+        let (mut app, _prompt_rx) = connected_app();
+        app.tab_id = Some("old-tab".into());
+        {
+            let tab = app.tab_mut("old-tab");
+            tab.pending_prompts
+                .push_back(QueuedPrompt::new("Q2".into(), "Q2".into(), vec![]));
+            tab.turn = TurnState::Surfaced {
+                prompt: submitted(42, "Q1"),
+                outcome: TurnOutcome::ExecutingRecommendation {
+                    execution: execution(42, 82),
+                },
+                end_pending: false,
+            };
+        }
+        app.tab_mut("unrelated-tab").turn = TurnState::Surfaced {
+            prompt: submitted(99, "other"),
+            outcome: TurnOutcome::ExecutingRecommendation {
+                execution: execution(99, 199),
+            },
+            end_pending: false,
+        };
+
+        app.handle_event(AppEvent::TabRenamed {
+            old_tab_id: "old-tab".into(),
+            new_tab_id: "new-tab".into(),
+            new_window_id: Some("window-2".into()),
+        });
+        app.handle_event(AppEvent::RecommendationExecutionCompleted {
+            tab_id: "old-tab".into(),
+            execution: execution(42, 82),
+            choice: 1,
+            result: Err("executor failed".into()),
+        });
+
+        assert!(app.tab_sessions["new-tab"].queue_paused);
+        assert!(matches!(
+            app.tab_sessions["unrelated-tab"].turn,
+            TurnState::Surfaced {
+                outcome: TurnOutcome::ExecutingRecommendation { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn stale_recommendation_acknowledgement_cannot_affect_newer_turn() {
+        let (mut app, mut prompt_rx) = connected_app();
+        app.current_tab_mut()
+            .pending_prompts
+            .push_back(QueuedPrompt::new("Q3".into(), "Q3".into(), vec![]));
+        app.current_tab_mut().turn = TurnState::Surfaced {
+            prompt: submitted(52, "Q2"),
+            outcome: TurnOutcome::ExecutingRecommendation {
+                execution: execution(52, 102),
+            },
+            end_pending: false,
+        };
+
+        app.handle_event(AppEvent::RecommendationExecutionCompleted {
+            tab_id: DEFAULT_TAB_ID.into(),
+            execution: execution(51, 101),
+            choice: 1,
+            result: Err("old execution failed".into()),
+        });
+        app.handle_event(AppEvent::RecommendationExecutionCompleted {
+            tab_id: DEFAULT_TAB_ID.into(),
+            execution: execution(52, 103),
+            choice: 1,
+            result: Err("wrong execution failed".into()),
+        });
+
+        assert!(matches!(
+            app.current_tab().turn,
+            TurnState::Surfaced {
+                outcome: TurnOutcome::ExecutingRecommendation { execution: active },
+                ..
+            } if active == execution(52, 102)
+        ));
+        assert!(!app.current_tab().queue_paused);
+        assert!(prompt_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn delayed_acp_completion_after_tab_rename_closes_its_prompt_only() {
+        let (mut app, mut prompt_rx) = connected_app();
+        app.tab_id = Some("old-tab".into());
+        app.owner_tab_id = Some("old-tab".into());
+        {
+            let tab = app.tab_mut("old-tab");
+            tab.session_id = Some("stable-session".into());
+            tab.turn = TurnState::Submitted(submitted(71, "Q1"));
+            tab.pending_prompts
+                .push_back(QueuedPrompt::new("Q2".into(), "Q2".into(), vec![]));
+        }
+        app.session_to_tab
+            .insert("stable-session".into(), "old-tab".into());
+
+        app.handle_event(AppEvent::TabRenamed {
+            old_tab_id: "old-tab".into(),
+            new_tab_id: "new-tab".into(),
+            new_window_id: Some("window-2".into()),
+        });
+        app.handle_event(AppEvent::AgentTurnCompleted {
+            session_id: "stable-session".into(),
+            prompt_id: 71,
+            soft_stop: None,
+        });
+
+        assert!(!app.tab_sessions.contains_key("old-tab"));
+        assert_eq!(prompt_rx.try_recv().unwrap().text, "Q2");
+        assert!(matches!(
+            app.tab_sessions["new-tab"].turn,
+            TurnState::Submitted(_)
+        ));
+    }
+
+    #[test]
+    fn lazy_session_attachment_after_tab_rename_follows_prompt_identity() {
+        let (mut app, _prompt_rx) = connected_app();
+        app.tab_id = Some("old-tab".into());
+        app.tab_mut("old-tab").turn = TurnState::Submitted(submitted(72, "Q1"));
+
+        app.handle_event(AppEvent::TabRenamed {
+            old_tab_id: "old-tab".into(),
+            new_tab_id: "new-tab".into(),
+            new_window_id: Some("window-2".into()),
+        });
+        app.handle_event(AppEvent::SessionAttached {
+            tab_id: "old-tab".into(),
+            session_id: "stable-session".into(),
+            prompt_id: Some(72),
+            available_models: vec![],
+            current_model_id: None,
+        });
+
+        assert_eq!(
+            app.session_to_tab.get("stable-session").map(String::as_str),
+            Some("new-tab")
+        );
+        assert_eq!(
+            app.tab_sessions["new-tab"].session_id.as_deref(),
+            Some("stable-session")
+        );
+    }
+
+    #[test]
+    fn stale_acp_failure_cannot_fail_a_replacement_prompt() {
+        let (mut app, _prompt_rx) = connected_app();
+        app.current_tab_mut().turn = TurnState::Submitted(submitted(74, "replacement"));
+
+        app.handle_event(AppEvent::AgentError {
+            session_id: Some("stable-session".into()),
+            prompt_id: Some(73),
+            failure: crate::protocol::acp::failure::AgentFailure::Protocol {
+                code: -32603,
+                message: "old prompt failed".into(),
+            },
+            message: "old prompt failed".into(),
+        });
+
+        assert!(matches!(
+            app.current_tab().turn,
+            TurnState::Submitted(SubmittedPrompt { id: 74, .. })
+        ));
+        assert!(app.current_tab().messages.is_empty());
+    }
+
+    #[test]
+    fn delayed_acp_cancellation_end_cannot_close_a_replacement_prompt() {
+        let (mut app, _prompt_rx) = connected_app();
+        app.current_tab_mut().session_id = Some("stable-session".into());
+        app.current_tab_mut().turn = TurnState::Submitted(submitted(75, "cancelled"));
+        app.turn_cancel(DEFAULT_TAB_ID);
+        app.current_tab_mut().turn = TurnState::Submitted(submitted(76, "replacement"));
+
+        app.handle_event(AppEvent::AgentMessageEnd {
+            session_id: "stable-session".into(),
+            prompt_id: 75,
+        });
+
+        assert!(matches!(
+            app.current_tab().turn,
+            TurnState::Submitted(SubmittedPrompt { id: 76, .. })
+        ));
+    }
+
+    #[test]
+    fn deferred_autofix_is_promoted_after_execution_resolution() {
+        let (mut app, _prompt_rx) = connected_app();
+        app.current_tab_mut().turn = TurnState::Surfaced {
+            prompt: submitted(61, "Q1"),
+            outcome: TurnOutcome::ExecutingRecommendation {
+                execution: execution(61, 91),
+            },
+            end_pending: false,
+        };
+        app.current_tab_mut().autofix.deferred = Some(super::super::autofix::DeferredAutofix {
+            pane_id: "failing-pane".into(),
+            summary: "command failed".into(),
+        });
+
+        app.handle_event(AppEvent::RecommendationExecutionCompleted {
+            tab_id: DEFAULT_TAB_ID.into(),
+            execution: execution(61, 91),
+            choice: 1,
+            result: Ok(()),
+        });
+
+        assert!(matches!(
+            app.current_tab().autofix.bar_snapshot,
+            AutofixBarSnapshot::Detected { .. }
+        ));
+        assert!(app.current_tab().autofix.deferred.is_none());
+    }
+
+    #[test]
+    fn autofix_defers_while_a_recommendation_execution_is_gated() {
+        let (mut app, _prompt_rx) = connected_app();
+        app.autofix_enabled = true;
+        app.current_tab_mut().turn = TurnState::Surfaced {
+            prompt: submitted(62, "Q1"),
+            outcome: TurnOutcome::ExecutingRecommendation {
+                execution: execution(62, 92),
+            },
+            end_pending: false,
+        };
+        let notification = WtNotification {
+            severity: WtEventSeverity::Actionable,
+            pane_id: "failing-pane".into(),
+            tab_id: Some(DEFAULT_TAB_ID.into()),
+            summary: "command failed".into(),
+            acknowledged: false,
+            age_ticks: 0,
+        };
+
+        app.trigger_autofix_inner(&notification, false);
+
+        assert!(app.current_tab().autofix.deferred.is_some());
+        assert!(matches!(
+            app.current_tab().turn,
+            TurnState::Surfaced {
+                outcome: TurnOutcome::ExecutingRecommendation { .. },
+                ..
+            }
+        ));
     }
 
     #[test]

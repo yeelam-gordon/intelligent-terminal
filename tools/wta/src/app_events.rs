@@ -239,9 +239,31 @@ impl App {
             AppEvent::SessionAttached {
                 tab_id,
                 session_id,
+                prompt_id,
                 available_models,
                 current_model_id,
             } => {
+                // Lazy attachment may finish after a drag rekeys `tab_id`.
+                // Resolve it by prompt identity, both to follow the moved tab
+                // and to reject a cancellation's obsolete attachment.
+                let tab_id = if let Some(prompt_id) = prompt_id {
+                    let Some(target_tab_id) = self.tab_for_in_flight_prompt(prompt_id) else {
+                        tracing::debug!(
+                            target: "acp_cancel",
+                            tab_id = %tab_id,
+                            session_id = %session_id,
+                            prompt_id,
+                            "dropping obsolete lazy session attachment"
+                        );
+                        let _ = self.drop_session_tx.send(DropSessionRequest {
+                            tab_id: tab_id.clone(),
+                        });
+                        return;
+                    };
+                    target_tab_id
+                } else {
+                    tab_id
+                };
                 let is_active_tab = self.active_tab_key() == tab_id;
                 let replaced_session_ids: Vec<String> = self
                     .session_to_tab
@@ -385,7 +407,19 @@ impl App {
             } => {
                 self.apply_prompt_target_resolved(tab_id, prompt_id, pane_id);
             }
-            AppEvent::AgentBusy { tab_id, prompt_id } => {
+            AppEvent::AgentBusy {
+                tab_id: context_tab_id,
+                prompt_id,
+            } => {
+                let Some(tab_id) = self.tab_for_in_flight_prompt(prompt_id) else {
+                    tracing::debug!(
+                        target: "acp",
+                        context_tab_id = %context_tab_id,
+                        prompt_id,
+                        "dropping stale agent-busy event"
+                    );
+                    return;
+                };
                 let rolled_back = self.rollback_queued_dispatch(&tab_id, prompt_id);
                 let tab = self.tab_mut(&tab_id);
                 if !rolled_back && tab.turn.prompt().is_some_and(|prompt| prompt.id == prompt_id)
@@ -405,6 +439,7 @@ impl App {
             }
             AppEvent::AgentError {
                 session_id,
+                prompt_id,
                 failure,
                 message,
             } => {
@@ -417,6 +452,7 @@ impl App {
                     target: "failure",
                     class = failure.class(),
                     session_id = ?session_id,
+                    prompt_id = ?prompt_id,
                     "agent failure"
                 );
 
@@ -426,6 +462,23 @@ impl App {
                 if failure.is_cancelled() {
                     return;
                 }
+
+                let target_tab = if let Some(prompt_id) = prompt_id {
+                    let Some(tab_id) = self.tab_for_in_flight_prompt(prompt_id) else {
+                        tracing::debug!(
+                            target: "failure",
+                            prompt_id,
+                            "dropping stale prompt failure"
+                        );
+                        return;
+                    };
+                    tab_id
+                } else {
+                    session_id
+                        .as_deref()
+                        .map(|sid| self.tab_for_session(sid))
+                        .unwrap_or_else(|| self.active_tab_key().to_string())
+                };
 
                 let session_survives = matches!(
                     &failure,
@@ -443,14 +496,10 @@ impl App {
                 let stale_usage_tab = if transport_lost {
                     self.transport_lost = true;
                     self.proposal_channels.set_agent_transport_available(false);
-                    let target_tab = session_id
-                        .as_deref()
-                        .map(|sid| self.tab_for_session(sid))
-                        .unwrap_or_else(|| self.active_tab_key().to_string());
                     let tab = self.tab_mut(&target_tab);
                     if let Some(snapshot) = tab.usage.as_ref() {
                         tab.usage_staleness.mark_present_stale(snapshot);
-                        Some(target_tab)
+                        Some(target_tab.clone())
                     } else {
                         None
                     }
@@ -521,10 +570,6 @@ impl App {
                         self.state = ConnectionState::Failed(message.clone());
                         self.publish_agent_status();
                     }
-                    let target_tab = session_id
-                        .as_deref()
-                        .map(|sid| self.tab_for_session(sid))
-                        .unwrap_or_else(|| self.active_tab_key().to_string());
                     self.pause_queued_dispatch(&target_tab, None);
                     let tab = self.tab_mut(&target_tab);
                     tab.activity_frame = 0;
@@ -680,37 +725,18 @@ impl App {
             }
             AppEvent::RecommendationExecutionCompleted {
                 tab_id,
-                prompt_id,
+                execution,
+                choice,
                 result,
             } => {
-                let ready = {
-                    let tab = self.tab_mut(&tab_id);
-                    match &tab.turn {
-                        TurnState::Surfaced {
-                            prompt,
-                            outcome: TurnOutcome::ExecutingRecommendation,
-                            end_pending,
-                        } if prompt.id == prompt_id => {
-                            let prompt = prompt.clone();
-                            let end_pending = *end_pending;
-                            tab.turn = TurnState::Surfaced {
-                                prompt,
-                                outcome: TurnOutcome::Empty,
-                                end_pending,
-                            };
-                            result.is_ok()
-                        }
-                        _ => false,
-                    }
-                };
-                match result {
-                    Ok(()) if ready => {
-                        self.dispatch_after_recommendation_execution(&tab_id);
-                    }
-                    Ok(()) => {}
-                    Err(_) => {
-                        self.pause_queued_dispatch(&tab_id, None);
-                    }
+                if !self.complete_recommendation_execution(execution, choice, result) {
+                    tracing::debug!(
+                        target: "recommendation",
+                        context_tab_id = %tab_id,
+                        prompt_id = execution.prompt_id,
+                        execution_id = execution.execution_id,
+                        "dropping stale or unmatched recommendation completion"
+                    );
                 }
             }
             AppEvent::AgentThoughtChunk { session_id, text } => {
@@ -763,14 +789,10 @@ impl App {
                 session_id,
                 prompt_id,
             } => {
-                if self
-                    .session_tab(&session_id)
-                    .turn
-                    .prompt()
-                    .is_none_or(|prompt| prompt.id != prompt_id)
-                {
+                let Some(tab_id) = self.tab_for_in_flight_prompt(prompt_id) else {
                     return;
-                }
+                };
+                self.session_to_tab.insert(session_id.clone(), tab_id);
                 if let Some(summary) = self.session_completion_latency_summary(&session_id) {
                     self.push_execution_info(summary);
                 }
@@ -782,14 +804,10 @@ impl App {
                 prompt_id,
                 soft_stop,
             } => {
-                if self
-                    .session_tab(&session_id)
-                    .turn
-                    .prompt()
-                    .is_none_or(|prompt| prompt.id != prompt_id)
-                {
+                let Some(tab_id) = self.tab_for_in_flight_prompt(prompt_id) else {
                     return;
-                }
+                };
+                self.session_to_tab.insert(session_id.clone(), tab_id);
                 let completed_before = self.session_tab(&session_id).completed_turns.len();
                 if let Some(summary) = self.session_completion_latency_summary(&session_id) {
                     self.push_execution_info(summary);

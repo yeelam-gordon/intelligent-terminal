@@ -1329,6 +1329,30 @@ fn load_session_passes_through_when_owner_tab_id_unset() {
 
 // ─── SessionAttached load-target gating (Plan-C race fix) ───────────────
 
+#[test]
+fn cancelled_prompt_rejects_its_late_lazy_session_attachment() {
+    let mut app = test_app();
+    app.current_tab_mut().turn = TurnState::Submitted(SubmittedPrompt {
+        id: 41,
+        text: "cancel me".into(),
+        submitted_at_unix_s: 0.0,
+        context: TurnContext::default(),
+        autofix: None,
+    });
+    app.turn_cancel(DEFAULT_TAB_ID);
+
+    app.handle_event(AppEvent::SessionAttached {
+        tab_id: DEFAULT_TAB_ID.into(),
+        session_id: "obsolete-session".into(),
+        prompt_id: Some(41),
+        available_models: vec![],
+        current_model_id: None,
+    });
+
+    assert!(app.current_tab().session_id.is_none());
+    assert!(!app.session_to_tab.contains_key("obsolete-session"));
+}
+
 /// After a load_session sets the replay window open, an unrelated
 /// `SessionAttached` (e.g. the bootstrap `session/new` that the helper
 /// always runs at startup) MUST NOT close the window — otherwise
@@ -1370,6 +1394,7 @@ fn session_attached_for_bootstrap_does_not_close_load_replay_window() {
     app.handle_event(AppEvent::SessionAttached {
         tab_id: "OWNER-TAB".to_string(),
         session_id: "sess-bootstrap".to_string(),
+        prompt_id: None,
         available_models: vec![],
         current_model_id: None,
     });
@@ -1413,6 +1438,7 @@ fn session_attached_for_load_target_closes_replay_window() {
     app.handle_event(AppEvent::SessionAttached {
         tab_id: "OWNER-TAB".to_string(),
         session_id: "sess-target".to_string(),
+        prompt_id: None,
         available_models: vec![],
         current_model_id: None,
     });
@@ -1599,6 +1625,7 @@ fn session_attached_for_load_target_packs_replayed_history() {
     app.handle_event(AppEvent::SessionAttached {
         tab_id: "OWNER-TAB".to_string(),
         session_id: "sess-target".to_string(),
+        prompt_id: None,
         available_models: vec![],
         current_model_id: None,
     });
@@ -2093,6 +2120,7 @@ fn model_config_update_before_session_attach_is_applied_on_attach() {
     app.handle_event(AppEvent::SessionAttached {
         tab_id: DEFAULT_TAB_ID.into(),
         session_id: "sid-later".into(),
+        prompt_id: None,
         available_models: vec![model_info("claude-sonnet-5")],
         current_model_id: Some("claude-sonnet-5".into()),
     });
@@ -2118,6 +2146,7 @@ fn session_attach_prunes_replaced_session_model_config() {
     app.handle_event(AppEvent::SessionAttached {
         tab_id: DEFAULT_TAB_ID.into(),
         session_id: "sid-new".into(),
+        prompt_id: None,
         available_models: vec![model_info("gpt-5.6-sol")],
         current_model_id: Some("gpt-5.6-sol".into()),
     });
@@ -2137,6 +2166,7 @@ fn background_session_attach_waits_for_tab_switch_to_update_picker() {
     app.handle_event(AppEvent::SessionAttached {
         tab_id: "background".into(),
         session_id: "sid-background".into(),
+        prompt_id: None,
         available_models: vec![model_info("gpt-5.6-sol")],
         current_model_id: Some("gpt-5.6-sol".into()),
     });
@@ -2241,6 +2271,7 @@ fn fresh_session_model_replaces_stale_agent_default() {
     app.handle_event(AppEvent::SessionAttached {
         tab_id: DEFAULT_TAB_ID.into(),
         session_id: "sid-fresh".into(),
+        prompt_id: None,
         available_models: vec![model_info("stale"), model_info("fresh")],
         current_model_id: Some("fresh".into()),
     });
@@ -2283,6 +2314,7 @@ fn fresh_session_model_does_not_replace_global_override() {
     app.handle_event(AppEvent::SessionAttached {
         tab_id: DEFAULT_TAB_ID.into(),
         session_id: "sid-fresh".into(),
+        prompt_id: None,
         available_models: vec![model_info("agent-default"), model_info("global")],
         current_model_id: Some("agent-default".into()),
     });
@@ -2311,6 +2343,7 @@ fn fresh_session_model_does_not_replace_pane_override_on_new() {
     app.handle_event(AppEvent::SessionAttached {
         tab_id: DEFAULT_TAB_ID.into(),
         session_id: "sid-new".into(),
+        prompt_id: None,
         available_models: vec![model_info("agent-default"), model_info("pane-picked")],
         current_model_id: Some("agent-default".into()),
     });
@@ -2349,6 +2382,7 @@ fn fresh_session_model_does_not_replace_custom_selection() {
     app.handle_event(AppEvent::SessionAttached {
         tab_id: DEFAULT_TAB_ID.into(),
         session_id: "sid-fresh".into(),
+        prompt_id: None,
         available_models: vec![model_info("agent-default")],
         current_model_id: Some("agent-default".into()),
     });
@@ -4275,6 +4309,7 @@ fn transport_loss_surfaces_restart_hint_even_behind_another_error() {
     // In-flight prompt fails first (raw), then the watchdog's connection.lost.
     app.handle_event(AppEvent::AgentError {
         session_id: None,
+        prompt_id: None,
         failure: crate::protocol::acp::failure::AgentFailure::Protocol {
             code: -32603,
             message: "pipe closed".to_string(),
@@ -4283,6 +4318,7 @@ fn transport_loss_surfaces_restart_hint_even_behind_another_error() {
     });
     app.handle_event(AppEvent::AgentError {
         session_id: None,
+        prompt_id: None,
         failure: crate::protocol::acp::failure::AgentFailure::TransportLost,
         message: lost.clone(),
     });
@@ -4300,6 +4336,7 @@ fn transport_loss_surfaces_restart_hint_even_behind_another_error() {
     // An identical connection.lost arriving again must not stack a duplicate.
     app.handle_event(AppEvent::AgentError {
         session_id: None,
+        prompt_id: None,
         failure: crate::protocol::acp::failure::AgentFailure::TransportLost,
         message: lost.clone(),
     });
@@ -4439,6 +4476,7 @@ fn transport_lost_latch_arms_on_transport_loss() {
 
     app.handle_event(AppEvent::AgentError {
         session_id: None,
+        prompt_id: None,
         failure: crate::protocol::acp::failure::AgentFailure::TransportLost,
         message: t!("connection.lost").into_owned(),
     });
@@ -4458,6 +4496,7 @@ fn protocol_error_ends_turn_without_failing_connection() {
 
     app.handle_event(AppEvent::AgentError {
         session_id: None,
+        prompt_id: None,
         failure: crate::protocol::acp::failure::AgentFailure::Protocol {
             code: -32603,
             message: "bad params".to_string(),
@@ -4487,6 +4526,7 @@ fn auth_failure_does_not_arm_degraded_latch() {
 
     app.handle_event(AppEvent::AgentError {
         session_id: None,
+        prompt_id: None,
         failure: crate::protocol::acp::failure::AgentFailure::AuthRequired {
             message: "authentication required".to_string(),
         },
@@ -4540,6 +4580,7 @@ fn auth_error_routes_to_signin_not_connection_lost() {
     app.state = ConnectionState::Connected;
     app.handle_event(AppEvent::AgentError {
         session_id: None,
+        prompt_id: None,
         failure: crate::protocol::acp::failure::AgentFailure::AuthRequired {
             message: "authentication required".to_string(),
         },
@@ -8791,6 +8832,7 @@ fn transport_loss_marks_usage_stale_until_each_metric_is_reported_again() {
 
     app.handle_event(AppEvent::AgentError {
         session_id: Some("usage-session".to_string()),
+        prompt_id: None,
         failure: crate::protocol::acp::failure::AgentFailure::TransportLost,
         message: t!("connection.lost").into_owned(),
     });

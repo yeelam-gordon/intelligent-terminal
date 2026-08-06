@@ -1544,6 +1544,7 @@ impl App {
                             } else {
                                 let _ = event_tx_for_pipe.send(AppEvent::AgentError {
                                     session_id: None,
+                                    prompt_id: None,
                                     failure,
                                     message: format!(
                                         "helper ACP transport failed on reconnect: {e:#}"
@@ -1565,6 +1566,7 @@ impl App {
                     );
                     let _ = event_tx.send(AppEvent::AgentError {
                         session_id: None,
+                        prompt_id: None,
                         failure: crate::protocol::acp::failure::AgentFailure::HandshakeFailed {
                             stage: crate::protocol::acp::failure::HandshakeStage::Initialize,
                             detail: "missing wta-master connection".to_string(),
@@ -3606,6 +3608,22 @@ impl App {
             .cloned()
             .or_else(|| self.tab_id.clone())
             .unwrap_or_else(|| DEFAULT_TAB_ID.to_string())
+    }
+
+    /// Finds the unique in-flight turn that owns an immutable prompt ID.
+    ///
+    /// ACP terminal events can arrive after a tab drag rekeys the session
+    /// map. They must never fall back to the active tab and mutate a newer
+    /// turn.
+    fn tab_for_in_flight_prompt(&self, prompt_id: u64) -> Option<String> {
+        self.tab_sessions.iter().find_map(|(tab_id, tab)| {
+            (tab.turn.is_in_flight()
+                && tab
+                    .turn
+                    .prompt()
+                    .is_some_and(|prompt| prompt.id == prompt_id))
+            .then(|| tab_id.clone())
+        })
     }
 
     /// Mutable view of the tab that owns the given session id. Lazily
