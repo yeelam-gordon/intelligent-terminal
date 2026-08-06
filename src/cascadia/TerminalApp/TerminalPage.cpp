@@ -1401,13 +1401,18 @@ namespace winrt::TerminalApp::implementation
                     });
                 // Only an empty profile setting follows the global delegate.
                 // An explicit unknown or blocked selection must fail closed.
-                if (!knownAndAllowed)
+                if (!knownAndAllowed &&
+                    !(_IsCustomAgentId(winrt::hstring{ backend->agentId }) &&
+                      winrt::hstring{ backend->agentId } == globals.EffectiveDelegateAgent()))
                 {
                     delegateAgent = {};
                 }
                 else
                 {
-                    delegateAgent = winrt::hstring{ backend->agentId };
+                    if (knownAndAllowed)
+                    {
+                        delegateAgent = winrt::hstring{ backend->agentId };
+                    }
                     // There is no profile-scoped model setting — the profile's
                     // commandPaletteAgent selects only the agent and its exact
                     // execution source, so the global DelegateModel still
