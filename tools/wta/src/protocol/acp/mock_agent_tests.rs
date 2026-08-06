@@ -207,8 +207,8 @@ impl MockAgent {
                                 sid,
                                 acp::schema::v1::SessionUpdate::ToolCall(
                                     acp::schema::v1::ToolCall::new(
-                                        acp::schema::v1::ToolCallId::new("mock-tool-1"),
-                                        "Run: echo hi",
+                                    acp::schema::v1::ToolCallId::new("mock-tool-1"),
+                                    "Run: echo hi",
                                     ),
                                 ),
                             ))
@@ -222,8 +222,8 @@ impl MockAgent {
                                 sid.clone(),
                                 acp::schema::v1::SessionUpdate::ToolCall(
                                     acp::schema::v1::ToolCall::new(
-                                        acp::schema::v1::ToolCallId::new("mock-tool-1"),
-                                        "Run: echo hi",
+                                    acp::schema::v1::ToolCallId::new("mock-tool-1"),
+                                    "Run: echo hi",
                                     ),
                                 ),
                             ))
@@ -233,9 +233,9 @@ impl MockAgent {
                                 sid,
                                 acp::schema::v1::SessionUpdate::ToolCallUpdate(
                                     acp::schema::v1::ToolCallUpdate::new(
-                                        acp::schema::v1::ToolCallId::new("mock-tool-1"),
-                                        acp::schema::v1::ToolCallUpdateFields::new()
-                                            .status(acp::schema::v1::ToolCallStatus::Completed),
+                                    acp::schema::v1::ToolCallId::new("mock-tool-1"),
+                                    acp::schema::v1::ToolCallUpdateFields::new()
+                                        .status(acp::schema::v1::ToolCallStatus::Completed),
                                     ),
                                 ),
                             ))
@@ -249,16 +249,16 @@ impl MockAgent {
                                 sid,
                                 acp::schema::v1::SessionUpdate::Plan(acp::schema::v1::Plan::new(
                                     vec![
-                                        acp::schema::v1::PlanEntry::new(
-                                            "Step one",
-                                            acp::schema::v1::PlanEntryPriority::Medium,
-                                            acp::schema::v1::PlanEntryStatus::InProgress,
-                                        ),
-                                        acp::schema::v1::PlanEntry::new(
-                                            "Step two",
-                                            acp::schema::v1::PlanEntryPriority::Low,
-                                            acp::schema::v1::PlanEntryStatus::Pending,
-                                        ),
+                                    acp::schema::v1::PlanEntry::new(
+                                        "Step one",
+                                        acp::schema::v1::PlanEntryPriority::Medium,
+                                        acp::schema::v1::PlanEntryStatus::InProgress,
+                                    ),
+                                    acp::schema::v1::PlanEntry::new(
+                                        "Step two",
+                                        acp::schema::v1::PlanEntryPriority::Low,
+                                        acp::schema::v1::PlanEntryStatus::Pending,
+                                    ),
                                     ],
                                 )),
                             ))
@@ -375,8 +375,8 @@ fn spawn_mock_pair(
                 move |req: acp::schema::v1::AgentRequest, responder, _cx| {
                     let c = c.clone();
                     async move {
-                        use acp::schema::v1::{AgentRequest as Q, ClientResponse as R};
-                        match req {
+            use acp::schema::v1::{AgentRequest as Q, ClientResponse as R};
+            match req {
                             Q::RequestPermissionRequest(a) => conn::respond_enum(
                                 responder,
                                 c.request_permission(a)
@@ -405,8 +405,8 @@ fn spawn_mock_pair(
                                 responder,
                                 c.kill_terminal(a).await.map(R::KillTerminalResponse),
                             ),
-                            _ => responder.respond_with_error(acp::Error::method_not_found()),
-                        }
+                _ => responder.respond_with_error(acp::Error::method_not_found()),
+            }
                     }
                 }
             },
@@ -421,7 +421,7 @@ fn spawn_mock_pair(
                         if let acp::schema::v1::AgentNotification::SessionNotification(n) = notif {
                             let _ = c.session_notification(n).await;
                         }
-                        Ok(())
+            Ok(())
                     }
                 }
             },
@@ -442,7 +442,7 @@ fn spawn_mock_pair(
                     let m = m.clone();
                     async move {
                         use acp::schema::v1::{AgentResponse as R, ClientRequest as Q};
-                        match req {
+            match req {
                             Q::InitializeRequest(a) => conn::respond_enum(
                                 responder,
                                 m.initialize(a).await.map(R::InitializeResponse),
@@ -463,16 +463,16 @@ fn spawn_mock_pair(
                                 responder,
                                 m.prompt(a).await.map(R::PromptResponse),
                             ),
-                            Q::ExtMethodRequest(_) => conn::respond_enum(
-                                responder,
-                                Ok(R::ExtMethodResponse(acp::schema::v1::ExtResponse::new(
+                Q::ExtMethodRequest(_) => conn::respond_enum(
+                    responder,
+                    Ok(R::ExtMethodResponse(acp::schema::v1::ExtResponse::new(
                                     serde_json::value::to_raw_value(&serde_json::Value::Null)
                                         .unwrap()
                                         .into(),
-                                ))),
-                            ),
-                            _ => responder.respond_with_error(acp::Error::method_not_found()),
-                        }
+                    ))),
+                ),
+                _ => responder.respond_with_error(acp::Error::method_not_found()),
+            }
                     }
                 }
             },
@@ -487,7 +487,7 @@ fn spawn_mock_pair(
                         if let acp::schema::v1::ClientNotification::CancelNotification(n) = notif {
                             let _ = m.cancel(n).await;
                         }
-                        Ok(())
+            Ok(())
                     }
                 }
             },
@@ -668,8 +668,9 @@ fn connect_for_dispatch(behavior: MockBehavior) -> DispatchHarness {
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let shell_mgr = Arc::new(ShellManager::new());
     let prompt_timing = Arc::new(PromptTimingState::default());
-    let proposal_channels =
-        Arc::new(crate::agent_tools::action_proposal::channel::ProposalChannelManager::new());
+    let proposal_channels = Arc::new(
+        crate::agent_tools::action_proposal::channel::ProposalChannelManager::new(),
+    );
     let state = Arc::new(ClientState {
         event_tx: event_tx.clone(),
         shell_mgr: shell_mgr.clone(),
@@ -761,7 +762,6 @@ async fn dispatch_prompt_busy_tab_emits_agent_busy_and_drops() {
 
             dispatch_prompt(
                 test_prompt(1, "hi", false),
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &memo,
@@ -817,7 +817,6 @@ async fn dispatch_prompt_round_trips_through_agent() {
 
             dispatch_prompt(
                 test_prompt(1, "hello", false),
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &memo,
@@ -904,7 +903,6 @@ async fn dispatch_prompt_does_not_advertise_host_proposals_to_wsl_agents() {
             let mut event_rx = h.event_rx;
             dispatch_prompt(
                 test_prompt(1, "hello from WSL", false),
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &memo,
@@ -980,7 +978,6 @@ async fn dispatch_prompt_sends_clipboard_image_to_agent() {
 
             dispatch_prompt(
                 submission,
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &memo,
@@ -1049,7 +1046,6 @@ async fn dispatch_prompt_new_session_failure_emits_error_and_releases_slot() {
 
             dispatch_prompt(
                 test_prompt(1, "hello", false),
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &memo,
@@ -1109,7 +1105,6 @@ async fn dispatch_prompt_autofix_uses_autofix_template() {
 
             dispatch_prompt(
                 test_prompt(1, "fix the build", true), // is_autofix = true
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &memo,
@@ -1341,7 +1336,6 @@ async fn dispatch_new_session_creates_binds_and_emits_attached() {
                     tab_id: "t1".to_string(),
                     cwd: None,
                 },
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &memo,
@@ -1390,7 +1384,6 @@ async fn dispatch_new_session_failure_emits_agent_error_and_leaves_unbound() {
                     tab_id: "t1".to_string(),
                     cwd: None,
                 },
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &memo,
@@ -1448,7 +1441,6 @@ async fn dispatch_new_session_replaces_old_and_fires_its_cancel() {
                     tab_id: "t1".to_string(),
                     cwd: None,
                 },
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &memo,
@@ -1500,7 +1492,6 @@ async fn dispatch_load_session_binds_and_emits_attached() {
                     session_id: "hist-sess-7".to_string(),
                     cwd: None,
                 },
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &cancel_signals,
@@ -1549,7 +1540,6 @@ async fn dispatch_load_session_failure_inline_emits_tab_error() {
                     session_id: "hist-sess-7".to_string(),
                     cwd: None,
                 },
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &cancel_signals,
@@ -1604,7 +1594,6 @@ async fn dispatch_load_session_failure_handler_restores_prior_binding() {
                     session_id: "hist-sess-7".to_string(),
                     cwd: None,
                 },
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &cancel_signals,
@@ -1654,7 +1643,6 @@ async fn dispatch_load_session_timeout_emits_tab_error() {
                     session_id: "hist-sess-7".to_string(),
                     cwd: None,
                 },
-                std::path::PathBuf::from("/test"),
                 &h.conn,
                 &tab_to_session,
                 &cancel_signals,
@@ -1924,7 +1912,9 @@ async fn session_notification_routes_provider_reported_zero_size() {
     client
         .session_notification(notif(
             "s1",
-            acp::schema::v1::SessionUpdate::UsageUpdate(acp::schema::v1::UsageUpdate::new(1, 0)),
+            acp::schema::v1::SessionUpdate::UsageUpdate(
+                acp::schema::v1::UsageUpdate::new(1, 0),
+            ),
         ))
         .await
         .expect("provider-owned capacity must not be rejected by the client");
@@ -1943,9 +1933,7 @@ async fn notification_dispatch_routes_over_capacity_usage_and_keeps_chat_flow() 
     client
         .dispatch_session_notification(notif(
             "s1",
-            acp::schema::v1::SessionUpdate::UsageUpdate(acp::schema::v1::UsageUpdate::new(
-                101, 100,
-            )),
+            acp::schema::v1::SessionUpdate::UsageUpdate(acp::schema::v1::UsageUpdate::new(101, 100)),
         ))
         .await;
 
@@ -2108,9 +2096,9 @@ async fn session_notification_hides_proposal_tool_call_before_permission() {
         .session_notification(notif(
             "s1",
             acp::schema::v1::SessionUpdate::ToolCallUpdate(acp::schema::v1::ToolCallUpdate::new(
-                acp::schema::v1::ToolCallId::new("proposal-tool"),
-                acp::schema::v1::ToolCallUpdateFields::new()
-                    .status(acp::schema::v1::ToolCallStatus::Completed),
+                    acp::schema::v1::ToolCallId::new("proposal-tool"),
+                    acp::schema::v1::ToolCallUpdateFields::new()
+                        .status(acp::schema::v1::ToolCallStatus::Completed),
             )),
         ))
         .await

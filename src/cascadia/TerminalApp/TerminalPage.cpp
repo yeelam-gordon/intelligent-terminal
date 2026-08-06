@@ -2317,11 +2317,7 @@ namespace winrt::TerminalApp::implementation
                 startingDirectory = winrt::hstring{ homePath };
             }
         }
-        // The helper passes this value to the master on every session/new and
-        // session/load. The master selects the agent's path namespace, so the
-        // source pane's cwd is useful for host, explicit WSL, and custom
-        // wrapper-backed agents alike.
-        if (!startingDirectory.empty())
+        if (effectiveAgentSource == L"wsl" && !startingDirectory.empty())
         {
             appendHelperFlagValue(L"--agent-source-cwd", startingDirectory);
         }

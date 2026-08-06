@@ -215,7 +215,8 @@ struct MasterStateInner {
     /// lazily on the next helper request. Idle-timeout eviction would save
     /// a background process at the cost of cold-start latency for the next
     /// tab switch; that trade-off favors warm agents for a terminal app.
-    pub(crate) agents: Mutex<HashMap<AgentCmdKey, Arc<tokio::sync::OnceCell<Arc<AgentCli>>>>>,
+    pub(crate) agents:
+        Mutex<HashMap<AgentCmdKey, Arc<tokio::sync::OnceCell<Arc<AgentCli>>>>>,
     /// Fallback agent command line + id for helpers that don't declare
     /// their own in `_meta.wta` (older helper builds, or the rare
     /// manual launch). Comes from the master's own `--agent` / `--agent-id`,
@@ -317,12 +318,8 @@ struct MasterStateInner {
     /// negative-cached so a burst of hook/watcher events and the 5s poll share
     /// one round-trip and don't hammer a hung agent. Both the host-history
     /// reconcile and the synthetic-title refresh derive from this one fetch.
-    host_list_cache: Mutex<
-        Option<(
-            std::time::Instant,
-            Option<std::sync::Arc<[acp::schema::v1::SessionInfo]>>,
-        )>,
-    >,
+    host_list_cache:
+        Mutex<Option<(std::time::Instant, Option<std::sync::Arc<[acp::schema::v1::SessionInfo]>>)>>,
     /// Last time a poll-triggered WSL title seed was dispatched. Throttles the
     /// expensive per-distro `wsl.exe` ACP scan so the 5 s `sessions/list` poll
     /// can't turn it into a scan storm while a synthetic WSL delegate row waits
@@ -417,7 +414,12 @@ impl AgentCli {
         let mut state = self.cwd_format.lock().await;
         if !state.detected {
             state.detected = true;
-            state.format = self.detect_cwd_format().await;
+            state.format = crate::protocol::acp::cwd_format::detect_agent_format(
+                &self.conn,
+                &self.cached_init_resp,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
             tracing::debug!(
                 target: "master",
                 agent = %self.cmd_key,
@@ -426,15 +428,6 @@ impl AgentCli {
             );
         }
         state.format
-    }
-
-    async fn detect_cwd_format(&self) -> Option<crate::protocol::acp::cwd_format::PathFormat> {
-        crate::protocol::acp::cwd_format::detect_agent_format(
-            &self.conn,
-            &self.cached_init_resp,
-            std::time::Duration::from_secs(5),
-        )
-        .await
     }
 
     async fn cwd_attempts(&self, reported: &std::path::Path) -> Vec<PathBuf> {
@@ -595,10 +588,7 @@ impl MasterClient {
         resp
     }
 
-    async fn session_notification(
-        &self,
-        args: acp::schema::v1::SessionNotification,
-    ) -> acp::Result<()> {
+    async fn session_notification(&self, args: acp::schema::v1::SessionNotification) -> acp::Result<()> {
         let sid = args.session_id.clone();
         // Discriminator for "what KIND of notification this is" — useful
         // when scrolling logs to see prompt/turn lifecycle without
@@ -1004,9 +994,8 @@ impl HelperHandler {
                 helper_id = ?self.helper_id,
                 "helper request arrived before initialize bound an agent — protocol violation"
             );
-            acp::Error::internal_error().data(serde_json::json!(
-                "no agent bound; initialize must come first"
-            ))
+            acp::Error::internal_error()
+                .data(serde_json::json!("no agent bound; initialize must come first"))
         })
     }
 
@@ -1171,20 +1160,25 @@ impl HelperHandler {
             "resolving agent CLI for helper"
         );
 
-        let agent = get_or_spawn_agent(&self.state, &agent_cmd, agent_id.as_deref(), &agent_source)
-            .await
-            .map_err(|e| {
-                tracing::error!(
-                    target: "master",
-                    op = "initialize",
-                    helper_id = ?self.helper_id,
-                    agent_cmd = %agent_cmd,
-                    error = %e,
-                    "failed to spawn/resolve agent CLI for helper"
-                );
-                acp::Error::internal_error()
-                    .data(serde_json::json!(format!("agent CLI unavailable: {e}")))
-            })?;
+        let agent = get_or_spawn_agent(
+            &self.state,
+            &agent_cmd,
+            agent_id.as_deref(),
+            &agent_source,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                target: "master",
+                op = "initialize",
+                helper_id = ?self.helper_id,
+                agent_cmd = %agent_cmd,
+                error = %e,
+                "failed to spawn/resolve agent CLI for helper"
+            );
+            acp::Error::internal_error()
+                .data(serde_json::json!(format!("agent CLI unavailable: {e}")))
+        })?;
         // `set` is idempotent-by-error; a helper that (incorrectly) sent
         // initialize twice keeps its first binding, which is fine.
         let _ = self.agent.set(Arc::clone(&agent));
@@ -1205,10 +1199,7 @@ impl HelperHandler {
             helper_id = ?self.helper_id,
             "forwarding authenticate"
         );
-        self.resolved_agent("authenticate")?
-            .conn
-            .authenticate(args)
-            .await
+        self.resolved_agent("authenticate")?.conn.authenticate(args).await
     }
 
     async fn new_session(
@@ -1261,8 +1252,10 @@ impl HelperHandler {
         // ordering matches the doc on `MasterStateInner::registry`:
         // `session_to_helper` is no longer held here, so the upsert
         // can't deadlock against `drop_sessions_for_helper`.
-        let mut info =
-            crate::session_registry::SessionInfo::new(resp.session_id.clone(), cwd_for_registry);
+        let mut info = crate::session_registry::SessionInfo::new(
+            resp.session_id.clone(),
+            cwd_for_registry,
+        );
         info.pane_session_id = wta_meta.pane_session_id;
         // Stamp the row as a Live agent-pane session. Without this, the
         // row lands in master's registry with status=cli_source=origin=None,
@@ -1493,10 +1486,7 @@ impl HelperHandler {
         &self,
         args: acp::schema::v1::SetSessionModeRequest,
     ) -> acp::Result<acp::schema::v1::SetSessionModeResponse> {
-        self.resolved_agent("set_session_mode")?
-            .conn
-            .set_session_mode(args)
-            .await
+        self.resolved_agent("set_session_mode")?.conn.set_session_mode(args).await
     }
 
     // Forward config-option changes (incl. model selection) — the
@@ -1516,10 +1506,7 @@ impl HelperHandler {
             session_id = ?args.session_id,
             "forwarding set_session_config_option"
         );
-        self.resolved_agent("set_session_config_option")?
-            .conn
-            .set_session_config_option(args)
-            .await
+        self.resolved_agent("set_session_config_option")?.conn.set_session_config_option(args).await
     }
 
     /// Answer `session/list` from our own registry (NOT by proxying the
@@ -1660,10 +1647,7 @@ impl HelperHandler {
     /// ACP-1.0 leading-`_` normalization lives in one place and the match below
     /// is exhaustive (a new method is a compile error until it is handled,
     /// instead of silently falling through to the agent CLI).
-    async fn ext_method(
-        &self,
-        args: acp::schema::v1::ExtRequest,
-    ) -> acp::Result<acp::schema::v1::ExtResponse> {
+    async fn ext_method(&self, args: acp::schema::v1::ExtRequest) -> acp::Result<acp::schema::v1::ExtResponse> {
         use crate::session_registry::WtaExtRequest as Req;
         tracing::debug!(
             target: "master",
@@ -1679,16 +1663,9 @@ impl HelperHandler {
             Req::SessionBornBound(ev, wsl_distro) => {
                 handle_session_born_bound(&self.state, ev, wsl_distro).await
             }
-            Req::SessionResumeDispatched(p) => {
-                handle_session_resume_dispatched(&self.state, &p).await
-            }
+            Req::SessionResumeDispatched(p) => handle_session_resume_dispatched(&self.state, &p).await,
             Req::SessionFocus(p) => handle_session_focus(&self.state, &p).await,
-            Req::ForwardToAgent(raw) => {
-                self.resolved_agent("ext_method")?
-                    .conn
-                    .ext_method(raw)
-                    .await
-            }
+            Req::ForwardToAgent(raw) => self.resolved_agent("ext_method")?.conn.ext_method(raw).await,
             Req::Malformed { method, error } => {
                 tracing::warn!(
                     target: "master",
@@ -1766,6 +1743,7 @@ pub async fn run_master_mode(config: MasterConfig, pipe_name: String) -> Result<
     }
     result
 }
+
 
 struct MasterPipeDiscoveryGuard {
     path: Option<PathBuf>,
@@ -2069,8 +2047,7 @@ async fn run_master_loop(config: MasterConfig, pipe_name: String) -> Result<()> 
         cached_init_resp: OnceLock::new(),
         agent_conn: OnceLock::new(),
         cli_source: crate::agent_sessions::CliSource::from_agent_id(
-            config
-                .agent_id
+            config.agent_id
                 .as_deref()
                 .unwrap_or_else(|| crate::agent_registry::resolve_agent_id_from_cmd(&config.agent)),
         ),
@@ -2312,7 +2289,11 @@ fn resolve_agent_selection(
     requested_source: Option<&str>,
     requested_wsl_distro: Option<&str>,
     helper_id: HelperId,
-) -> (String, Option<String>, crate::agent_source::AgentSource) {
+) -> (
+    String,
+    Option<String>,
+    crate::agent_source::AgentSource,
+) {
     let requested = requested_id
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -2329,10 +2310,14 @@ fn resolve_agent_selection(
         let allowed = allowed_ids.map_or(true, |set| set.contains(id));
 
         if known && allowed {
-            let model = requested_model.map(str::trim).filter(|s| !s.is_empty());
+            let model = requested_model
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
             let cmd = crate::agent_registry::build_acp_command(id, model);
-            let source =
-                crate::agent_source::AgentSource::from_wire(requested_source, requested_wsl_distro);
+            let source = crate::agent_source::AgentSource::from_wire(
+                requested_source,
+                requested_wsl_distro,
+            );
             return (cmd, Some(id.to_string()), source);
         }
 
@@ -2574,9 +2559,14 @@ async fn spawn_one_agent(
         std::time::Duration::from_secs(init_timeout_secs),
         conn.initialize(
             acp::schema::v1::InitializeRequest::new(acp::schema::ProtocolVersion::V1)
-                .client_capabilities(acp::schema::v1::ClientCapabilities::new().terminal(true))
+                .client_capabilities(
+                    acp::schema::v1::ClientCapabilities::new().terminal(true),
+                )
                 .client_info(
-                    acp::schema::v1::Implementation::new("wta-master", env!("CARGO_PKG_VERSION"))
+                    acp::schema::v1::Implementation::new(
+                        "wta-master",
+                        env!("CARGO_PKG_VERSION"),
+                    )
                         .title("Windows Terminal Agent (master)"),
                 ),
         ),
@@ -2744,71 +2734,25 @@ async fn serve_helper(
     let builder = acp::Agent
         .builder()
         .name("wta-master-helper")
-        .on_receive_request(
-            {
-                let h = handler.clone();
-                move |req: acp::schema::v1::ClientRequest, responder, _cx| {
-                    let h = h.clone();
-                    async move {
-                        use acp::schema::v1::{AgentResponse as R, ClientRequest as Q};
-                        match req {
-                            Q::InitializeRequest(a) => conn::respond_enum(
-                                responder,
-                                h.initialize(a).await.map(R::InitializeResponse),
-                            ),
-                            Q::AuthenticateRequest(a) => conn::respond_enum(
-                                responder,
-                                h.authenticate(a).await.map(R::AuthenticateResponse),
-                            ),
-                            Q::NewSessionRequest(a) => conn::respond_enum(
-                                responder,
-                                h.new_session(a).await.map(R::NewSessionResponse),
-                            ),
-                            Q::LoadSessionRequest(a) => conn::respond_enum(
-                                responder,
-                                h.load_session(a).await.map(R::LoadSessionResponse),
-                            ),
-                            Q::SetSessionModeRequest(a) => conn::respond_enum(
-                                responder,
-                                h.set_session_mode(a).await.map(R::SetSessionModeResponse),
-                            ),
-                            Q::SetSessionConfigOptionRequest(a) => conn::respond_enum(
-                                responder,
-                                h.set_session_config_option(a)
-                                    .await
-                                    .map(R::SetSessionConfigOptionResponse),
-                            ),
-                            Q::ListSessionsRequest(a) => conn::respond_enum(
-                                responder,
-                                h.list_sessions(a).await.map(R::ListSessionsResponse),
-                            ),
-                            Q::PromptRequest(a) => h.prompt(a, responder).await,
-                            Q::ExtMethodRequest(a) => conn::respond_enum(
-                                responder,
-                                h.ext_method(a).await.map(R::ExtMethodResponse),
-                            ),
-                            _ => responder.respond_with_error(acp::Error::method_not_found()),
-                        }
-                    }
-                }
-            },
-            acp::on_receive_request!(),
-        )
-        .on_receive_notification(
-            {
-                let h = handler.clone();
-                move |notif: acp::schema::v1::ClientNotification, _cx| {
-                    let h = h.clone();
-                    async move {
-                        if let acp::schema::v1::ClientNotification::CancelNotification(n) = notif {
-                            let _ = h.cancel(n).await;
-                        }
-                        Ok(())
-                    }
-                }
-            },
-            acp::on_receive_notification!(),
-        );
+        .on_receive_request({ let h = handler.clone(); move |req: acp::schema::v1::ClientRequest, responder, _cx| { let h = h.clone(); async move {
+            use acp::schema::v1::{ClientRequest as Q, AgentResponse as R};
+            match req {
+                Q::InitializeRequest(a) => conn::respond_enum(responder, h.initialize(a).await.map(R::InitializeResponse)),
+                Q::AuthenticateRequest(a) => conn::respond_enum(responder, h.authenticate(a).await.map(R::AuthenticateResponse)),
+                Q::NewSessionRequest(a) => conn::respond_enum(responder, h.new_session(a).await.map(R::NewSessionResponse)),
+                Q::LoadSessionRequest(a) => conn::respond_enum(responder, h.load_session(a).await.map(R::LoadSessionResponse)),
+                Q::SetSessionModeRequest(a) => conn::respond_enum(responder, h.set_session_mode(a).await.map(R::SetSessionModeResponse)),
+                Q::SetSessionConfigOptionRequest(a) => conn::respond_enum(responder, h.set_session_config_option(a).await.map(R::SetSessionConfigOptionResponse)),
+                Q::ListSessionsRequest(a) => conn::respond_enum(responder, h.list_sessions(a).await.map(R::ListSessionsResponse)),
+                Q::PromptRequest(a) => h.prompt(a, responder).await,
+                Q::ExtMethodRequest(a) => conn::respond_enum(responder, h.ext_method(a).await.map(R::ExtMethodResponse)),
+                _ => responder.respond_with_error(acp::Error::method_not_found()),
+            }
+        } } }, acp::on_receive_request!())
+        .on_receive_notification({ let h = handler.clone(); move |notif: acp::schema::v1::ClientNotification, _cx| { let h = h.clone(); async move {
+            if let acp::schema::v1::ClientNotification::CancelNotification(n) = notif { let _ = h.cancel(n).await; }
+            Ok(())
+        } } }, acp::on_receive_notification!());
 
     let (agent_side_conn, handle_io) =
         conn::spawn_agent(builder, conn::byte_streams(outgoing, incoming));
@@ -3096,9 +3040,7 @@ pub(crate) async fn broadcast_ext_to_helpers(
 /// "no sessions" — the reconcile skips it so a transient error can't wipe the
 /// view. 2s TTL so the 5s poll, the title refresh, and a burst of hook events
 /// share one round-trip.
-async fn host_session_list_raw(
-    state: &MasterStateInner,
-) -> Option<std::sync::Arc<[acp::schema::v1::SessionInfo]>> {
+async fn host_session_list_raw(state: &MasterStateInner) -> Option<std::sync::Arc<[acp::schema::v1::SessionInfo]>> {
     let Some(init) = state.cached_init_resp.get() else {
         return None;
     };
@@ -3231,10 +3173,8 @@ async fn sync_host_history(state: &MasterStateInner) -> Option<(bool, usize)> {
     // Snapshot once; compute existing ids for the add pass and reconcile the
     // terminal Class-B host rows in the same pass.
     let snapshot = state.registry.snapshot().await;
-    let existing: std::collections::HashSet<String> = snapshot
-        .iter()
-        .map(|s| s.session_id.0.to_string())
-        .collect();
+    let existing: std::collections::HashSet<String> =
+        snapshot.iter().map(|s| s.session_id.0.to_string()).collect();
 
     let mut changed = false;
 
@@ -3435,7 +3375,9 @@ fn wsl_title_seed_warranted(
 /// [`wsl_title_seed_warranted`] to tell a synthetic row the host CLI knows about
 /// apart from an in-distro (WSL) one it can never title. Empty when the host
 /// agent can't list / isn't connected.
-async fn host_session_id_set(state: &MasterStateInner) -> std::collections::HashSet<String> {
+async fn host_session_id_set(
+    state: &MasterStateInner,
+) -> std::collections::HashSet<String> {
     host_session_list_raw(state)
         .await
         .map(|rows| rows.iter().map(|r| r.session_id.to_string()).collect())
@@ -3522,10 +3464,7 @@ async fn handle_sessions_list(
     }
 
     let mut sessions = state.registry.snapshot().await;
-    if sessions
-        .iter()
-        .any(crate::session_registry::title_is_synthetic)
-    {
+    if sessions.iter().any(crate::session_registry::title_is_synthetic) {
         let titles = host_titles_via_acp(state).await;
         // Re-snapshot only when a title actually changed; the common steady-state
         // (no synthetic rows, or nothing to upgrade) reuses the first snapshot.
@@ -3647,9 +3586,7 @@ async fn handle_session_hook(
         .await;
     }
 
-    Ok(crate::session_registry::build_session_hook_response(
-        applied,
-    ))
+    Ok(crate::session_registry::build_session_hook_response(applied))
 }
 
 /// Handle a #266 *born-bound* registration (delegate `?<prompt>` / resume).
@@ -3700,7 +3637,10 @@ async fn handle_session_born_bound(
 ///      without touching the pane binding; or
 ///   3. anything else (a user-typed CLI, or a machine-wide copilot/claude in
 ///      VS Code / another terminal) → drop — we can't bind it to an IT pane.
-async fn apply_watcher_event(state: &MasterStateInner, emitted: crate::session_watcher::Emitted) {
+async fn apply_watcher_event(
+    state: &MasterStateInner,
+    emitted: crate::session_watcher::Emitted,
+) {
     let sid = acp::schema::v1::SessionId::new(emitted.key.clone());
 
     // Hybrid dedup — the watcher is a *fallback*. Coordinate with authoritative
@@ -3761,7 +3701,10 @@ async fn apply_watcher_event(state: &MasterStateInner, emitted: crate::session_w
 /// the publish-from-helper path works for them today; this subscriber
 /// makes the behavior uniform across CLIs and resilient to helper
 /// teardown order.
-async fn handle_master_wt_event(state: &MasterStateInner, event_json: serde_json::Value) {
+async fn handle_master_wt_event(
+    state: &MasterStateInner,
+    event_json: serde_json::Value,
+) {
     let method = event_json
         .get("method")
         .and_then(|v| v.as_str())
@@ -3786,7 +3729,10 @@ async fn handle_master_wt_event(state: &MasterStateInner, event_json: serde_json
     if pane_id.is_empty() {
         return;
     }
-    let pane_state = params.get("state").and_then(|v| v.as_str()).unwrap_or("");
+    let pane_state = params
+        .get("state")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let event = match pane_state {
         "closed" => crate::agent_sessions::SessionEvent::PaneClosed {
             pane_session_id: pane_id.clone(),

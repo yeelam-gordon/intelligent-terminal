@@ -16,9 +16,7 @@ impl PendingNewSessionAgent {
         &self,
         _args: acp::schema::v1::InitializeRequest,
     ) -> acp::Result<acp::schema::v1::InitializeResponse> {
-        Ok(acp::schema::v1::InitializeResponse::new(
-            acp::schema::ProtocolVersion::V1,
-        ))
+        Ok(acp::schema::v1::InitializeResponse::new(acp::schema::ProtocolVersion::V1))
     }
     async fn authenticate(
         &self,
@@ -44,9 +42,7 @@ impl CwdRetryAgent {
         &self,
         _args: acp::schema::v1::InitializeRequest,
     ) -> acp::Result<acp::schema::v1::InitializeResponse> {
-        Ok(acp::schema::v1::InitializeResponse::new(
-            acp::schema::ProtocolVersion::V1,
-        ))
+        Ok(acp::schema::v1::InitializeResponse::new(acp::schema::ProtocolVersion::V1))
     }
 
     async fn new_session(
@@ -195,17 +191,8 @@ fn every_known_agent_id_is_honored_not_conflated_with_default_fallback() {
     for profile in crate::agent_registry::KNOWN_AGENTS {
         let (cmd, id) = resolve(None, Some(profile.id), None);
         let expected = crate::agent_registry::build_acp_command(profile.id, None);
-        assert_eq!(
-            cmd, expected,
-            "agent {} must be honored, not fall back",
-            profile.id
-        );
-        assert_eq!(
-            id.as_deref(),
-            Some(profile.id),
-            "id stamp for {}",
-            profile.id
-        );
+        assert_eq!(cmd, expected, "agent {} must be honored, not fall back", profile.id);
+        assert_eq!(id.as_deref(), Some(profile.id), "id stamp for {}", profile.id);
     }
 }
 
@@ -225,11 +212,7 @@ fn unknown_or_custom_id_falls_back_to_trusted_default() {
 fn allowed_ids_absent_is_no_policy_present_but_empty_is_block_all() {
     // The flag being *absent* (clap yields `[]`) is the only "no host
     // policy" case → `None` → accept any known id.
-    assert_eq!(
-        normalize_allowed_agent_ids(&[]),
-        None,
-        "no argv ⇒ no policy"
-    );
+    assert_eq!(normalize_allowed_agent_ids(&[]), None, "no argv ⇒ no policy");
 
     // The flag being *present* but filtering down to nothing is honored
     // fail-closed → `Some({})` → block every helper-selected id (all tabs
@@ -264,8 +247,11 @@ fn allowed_ids_absent_is_no_policy_present_but_empty_is_block_all() {
     .expect("non-empty allowlist");
     assert_eq!(set, allow_set(&["gemini", "copilot"]));
     // Unknown ids mixed with a real id: only the real id survives.
-    let mixed = normalize_allowed_agent_ids(&["custom:myapp".to_string(), "claude".to_string()])
-        .expect("one real id survives");
+    let mixed = normalize_allowed_agent_ids(&[
+        "custom:myapp".to_string(),
+        "claude".to_string(),
+    ])
+    .expect("one real id survives");
     assert_eq!(mixed, allow_set(&["claude"]));
 
     // End-to-end through resolve_agent_selection:
@@ -401,48 +387,24 @@ fn client_connection_to_pending_new_session_agent() -> conn::ClientLink {
     let agent_builder = acp::Agent
         .builder()
         .name("pending-agent")
-        .on_receive_request(
-            {
-                let m = mock.clone();
-                move |req: acp::schema::v1::ClientRequest, responder, _cx| {
-                    let m = m.clone();
-                    async move {
-                        use acp::schema::v1::{AgentResponse as R, ClientRequest as Q};
-                        match req {
-                            Q::InitializeRequest(a) => conn::respond_enum(
-                                responder,
-                                m.initialize(a).await.map(R::InitializeResponse),
-                            ),
-                            Q::AuthenticateRequest(a) => conn::respond_enum(
-                                responder,
-                                m.authenticate(a).await.map(R::AuthenticateResponse),
-                            ),
-                            Q::NewSessionRequest(a) => conn::respond_enum(
-                                responder,
-                                m.new_session(a).await.map(R::NewSessionResponse),
-                            ),
-                            _ => responder.respond_with_error(acp::Error::method_not_found()),
-                        }
-                    }
-                }
-            },
-            acp::on_receive_request!(),
-        );
-    let (_agent_conn, agent_io) = conn::spawn_agent(
-        agent_builder,
-        conn::byte_streams(agent_write.compat_write(), agent_read.compat()),
-    );
-    tokio::task::spawn_local(async move {
-        let _ = agent_io.await;
-    });
+        .on_receive_request({ let m = mock.clone(); move |req: acp::schema::v1::ClientRequest, responder, _cx| { let m = m.clone(); async move {
+            use acp::schema::v1::{ClientRequest as Q, AgentResponse as R};
+            match req {
+                Q::InitializeRequest(a) => conn::respond_enum(responder, m.initialize(a).await.map(R::InitializeResponse)),
+                Q::AuthenticateRequest(a) => conn::respond_enum(responder, m.authenticate(a).await.map(R::AuthenticateResponse)),
+                Q::NewSessionRequest(a) => conn::respond_enum(responder, m.new_session(a).await.map(R::NewSessionResponse)),
+                _ => responder.respond_with_error(acp::Error::method_not_found()),
+            }
+        } } }, acp::on_receive_request!());
+    let (_agent_conn, agent_io) =
+        conn::spawn_agent(agent_builder, conn::byte_streams(agent_write.compat_write(), agent_read.compat()));
+    tokio::task::spawn_local(async move { let _ = agent_io.await; });
 
     let (client_conn, client_io) = conn::spawn_client(
         acp::Client.builder().name("noop-client"),
         conn::byte_streams(client_write.compat_write(), client_read.compat()),
     );
-    tokio::task::spawn_local(async move {
-        let _ = client_io.await;
-    });
+    tokio::task::spawn_local(async move { let _ = client_io.await; });
 
     client_conn
 }
@@ -455,47 +417,38 @@ fn client_connection_to_cwd_retry_agent(agent: CwdRetryAgent) -> conn::ClientLin
     let agent_builder = acp::Agent
         .builder()
         .name("cwd-retry-agent")
-        .on_receive_request(
-            {
-                move |req: acp::schema::v1::ClientRequest, responder, _cx| {
-                    let agent = agent.clone();
-                    async move {
-                        use acp::schema::v1::{AgentResponse as R, ClientRequest as Q};
-                        match req {
-                            Q::InitializeRequest(args) => conn::respond_enum(
-                                responder,
-                                agent.initialize(args).await.map(R::InitializeResponse),
-                            ),
-                            Q::NewSessionRequest(args) => conn::respond_enum(
-                                responder,
-                                agent.new_session(args).await.map(R::NewSessionResponse),
-                            ),
-                            Q::LoadSessionRequest(args) => conn::respond_enum(
-                                responder,
-                                agent.load_session(args).await.map(R::LoadSessionResponse),
-                            ),
-                            _ => responder.respond_with_error(acp::Error::method_not_found()),
-                        }
-                    }
+        .on_receive_request({ move |req: acp::schema::v1::ClientRequest, responder, _cx| {
+            let agent = agent.clone();
+            async move {
+                use acp::schema::v1::{AgentResponse as R, ClientRequest as Q};
+                match req {
+                    Q::InitializeRequest(args) => conn::respond_enum(
+                        responder,
+                        agent.initialize(args).await.map(R::InitializeResponse),
+                    ),
+                    Q::NewSessionRequest(args) => conn::respond_enum(
+                        responder,
+                        agent.new_session(args).await.map(R::NewSessionResponse),
+                    ),
+                    Q::LoadSessionRequest(args) => conn::respond_enum(
+                        responder,
+                        agent.load_session(args).await.map(R::LoadSessionResponse),
+                    ),
+                    _ => responder.respond_with_error(acp::Error::method_not_found()),
                 }
-            },
-            acp::on_receive_request!(),
-        );
+            }
+        } }, acp::on_receive_request!());
     let (_agent_conn, agent_io) = conn::spawn_agent(
         agent_builder,
         conn::byte_streams(agent_write.compat_write(), agent_read.compat()),
     );
-    tokio::task::spawn_local(async move {
-        let _ = agent_io.await;
-    });
+    tokio::task::spawn_local(async move { let _ = agent_io.await; });
 
     let (client_conn, client_io) = conn::spawn_client(
         acp::Client.builder().name("cwd-retry-client"),
         conn::byte_streams(client_write.compat_write(), client_read.compat()),
     );
-    tokio::task::spawn_local(async move {
-        let _ = client_io.await;
-    });
+    tokio::task::spawn_local(async move { let _ = client_io.await; });
 
     client_conn
 }
@@ -628,8 +581,9 @@ fn cloned_helper_handlers_share_the_lazy_agent_binding() {
 #[tokio::test]
 async fn request_permission_for_orphaned_session_returns_cancelled_not_error() {
     use acp::schema::v1::{
-        PermissionOption, PermissionOptionId, PermissionOptionKind, RequestPermissionOutcome,
-        RequestPermissionRequest, ToolCallId, ToolCallUpdate, ToolCallUpdateFields,
+        PermissionOption, PermissionOptionId, PermissionOptionKind,
+        RequestPermissionOutcome, RequestPermissionRequest, ToolCallId, ToolCallUpdate,
+        ToolCallUpdateFields,
     };
     let state = make_state();
     let client = MasterClient {
@@ -731,7 +685,8 @@ async fn prompt_forward_survives_reentrant_permission() {
         AgentRequest, AgentResponse, ClientRequest, ClientResponse, PermissionOption,
         PermissionOptionId, PermissionOptionKind, PromptRequest, PromptResponse,
         RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-        SelectedPermissionOutcome, StopReason, ToolCallId, ToolCallUpdate, ToolCallUpdateFields,
+        SelectedPermissionOutcome, StopReason, ToolCallId, ToolCallUpdate,
+        ToolCallUpdateFields,
     };
 
     tokio::task::LocalSet::new()
@@ -746,51 +701,51 @@ async fn prompt_forward_survives_reentrant_permission() {
             // task so the mock's own dispatch loop stays free), then EndTurn.
             {
                 let (ar, aw) = tokio::io::split(mock_agent_pipe);
-                let builder =
-                    acp::Agent
-                        .builder()
-                        .name("mock-reentrant-agent")
-                        .on_receive_request(
-                            move |req: ClientRequest,
-                                  responder,
-                                  cx: acp::ConnectionTo<acp::Client>| async move {
-                                match req {
-                                    ClientRequest::PromptRequest(a) => {
-                                        let sid = a.session_id.clone();
-                                        tokio::task::spawn_local(async move {
-                                            let perm = RequestPermissionRequest::new(
-                                                sid,
-                                                ToolCallUpdate::new(
-                                                    ToolCallId::new("tool-1"),
-                                                    ToolCallUpdateFields::new()
-                                                        .title("Run: echo hi"),
-                                                ),
-                                                vec![PermissionOption::new(
-                                                    PermissionOptionId::new("allow-once"),
-                                                    "Allow once",
-                                                    PermissionOptionKind::AllowOnce,
-                                                )],
-                                            );
-                                            // block_task from a spawned task is safe.
-                                            let _ = cx.send_request(perm).block_task().await;
-                                            let _ = conn::respond_enum(
-                                                responder,
-                                                Ok(AgentResponse::PromptResponse(
-                                                    PromptResponse::new(StopReason::EndTurn),
-                                                )),
-                                            );
-                                        });
-                                        Ok(())
-                                    }
-                                    _ => {
-                                        responder.respond_with_error(acp::Error::method_not_found())
-                                    }
+                let builder = acp::Agent
+                    .builder()
+                    .name("mock-reentrant-agent")
+                    .on_receive_request(
+                        move |req: ClientRequest,
+                              responder,
+                              cx: acp::ConnectionTo<acp::Client>| async move {
+                            match req {
+                                ClientRequest::PromptRequest(a) => {
+                                    let sid = a.session_id.clone();
+                                    tokio::task::spawn_local(async move {
+                                        let perm = RequestPermissionRequest::new(
+                                            sid,
+                                            ToolCallUpdate::new(
+                                                ToolCallId::new("tool-1"),
+                                                ToolCallUpdateFields::new()
+                                                    .title("Run: echo hi"),
+                                            ),
+                                            vec![PermissionOption::new(
+                                                PermissionOptionId::new("allow-once"),
+                                                "Allow once",
+                                                PermissionOptionKind::AllowOnce,
+                                            )],
+                                        );
+                                        // block_task from a spawned task is safe.
+                                        let _ = cx.send_request(perm).block_task().await;
+                                        let _ = conn::respond_enum(
+                                            responder,
+                                            Ok(AgentResponse::PromptResponse(
+                                                PromptResponse::new(StopReason::EndTurn),
+                                            )),
+                                        );
+                                    });
+                                    Ok(())
                                 }
-                            },
-                            acp::on_receive_request!(),
-                        );
-                let (_agent_link, agent_io) =
-                    conn::spawn_agent(builder, conn::byte_streams(aw.compat_write(), ar.compat()));
+                                _ => responder
+                                    .respond_with_error(acp::Error::method_not_found()),
+                            }
+                        },
+                        acp::on_receive_request!(),
+                    );
+                let (_agent_link, agent_io) = conn::spawn_agent(
+                    builder,
+                    conn::byte_streams(aw.compat_write(), ar.compat()),
+                );
                 tokio::task::spawn_local(async move {
                     let _ = agent_io.await;
                 });
@@ -816,21 +771,24 @@ async fn prompt_forward_survives_reentrant_permission() {
                                         AgentRequest::RequestPermissionRequest(a) => {
                                             conn::respond_enum(
                                                 responder,
-                                                c.request_permission(a)
-                                                    .await
-                                                    .map(ClientResponse::RequestPermissionResponse),
+                                                c.request_permission(a).await.map(
+                                                    ClientResponse::RequestPermissionResponse,
+                                                ),
                                             )
                                         }
-                                        _ => responder
-                                            .respond_with_error(acp::Error::method_not_found()),
+                                        _ => responder.respond_with_error(
+                                            acp::Error::method_not_found(),
+                                        ),
                                     }
                                 }
                             }
                         },
                         acp::on_receive_request!(),
                     );
-                let (link, io) =
-                    conn::spawn_client(builder, conn::byte_streams(cw.compat_write(), cr.compat()));
+                let (link, io) = conn::spawn_client(
+                    builder,
+                    conn::byte_streams(cw.compat_write(), cr.compat()),
+                );
                 tokio::task::spawn_local(async move {
                     let _ = io.await;
                 });
@@ -873,16 +831,19 @@ async fn prompt_forward_survives_reentrant_permission() {
                                         ClientRequest::PromptRequest(a) => {
                                             h.prompt(a, responder).await
                                         }
-                                        _ => responder
-                                            .respond_with_error(acp::Error::method_not_found()),
+                                        _ => responder.respond_with_error(
+                                            acp::Error::method_not_found(),
+                                        ),
                                     }
                                 }
                             }
                         },
                         acp::on_receive_request!(),
                     );
-                let (link, io) =
-                    conn::spawn_agent(builder, conn::byte_streams(mw.compat_write(), mr.compat()));
+                let (link, io) = conn::spawn_agent(
+                    builder,
+                    conn::byte_streams(mw.compat_write(), mr.compat()),
+                );
                 tokio::task::spawn_local(async move {
                     let _ = io.await;
                 });
@@ -910,25 +871,30 @@ async fn prompt_forward_survives_reentrant_permission() {
                     .on_receive_request(
                         move |req: AgentRequest, responder, _cx| async move {
                             match req {
-                                AgentRequest::RequestPermissionRequest(_a) => conn::respond_enum(
-                                    responder,
-                                    Ok(ClientResponse::RequestPermissionResponse(
-                                        RequestPermissionResponse::new(
-                                            RequestPermissionOutcome::Selected(
-                                                SelectedPermissionOutcome::new(
-                                                    PermissionOptionId::new("allow-once"),
+                                AgentRequest::RequestPermissionRequest(_a) => {
+                                    conn::respond_enum(
+                                        responder,
+                                        Ok(ClientResponse::RequestPermissionResponse(
+                                            RequestPermissionResponse::new(
+                                                RequestPermissionOutcome::Selected(
+                                                    SelectedPermissionOutcome::new(
+                                                        PermissionOptionId::new("allow-once"),
+                                                    ),
                                                 ),
                                             ),
-                                        ),
-                                    )),
-                                ),
-                                _ => responder.respond_with_error(acp::Error::method_not_found()),
+                                        )),
+                                    )
+                                }
+                                _ => responder
+                                    .respond_with_error(acp::Error::method_not_found()),
                             }
                         },
                         acp::on_receive_request!(),
                     );
-                let (link, io) =
-                    conn::spawn_client(builder, conn::byte_streams(hw.compat_write(), hr.compat()));
+                let (link, io) = conn::spawn_client(
+                    builder,
+                    conn::byte_streams(hw.compat_write(), hr.compat()),
+                );
                 tokio::task::spawn_local(async move {
                     let _ = io.await;
                 });
@@ -1275,10 +1241,7 @@ async fn rebinding_session_clears_previous_helpers_pending_usage() {
     .await;
 
     assert!(!state.pending_usage.lock().await.contains_key(&sid));
-    assert_eq!(
-        state.session_to_helper.lock().await[&sid].helper_id,
-        HelperId(2)
-    );
+    assert_eq!(state.session_to_helper.lock().await[&sid].helper_id, HelperId(2));
 }
 
 /// Unknown SessionId is a no-op (warned but not errored) — the
@@ -1610,16 +1573,16 @@ async fn master_client_create_terminal_unknown_session_returns_internal_error() 
     let client = MasterClient {
         state: Arc::clone(&state),
     };
-    let req = acp::schema::v1::CreateTerminalRequest::new(
-        SessionId::new("nobody-home"),
-        "echo".to_string(),
-    );
+    let req =
+        acp::schema::v1::CreateTerminalRequest::new(SessionId::new("nobody-home"), "echo".to_string());
     let err = client
         .create_terminal(req)
         .await
         .expect_err("create_terminal on unknown session must fail");
     assert_eq!(err.code, acp::ErrorCode::InternalError);
 }
+
+
 
 #[tokio::test]
 async fn sessions_list_handler_returns_registry_snapshot_payload() {
@@ -1633,13 +1596,11 @@ async fn sessions_list_handler_returns_registry_snapshot_payload() {
     row.last_activity_at_ms = Some(42);
     state.registry.upsert(row.clone()).await;
 
-    let resp = handle_sessions_list(
-        &state,
-        &session_registry::SessionsListParams { rescan: false },
-    )
-    .await
-    .expect("sessions/list succeeds");
-    let parsed = session_registry::parse_sessions_list_response(&resp.0).expect("response parses");
+    let resp = handle_sessions_list(&state, &session_registry::SessionsListParams { rescan: false })
+        .await
+        .expect("sessions/list succeeds");
+    let parsed = session_registry::parse_sessions_list_response(&resp.0)
+        .expect("response parses");
 
     assert_eq!(parsed.sessions, vec![row]);
 }
@@ -1655,20 +1616,14 @@ async fn drop_sessions_for_helper_broadcasts_sessions_changed() {
     let sid = SessionId::new("removed-a");
     {
         let mut map = state.session_to_helper.lock().await;
-        map.insert(
-            sid.clone(),
-            HelperRoute {
-                helper_id: HelperId(1),
-                notif_tx,
-                forwarder: None,
-                consecutive_drops: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            },
-        );
+        map.insert(sid.clone(), HelperRoute {
+            helper_id: HelperId(1),
+            notif_tx,
+            forwarder: None,
+            consecutive_drops: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        });
     }
-    state
-        .registry
-        .upsert(SessionInfo::new(sid, PathBuf::from("C:\\repo")))
-        .await;
+    state.registry.upsert(SessionInfo::new(sid, PathBuf::from("C:\\repo"))).await;
     {
         let mut subs = state.helper_ext_subscribers.lock().await;
         subs.insert(HelperId(2), ext_tx);
@@ -1780,15 +1735,11 @@ async fn session_focus_without_pane_returns_no_pane() {
     assert!(mock.calls().is_empty());
 }
 
-fn session_resume_params_for(
-    sid: &acp::schema::v1::SessionId,
-) -> crate::session_registry::SessionResumeDispatchedParams {
+fn session_resume_params_for(sid: &acp::schema::v1::SessionId) -> crate::session_registry::SessionResumeDispatchedParams {
     crate::session_registry::SessionResumeDispatchedParams { sid: sid.clone() }
 }
 
-fn session_focus_params_for(
-    sid: &acp::schema::v1::SessionId,
-) -> crate::session_registry::SessionFocusParams {
+fn session_focus_params_for(sid: &acp::schema::v1::SessionId) -> crate::session_registry::SessionFocusParams {
     crate::session_registry::SessionFocusParams { sid: sid.clone() }
 }
 
@@ -1844,7 +1795,9 @@ impl crate::shell::wt_channel::WtChannel for MockWtChannel {
     }
 }
 
-fn make_state_with_wt(wt: Arc<dyn crate::shell::wt_channel::WtChannel>) -> Arc<MasterStateInner> {
+fn make_state_with_wt(
+    wt: Arc<dyn crate::shell::wt_channel::WtChannel>,
+) -> Arc<MasterStateInner> {
     Arc::new(MasterStateInner {
         session_to_helper: Mutex::new(HashMap::new()),
         pending_usage: Mutex::new(HashMap::new()),
@@ -1869,12 +1822,8 @@ fn make_state_with_wt(wt: Arc<dyn crate::shell::wt_channel::WtChannel>) -> Arc<M
     })
 }
 
-fn focus_params_for(
-    sid: &acp::schema::v1::SessionId,
-) -> crate::session_registry::FocusSessionParams {
-    crate::session_registry::FocusSessionParams {
-        session_id: sid.clone(),
-    }
+fn focus_params_for(sid: &acp::schema::v1::SessionId) -> crate::session_registry::FocusSessionParams {
+    crate::session_registry::FocusSessionParams { session_id: sid.clone() }
 }
 
 /// Happy path: sid in registry with pane_session_id, WtChannel present.
@@ -2001,11 +1950,7 @@ async fn focus_session_wraps_wt_failure_as_internal_error() {
 async fn session_hook_broadcasts_sessions_changed_after_valid_payload() {
     let state = make_state();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    state
-        .helper_ext_subscribers
-        .lock()
-        .await
-        .insert(HelperId(7), tx);
+    state.helper_ext_subscribers.lock().await.insert(HelperId(7), tx);
 
     // Use SessionStarted because it unconditionally upserts a row,
     // so the reducer returns true and the broadcast fires. PaneClosed
@@ -2070,10 +2015,7 @@ async fn refresh_synthetic_titles_from_upgrades_known_placeholder_titles_only() 
     let titles = HashMap::from([
         ("sid-empty".to_string(), "Empty Real Title".to_string()),
         ("sid-base".to_string(), "Basename Real Title".to_string()),
-        (
-            "sid-placeholder".to_string(),
-            "OpenCode Real Title".to_string(),
-        ),
+        ("sid-placeholder".to_string(), "OpenCode Real Title".to_string()),
         ("sid-real".to_string(), "Should Not Overwrite".to_string()),
     ]);
 
@@ -2133,7 +2075,8 @@ async fn refresh_synthetic_titles_from_skips_when_id_absent() {
     state.registry.upsert(row).await;
 
     assert!(
-        !refresh_synthetic_titles_from(&*state.registry, &std::collections::HashMap::new()).await
+        !refresh_synthetic_titles_from(&*state.registry, &std::collections::HashMap::new())
+            .await
     );
     assert_eq!(
         state
@@ -2223,53 +2166,35 @@ fn wsl_title_seed_warranted_only_for_live_pane_bound_non_host_synthetic() {
     // and its id is NOT in the host session/list → warrants a WSL scan.
     let wsl_row = live_synthetic_pane_row("wsl-sid");
     let no_host: HashSet<String> = HashSet::new();
-    assert!(wsl_title_seed_warranted(
-        std::slice::from_ref(&wsl_row),
-        &no_host
-    ));
+    assert!(wsl_title_seed_warranted(std::slice::from_ref(&wsl_row), &no_host));
 
     // Same row, but the host CLI lists it (a host delegate not yet titled) →
     // the host title refresh owns it, no WSL scan.
     let host_ids: HashSet<String> = ["wsl-sid".to_string()].into_iter().collect();
-    assert!(!wsl_title_seed_warranted(
-        std::slice::from_ref(&wsl_row),
-        &host_ids
-    ));
+    assert!(!wsl_title_seed_warranted(std::slice::from_ref(&wsl_row), &host_ids));
 
     // A Host-located row with the same live/synthetic/pane-bound shape must
     // NOT warrant a scan, even when the host list is empty (temporarily
     // unavailable) — only in-distro rows can be titled by a WSL scan.
     let mut host_row = live_synthetic_pane_row("host-sid");
     host_row.location = SessionLocation::Host;
-    assert!(!wsl_title_seed_warranted(
-        std::slice::from_ref(&host_row),
-        &no_host
-    ));
+    assert!(!wsl_title_seed_warranted(std::slice::from_ref(&host_row), &no_host));
 
     // A non-synthetic row never warrants a scan.
     let mut titled = live_synthetic_pane_row("titled-sid");
     titled.title = Some("Real Title".to_string());
-    assert!(!wsl_title_seed_warranted(
-        std::slice::from_ref(&titled),
-        &no_host
-    ));
+    assert!(!wsl_title_seed_warranted(std::slice::from_ref(&titled), &no_host));
 
     // Historical / ended synthetic rows are excluded so an untitled old row
     // can't drive perpetual scans.
     let mut ended = live_synthetic_pane_row("ended-sid");
     ended.status = Some(AgentStatus::Ended);
-    assert!(!wsl_title_seed_warranted(
-        std::slice::from_ref(&ended),
-        &no_host
-    ));
+    assert!(!wsl_title_seed_warranted(std::slice::from_ref(&ended), &no_host));
 
     // A synthetic live row with no pane binding (not born-bound) is excluded.
     let mut unbound = live_synthetic_pane_row("unbound-sid");
     unbound.pane_session_id = None;
-    assert!(!wsl_title_seed_warranted(
-        std::slice::from_ref(&unbound),
-        &no_host
-    ));
+    assert!(!wsl_title_seed_warranted(std::slice::from_ref(&unbound), &no_host));
 }
 
 #[tokio::test]
@@ -2315,21 +2240,12 @@ fn row_refreshable_skips_only_definitively_cross_cli() {
     );
     // Same known cli → refreshable.
     row.cli_source = Some(CliSource::Copilot);
-    assert!(row_refreshable_by_connected_agent(
-        &row,
-        Some(&CliSource::Copilot)
-    ));
+    assert!(row_refreshable_by_connected_agent(&row, Some(&CliSource::Copilot)));
     // Different known cli → skipped (the connected agent can't enumerate it).
-    assert!(!row_refreshable_by_connected_agent(
-        &row,
-        Some(&CliSource::Claude)
-    ));
+    assert!(!row_refreshable_by_connected_agent(&row, Some(&CliSource::Claude)));
     // Unknown cli on either side → attempt (never skip).
     row.cli_source = None;
-    assert!(row_refreshable_by_connected_agent(
-        &row,
-        Some(&CliSource::Copilot)
-    ));
+    assert!(row_refreshable_by_connected_agent(&row, Some(&CliSource::Copilot)));
     row.cli_source = Some(CliSource::Copilot);
     assert!(row_refreshable_by_connected_agent(&row, None));
 }
@@ -2362,9 +2278,7 @@ fn is_stale_host_history_row_reconcile_rules() {
     assert!(!is_stale_host_history_row(&pane, &listed));
     // WSL row → host can't authoritatively list distro sessions.
     let mut wsl = mk("gone");
-    wsl.location = SessionLocation::Wsl {
-        distro: "Ubuntu".to_string(),
-    };
+    wsl.location = SessionLocation::Wsl { distro: "Ubuntu".to_string() };
     assert!(!is_stale_host_history_row(&wsl, &listed));
 }
 
@@ -2505,9 +2419,7 @@ async fn watcher_event_dropped_for_agent_pane_session() {
 
     let row = state
         .registry
-        .lookup(&acp::schema::v1::SessionId::new(
-            "sid-agent-pane".to_string(),
-        ))
+        .lookup(&acp::schema::v1::SessionId::new("sid-agent-pane".to_string()))
         .await
         .unwrap();
     // Still Idle — the watcher's ToolStarting (Working) was dropped.
@@ -2602,9 +2514,7 @@ async fn born_bound_wsl_stamps_wsl_location() {
     let sid = acp::schema::v1::SessionId::new("bb-wsl-loc".to_string());
     assert_eq!(
         state.registry.lookup(&sid).await.unwrap().location,
-        crate::agent_sessions::SessionLocation::Wsl {
-            distro: "Ubuntu".to_string()
-        },
+        crate::agent_sessions::SessionLocation::Wsl { distro: "Ubuntu".to_string() },
         "WSL born-bound row must be stamped Wsl {{ distro }}"
     );
     // Still binding-only, like any born-bound row.
@@ -2641,10 +2551,8 @@ async fn born_bound_session_gets_watcher_activity_without_rebinding() {
     let state = make_state();
     let sid = acp::schema::v1::SessionId::new("bb-activity".to_string());
 
-    let mut info = crate::session_registry::SessionInfo::new(
-        sid.clone(),
-        std::path::PathBuf::from("C:\\repo"),
-    );
+    let mut info =
+        crate::session_registry::SessionInfo::new(sid.clone(), std::path::PathBuf::from("C:\\repo"));
     info.cli_source = Some(crate::agent_sessions::CliSource::Claude);
     info.origin = Some(crate::agent_sessions::SessionOrigin::Unknown);
     info.status = Some(crate::agent_sessions::AgentStatus::Idle);
