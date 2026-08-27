@@ -100,45 +100,49 @@ where
             })
         }
         "ping" => json!({}),
-        "tools/list" => json!({
-            "tools": [
-                {
-                    "name": TERMINAL_ACTION_TOOL_NAME,
-                    "description": "Request one terminal action in Intelligent Terminal. Use send for a simple bounded action in the current pane, open for a new empty tab or panel, and open_and_send for a new destination with input. Prefer a panel for related parallel work and a tab for independent work, a different environment, or a long-running task. Routing is automatic. Call at most once per turn, then end without assistant prose.",
-                    "inputSchema": super::action_proposal::schema::mcp_input_schema()
-                },
-                {
-                    "name": USER_INPUT_TOOL_NAME,
-                    "description": "Ask the user a blocking clarification question in Intelligent Terminal. Supply up to 8 choices, set allow_freeform to true, or both; a call with neither is rejected. Use only when the answer is required to continue the current task.",
-                    "inputSchema": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["question"],
-                        "properties": {
-                            "question": {
+        "tools/list" => {
+            let mut tools: Vec<Value> = super::action_proposal::schema::McpActionTool::ALL
+                .into_iter()
+                .map(|tool| {
+                    json!({
+                        "name": tool.tool_name(),
+                        "description": super::action_proposal::schema::mcp_action_description(tool),
+                        "inputSchema": super::action_proposal::schema::mcp_action_input_schema(tool)
+                    })
+                })
+                .collect();
+            tools.push(json!({
+                "name": USER_INPUT_TOOL_NAME,
+                "description": "Ask the user a blocking clarification question in Intelligent Terminal. Supply up to 8 choices, set allow_freeform to true, or both; a call with neither is rejected. Use only when the answer is required to continue the current task.",
+                "inputSchema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["question"],
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 2000
+                        },
+                        "choices": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "items": {
                                 "type": "string",
                                 "minLength": 1,
-                                "maxLength": 2000
-                            },
-                            "choices": {
-                                "type": "array",
-                                "minItems": 1,
-                                "maxItems": 8,
-                                "items": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 200
-                                }
-                            },
-                            "allow_freeform": {
-                                "type": "boolean",
-                                "default": false
+                                "maxLength": 200
                             }
+                        },
+                        "allow_freeform": {
+                            "type": "boolean",
+                            "default": false
                         }
                     }
                 }
-            ]
-        }),
+            }));
+            json!({ "tools": tools })
+        }
         "tools/call" => {
             let name = request.pointer("/params/name").and_then(Value::as_str);
             let arguments = request
@@ -147,7 +151,20 @@ where
                 .unwrap_or_else(|| json!({}));
             match name {
                 Some(TERMINAL_ACTION_TOOL_NAME) => {
+                    // Superseded single-tool name: the payload already carries
+                    // its own `type`, so forward it untouched.
                     terminal_action_result(submit_action(arguments).await)
+                }
+                Some(name)
+                    if super::action_proposal::schema::McpActionTool::from_tool_name(name)
+                        .is_some() =>
+                {
+                    let Some(tool) =
+                        super::action_proposal::schema::McpActionTool::from_tool_name(name)
+                    else {
+                        unreachable!("guarded by the match arm")
+                    };
+                    terminal_action_result(submit_action(with_action_type(arguments, tool)).await)
                 }
                 Some(USER_INPUT_TOOL_NAME) => {
                     user_input_result(request_user_input(arguments).await)
@@ -158,6 +175,26 @@ where
         _ => return Some(error_response(id, -32601, "method not found")),
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// Map the selected action tool back to the `type` discriminator the internal
+/// helper pipe expects. Server-generated from the matched tool name, so it is
+/// always consistent with the schema the payload was validated against.
+fn with_action_type(
+    arguments: Value,
+    tool: super::action_proposal::schema::McpActionTool,
+) -> Value {
+    use super::action_proposal::schema::McpActionTool;
+    let action_type = match tool {
+        McpActionTool::Send => "send",
+        McpActionTool::Open => "open",
+        McpActionTool::OpenAndSend => "open_and_send",
+    };
+    let mut arguments = arguments;
+    if let Some(object) = arguments.as_object_mut() {
+        object.insert("type".to_string(), Value::String(action_type.to_string()));
+    }
+    arguments
 }
 
 fn terminal_action_result(response: anyhow::Result<ProposalValidationResponse>) -> Value {
@@ -266,27 +303,27 @@ mod tests {
         )
         .await
         .unwrap();
+        let names: Vec<&str> = response
+            .pointer("/result/tools")
+            .and_then(Value::as_array)
+            .expect("tools")
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect();
         assert_eq!(
-            response
-                .pointer("/result/tools/0/name")
-                .and_then(Value::as_str),
-            Some(TERMINAL_ACTION_TOOL_NAME)
+            names,
+            vec![
+                "terminal_send",
+                "terminal_open",
+                "terminal_open_and_send",
+                USER_INPUT_TOOL_NAME
+            ]
         );
-        assert_eq!(
-            response
-                .pointer("/result/tools")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
-        assert_eq!(
-            response
-                .pointer("/result/tools/1/name")
-                .and_then(Value::as_str),
-            Some(USER_INPUT_TOOL_NAME)
-        );
+        // The superseded single-tool name is still accepted by tools/call, but
+        // must not be advertised — advertising both would double the cost.
+        assert!(!names.contains(&TERMINAL_ACTION_TOOL_NAME));
         let user_input_schema = response
-            .pointer("/result/tools/1/inputSchema")
+            .pointer("/result/tools/3/inputSchema")
             .expect("user input schema");
         assert_eq!(
             user_input_schema.get("type").and_then(Value::as_str),
@@ -307,6 +344,28 @@ mod tests {
                 .pointer("/properties/choices/minItems")
                 .and_then(Value::as_u64),
             Some(1)
+        );
+    }
+
+    /// Prints the serialized `tools/list` size so the cost of the tool surface
+    /// can be compared across revisions with a real number rather than an
+    /// estimate. Run with `-- --nocapture`.
+    #[tokio::test]
+    async fn measure_tools_list_size() {
+        let response = dispatch(
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}),
+            |_| async { unreachable!() },
+            |_| async { unreachable!() },
+        )
+        .await
+        .unwrap();
+        let tools = response.pointer("/result/tools").expect("tools");
+        let serialized = serde_json::to_string(tools).expect("serialize");
+        println!(
+            "MEASURE tools={} chars={} approx_tokens={}",
+            tools.as_array().map(Vec::len).unwrap_or(0),
+            serialized.len(),
+            serialized.len() / 4
         );
     }
 
