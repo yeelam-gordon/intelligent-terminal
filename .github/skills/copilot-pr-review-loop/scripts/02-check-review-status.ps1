@@ -12,12 +12,19 @@
       - PrNumber, Owner, Repo
       - HeadOid           : current PR HEAD SHA
       - State             : PR state (OPEN/CLOSED/MERGED)
-      - LatestCopilotReview: {state, submittedAt, commitOid, bodyHead}
+      - LatestCopilotReview: {state, submittedAt, commitOid, commentCount,
+                            refusedToReview, bodyHead}
                             or null if no Copilot review is present
                             in the most recent 100 reviews (very long
                             PRs may have an older Copilot review outside
                             this window — treat null as "no recent
                             review", not "never reviewed")
+                            commentCount is the API's inline-comment count
+                            for that review, or null when unavailable.
+                            refusedToReview is true when Copilot reported it
+                            could not review any files; such a review has zero
+                            comments but examined nothing, so it does NOT
+                            satisfy convergence.
       - ReviewAtHead       : true iff latest Copilot review's commit.oid == HeadOid
       - NoNewComments      : true iff the latest Copilot review carries zero
                              inline comments. Taken from the API's
@@ -43,6 +50,7 @@
       - Converged          : true iff the agent has done its job.
                              - When a Copilot review is at HEAD:
                                ReviewAtHead && NoNewComments &&
+                               not refusedToReview &&
                                OpenThreadsAwaitingReply == 0.
                              - When no Copilot review has been observed
                                on this PR (LatestCopilotReview is null
@@ -333,7 +341,10 @@ $result = [ordered]@{
     #   == 0. Ignores ReviewAtHead / NoNewComments because those will
     #   never advance without a new Copilot review.
     # - Copilot review exists or pending: ReviewAtHead &&
-    #   NoNewComments && OpenThreadsAwaitingReply == 0.
+    #   NoNewComments && OpenThreadsAwaitingReply == 0, and the review
+    #   must not be a refusal. A refusal carries zero comments, so
+    #   NoNewComments alone would let "I could not review anything"
+    #   masquerade as "I reviewed it and found nothing".
     # - No Copilot review has ever been observed: just
     #   OpenThreadsAwaitingReply == 0 (also fires for brand-new PRs
     #   with zero findings; agent should still trigger via
@@ -341,7 +352,7 @@ $result = [ordered]@{
     Converged = if ($SingleIteration) {
         $awaitingCount -eq 0
     } elseif ($latest -or $copilotPending) {
-        $reviewAtHead -and $noNewComments -and $awaitingCount -eq 0
+        $reviewAtHead -and $noNewComments -and -not $reviewRefusedToReview -and $awaitingCount -eq 0
     } else {
         $awaitingCount -eq 0
     }
