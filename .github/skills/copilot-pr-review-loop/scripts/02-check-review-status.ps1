@@ -19,8 +19,10 @@
                             this window — treat null as "no recent
                             review", not "never reviewed")
       - ReviewAtHead       : true iff latest Copilot review's commit.oid == HeadOid
-      - NoNewComments      : true iff the latest review body matches
-                             "generated no new comments" / "generated 0 comments"
+      - NoNewComments      : true iff the latest review body indicates the
+                             review added nothing actionable — a zero count in
+                             either the prose or structured form, or a refusal
+                             to review any files
       - OpenThreadCount    : number of unresolved review threads (from all
                              reviewers); informational — convergence does
                              NOT require this to be zero
@@ -225,11 +227,21 @@ if ($latest) {
         $reviewAtHead = ($latestCommitOid -eq $pr.headRefOid)
     }
     $bodyText = if ($latest.body) { $latest.body } else { '' }
-    # Copilot has used several phrasings for "this review added nothing new".
-    # The structured "**Comments generated:** 0 new" detail block is the
-    # current one; the prose variants are older but still appear on
-    # long-lived PRs, so all of them must keep matching.
-    $noNewComments = ($bodyText -match '(?i)generated no new comments|generated\s+0\s+comments|comments\s+generated\W*0\s+new|reviewed\s+\d+\s+out\s+of\s+\d+\s+changed\s+files\s+in\s+this\s+pull\s+request\s+and\s+generated\s+no\s+new\s+comments')
+    # Copilot has used several phrasings for "this review added nothing new",
+    # and a stale pattern here hangs the loop: a clean review reports
+    # NoNewComments:false, Converged never becomes true, and the agent keeps
+    # requesting redundant reviews. So match every known shape.
+    #
+    #   1. Prose:      "generated no new comments", "had zero comments"
+    #   2. Structured: "- **Comments generated:** 0 new"  (current format;
+    #                  "comments" precedes "generated", so alternative 1
+    #                  cannot match it)
+    #   3. Refusal:    "was not able to review any files in this pull request"
+    #                  -- nothing is pending, so the loop must not keep waiting.
+    #
+    # Both count-bearing alternatives require an explicit no/0/zero, so
+    # "3 new" and "10 new" correctly do not match.
+    $noNewComments = ($bodyText -match '(?im)\b(?:generated|had|with)\s+(?:no|0|zero)\s+(?:new\s+)?comments\s*(?:[\.\!]|$)|comments\s+generated\W*(?:no|0|zero)\s+new\b|wasn''t\s+able\s+to\s+review\s+any\s+files\s+in\s+this\s+pull\s+request|was\s+not\s+able\s+to\s+review\s+any\s+files\s+in\s+this\s+pull\s+request')
     $bodyHead = if ($bodyText.Length -gt 300) { $bodyText.Substring(0, 300) } else { $bodyText }
 }
 
