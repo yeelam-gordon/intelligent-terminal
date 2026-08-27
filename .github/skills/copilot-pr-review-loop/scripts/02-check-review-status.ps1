@@ -225,7 +225,11 @@ if ($latest) {
         $reviewAtHead = ($latestCommitOid -eq $pr.headRefOid)
     }
     $bodyText = if ($latest.body) { $latest.body } else { '' }
-    $noNewComments = ($bodyText -match '(?i)generated no new comments|generated\s+0\s+comments|reviewed\s+\d+\s+out\s+of\s+\d+\s+changed\s+files\s+in\s+this\s+pull\s+request\s+and\s+generated\s+no\s+new\s+comments')
+    # Copilot has used several phrasings for "this review added nothing new".
+    # The structured "**Comments generated:** 0 new" detail block is the
+    # current one; the prose variants are older but still appear on
+    # long-lived PRs, so all of them must keep matching.
+    $noNewComments = ($bodyText -match '(?i)generated no new comments|generated\s+0\s+comments|comments\s+generated\W*0\s+new|reviewed\s+\d+\s+out\s+of\s+\d+\s+changed\s+files\s+in\s+this\s+pull\s+request\s+and\s+generated\s+no\s+new\s+comments')
     $bodyHead = if ($bodyText.Length -gt 300) { $bodyText.Substring(0, 300) } else { $bodyText }
 }
 
