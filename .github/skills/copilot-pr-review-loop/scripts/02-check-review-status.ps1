@@ -19,10 +19,11 @@
                             this window — treat null as "no recent
                             review", not "never reviewed")
       - ReviewAtHead       : true iff latest Copilot review's commit.oid == HeadOid
-      - NoNewComments      : true iff the latest review body indicates the
-                             review added nothing actionable — a zero count in
-                             either the prose or structured form, or a refusal
-                             to review any files
+      - NoNewComments      : true iff the latest Copilot review carries zero
+                             inline comments. Taken from the API's
+                             `comments.totalCount`, so it does not depend on
+                             how Copilot words its summary. Falls back to a
+                             narrow prose match only if the count is absent.
       - OpenThreadCount    : number of unresolved review threads (from all
                              reviewers); informational — convergence does
                              NOT require this to be zero
@@ -150,7 +151,7 @@ query($o:String!,$r:String!,$n:Int!){
     pullRequest(number:$n){
       headRefOid
       state
-      reviews(last:100){nodes{author{login} state submittedAt body commit{oid}}}
+      reviews(last:100){nodes{author{login} state submittedAt body commit{oid} comments{totalCount}}}
       reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login} ... on User{login} ... on Mannequin{login}}}}
     }
   }
@@ -219,6 +220,8 @@ $latest = if ($copilotReviews.Count -gt 0) { $copilotReviews | Sort-Object submi
 
 $reviewAtHead = $false
 $noNewComments = $false
+$reviewRefusedToReview = $false
+$commentCount = $null
 $bodyHead = $null
 $latestCommitOid = $null
 if ($latest) {
@@ -227,21 +230,30 @@ if ($latest) {
         $reviewAtHead = ($latestCommitOid -eq $pr.headRefOid)
     }
     $bodyText = if ($latest.body) { $latest.body } else { '' }
-    # Copilot has used several phrasings for "this review added nothing new",
-    # and a stale pattern here hangs the loop: a clean review reports
-    # NoNewComments:false, Converged never becomes true, and the agent keeps
-    # requesting redundant reviews. So match every known shape.
-    #
-    #   1. Prose:      "generated no new comments", "had zero comments"
-    #   2. Structured: "- **Comments generated:** 0 new"  (current format;
-    #                  "comments" precedes "generated", so alternative 1
-    #                  cannot match it)
-    #   3. Refusal:    "was not able to review any files in this pull request"
-    #                  -- nothing is pending, so the loop must not keep waiting.
-    #
-    # Both count-bearing alternatives require an explicit no/0/zero, so
-    # "3 new" and "10 new" correctly do not match.
-    $noNewComments = ($bodyText -match '(?im)\b(?:generated|had|with)\s+(?:no|0|zero)\s+(?:new\s+)?comments\s*(?:[\.\!]|$)|comments\s+generated\W*(?:no|0|zero)\s+new\b|wasn''t\s+able\s+to\s+review\s+any\s+files\s+in\s+this\s+pull\s+request|was\s+not\s+able\s+to\s+review\s+any\s+files\s+in\s+this\s+pull\s+request')
+    # Prefer the structural signal: how many inline comments the review
+    # actually carries. This is a number from the API, so it does not break
+    # when Copilot rewords its summary — which is exactly how this check
+    # broke before (the loop hung because a clean review still reported
+    # NoNewComments:false, so Converged never became true).
+    $commentCount = $null
+    if ($null -ne $latest.comments -and $null -ne $latest.comments.totalCount) {
+        $commentCount = [int]$latest.comments.totalCount
+    }
+
+    if ($null -ne $commentCount) {
+        $noNewComments = ($commentCount -eq 0)
+    }
+    else {
+        # Fallback only when the API did not return a count. Prose matching is
+        # inherently brittle; keep it narrow and documented.
+        $noNewComments = ($bodyText -match '(?im)\b(?:generated|had|with)\s+(?:no|0|zero)\s+(?:new\s+)?comments\s*(?:[\.\!]|$)|comments\s+generated\W*(?:no|0|zero)\s+new\b')
+    }
+
+    # A refusal carries zero comments but is NOT convergence — nothing was
+    # reviewed. Detectable only from the body, so this stays textual.
+    if ($bodyText -match '(?i)(?:wasn''t|was\s+not)\s+able\s+to\s+review\s+any\s+files\s+in\s+this\s+pull\s+request') {
+        $reviewRefusedToReview = $true
+    }
     $bodyHead = if ($bodyText.Length -gt 300) { $bodyText.Substring(0, 300) } else { $bodyText }
 }
 
@@ -305,6 +317,8 @@ $result = [ordered]@{
             state       = $latest.state
             submittedAt = $submittedAtIso
             commitOid   = $latestCommitOid
+            commentCount = $commentCount
+            refusedToReview = $reviewRefusedToReview
             bodyHead    = $bodyHead
         }
     } else { $null }
