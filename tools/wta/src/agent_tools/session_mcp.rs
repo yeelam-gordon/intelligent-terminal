@@ -122,6 +122,7 @@ where
                             },
                             "choices": {
                                 "type": "array",
+                                "minItems": 1,
                                 "maxItems": 8,
                                 "items": {
                                     "type": "string",
@@ -297,6 +298,16 @@ mod tests {
                 "top-level {keyword} is rejected by strict OpenAI-compatible providers"
             );
         }
+        // An empty choice list is never meaningful — omit the field instead.
+        // Constraining it here stops a model from emitting `choices: []` and
+        // then tripping `UserInputRequest::validate()` when it also leaves
+        // `allow_freeform` at its default of false.
+        assert_eq!(
+            user_input_schema
+                .pointer("/properties/choices/minItems")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
     }
 
     #[tokio::test]

@@ -791,6 +791,15 @@ mod tests {
                 "top-level {keyword} is rejected by strict OpenAI-compatible providers"
             );
         }
+        // The schema is deliberately flat: composition keywords must not appear
+        // at ANY depth, not merely at the top level.
+        let serialized = schema.to_string();
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            assert!(
+                !serialized.contains(&format!("\"{keyword}\"")),
+                "{keyword} must not appear anywhere in the flat action schema"
+            );
+        }
     }
 
     #[test]
