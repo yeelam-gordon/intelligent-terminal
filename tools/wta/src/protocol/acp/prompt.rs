@@ -281,7 +281,9 @@ mod tests {
     fn embedded_prompts_use_the_mcp_tool_schema_as_authority() {
         for prompt in [EMBEDDED_DEFAULT_PROMPT, EMBEDDED_AUTOFIX_PROMPT] {
             assert!(prompt.contains("provides an MCP server for this session"));
-            assert!(prompt.contains("`request_terminal_actions`"));
+            assert!(prompt.contains("terminal_send"));
+            assert!(prompt.contains("terminal_open_and_send"));
+            assert!(!prompt.contains("request_terminal_actions"));
             assert!(prompt.contains("advertised input schema as the sole authority"));
             assert!(!prompt.contains(r#"{"type""#));
             assert!(!prompt.contains("recommended_choice"));

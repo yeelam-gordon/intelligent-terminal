@@ -1399,7 +1399,16 @@ mod tests {
         assert!(server_id
             .chars()
             .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch)));
-        assert!(format!("mcp__{}__request_terminal_actions", config.name).len() <= 64);
+        // Some agent CLIs cap the fully-qualified MCP tool name at 64 chars.
+        // Assert against the longest name actually published.
+        for tool in crate::agent_tools::action_proposal::schema::McpActionTool::ALL {
+            let qualified = format!("mcp__{}__{}", config.name, tool.tool_name());
+            assert!(
+                qualified.len() <= 64,
+                "{qualified} is {} chars",
+                qualified.len()
+            );
+        }
         assert!(!config.name.contains(&pending.secret));
         assert_eq!(config.url, "http://127.0.0.1:4321/mcp");
         assert_eq!(config.headers.len(), 1);
