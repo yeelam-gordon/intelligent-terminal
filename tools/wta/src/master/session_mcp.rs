@@ -940,6 +940,7 @@ async fn submit_to_helper(
         target: "session_mcp",
         step = "helper→master",
         op = "request_terminal_actions",
+        tool = tool.tool_name(),
         session_id = %session_id,
         status = ?response.status,
         retryable = response.retryable,
@@ -1119,6 +1120,7 @@ async fn forward_to_helper(
         target: "session_mcp",
         step = "master→helper",
         op,
+        tool,
         helper_id = ?helper_id,
         session_id = %session_id,
         "routing MCP request to owning Helper"

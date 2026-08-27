@@ -282,17 +282,27 @@ mod tests {
         for prompt in [EMBEDDED_DEFAULT_PROMPT, EMBEDDED_AUTOFIX_PROMPT] {
             assert!(prompt.contains("provides an MCP server for this session"));
             assert!(prompt.contains("terminal_send"));
-            assert!(prompt.contains("terminal_open_and_send"));
             assert!(!prompt.contains("request_terminal_actions"));
             assert!(prompt.contains("advertised input schema as the sole authority"));
             assert!(!prompt.contains(r#"{"type""#));
             assert!(!prompt.contains("recommended_choice"));
             assert!(!prompt.contains("```json"));
         }
+        // The default prompt drives every action, so it must name each tool.
+        // Autofix is deliberately restricted to `terminal_send` — the Helper
+        // rejects any other action for an autofix turn — so naming the target
+        // tools there would invite a call that cannot be accepted.
+        for tool in ["terminal_send", "terminal_open", "terminal_open_and_send"] {
+            assert!(
+                EMBEDDED_DEFAULT_PROMPT.contains(tool),
+                "default prompt must name {tool}"
+            );
+        }
+        assert!(!EMBEDDED_AUTOFIX_PROMPT.contains("terminal_open"));
         assert!(EMBEDDED_DEFAULT_PROMPT.contains("Submit exactly one action"));
         assert!(EMBEDDED_DEFAULT_PROMPT.contains("`request_user_input`"));
         assert!(EMBEDDED_DEFAULT_PROMPT.contains("instead of guessing"));
-        assert!(EMBEDDED_AUTOFIX_PROMPT.contains("Submit exactly one `send` action"));
+        assert!(EMBEDDED_AUTOFIX_PROMPT.contains("Submit exactly one `terminal_send` call"));
     }
 
     #[test]

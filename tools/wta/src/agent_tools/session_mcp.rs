@@ -299,8 +299,8 @@ mod tests {
                 USER_INPUT_TOOL_NAME
             ]
         );
-        // The superseded single-tool name is still accepted by tools/call, but
-        // must not be advertised — advertising both would double the cost.
+        // The superseded single-tool name is neither advertised nor accepted;
+        // `tools/call` returns "unknown tool" for it.
         assert!(!names.contains(&TERMINAL_ACTION_TOOL_NAME));
         let user_input_schema = response
             .pointer("/result/tools/3/inputSchema")
