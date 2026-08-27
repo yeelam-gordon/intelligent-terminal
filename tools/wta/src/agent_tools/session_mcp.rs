@@ -109,7 +109,7 @@ where
                 },
                 {
                     "name": USER_INPUT_TOOL_NAME,
-                    "description": "Ask the user a blocking clarification question in Intelligent Terminal. Supply up to 8 choices, allow freeform input, or both. Use only when the answer is required to continue the current task.",
+                    "description": "Ask the user a blocking clarification question in Intelligent Terminal. Supply up to 8 choices, set allow_freeform to true, or both; a call with neither is rejected. Use only when the answer is required to continue the current task.",
                     "inputSchema": {
                         "type": "object",
                         "additionalProperties": false,
@@ -133,21 +133,7 @@ where
                                 "type": "boolean",
                                 "default": false
                             }
-                        },
-                        "anyOf": [
-                            {
-                                "required": ["choices"],
-                                "properties": {
-                                    "choices": { "minItems": 1 }
-                                }
-                            },
-                            {
-                                "required": ["allow_freeform"],
-                                "properties": {
-                                    "allow_freeform": { "const": true }
-                                }
-                            }
-                        ]
+                        }
                     }
                 }
             ]
@@ -298,13 +284,19 @@ mod tests {
                 .and_then(Value::as_str),
             Some(USER_INPUT_TOOL_NAME)
         );
+        let user_input_schema = response
+            .pointer("/result/tools/1/inputSchema")
+            .expect("user input schema");
         assert_eq!(
-            response
-                .pointer("/result/tools/1/inputSchema/anyOf")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2)
+            user_input_schema.get("type").and_then(Value::as_str),
+            Some("object")
         );
+        for keyword in ["oneOf", "anyOf", "allOf", "enum", "const", "not"] {
+            assert!(
+                user_input_schema.get(keyword).is_none(),
+                "top-level {keyword} is rejected by strict OpenAI-compatible providers"
+            );
+        }
     }
 
     #[tokio::test]

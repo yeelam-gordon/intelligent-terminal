@@ -278,22 +278,38 @@ pub fn parse_mcp_proposal_payload(
         serde_json::from_slice(bytes).map_err(|e| ProposalError::Malformed(e.to_string()))?;
     let action = match proposal.action_type {
         McpActionType::Send => {
-            reject_mcp_fields(&[
-                ("target", proposal.target.is_some()),
-                ("delegate", proposal.delegate.is_some()),
-                ("cwd", proposal.cwd.is_some()),
-                ("direction", proposal.direction.is_some()),
-                ("profile", proposal.profile.is_some()),
-            ])?;
+            reject_mcp_fields(
+                "send",
+                &["type", "title", "rationale", "input"],
+                &[
+                    ("target", proposal.target.is_some()),
+                    ("delegate", proposal.delegate.is_some()),
+                    ("cwd", proposal.cwd.is_some()),
+                    ("direction", proposal.direction.is_some()),
+                    ("profile", proposal.profile.is_some()),
+                ],
+            )?;
             ProposalActionWire::Send {
                 input: required_mcp_field(proposal.input, "input", "send")?,
             }
         }
         McpActionType::Open => {
-            reject_mcp_fields(&[
-                ("input", proposal.input.is_some()),
-                ("delegate", proposal.delegate.is_some()),
-            ])?;
+            reject_mcp_fields(
+                "open",
+                &[
+                    "type",
+                    "title",
+                    "rationale",
+                    "target",
+                    "cwd",
+                    "direction",
+                    "profile",
+                ],
+                &[
+                    ("input", proposal.input.is_some()),
+                    ("delegate", proposal.delegate.is_some()),
+                ],
+            )?;
             ProposalActionWire::Open {
                 target: required_mcp_field(proposal.target, "target", "open")?,
                 cwd: proposal.cwd,
@@ -339,10 +355,19 @@ fn required_mcp_field<T>(
     })
 }
 
-fn reject_mcp_fields(fields: &[(&str, bool)]) -> Result<(), ProposalError> {
+fn reject_mcp_fields(
+    action_type: &str,
+    allowed: &[&str],
+    fields: &[(&str, bool)],
+) -> Result<(), ProposalError> {
     if let Some((field, _)) = fields.iter().find(|(_, present)| *present) {
         return Err(ProposalError::Malformed(format!(
-            "field `{field}` is not valid for this action type"
+            "field `{field}` is not valid for `{action_type}`; retry with only {}",
+            allowed
+                .iter()
+                .map(|field| format!("`{field}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
         )));
     }
     Ok(())
@@ -356,7 +381,7 @@ pub fn mcp_input_schema() -> serde_json::Value {
             "type": {
                 "type": "string",
                 "enum": ["send", "open", "open_and_send"],
-                "description": "send uses the current pane; open creates an empty target; open_and_send creates a target and submits input"
+                "description": "send uses the current pane and accepts ONLY type, title, rationale, input. open creates an empty target and accepts ONLY type, title, rationale, target, cwd, direction, profile. open_and_send creates a target and submits input, and accepts every field. Sending a field outside the set for the chosen type is rejected."
             },
             "title": {
                 "type": "string",
@@ -372,20 +397,34 @@ pub fn mcp_input_schema() -> serde_json::Value {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": MAX_INPUT_CHARS,
-                "description": "Required for send and open_and_send"
+                "description": "Required for send and open_and_send. Must be omitted for open"
             },
             "target": {
                 "type": "string",
                 "enum": ["tab", "panel"],
-                "description": "Required for open and open_and_send"
+                "description": "Required for open and open_and_send. Must be omitted for send"
             },
             "delegate": {
                 "type": "boolean",
-                "description": "For open_and_send, use the configured delegate agent"
+                "description": "Only valid for open_and_send: use the configured delegate agent. Must be omitted for send and open"
             },
-            "cwd": { "type": "string", "minLength": 1, "maxLength": MAX_INPUT_CHARS },
-            "direction": { "type": "string", "enum": ["right", "left", "up", "down", "auto"] },
-            "profile": { "type": "string", "minLength": 1, "maxLength": MAX_TITLE_CHARS }
+            "cwd": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_INPUT_CHARS,
+                "description": "Optional working directory for the new target. Only valid for open and open_and_send. Must be omitted for send, which always uses the current pane"
+            },
+            "direction": {
+                "type": "string",
+                "enum": ["right", "left", "up", "down", "auto"],
+                "description": "Optional split direction for a panel target. Only valid for open and open_and_send. Must be omitted for send"
+            },
+            "profile": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_TITLE_CHARS,
+                "description": "Optional Terminal profile for the new target. Only valid for open and open_and_send. Must be omitted for send"
+            }
         },
         "required": ["type", "title"]
     })
@@ -746,7 +785,40 @@ mod tests {
         assert!(schema.pointer("/properties/input").is_some());
         assert!(schema.pointer("/properties/choices").is_none());
         assert!(schema.pointer("/properties/actions").is_none());
-        assert!(!schema.to_string().contains("\"oneOf\""));
+        for keyword in ["oneOf", "anyOf", "allOf", "enum", "const", "not"] {
+            assert!(
+                schema.get(keyword).is_none(),
+                "top-level {keyword} is rejected by strict OpenAI-compatible providers"
+            );
+        }
+    }
+
+    #[test]
+    fn send_rejecting_a_target_only_field_names_the_allowed_set() {
+        let err = parse_mcp_proposal_payload(
+            br#"{"type":"send","title":"Show weather quickly","input":"curl wttr.in","cwd":"C:\\repo"}"#,
+            false,
+        )
+        .unwrap_err();
+        let ProposalError::Malformed(message) = err else {
+            panic!("expected a malformed payload error");
+        };
+        assert!(message.contains("`cwd`"), "{message}");
+        assert!(message.contains("`send`"), "{message}");
+        assert!(message.contains("`input`"), "{message}");
+        assert!(
+            message.contains("`type`"),
+            "the allowed set must keep the required discriminator, else the retry \
+             fails with `missing field type`: {message}"
+        );
+
+        // The retry the message literally describes must succeed, otherwise the
+        // model burns a second turn on a different error.
+        parse_mcp_proposal_payload(
+            br#"{"type":"send","title":"Show weather quickly","input":"curl wttr.in"}"#,
+            false,
+        )
+        .expect("the advertised retry payload must parse");
     }
 
     #[test]
