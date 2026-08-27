@@ -12,15 +12,25 @@
       - PrNumber, Owner, Repo
       - HeadOid           : current PR HEAD SHA
       - State             : PR state (OPEN/CLOSED/MERGED)
-      - LatestCopilotReview: {state, submittedAt, commitOid, bodyHead}
+      - LatestCopilotReview: {state, submittedAt, commitOid, commentCount,
+                            refusedToReview, bodyHead}
                             or null if no Copilot review is present
                             in the most recent 100 reviews (very long
                             PRs may have an older Copilot review outside
                             this window — treat null as "no recent
                             review", not "never reviewed")
+                            commentCount is the API's inline-comment count
+                            for that review, or null when unavailable.
+                            refusedToReview is true when Copilot reported it
+                            could not review any files; such a review has zero
+                            comments but examined nothing, so it does NOT
+                            satisfy convergence.
       - ReviewAtHead       : true iff latest Copilot review's commit.oid == HeadOid
-      - NoNewComments      : true iff the latest review body matches
-                             "generated no new comments" / "generated 0 comments"
+      - NoNewComments      : true iff the latest Copilot review carries zero
+                             inline comments. Taken from the API's
+                             `comments.totalCount`, so it does not depend on
+                             how Copilot words its summary. Falls back to a
+                             narrow prose match only if the count is absent.
       - OpenThreadCount    : number of unresolved review threads (from all
                              reviewers); informational — convergence does
                              NOT require this to be zero
@@ -40,6 +50,7 @@
       - Converged          : true iff the agent has done its job.
                              - When a Copilot review is at HEAD:
                                ReviewAtHead && NoNewComments &&
+                               not refusedToReview &&
                                OpenThreadsAwaitingReply == 0.
                              - When no Copilot review has been observed
                                on this PR (LatestCopilotReview is null
@@ -148,7 +159,7 @@ query($o:String!,$r:String!,$n:Int!){
     pullRequest(number:$n){
       headRefOid
       state
-      reviews(last:100){nodes{author{login} state submittedAt body commit{oid}}}
+      reviews(last:100){nodes{author{login} state submittedAt body commit{oid} comments{totalCount}}}
       reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login} ... on User{login} ... on Mannequin{login}}}}
     }
   }
@@ -217,6 +228,8 @@ $latest = if ($copilotReviews.Count -gt 0) { $copilotReviews | Sort-Object submi
 
 $reviewAtHead = $false
 $noNewComments = $false
+$reviewRefusedToReview = $false
+$commentCount = $null
 $bodyHead = $null
 $latestCommitOid = $null
 if ($latest) {
@@ -225,7 +238,30 @@ if ($latest) {
         $reviewAtHead = ($latestCommitOid -eq $pr.headRefOid)
     }
     $bodyText = if ($latest.body) { $latest.body } else { '' }
-    $noNewComments = ($bodyText -match '(?i)generated no new comments|generated\s+0\s+comments|reviewed\s+\d+\s+out\s+of\s+\d+\s+changed\s+files\s+in\s+this\s+pull\s+request\s+and\s+generated\s+no\s+new\s+comments')
+    # Prefer the structural signal: how many inline comments the review
+    # actually carries. This is a number from the API, so it does not break
+    # when Copilot rewords its summary — which is exactly how this check
+    # broke before (the loop hung because a clean review still reported
+    # NoNewComments:false, so Converged never became true).
+    $commentCount = $null
+    if ($null -ne $latest.comments -and $null -ne $latest.comments.totalCount) {
+        $commentCount = [int]$latest.comments.totalCount
+    }
+
+    if ($null -ne $commentCount) {
+        $noNewComments = ($commentCount -eq 0)
+    }
+    else {
+        # Fallback only when the API did not return a count. Prose matching is
+        # inherently brittle; keep it narrow and documented.
+        $noNewComments = ($bodyText -match '(?im)\b(?:generated|had|with)\s+(?:no|0|zero)\s+(?:new\s+)?comments\s*(?:[\.\!]|$)|comments\s+generated\W*(?:no|0|zero)\s+new\b')
+    }
+
+    # A refusal carries zero comments but is NOT convergence — nothing was
+    # reviewed. Detectable only from the body, so this stays textual.
+    if ($bodyText -match '(?i)(?:wasn''t|was\s+not)\s+able\s+to\s+review\s+any\s+files\s+in\s+this\s+pull\s+request') {
+        $reviewRefusedToReview = $true
+    }
     $bodyHead = if ($bodyText.Length -gt 300) { $bodyText.Substring(0, 300) } else { $bodyText }
 }
 
@@ -289,6 +325,8 @@ $result = [ordered]@{
             state       = $latest.state
             submittedAt = $submittedAtIso
             commitOid   = $latestCommitOid
+            commentCount = $commentCount
+            refusedToReview = $reviewRefusedToReview
             bodyHead    = $bodyHead
         }
     } else { $null }
@@ -303,7 +341,10 @@ $result = [ordered]@{
     #   == 0. Ignores ReviewAtHead / NoNewComments because those will
     #   never advance without a new Copilot review.
     # - Copilot review exists or pending: ReviewAtHead &&
-    #   NoNewComments && OpenThreadsAwaitingReply == 0.
+    #   NoNewComments && OpenThreadsAwaitingReply == 0, and the review
+    #   must not be a refusal. A refusal carries zero comments, so
+    #   NoNewComments alone would let "I could not review anything"
+    #   masquerade as "I reviewed it and found nothing".
     # - No Copilot review has ever been observed: just
     #   OpenThreadsAwaitingReply == 0 (also fires for brand-new PRs
     #   with zero findings; agent should still trigger via
@@ -311,7 +352,7 @@ $result = [ordered]@{
     Converged = if ($SingleIteration) {
         $awaitingCount -eq 0
     } elseif ($latest -or $copilotPending) {
-        $reviewAtHead -and $noNewComments -and $awaitingCount -eq 0
+        $reviewAtHead -and $noNewComments -and -not $reviewRefusedToReview -and $awaitingCount -eq 0
     } else {
         $awaitingCount -eq 0
     }
