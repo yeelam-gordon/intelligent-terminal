@@ -863,7 +863,7 @@ async fn serve_connection(
             let action_capability = capability.clone();
             let response = crate::agent_tools::session_mcp::dispatch(
                 message,
-                |arguments| submit_to_helper(&state, action_capability, arguments),
+                |tool, arguments| submit_to_helper(&state, action_capability, tool, arguments),
                 |arguments| submit_user_input_to_helper(&state, capability, arguments),
             );
             let response = if is_user_input {
@@ -920,6 +920,7 @@ fn is_user_input_call(message: &Value) -> bool {
 async fn submit_to_helper(
     state: &MasterStateInner,
     capability: CapabilityResolution,
+    tool: crate::agent_tools::action_proposal::schema::McpActionTool,
     arguments: Value,
 ) -> Result<ProposalValidationResponse> {
     let started = std::time::Instant::now();
@@ -927,6 +928,7 @@ async fn submit_to_helper(
         state,
         capability,
         arguments,
+        Some(tool.tool_name()),
         "request_terminal_actions",
         crate::agent_tools::session_mcp::HELPER_REQUEST_METHOD,
         HELPER_TIMEOUT,
@@ -1099,6 +1101,7 @@ async fn forward_to_helper(
     state: &MasterStateInner,
     capability: CapabilityResolution,
     arguments: Value,
+    tool: Option<&'static str>,
     op: &'static str,
     helper_method: &'static str,
     timeout: Duration,
@@ -1107,6 +1110,7 @@ async fn forward_to_helper(
     let (session_id, helper_id, forwarder) = resolve_helper(state, capability, op).await?;
     let params = serde_json::value::to_raw_value(&HelperRequest {
         session_id: session_id.to_string(),
+        tool: tool.map(str::to_string),
         arguments,
     })
     .context("encode Helper request")?;

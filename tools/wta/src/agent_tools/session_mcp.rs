@@ -22,6 +22,11 @@ pub const CANCEL_USER_INPUT_HELPER_REQUEST_METHOD: &str = "_intellterm.wta/cance
 #[serde(deny_unknown_fields)]
 pub struct HelperRequest {
     pub session_id: String,
+    /// Which action tool the agent selected. Carries the action shape
+    /// alongside the payload, so it never has to be re-encoded as a
+    /// discriminator field inside the arguments.
+    #[serde(default)]
+    pub tool: Option<String>,
     pub arguments: Value,
 }
 
@@ -72,7 +77,7 @@ pub async fn dispatch<A, ActionFuture, U, UserInputFuture>(
     request_user_input: U,
 ) -> Option<Value>
 where
-    A: FnOnce(Value) -> ActionFuture,
+    A: FnOnce(super::action_proposal::schema::McpActionTool, Value) -> ActionFuture,
     ActionFuture: Future<Output = anyhow::Result<ProposalValidationResponse>>,
     U: FnOnce(Value) -> UserInputFuture,
     UserInputFuture: Future<Output = anyhow::Result<UserInputResponse>>,
@@ -150,11 +155,6 @@ where
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             match name {
-                Some(TERMINAL_ACTION_TOOL_NAME) => {
-                    // Superseded single-tool name: the payload already carries
-                    // its own `type`, so forward it untouched.
-                    terminal_action_result(submit_action(arguments).await)
-                }
                 Some(name)
                     if super::action_proposal::schema::McpActionTool::from_tool_name(name)
                         .is_some() =>
@@ -164,7 +164,7 @@ where
                     else {
                         unreachable!("guarded by the match arm")
                     };
-                    terminal_action_result(submit_action(with_action_type(arguments, tool)).await)
+                    terminal_action_result(submit_action(tool, arguments).await)
                 }
                 Some(USER_INPUT_TOOL_NAME) => {
                     user_input_result(request_user_input(arguments).await)
@@ -175,26 +175,6 @@ where
         _ => return Some(error_response(id, -32601, "method not found")),
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
-}
-
-/// Map the selected action tool back to the `type` discriminator the internal
-/// helper pipe expects. Server-generated from the matched tool name, so it is
-/// always consistent with the schema the payload was validated against.
-fn with_action_type(
-    arguments: Value,
-    tool: super::action_proposal::schema::McpActionTool,
-) -> Value {
-    use super::action_proposal::schema::McpActionTool;
-    let action_type = match tool {
-        McpActionTool::Send => "send",
-        McpActionTool::Open => "open",
-        McpActionTool::OpenAndSend => "open_and_send",
-    };
-    let mut arguments = arguments;
-    if let Some(object) = arguments.as_object_mut() {
-        object.insert("type".to_string(), Value::String(action_type.to_string()));
-    }
-    arguments
 }
 
 fn terminal_action_result(response: anyhow::Result<ProposalValidationResponse>) -> Value {
@@ -298,7 +278,7 @@ mod tests {
     async fn lists_session_tools() {
         let response = dispatch(
             json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}),
-            |_| async { unreachable!() },
+            |_, _| async { unreachable!() },
             |_| async { unreachable!() },
         )
         .await
@@ -354,7 +334,7 @@ mod tests {
     async fn measure_tools_list_size() {
         let response = dispatch(
             json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}),
-            |_| async { unreachable!() },
+            |_, _| async { unreachable!() },
             |_| async { unreachable!() },
         )
         .await
@@ -379,7 +359,7 @@ mod tests {
         });
         let response = dispatch(
             request,
-            |_| async { unreachable!() },
+            |_, _| async { unreachable!() },
             |_| async { unreachable!() },
         )
         .await
@@ -405,7 +385,7 @@ mod tests {
                     "arguments":{"question":"Choose","choices":["A","B"]}
                 }
             }),
-            |_| async { unreachable!() },
+            |_, _| async { unreachable!() },
             |_| async {
                 Ok(UserInputResponse::Answered {
                     answer: "B".into(),

@@ -384,41 +384,6 @@ pub fn parse_mcp_action_payload(
     })
 }
 
-/// Decode an action payload that carries its shape in a `type` field.
-///
-/// This is the internal helper-pipe format, unchanged by the tool split: the
-/// MCP boundary maps the selected tool name to `type` before forwarding, so
-/// the discriminator is server-generated and cannot be a model error. It also
-/// accepts the superseded single-tool payload directly, for resumed sessions
-/// whose seeded ACP history contains calls made under the old name.
-pub fn parse_mcp_proposal_payload(
-    bytes: &[u8],
-    is_autofix_turn: bool,
-) -> Result<ProposalWire, ProposalError> {
-    if bytes.len() > MAX_PAYLOAD_BYTES {
-        return Err(ProposalError::TooLarge { size: bytes.len() });
-    }
-    let mut value: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|e| ProposalError::Malformed(e.to_string()))?;
-    let action_type = value
-        .as_object_mut()
-        .and_then(|object| object.remove("type"))
-        .ok_or_else(|| ProposalError::Malformed("missing field `type`".to_string()))?;
-    let tool = match action_type.as_str() {
-        Some("send") => McpActionTool::Send,
-        Some("open") => McpActionTool::Open,
-        Some("open_and_send") => McpActionTool::OpenAndSend,
-        _ => {
-            return Err(ProposalError::Malformed(format!(
-                "unknown action type {action_type}"
-            )))
-        }
-    };
-    let rewritten =
-        serde_json::to_vec(&value).map_err(|e| ProposalError::Malformed(e.to_string()))?;
-    parse_mcp_action_payload(tool, &rewritten, is_autofix_turn)
-}
-
 fn mcp_title_property() -> serde_json::Value {
     serde_json::json!({ "type": "string", "minLength": 1, "maxLength": MAX_TITLE_CHARS })
 }
@@ -766,12 +731,11 @@ mod tests {
     #[test]
     fn flat_mcp_send_converts_to_one_recommended_action() {
         let payload = br#"{
-            "type": "send",
             "title": "Run tests",
             "rationale": "Verify the fix",
             "input": "cargo test"
         }"#;
-        let wire = parse_mcp_proposal_payload(payload, false).unwrap();
+        let wire = parse_mcp_action_payload(McpActionTool::Send, payload, false).unwrap();
         assert_eq!(wire.origin, ProposalOrigin::TerminalAgent);
         assert_eq!(wire.recommended_choice, Some(1));
         assert_eq!(wire.choices.len(), 1);
@@ -787,14 +751,13 @@ mod tests {
     #[test]
     fn flat_mcp_open_and_send_converts_to_one_action() {
         let payload = br#"{
-            "type": "open_and_send",
             "title": "Run tests",
             "input": "cargo test",
             "target": "panel",
             "direction": "right",
             "delegate": true
         }"#;
-        let wire = parse_mcp_proposal_payload(payload, false).unwrap();
+        let wire = parse_mcp_action_payload(McpActionTool::OpenAndSend, payload, false).unwrap();
         assert!(matches!(
             &wire.choices[0].actions[0],
             ProposalActionWire::OpenAndSend {
@@ -811,13 +774,12 @@ mod tests {
     #[test]
     fn flat_mcp_open_and_send_tab_accepts_direction() {
         let payload = br#"{
-            "type": "open_and_send",
             "title": "Project walkthrough",
             "input": "Walk through this project",
             "target": "tab",
             "direction": "auto"
         }"#;
-        let wire = parse_mcp_proposal_payload(payload, false).unwrap();
+        let wire = parse_mcp_action_payload(McpActionTool::OpenAndSend, payload, false).unwrap();
         let set = build_recommendation_set(&wire, false, None, None, None).unwrap();
         assert!(matches!(
             &set.choices[0].actions[0],
@@ -838,7 +800,7 @@ mod tests {
                 "actions": [{"type": "send", "input": "cargo test"}]
             }]
         }"#;
-        let err = parse_mcp_proposal_payload(payload, false).unwrap_err();
+        let err = parse_mcp_action_payload(McpActionTool::Send, payload, false).unwrap_err();
         assert!(matches!(err, ProposalError::Malformed(_)));
     }
 
@@ -982,20 +944,6 @@ mod tests {
                 tool.tool_name()
             );
         }
-    }
-
-    #[test]
-    fn flat_mcp_requires_action_specific_fields() {
-        let err = parse_mcp_proposal_payload(br#"{"type":"send","title":"Run tests"}"#, false)
-            .unwrap_err();
-        assert!(matches!(err, ProposalError::Malformed(_)));
-
-        let err = parse_mcp_proposal_payload(
-            br#"{"type":"open","title":"New tab","target":"tab","input":"echo hi"}"#,
-            false,
-        )
-        .unwrap_err();
-        assert!(matches!(err, ProposalError::Malformed(_)));
     }
 
     #[test]
