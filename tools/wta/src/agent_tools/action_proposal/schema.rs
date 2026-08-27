@@ -381,7 +381,7 @@ pub fn mcp_input_schema() -> serde_json::Value {
             "type": {
                 "type": "string",
                 "enum": ["send", "open", "open_and_send"],
-                "description": "send uses the current pane and accepts ONLY type, title, rationale, input. open creates an empty target and accepts ONLY type, title, rationale, target, cwd, direction, profile. open_and_send creates a target and submits input, and accepts every field. Sending a field outside the set for the chosen type is rejected."
+                "description": "send acts on the current pane; open creates an empty target; open_and_send creates a target and submits input. Each field below lists the types that accept it; sending a field outside that set is rejected."
             },
             "title": {
                 "type": "string",
@@ -397,33 +397,33 @@ pub fn mcp_input_schema() -> serde_json::Value {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": MAX_INPUT_CHARS,
-                "description": "Required for send and open_and_send. Must be omitted for open"
+                "description": "send, open_and_send. Required."
             },
             "target": {
                 "type": "string",
                 "enum": ["tab", "panel"],
-                "description": "Required for open and open_and_send. Must be omitted for send"
+                "description": "open, open_and_send. Required."
             },
             "delegate": {
                 "type": "boolean",
-                "description": "Only valid for open_and_send: use the configured delegate agent. Must be omitted for send and open"
+                "description": "open_and_send only. Use the configured delegate agent."
             },
             "cwd": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": MAX_INPUT_CHARS,
-                "description": "Optional working directory for the new target. Only valid for open and open_and_send. Must be omitted for send, which always uses the current pane"
+                "description": "open, open_and_send. Working directory for the new target."
             },
             "direction": {
                 "type": "string",
                 "enum": ["right", "left", "up", "down", "auto"],
-                "description": "Optional split direction for a panel target. Only valid for open and open_and_send. Must be omitted for send"
+                "description": "open, open_and_send. Split direction for a panel target."
             },
             "profile": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": MAX_TITLE_CHARS,
-                "description": "Optional Terminal profile for the new target. Only valid for open and open_and_send. Must be omitted for send"
+                "description": "open, open_and_send. Terminal profile for the new target."
             }
         },
         "required": ["type", "title"]
