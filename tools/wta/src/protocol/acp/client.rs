@@ -1825,14 +1825,30 @@ impl WtaClient {
                     "invalid terminal action request parameters: {error}"
                 ))
             })?;
-        let action_tool = request
-            .tool
-            .as_deref()
-            .and_then(crate::agent_tools::action_proposal::schema::McpActionTool::from_tool_name)
-            .ok_or_else(|| {
-                acp::Error::invalid_params()
-                    .data("terminal action request did not name a known action tool")
-            })?;
+        let action_tool = {
+            use crate::agent_tools::action_proposal::schema::McpActionTool;
+            let known = || {
+                McpActionTool::ALL
+                    .iter()
+                    .map(|tool| tool.tool_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            match request.tool.as_deref() {
+                Some(name) => McpActionTool::from_tool_name(name).ok_or_else(|| {
+                    acp::Error::invalid_params().data(format!(
+                        "unknown terminal action tool `{name}`; expected one of: {}",
+                        known()
+                    ))
+                })?,
+                None => {
+                    return Err(acp::Error::invalid_params().data(format!(
+                        "terminal action request is missing `tool`; expected one of: {}",
+                        known()
+                    )))
+                }
+            }
+        };
         let payload = serde_json::to_string(&request.arguments).map_err(|error| {
             acp::Error::internal_error().data(format!(
                 "failed to encode terminal action arguments: {error}"
