@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include <map>
+
 #include "ShellIntegrationCommon.h"
 #include "BashShellIntegration.h"
 #include "ShellIntegrationProfileGate.h"
@@ -686,4 +688,104 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
         }
         return orchestrator::Uninstall(flavor);
     }
+
+    // Process-wide bookkeeping for the lazy, new-tab-triggered WSL reconcile
+    // (GH#613). Owned by ShellIntegrationSweep::WslNewTabReconcileGate() and
+    // driven from TerminalPage::_ReconcileWslProfileForNewTab, on the
+    // TerminalApp new-tab lifecycle; it decides whether that call proceeds to
+    // the Wsl::Install / Wsl::Uninstall helpers above.
+    //
+    // No ShellIntegrationSweep entry point touches WSL — not the silent
+    // startup/settings reconcile, and not the explicit FRE / Settings-UI
+    // "Install" buttons. Probing a distro means cold-starting its VM, and
+    // doing that for every WSL profile would boot distros the user never
+    // opens. Reconciling one is instead DEFERRED to the first new tab that
+    // launches that profile, at which point the user is starting the distro
+    // anyway.
+    //
+    // KEYED ON PROFILE, once per app process. The key is the profile's stable
+    // GUID (ShellIntegrationSweep::WslProfileKey), not a launch commandline:
+    // the invariant is "reconcile a given profile once", so two profiles
+    // pointing at the same distro each get their own single reconcile, and
+    // one profile launched with different appended commands still only
+    // reconciles once.
+    //
+    //     unknown --TryClaim----> InFlight --MarkHandled--> Handled
+    //        ^                       |        (attempt ran)
+    //        |                       |
+    //        +-------Release---------+
+    //         (only when the claimed
+    //          work never ran at all)
+    //
+    // Two states rather than one set, because Release means specifically "the
+    // work I claimed never ran". It removes an InFlight entry ONLY: once a
+    // profile is Handled nothing may re-open it, so a late or duplicated
+    // Release can't hand a reconciled profile back out and let the next new
+    // tab schedule a second attempt.
+    //
+    // The boundary is one SCHEDULED ATTEMPT, not one successful reconcile: an
+    // attempt that actually invoked install or uninstall becomes Handled
+    // whether it succeeded or failed, so a profile whose distro can't be
+    // integrated is not re-probed on every later tab. Release exists purely
+    // for the paths where the scheduled work never started at all (the window
+    // was torn down before the coroutine resumed).
+    //
+    // Settings toggles do NOT reset this. A profile reconciled once in this
+    // process stays reconciled until the app restarts.
+    //
+    // Deliberately pure in-memory bookkeeping with no filesystem/process
+    // interaction, so it is unit-testable without a real WSL distro.
+    class NewTabReconcileGate
+    {
+    public:
+        // True exactly once per `profileKey` for the life of this process.
+        // Every later call is a cheap no-op: one map lookup, no allocation,
+        // no I/O.
+        bool TryClaim(std::wstring_view profileKey)
+        {
+            std::lock_guard<std::mutex> guard{ _mutex };
+            if (_states.find(profileKey) != _states.end())
+            {
+                return false;
+            }
+            _states.emplace(profileKey, State::InFlight);
+            return true;
+        }
+
+        // Give back a claim whose work never ran. Deliberately a no-op once
+        // the profile is Handled -- see the state note above.
+        void Release(std::wstring_view profileKey)
+        {
+            std::lock_guard<std::mutex> guard{ _mutex };
+            if (const auto it = _states.find(profileKey);
+                it != _states.end() && it->second == State::InFlight)
+            {
+                _states.erase(it);
+            }
+        }
+
+        // Record that `profileKey` has been reconciled in this process, so
+        // TryClaim refuses it from now on and Release can no longer reopen
+        // it. Idempotent, and valid from any state.
+        void MarkHandled(std::wstring_view profileKey)
+        {
+            std::lock_guard<std::mutex> guard{ _mutex };
+            if (const auto it = _states.find(profileKey); it != _states.end())
+            {
+                it->second = State::Handled;
+                return;
+            }
+            _states.emplace(profileKey, State::Handled);
+        }
+
+    private:
+        enum class State
+        {
+            InFlight, // claimed; the attempt may still be abandoned
+            Handled, // reconciled in this process; terminal
+        };
+
+        std::mutex _mutex;
+        std::map<std::wstring, State, std::less<>> _states;
+    };
 }

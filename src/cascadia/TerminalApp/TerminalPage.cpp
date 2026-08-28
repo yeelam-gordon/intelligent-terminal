@@ -395,6 +395,10 @@ namespace winrt::TerminalApp::implementation
                 // Publish latest desired state BEFORE spawning the
                 // coroutine so the eventual locked re-read picks it up.
                 _shellIntegrationDesiredEnabled.store(currentDetection, std::memory_order_release);
+                // The user has now expressed a preference (this reload
+                // carried an explicit value, or changed one), so the lazy WSL
+                // reconcile is allowed to act on it — see GH#613.
+                _shellIntegrationDesiredStateKnown.store(true, std::memory_order_release);
                 _ReconcileShellIntegration();
             }
         }
@@ -4865,6 +4869,13 @@ namespace winrt::TerminalApp::implementation
             pane->FinalizeConfigurationGivenDefault();
         });
         _CreateNewTabFromPane(newPane);
+
+        // GH#613 deliberately does NOT reconcile here. A default-terminal
+        // handoff builds the tab around a console session that is already
+        // running, from that process's own commandline — which we hand to
+        // NewTerminalArgs as a full commandline override. Whatever profile
+        // that matches, this is not a launch of that profile's own
+        // configured commandline, so it doesn't qualify.
     }
 
     // Method Description:
@@ -5561,6 +5572,11 @@ namespace winrt::TerminalApp::implementation
         }
         else
         {
+            // GH#613: resolve the profile up front (cheap lookup, no I/O)
+            // so we can lazily reconcile WSL shell integration ONLY when a
+            // new tab is actually created -- never for an ordinary split.
+            const auto profile = _settings.GetProfileForArgs(newTerminalArgs);
+            const auto focusedTab = _GetFocusedTabImpl();
             const auto newPane = _MakePane(newTerminalArgs);
             // If the newTerminalArgs caused us to open an elevated window
             // instead of creating a pane, it may have returned nullptr. Just do
@@ -5571,7 +5587,14 @@ namespace winrt::TerminalApp::implementation
             }
             if (altPressed && !debugTap)
             {
-                this->_SplitPane(_GetFocusedTabImpl(),
+                // A split with no tab to split at all is promoted to a new
+                // tab by _SplitPane -- that narrow case still counts as a
+                // launch (see _WillPromoteSplitToNewTab).
+                if (_WillPromoteSplitToNewTab(focusedTab))
+                {
+                    _ReconcileWslProfileForNewTab(profile, newTerminalArgs);
+                }
+                this->_SplitPane(focusedTab,
                                  SplitDirection::Automatic,
                                  0.5f,
                                  newPane);
@@ -5579,6 +5602,7 @@ namespace winrt::TerminalApp::implementation
             }
             else
             {
+                _ReconcileWslProfileForNewTab(profile, newTerminalArgs);
                 _CreateNewTabFromPane(newPane);
                 sessionType = "Tab";
             }

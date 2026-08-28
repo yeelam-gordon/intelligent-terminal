@@ -521,7 +521,20 @@ namespace winrt::TerminalApp::implementation
         // with idempotent Install/Uninstall this guarantees the on-disk
         // state matches the latest setting even when reconciles arrive
         // back-to-back (e.g. file-watcher reload storms).
+        //
+        // NOT a mirror of the setting on every load: it is only written on
+        // the reloads that actually reconcile, so its value is meaningless
+        // until the user has expressed a preference (an explicit
+        // autoErrorDetectionEnabled key, or the FRE / Settings-UI "Install"
+        // button). _shellIntegrationDesiredStateKnown below says whether it
+        // has been published yet.
         std::atomic<bool> _shellIntegrationDesiredEnabled{ false };
+        // Set once, at the same two places _shellIntegrationDesiredEnabled is
+        // published, and never cleared. It separates "the user chose OFF"
+        // from "the user has never chosen", which the lazy WSL reconcile
+        // (GH#613) needs: known-ON installs, known-OFF uninstalls, and a
+        // brand-new user who has never seen the FRE gets no WSL work at all.
+        std::atomic<bool> _shellIntegrationDesiredStateKnown{ false };
         std::mutex _shellIntegrationReconcileMutex;
         bool _agentLifecycleOperationInProgress{ false };
         details::CoalescedRequest _pendingAgentStackRestart;
@@ -741,6 +754,12 @@ namespace winrt::TerminalApp::implementation
         safe_void_coroutine _ReconcileShellIntegration();
         void _ShowShellIntegrationDialog(const winrt::hstring& title, const winrt::hstring& message);
         void _OnSettingsInitShellIntegration(const winrt::Windows::Foundation::IInspectable& sender, const Microsoft::Terminal::Settings::Model::ShellIntegrationTarget target);
+        void _ReconcileWslProfileForNewTab(const Microsoft::Terminal::Settings::Model::Profile& profile,
+                                           const Microsoft::Terminal::Settings::Model::NewTerminalArgs& newTerminalArgs) noexcept;
+        safe_void_coroutine _ReconcileWslProfileForNewTabAsync(std::wstring profileKey,
+                                                               std::wstring commandline,
+                                                               std::string logIdentity);
+        bool _WillPromoteSplitToNewTab(const winrt::com_ptr<Tab>& targetTab) const;
 
         void _CreateNewTabFlyout();
         std::vector<winrt::Windows::UI::Xaml::Controls::MenuFlyoutItemBase> _CreateNewTabFlyoutItems(winrt::Windows::Foundation::Collections::IVector<Microsoft::Terminal::Settings::Model::NewTabMenuEntry> entries);

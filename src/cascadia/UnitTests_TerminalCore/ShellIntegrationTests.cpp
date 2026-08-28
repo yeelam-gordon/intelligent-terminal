@@ -10,12 +10,14 @@
 
 #include "pch.h"
 #include <WexTestClass.h>
-
 #include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 #include "../inc/ShellIntegration.h"
 
@@ -57,6 +59,7 @@ class TerminalCoreUnitTests::ShellIntegrationTests final
     TEST_METHOD(Install_EmptyPath_Fails);
     TEST_METHOD(Install_ProfileMissing_CreatesProfileAndScript);
     TEST_METHOD(Install_ProfileWithoutBlock_AppendsBlockPreservesOriginalContent);
+    TEST_METHOD(Install_ExistingProfileKeepsItsFileIdentity);
     TEST_METHOD(Install_PreservesCrlfFromExistingProfile);
     TEST_METHOD(Install_PreservesLfFromExistingProfile);
     TEST_METHOD(Install_AppendsEolWhenProfileMissingTrailingNewline);
@@ -138,7 +141,7 @@ class TerminalCoreUnitTests::ShellIntegrationTests final
 
     TEST_METHOD(Bash_InstallUninstallInstall_RoundTrip);
 
-    // ─── WSL flavor (helpers only — Install/UninstallWslBash requires real WSL) ──
+    // ─── WSL flavor (helpers only — InstallWslBash requires real WSL) ──
     TEST_METHOD(Wsl_IsSafeDistroName_AcceptsCommonNames);
     TEST_METHOD(Wsl_IsSafeDistroName_RejectsInjection);
     TEST_METHOD(Wsl_IsSafeDistroName_RejectsEmptyAndOverlong);
@@ -148,6 +151,33 @@ class TerminalCoreUnitTests::ShellIntegrationTests final
     TEST_METHOD(Wsl_UncPath_BuildsExpectedFormat);
     TEST_METHOD(Wsl_StripExecTail_StripsExistingExecCommand);
     TEST_METHOD(Wsl_QualifyBareLauncher_QualifiesBareWslBash);
+
+    // NewTabReconcileGate — once-per-profile-per-process claim tracking for
+    // the lazy, new-tab-triggered WSL install (GH#613).
+    TEST_METHOD(Wsl_NewTabReconcileGate_FirstClaimSucceeds);
+    TEST_METHOD(Wsl_NewTabReconcileGate_SecondClaimForSameProfileFails);
+    TEST_METHOD(Wsl_NewTabReconcileGate_ClaimSurvivesRepeatedLaunches);
+    TEST_METHOD(Wsl_NewTabReconcileGate_DifferentProfilesClaimIndependently);
+    TEST_METHOD(Wsl_NewTabReconcileGate_ReleaseReopensOnlyTheUnrunClaim);
+    TEST_METHOD(Wsl_NewTabReconcileGate_MarkHandledIsTerminalAndIdempotent);
+    TEST_METHOD(Wsl_NewTabReconcileGate_ReleaseNeverUndoesAHandledProfile);
+    TEST_METHOD(Wsl_NewTabReconcileGate_ConcurrentClaimsElectExactlyOneWinner);
+
+    // Every install/uninstall sweep handles only the three non-WSL shells.
+    TEST_METHOD(Sweep_SupportedTargetsMatchNoWslLaunch);
+
+    // The qualifying-launch policy the lazy WSL reconcile admits on (GH#613).
+    TEST_METHOD(Qualifies_WslProfileWithNoOverride);
+    TEST_METHOD(Qualifies_AppendOverrideKeepsTheProfileLauncher);
+    TEST_METHOD(Qualifies_FullOverrideNeverQualifies);
+    TEST_METHOD(Qualifies_NonWslProfileNeverQualifies);
+    TEST_METHOD(Qualifies_ReattachedContentNeverQualifies);
+
+    // In-place profile writes (details::OverwriteFileContents).
+    TEST_METHOD(OverwriteFileContents_ReplacesContentKeepingTheSameFile);
+    TEST_METHOD(OverwriteFileContents_MissingDirectoryFailsWithoutCreatingTarget);
+    TEST_METHOD(OverwriteFileContents_NeverExposesAZeroLengthFile);
+    TEST_METHOD(OverwriteFileContents_WritesThroughSymlink);
 
     // Profile-presence gate (ShellIntegrationProfileGate.h)
     TEST_METHOD(ProfileGate_PwshSourceMatches);
@@ -260,6 +290,22 @@ private:
             }
         }
         return n;
+    }
+
+    // The file's on-disk identity (volume + file index). Equal before and
+    // after a write means the same file OBJECT survived, which is what
+    // carries permissions/ACL, owner and hardlinks along with it.
+    static std::optional<std::pair<DWORD, uint64_t>> _FileIdentity(const std::filesystem::path& p)
+    {
+        wil::unique_hfile handle{ ::CreateFileW(p.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (!handle || !::GetFileInformationByHandle(handle.get(), &info))
+        {
+            return std::nullopt;
+        }
+        return std::make_pair(info.dwVolumeSerialNumber,
+                              (static_cast<uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow);
     }
 };
 
@@ -529,6 +575,40 @@ void ShellIntegrationTests::Install_ProfileWithoutBlock_AppendsBlockPreservesOri
     VERIFY_IS_TRUE(contents.rfind(original, 0) == 0, L"Original content must remain at start of file");
     VERIFY_IS_TRUE(_Contains(contents, kShellIntegrationBlockOpenMarker));
     VERIFY_IS_TRUE(_Contains(contents, kShellIntegrationBlockCloseMarker));
+}
+
+void ShellIntegrationTests::Install_ExistingProfileKeepsItsFileIdentity()
+{
+    // Install never creates, truncates or replaces the user's profile file
+    // object. It used to "touch" a profile it believed was missing with a
+    // truncating `std::ofstream`, so an existence check that answered wrongly
+    // — a \\wsl$ provider or network path failing transiently — would have
+    // emptied a profile that was really there. There is no touch any more:
+    // the file is read, and a genuinely absent one is created by the single
+    // in-place write that puts the block in. (The transient-stat-failure case
+    // itself needs filesystem fault injection to reproduce; what is checked
+    // here is the observable contract that made it dangerous.)
+    const auto profile = _ProfilePath();
+    const std::string original = "Set-Alias ll Get-ChildItem\n";
+    _WriteFile(profile, original);
+    const auto before = _FileIdentity(profile);
+    VERIFY_IS_TRUE(before.has_value());
+
+    VERIFY_IS_TRUE(Install(profile.wstring()).success);
+
+    // Same file object — the user's permissions/ACL, owner, hardlinks and, on
+    // a \\wsl$ path, uid/gid/mode all survived.
+    VERIFY_IS_TRUE(before == _FileIdentity(profile));
+    const auto contents = _ReadFile(profile);
+    VERIFY_IS_TRUE(contents.rfind(original, 0) == 0, L"Existing content must survive byte-for-byte at the start");
+    VERIFY_IS_TRUE(_Contains(contents, kShellIntegrationBlockOpenMarker));
+
+    // A profile that really is missing is created by that same write, with
+    // its block, and is never left as the empty file the touch used to make.
+    const auto fresh = _scratchDir / L"never-existed" / L"profile.ps1";
+    VERIFY_IS_FALSE(std::filesystem::exists(fresh));
+    VERIFY_IS_TRUE(Install(fresh.wstring()).success);
+    VERIFY_IS_TRUE(_Contains(_ReadFile(fresh), kShellIntegrationBlockOpenMarker));
 }
 
 void ShellIntegrationTests::Install_PreservesCrlfFromExistingProfile()
@@ -1539,7 +1619,7 @@ void ShellIntegrationTests::Bash_InstallUninstallInstall_RoundTrip()
 // ═════════════════════════════════════════════════════════════════════════════
 // WSL flavor
 //
-// Install/UninstallWslBash require a real running WSL distro on the host —
+// InstallWslBash requires a real running WSL distro on the host —
 // we cover only the pure-function helpers here. The shared UNC-mediated
 // write path is already covered by the Bash_* tests; once
 // QueryWslIdentityRaw returns successfully the implementation IS
@@ -1708,6 +1788,450 @@ void ShellIntegrationTests::Wsl_QualifyBareLauncher_QualifiesBareWslBash()
     VERIFY_ARE_EQUAL(std::wstring{ L"\"C:\\X\\wsl.exe\" -d Ubuntu" },
                      QualifyBareLauncher(L"\"C:\\X\\wsl.exe\" -d Ubuntu"));
     VERIFY_ARE_EQUAL(std::wstring{ L"cmd.exe /c wsl" }, QualifyBareLauncher(L"cmd.exe /c wsl"));
+}
+
+// ───────────────────────────────────────────────────────────────────
+// NewTabReconcileGate (GH#613) — the gate for the lazy,
+// new-tab-triggered WSL install. The silent startup/settings sweep
+// (_ReconcileShellIntegration) performs NO WSL work at all;
+// TerminalPage::_ReconcileWslProfileForNewTab claims through this gate the
+// first time a WSL profile is launched in a new tab and schedules one
+// background install for it.
+//
+// The key is the PROFILE (its stable GUID), not a commandline, so the claim
+// is ONCE PER PROFILE PER PROCESS: later tabs launching that profile, and
+// settings toggles, never re-open it. Two profiles pointing at the same
+// distro are separate identities and each get one claim.
+//
+// The tests use readable placeholder keys; production passes
+// ShellIntegrationSweep::WslProfileKey(profile) (a GUID string). The gate
+// only ever compares keys, so the exact spelling is irrelevant to it.
+// ───────────────────────────────────────────────────────────────────
+
+using ReconcileGate = Microsoft::Terminal::ShellIntegration::Wsl::NewTabReconcileGate;
+
+static constexpr std::wstring_view UbuntuProfile{ L"{2c4de342-38b7-51cf-b940-2309a097f518}" };
+static constexpr std::wstring_view DebianProfile{ L"{58ad8b0c-3ef8-5f4d-bc6f-13e4c00f2530}" };
+
+void ShellIntegrationTests::Wsl_NewTabReconcileGate_FirstClaimSucceeds()
+{
+    ReconcileGate gate;
+    VERIFY_IS_TRUE(gate.TryClaim(UbuntuProfile));
+}
+
+void ShellIntegrationTests::Wsl_NewTabReconcileGate_SecondClaimForSameProfileFails()
+{
+    ReconcileGate gate;
+    VERIFY_IS_TRUE(gate.TryClaim(UbuntuProfile));
+    // A second new tab for the SAME profile while the first reconcile is
+    // still in flight must not start a concurrent one.
+    VERIFY_IS_FALSE(gate.TryClaim(UbuntuProfile));
+}
+
+void ShellIntegrationTests::Wsl_NewTabReconcileGate_ClaimSurvivesRepeatedLaunches()
+{
+    ReconcileGate gate;
+    VERIFY_IS_TRUE(gate.TryClaim(UbuntuProfile));
+    gate.MarkHandled(UbuntuProfile);
+
+    // Whatever the one scheduled attempt did -- installed, found the block
+    // already present, or failed because the distro was unreachable -- the
+    // profile is handled. Launching it for the rest of the app's life is a
+    // cheap no-op, which is the whole point of GH#613: we never pay the
+    // distro probe more than once per profile.
+    for (auto i = 0; i < 25; ++i)
+    {
+        VERIFY_IS_FALSE(gate.TryClaim(UbuntuProfile));
+    }
+}
+
+void ShellIntegrationTests::Wsl_NewTabReconcileGate_DifferentProfilesClaimIndependently()
+{
+    ReconcileGate gate;
+    VERIFY_IS_TRUE(gate.TryClaim(UbuntuProfile));
+    // A different profile is a different identity and gets its own single
+    // claim -- including a second, hand-made profile pointing at the same
+    // distro, which matches "reconcile a given profile once".
+    VERIFY_IS_TRUE(gate.TryClaim(DebianProfile));
+    VERIFY_IS_TRUE(gate.TryClaim(L"{6b0b0f0f-0000-0000-0000-00000000ub2}"));
+    VERIFY_IS_FALSE(gate.TryClaim(UbuntuProfile));
+    VERIFY_IS_FALSE(gate.TryClaim(DebianProfile));
+}
+
+void ShellIntegrationTests::Wsl_NewTabReconcileGate_ReleaseReopensOnlyTheUnrunClaim()
+{
+    ReconcileGate gate;
+    VERIFY_IS_TRUE(gate.TryClaim(UbuntuProfile));
+    VERIFY_IS_TRUE(gate.TryClaim(DebianProfile));
+
+    // The scheduled work never ran (the page was torn down, or auto-detection
+    // was switched off between the claim and the coroutine resuming), so the
+    // first qualifying launch must not be consumed.
+    gate.Release(UbuntuProfile);
+    VERIFY_IS_TRUE(gate.TryClaim(UbuntuProfile));
+    VERIFY_IS_FALSE(gate.TryClaim(UbuntuProfile));
+    // Releasing one profile leaves every other claim alone.
+    VERIFY_IS_FALSE(gate.TryClaim(DebianProfile));
+}
+
+void ShellIntegrationTests::Wsl_NewTabReconcileGate_MarkHandledIsTerminalAndIdempotent()
+{
+    ReconcileGate gate;
+    // Handled is the terminal state: the profile's one scheduled reconcile
+    // ran (install or uninstall, succeeded or failed), so no later tab may
+    // schedule another one in this process. Valid from any state, so the
+    // coroutine can record it without caring how it got here.
+    gate.MarkHandled(UbuntuProfile);
+    VERIFY_IS_FALSE(gate.TryClaim(UbuntuProfile));
+
+    // Only that profile is affected -- another one is still entitled to its
+    // own single reconcile.
+    VERIFY_IS_TRUE(gate.TryClaim(DebianProfile));
+
+    // Marking is idempotent, and marking something already claimed neither
+    // throws nor re-opens it.
+    gate.MarkHandled(UbuntuProfile);
+    gate.MarkHandled(DebianProfile);
+    VERIFY_IS_FALSE(gate.TryClaim(UbuntuProfile));
+    VERIFY_IS_FALSE(gate.TryClaim(DebianProfile));
+}
+
+void ShellIntegrationTests::Wsl_NewTabReconcileGate_ReleaseNeverUndoesAHandledProfile()
+{
+    ReconcileGate gate;
+    // The interleaving that makes two states necessary rather than one set:
+    // Release means "the work I claimed never ran". It must only ever undo an
+    // in-flight claim, so a stray or late Release after the attempt has
+    // already been recorded cannot re-open a profile that was reconciled --
+    // which would let the next new tab schedule a second attempt.
+    VERIFY_IS_TRUE(gate.TryClaim(UbuntuProfile));
+    gate.MarkHandled(UbuntuProfile);
+    gate.Release(UbuntuProfile);
+    VERIFY_IS_FALSE(gate.TryClaim(UbuntuProfile));
+}
+
+void ShellIntegrationTests::Wsl_NewTabReconcileGate_ConcurrentClaimsElectExactlyOneWinner()
+{
+    // Every Terminal window lives in one process, so several windows can open
+    // the same WSL profile at the same instant. Exactly one may install.
+    ReconcileGate gate;
+    constexpr auto threadCount = 16;
+    std::atomic<int> winners{ 0 };
+    std::atomic<bool> go{ false };
+    std::vector<std::thread> threads;
+    threads.reserve(threadCount);
+
+    for (auto i = 0; i < threadCount; ++i)
+    {
+        threads.emplace_back([&]() {
+            while (!go.load(std::memory_order_acquire))
+            {
+                std::this_thread::yield();
+            }
+            if (gate.TryClaim(UbuntuProfile))
+            {
+                winners.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+
+    go.store(true, std::memory_order_release);
+    for (auto& t : threads)
+    {
+        t.join();
+    }
+
+    VERIFY_ARE_EQUAL(1, winners.load());
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Install/uninstall sweep scope (GH#613).
+//
+// ShellIntegrationSweep::RunInstall and RunUninstall take a ShellPresence
+// bitset and nothing else, and that bitset is filled by ProfileMatchesShell
+// over the three non-WSL targets. Since no WSL launch can match any of those
+// three, EVERY sweep entry point -- the silent startup/settings reconcile,
+// the FRE "Install" button and the Settings-UI "Install" button -- is
+// structurally incapable of WSL work: no install, no uninstall, no probe, no
+// file I/O. WSL is reconciled only by the first new tab that launches the
+// profile.
+// ───────────────────────────────────────────────────────────────────
+
+void ShellIntegrationTests::Sweep_SupportedTargetsMatchNoWslLaunch()
+{
+    using Microsoft::Terminal::ShellIntegration::IsWslProfile;
+    using Microsoft::Terminal::ShellIntegration::ProfileMatchesShell;
+    using Microsoft::Terminal::ShellIntegration::Target;
+
+    const std::wstring_view wslLaunches[]{
+        L"wsl.exe",
+        L"wsl.exe -d Ubuntu",
+        L"C:\\Windows\\system32\\wsl.exe --distribution-id {2c4de342-38b7-51cf-b940-2309a097f518}",
+        L"C:\\Windows\\System32\\bash.exe",
+    };
+    for (const auto& cmd : wslLaunches)
+    {
+        VERIFY_IS_FALSE(ProfileMatchesShell(Target::Pwsh, L"Windows.Terminal.Wsl", cmd));
+        VERIFY_IS_FALSE(ProfileMatchesShell(Target::WindowsPowerShell, L"Windows.Terminal.Wsl", cmd));
+        VERIFY_IS_FALSE(ProfileMatchesShell(Target::Bash, L"Windows.Terminal.Wsl", cmd));
+        // ...while the lazy new-tab path still recognizes it as WSL.
+        VERIFY_IS_TRUE(IsWslProfile(cmd));
+    }
+
+    // And the mirror image: the three shells the sweep DOES handle
+    // are matched by exactly one target each, so nothing it installs can be
+    // mistaken for a WSL launch.
+    VERIFY_IS_TRUE(ProfileMatchesShell(Target::Pwsh, L"Windows.Terminal.PowershellCore", L"pwsh.exe"));
+    VERIFY_IS_TRUE(ProfileMatchesShell(Target::WindowsPowerShell, L"", L"powershell.exe"));
+    VERIFY_IS_TRUE(ProfileMatchesShell(Target::Bash, L"", L"C:\\Program Files\\Git\\bin\\bash.exe -i -l"));
+    VERIFY_IS_FALSE(IsWslProfile(L"pwsh.exe"));
+    VERIFY_IS_FALSE(IsWslProfile(L"powershell.exe"));
+    VERIFY_IS_FALSE(IsWslProfile(L"C:\\Program Files\\Git\\bin\\bash.exe -i -l"));
+}
+
+// ───────────────────────────────────────────────────────────────────
+// The qualifying-launch policy (GH#613).
+//
+// SI::QualifyingWslLaunchCommandline IS the production admission decision:
+// ShellIntegrationSweep::QualifyingWslLaunchCommandline only unpacks the
+// WinRT Profile / NewTerminalArgs and forwards to it, so these tests call
+// the shipping policy directly rather than restating it.
+//
+// A launch qualifies only when the user is launching the CONFIGURED WSL
+// PROFILE itself. Anything that replaces the profile's launcher, or that
+// doesn't launch anything at all, must not reconcile that profile — and
+// must not consume its one claim.
+// ───────────────────────────────────────────────────────────────────
+
+void ShellIntegrationTests::Qualifies_WslProfileWithNoOverride()
+{
+    using Microsoft::Terminal::ShellIntegration::QualifyingWslLaunchCommandline;
+
+    // The reconciled commandline is the PROFILE's — the installer appends its
+    // own probe to it, so it has to stay a plain distro-selection command.
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu" },
+                     QualifyingWslLaunchCommandline(L"wsl.exe -d Ubuntu", L"", false, false));
+    // `--appendCommandLine` with no commandline at all is still "no override".
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu" },
+                     QualifyingWslLaunchCommandline(L"wsl.exe -d Ubuntu", L"", true, false));
+    // The legacy System32 bash.exe launcher is a WSL launch too.
+    const auto sys32Bash = std::wstring{ Microsoft::Terminal::ShellIntegration::details::WindowsDir() } +
+                           L"\\System32\\bash.exe";
+    VERIFY_ARE_EQUAL(std::wstring_view{ sys32Bash },
+                     QualifyingWslLaunchCommandline(sys32Bash, L"", false, false));
+}
+
+void ShellIntegrationTests::Qualifies_AppendOverrideKeepsTheProfileLauncher()
+{
+    using Microsoft::Terminal::ShellIntegration::IsWslProfile;
+    using Microsoft::Terminal::ShellIntegration::QualifyingWslLaunchCommandline;
+
+    // `wt -p Ubuntu --appendCommandLine htop` still launches Ubuntu's wsl.exe;
+    // the appended text is the command run inside it, not a different shell.
+    // We reconcile the profile's clean commandline so the identity probe stays
+    // valid...
+    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu" },
+                     QualifyingWslLaunchCommandline(L"wsl.exe -d Ubuntu", L"htop", true, false));
+    // ...which is only sound because appending cannot change the LAUNCH
+    // executable: the concatenation WT actually runs classifies the same way.
+    VERIFY_IS_TRUE(IsWslProfile(L"wsl.exe -d Ubuntu htop"));
+}
+
+void ShellIntegrationTests::Qualifies_FullOverrideNeverQualifies()
+{
+    using Microsoft::Terminal::ShellIntegration::QualifyingWslLaunchCommandline;
+
+    // `wt -p Ubuntu cmd.exe` runs Windows cmd, so cold-starting Ubuntu for it
+    // would be exactly the GH#613 bug.
+    VERIFY_IS_TRUE(QualifyingWslLaunchCommandline(L"wsl.exe -d Ubuntu", L"cmd.exe", false, false).empty());
+    // A full override that is itself WSL doesn't qualify either: running
+    // Debian is not launching the Ubuntu profile, and the override is not the
+    // profile the gate would be keyed on.
+    VERIFY_IS_TRUE(QualifyingWslLaunchCommandline(L"wsl.exe -d Ubuntu", L"wsl.exe -d Debian", false, false).empty());
+}
+
+void ShellIntegrationTests::Qualifies_NonWslProfileNeverQualifies()
+{
+    using Microsoft::Terminal::ShellIntegration::QualifyingWslLaunchCommandline;
+
+    // A PowerShell profile overridden with `wsl -d Debian` is not a launch of
+    // a WSL profile -- the invariant is "once per WSL profile", and there is
+    // no WSL profile here to key on.
+    VERIFY_IS_TRUE(QualifyingWslLaunchCommandline(L"pwsh.exe -nologo", L"wsl -d Debian", false, false).empty());
+    // The three shells the startup sweep owns are never in scope here.
+    VERIFY_IS_TRUE(QualifyingWslLaunchCommandline(L"pwsh.exe", L"", false, false).empty());
+    VERIFY_IS_TRUE(QualifyingWslLaunchCommandline(L"powershell.exe", L"", false, false).empty());
+    VERIFY_IS_TRUE(QualifyingWslLaunchCommandline(L"C:\\Program Files\\Git\\bin\\bash.exe -i -l", L"", false, false).empty());
+    // An inherited/empty profile commandline (e.g. the sourceless "Defaults"
+    // profile a default-terminal handoff can resolve to) is not WSL.
+    VERIFY_IS_TRUE(QualifyingWslLaunchCommandline(L"", L"", false, false).empty());
+}
+
+void ShellIntegrationTests::Qualifies_ReattachedContentNeverQualifies()
+{
+    using Microsoft::Terminal::ShellIntegration::QualifyingWslLaunchCommandline;
+
+    // NewTerminalArgs::ContentId != 0 wraps a tab around a pane that is
+    // already running. Nothing is launched, so the profile must keep its
+    // claim for a later, real launch.
+    VERIFY_IS_TRUE(QualifyingWslLaunchCommandline(L"wsl.exe -d Ubuntu", L"", false, true).empty());
+    VERIFY_IS_TRUE(QualifyingWslLaunchCommandline(L"wsl.exe -d Ubuntu", L"htop", true, true).empty());
+}
+
+// ───────────────────────────────────────────────────────────────────
+// In-place profile writes (details::OverwriteFileContents).
+//
+// The WslShellIntegration install helper writes a distro's ~/.bashrc over a
+// `\\wsl.localhost\...` UNC path, and GH#613 now runs that install
+// concurrently with the WSL tab's bash starting up. The write therefore
+// keeps the user's existing file object and never opens it for truncation.
+// It is NOT atomic — see the guarantee documented on the function.
+// ───────────────────────────────────────────────────────────────────
+
+void ShellIntegrationTests::OverwriteFileContents_ReplacesContentKeepingTheSameFile()
+{
+    using Microsoft::Terminal::ShellIntegration::details::OverwriteFileContents;
+    const auto target = _scratchDir / L"profile.txt";
+    _WriteFile(target, "original contents that are quite long\n");
+    const auto before = _FileIdentity(target);
+    VERIFY_IS_TRUE(before.has_value());
+
+    // Shrinking write: the trailing bytes of the old contents must be gone,
+    // not left dangling past the new length.
+    VERIFY_IS_TRUE(OverwriteFileContents(target, "new\n").empty());
+    VERIFY_ARE_EQUAL(std::string{ "new\n" }, _ReadFile(target));
+
+    // Same file object, so the ACL/owner/hardlinks the user set on their
+    // profile came through untouched.
+    VERIFY_IS_TRUE(before == _FileIdentity(target));
+
+    // Growing write over the same file, and a target that doesn't exist yet.
+    VERIFY_IS_TRUE(OverwriteFileContents(target, "considerably longer than before\n").empty());
+    VERIFY_ARE_EQUAL(std::string{ "considerably longer than before\n" }, _ReadFile(target));
+    VERIFY_IS_TRUE(before == _FileIdentity(target));
+
+    const auto fresh = _scratchDir / L"fresh.txt";
+    VERIFY_IS_TRUE(OverwriteFileContents(fresh, "hello").empty());
+    VERIFY_ARE_EQUAL(std::string{ "hello" }, _ReadFile(fresh));
+}
+
+void ShellIntegrationTests::OverwriteFileContents_MissingDirectoryFailsWithoutCreatingTarget()
+{
+    using Microsoft::Terminal::ShellIntegration::details::OverwriteFileContents;
+    const auto target = _scratchDir / L"no-such-dir" / L"profile.txt";
+    // A failure is reported explicitly (non-empty reason), never swallowed
+    // into a success-shaped result.
+    VERIFY_IS_FALSE(OverwriteFileContents(target, "data").empty());
+    VERIFY_IS_FALSE(std::filesystem::exists(target));
+}
+
+void ShellIntegrationTests::OverwriteFileContents_NeverExposesAZeroLengthFile()
+{
+    using Microsoft::Terminal::ShellIntegration::details::OverwriteFileContents;
+    // This is the one guarantee the write actually makes, and the reason it
+    // replaced the old `std::ios::trunc` open: a shell sourcing the profile
+    // while we rewrite it must never read an EMPTY file. (A stale tail is
+    // still possible on a shrinking write — that is documented, not tested
+    // as absent.)
+    const auto target = _scratchDir / L"contended.txt";
+    const std::string longPayload(4096, 'L');
+    const std::string shortPayload(16, 'S');
+    _WriteFile(target, longPayload);
+
+    std::atomic<bool> writing{ true };
+    std::atomic<int> emptyReads{ 0 };
+    std::atomic<int> failures{ 0 };
+    std::atomic<int> failedOpens{ 0 };
+    std::atomic<int> failedWriterOpens{ 0 };
+    std::atomic<int> writes{ 0 };
+
+    std::thread reader{ [&] {
+        while (writing.load(std::memory_order_acquire))
+        {
+            std::ifstream in{ target, std::ios::binary };
+            if (!in)
+            {
+                // Failing to OPEN the file is not the same as observing a
+                // zero-length one, and counting it as one would make this
+                // test flaky. Recorded separately; the guarantee under test
+                // is only about what a successful open can see.
+                failedOpens.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+            const std::string contents{ std::istreambuf_iterator<char>(in),
+                                        std::istreambuf_iterator<char>() };
+            if (contents.empty())
+            {
+                emptyReads.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    } };
+
+    for (auto i = 0; i < 400; ++i)
+    {
+        const auto reason = OverwriteFileContents(target, (i % 2) ? shortPayload : longPayload);
+        if (reason.empty())
+        {
+            writes.fetch_add(1, std::memory_order_relaxed);
+        }
+        else if (reason.rfind(L"Failed to open ", 0) == 0)
+        {
+            // Symmetric with the reader above: losing the race to OPEN the
+            // file is a transient contention outcome, not a broken write, and
+            // failing the test on it would make it flaky. Every other reason
+            // (a failed or short WriteFile, a failed resize) means we did
+            // touch the file and got it wrong, and is still fatal below.
+            failedWriterOpens.fetch_add(1, std::memory_order_relaxed);
+        }
+        else
+        {
+            failures.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    writing.store(false, std::memory_order_release);
+    reader.join();
+
+    Log::Comment(NoThrowString().Format(L"reader could not open the file %d time(s); writer %d time(s)",
+                                        failedOpens.load(std::memory_order_relaxed),
+                                        failedWriterOpens.load(std::memory_order_relaxed)));
+
+    // A write that actually reached the file and went wrong is always fatal.
+    VERIFY_ARE_EQUAL(0, failures.load(std::memory_order_relaxed));
+    // The guarantee under test: no successful read ever saw an empty file.
+    VERIFY_ARE_EQUAL(0, emptyReads.load(std::memory_order_relaxed));
+    // ...and the run was not vacuous — contention must not have starved the
+    // writer completely, or the assertion above proves nothing.
+    VERIFY_IS_GREATER_THAN(writes.load(std::memory_order_relaxed), 0);
+    // Whatever the last successful write was, the file must hold exactly that
+    // payload: no truncated or interleaved remains of the other one.
+    const auto finalContents = _ReadFile(target);
+    VERIFY_IS_TRUE(finalContents == longPayload || finalContents == shortPayload,
+                   L"File left in a state that was never written");
+}
+
+void ShellIntegrationTests::OverwriteFileContents_WritesThroughSymlink()
+{
+    using Microsoft::Terminal::ShellIntegration::details::OverwriteFileContents;
+    // A dotfiles-managed profile is frequently a symlink (GH#10787). Opening
+    // the link resolves it, so we update what it points AT and leave the link
+    // in place -- replacing the link would detach the user's dotfiles repo.
+    const auto realFile = _scratchDir / L"real-profile.txt";
+    const auto link = _scratchDir / L"linked-profile.txt";
+    _WriteFile(realFile, "original");
+
+    std::error_code ec;
+    std::filesystem::create_symlink(realFile, link, ec);
+    if (ec)
+    {
+        // Creating symlinks needs Developer Mode or elevation; not available
+        // on every test host.
+        Log::Comment(L"Symlink creation unavailable on this host; skipping.");
+        return;
+    }
+
+    VERIFY_IS_TRUE(OverwriteFileContents(link, "through-the-link").empty());
+    VERIFY_IS_TRUE(std::filesystem::is_symlink(link));
+    VERIFY_ARE_EQUAL(std::string{ "through-the-link" }, _ReadFile(realFile));
 }
 
 // ───────────────────────────────────────────────────────────────────

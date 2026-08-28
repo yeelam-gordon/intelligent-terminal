@@ -516,6 +516,52 @@ namespace Microsoft::Terminal::ShellIntegration
                details::IsSystem32BashLauncher(commandline);
     }
 
+    // GH#613 admission policy, in one pure function: is this new tab a launch
+    // of the CONFIGURED WSL PROFILE itself, and if so, with which commandline?
+    // Returns the commandline to reconcile, or empty when the launch doesn't
+    // qualify. Called by ShellIntegrationSweep::QualifyingWslLaunchCommandline,
+    // which is the WinRT adapter over this.
+    //
+    // WSL shell integration is deferred out of app startup and performed once,
+    // on the first new tab that launches a given WSL profile — at which point
+    // the user is starting that distro anyway. So "qualifies" has to mean
+    // exactly "the user is launching this configured WSL profile":
+    //
+    //   * `reattachesExistingContent` (NewTerminalArgs::ContentId) wraps a tab
+    //     around a pane that is already running. Nothing is launched, so it
+    //     never qualifies.
+    //   * The PROFILE must itself be a WSL profile. A PowerShell profile with
+    //     a `wsl -d Debian` override is not a launch of a WSL profile, and no
+    //     profile's integration is reconciled for it.
+    //   * A FULL (non-append) commandline override replaces the profile's
+    //     launcher, so it is not a launch of that profile — regardless of what
+    //     the override runs. `wt -p Ubuntu cmd.exe` runs Windows cmd, and
+    //     `wt -p Ubuntu wsl.exe -d Debian` runs a different distro; neither is
+    //     "launching the Ubuntu profile", so neither qualifies.
+    //   * An APPEND override (`wt -p Ubuntu -- ls`) keeps the profile's
+    //     launcher — TerminalSettings::CreateWithNewTerminalArgs concatenates
+    //     `profile.Commandline() + L" " + args.Commandline()` — so it does
+    //     qualify.
+    //
+    // The returned commandline is the PROFILE's, never the concatenation: the
+    // installer runs it with its own probe appended, so it has to stay a
+    // plain distro-selection command.
+    inline std::wstring_view QualifyingWslLaunchCommandline(std::wstring_view profileCommandline,
+                                                            std::wstring_view overrideCommandline,
+                                                            bool appendOverride,
+                                                            bool reattachesExistingContent) noexcept
+    {
+        if (reattachesExistingContent || !IsWslProfile(profileCommandline))
+        {
+            return {};
+        }
+        if (!overrideCommandline.empty() && !appendOverride)
+        {
+            return {};
+        }
+        return profileCommandline;
+    }
+
     // Iterates the profile collection and returns true if any profile
     // matches `target`. A per-profile exception (e.g. Source() or
     // Commandline() throws) is swallowed for that one profile — it
