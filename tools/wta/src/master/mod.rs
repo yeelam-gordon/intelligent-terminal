@@ -3280,7 +3280,12 @@ impl HelperHandler {
                 .is_some_and(|set| set.remove(&session_id))
         };
         let cwd_for_registry = if is_orphan_rebind {
-            original_cwd
+            self.state
+                .registry
+                .lookup(&session_id)
+                .await
+                .map(|info| info.cwd.clone())
+                .unwrap_or(original_cwd)
         } else {
             args.cwd.clone()
         };

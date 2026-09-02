@@ -152,6 +152,9 @@ pub fn to_windows_format(path: &Path) -> PathBuf {
 ///   distro-independent — no shell-out needed);
 /// * non-drive Windows path (true UNC) → `/tmp` (via `windows_to_mnt`).
 pub fn to_linux_format(path: &Path) -> PathBuf {
+    if let Some(posix) = wsl_unc_to_posix(path) {
+        return posix;
+    }
     match classify(path) {
         PathFormat::Posix => path.to_path_buf(),
         PathFormat::Windows => {
@@ -361,6 +364,35 @@ pub(crate) fn is_wsl_unc_path(path: &Path) -> bool {
         || lower.starts_with("//wsl$/")
         || lower.starts_with("//?/unc/wsl.localhost/")
         || lower.starts_with("//?/unc/wsl$/")
+}
+
+fn wsl_unc_to_posix(path: &Path) -> Option<PathBuf> {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    for prefix in [
+        "//wsl.localhost/",
+        "//wsl$/",
+        "//?/unc/wsl.localhost/",
+        "//?/unc/wsl$/",
+    ] {
+        let Some(rest) = lower.strip_prefix(prefix) else {
+            continue;
+        };
+        let distro_len = rest.find('/').unwrap_or(rest.len());
+        if distro_len == 0 {
+            return None;
+        }
+        let tail = normalized
+            .get(prefix.len() + distro_len..)
+            .unwrap_or_default()
+            .trim_start_matches('/');
+        return Some(if tail.is_empty() {
+            PathBuf::from("/")
+        } else {
+            PathBuf::from(format!("/{tail}"))
+        });
+    }
+    None
 }
 
 // --- internals ---------------------------------------------------------
@@ -616,6 +648,21 @@ mod tests {
         assert_eq!(
             to_linux_format(Path::new(r"\\server\share")),
             PathBuf::from("/tmp")
+        );
+        for source in [
+            r"\\wsl.localhost\Ubuntu\home\me\project",
+            r"\\wsl$\Ubuntu\home\me\project",
+            r"\\?\UNC\wsl.localhost\Ubuntu\home\me\project",
+            "//wsl$/Ubuntu/home/me/project",
+        ] {
+            assert_eq!(
+                to_linux_format(Path::new(source)),
+                PathBuf::from("/home/me/project")
+            );
+        }
+        assert_eq!(
+            to_linux_format(Path::new("//wsl$/Ubuntu")),
+            PathBuf::from("/")
         );
     }
 
