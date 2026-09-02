@@ -961,12 +961,14 @@ mod tests {
         let attempts = vec![PathBuf::from(r"C:\repo"), PathBuf::from("/mnt/c/repo")];
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let calls_for_operation = std::sync::Arc::clone(&calls);
-        let deadline = Instant::now() + Duration::from_millis(250);
+        let deadline = Instant::now() + Duration::from_secs(1);
         let result = run_cwd_attempts(&attempts, deadline, move |_cwd| {
             let calls = std::sync::Arc::clone(&calls_for_operation);
             async move {
-                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                tokio::time::sleep(Duration::from_millis(150)).await;
+                let attempt = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if attempt > 0 {
+                    std::future::pending().await
+                }
                 Err::<(), _>(acp::Error::new(-32603, "Invalid working directory"))
             }
         })
