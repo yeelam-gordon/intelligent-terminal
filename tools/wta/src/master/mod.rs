@@ -5855,10 +5855,8 @@ async fn host_session_list_raw(
 /// already treats those identically, so no case here needs to special-case
 /// them further.
 async fn resolve_agent_cwd_target(agent: &AgentCli) -> crate::protocol::acp::cwd_format::CwdTarget {
-    if matches!(agent.source, crate::agent_source::AgentSource::Wsl { .. }) {
-        return crate::protocol::acp::cwd_format::CwdTarget::Explicit(
-            crate::protocol::acp::cwd_format::PathFormat::Posix,
-        );
+    if let crate::agent_source::AgentSource::Wsl { distro } = &agent.source {
+        return crate::protocol::acp::cwd_format::CwdTarget::ExplicitWsl(distro.clone());
     }
     let Some(sessions) = host_session_list_raw(agent).await else {
         return crate::protocol::acp::cwd_format::CwdTarget::Unknown;
@@ -5892,6 +5890,10 @@ fn convert_cwd_for_single_attempt(
         }
         CwdTarget::Explicit(PathFormat::Posix) | CwdTarget::Detected(PathFormat::Posix) => {
             crate::protocol::acp::cwd_format::to_linux_format(cwd)
+        }
+        CwdTarget::ExplicitWsl(distro) => {
+            crate::protocol::acp::cwd_format::to_wsl_format(&distro, cwd)
+                .unwrap_or_else(|| crate::protocol::acp::cwd_format::to_linux_format(cwd))
         }
         CwdTarget::Unknown => cwd.to_path_buf(),
     }

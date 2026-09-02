@@ -2178,6 +2178,13 @@ fn load_session_cwd_conversion_is_single_attempt_and_namespace_aware() {
         convert_cwd_for_single_attempt(Path::new(r"C:\repo"), CwdTarget::Unknown),
         PathBuf::from(r"C:\repo")
     );
+    assert_eq!(
+        convert_cwd_for_single_attempt(
+            Path::new(r"\\wsl.localhost\Ubuntu\home\me\repo"),
+            CwdTarget::ExplicitWsl("Ubuntu".to_string()),
+        ),
+        PathBuf::from("/home/me/repo")
+    );
 }
 
 #[tokio::test]

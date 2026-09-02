@@ -32,7 +32,6 @@
 //!    format.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use std::{future::Future, time::Instant};
 
 use agent_client_protocol as acp;
@@ -50,9 +49,10 @@ pub enum PathFormat {
 /// authoritative. A detected source comes from historical `session/list`
 /// rows, which can be stale, so its candidate ladder keeps the opposite
 /// namespace available after a proven cwd rejection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CwdTarget {
     Explicit(PathFormat),
+    ExplicitWsl(String),
     Detected(PathFormat),
     Unknown,
 }
@@ -189,11 +189,23 @@ pub(crate) fn to_wsl_format(distro: &str, path: &Path) -> Option<PathBuf> {
             return Some(PathBuf::from("/"));
         }
         let prefix = format!("{root}/");
-        if normalized.len() >= prefix.len()
-            && normalized[..prefix.len()].eq_ignore_ascii_case(&prefix)
+        if normalized
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
         {
-            return Some(PathBuf::from(format!("/{}", &normalized[prefix.len()..])));
+            return Some(PathBuf::from(format!(
+                "/{}",
+                normalized.get(prefix.len()..).unwrap_or_default()
+            )));
         }
+    }
+    let lower = normalized.to_ascii_lowercase();
+    if lower.starts_with("//wsl.localhost/")
+        || lower.starts_with("//wsl$/")
+        || lower.starts_with("//?/unc/wsl.localhost/")
+        || lower.starts_with("//?/unc/wsl$/")
+    {
+        return None;
     }
     if raw.starts_with('/') {
         return Some(PathBuf::from(raw));
@@ -218,6 +230,10 @@ pub fn build_attempts(value: &Path, target: CwdTarget) -> Vec<PathBuf> {
         CwdTarget::Explicit(PathFormat::Windows) => push(to_windows_format(value)),
         CwdTarget::Explicit(PathFormat::Posix) => {
             push(to_linux_format(value));
+            push(PathBuf::from("/tmp"));
+        }
+        CwdTarget::ExplicitWsl(distro) => {
+            push(to_wsl_format(&distro, value).unwrap_or_else(|| to_linux_format(value)));
             push(PathBuf::from("/tmp"));
         }
         CwdTarget::Detected(PathFormat::Windows) => {
@@ -270,6 +286,13 @@ where
             Ok(Err(error))
                 if index + 1 < attempts.len() && is_retryable_cwd_rejection(&error, cwd) =>
             {
+                tracing::warn!(
+                    target: "master",
+                    rejected_cwd = %cwd.display(),
+                    fallback_cwd = %attempts[index + 1].display(),
+                    attempt = index + 1,
+                    "agent rejected session cwd; retrying once with fallback namespace"
+                );
                 continue;
             }
             Ok(Err(error)) => return Err(CwdAttemptFailure::Agent(error)),
@@ -280,18 +303,16 @@ where
 }
 
 fn is_retryable_cwd_rejection(error: &acp::Error, attempted: &Path) -> bool {
-    let data = error
-        .data
-        .as_ref()
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    let evidence = format!("{} {data}", error.message).to_ascii_lowercase();
+    // Only the primary error message can authorize a retry. Structured data
+    // often echoes the entire request (including a `cwd` field), which is not
+    // evidence that session creation failed before producing side effects.
+    let evidence = error.message.to_ascii_lowercase();
     let attempted = attempted
         .to_string_lossy()
         .replace('\\', "/")
         .to_ascii_lowercase();
     let normalized_evidence = evidence.replace('\\', "/");
-    let references_attempt = !attempted.is_empty() && normalized_evidence.contains(&attempted);
+    let references_attempt = references_path_value(&normalized_evidence, &attempted);
     let declares_cwd = evidence.contains("cwd")
         || evidence.contains("working directory")
         || evidence.contains("current directory")
@@ -305,6 +326,22 @@ fn is_retryable_cwd_rejection(error: &acp::Error, attempted: &Path) -> bool {
         || evidence.contains("invalid working directory")
         || evidence.contains("failed to set current directory");
     deterministic_rejection && (references_attempt || declares_cwd)
+}
+
+fn references_path_value(evidence: &str, attempted: &str) -> bool {
+    if attempted.is_empty() {
+        return false;
+    }
+    evidence.match_indices(attempted).any(|(start, matched)| {
+        let end = start + matched.len();
+        let before = evidence[..start].chars().next_back();
+        let after = evidence[end..].chars().next();
+        before.is_none_or(is_path_boundary) && after.is_none_or(is_path_boundary)
+    })
+}
+
+fn is_path_boundary(ch: char) -> bool {
+    !ch.is_alphanumeric() && !matches!(ch, '/' | '\\' | '.' | '_' | '-' | '~' | ':')
 }
 
 // --- internals ---------------------------------------------------------
@@ -444,6 +481,7 @@ fn path_eq_ci(a: &Path, b: &Path) -> bool {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+    use std::time::Duration;
 
     // Serializes + restores process-wide env mutations so parallel tests
     // don't clobber each other's USERPROFILE/SystemRoot. Uses the CRATE-WIDE
@@ -580,6 +618,16 @@ mod tests {
             to_wsl_format("Fedora-40", Path::new(r"\\wsl$\Ubuntu\home\me")),
             None,
             "a different distro's cwd must not cross into the selected agent"
+        );
+        assert_eq!(
+            to_wsl_format("Fedora-40", Path::new("//wsl$/Ubuntu/home/me")),
+            None,
+            "a forward-slash cwd from another distro must also be rejected"
+        );
+        assert_eq!(
+            to_wsl_format("Ubuntu", Path::new(r"C:\Users\me\プロジェクト")),
+            Some(PathBuf::from("/mnt/c/Users/me/プロジェクト")),
+            "non-ASCII Windows paths must convert without slicing panics"
         );
     }
 
@@ -747,6 +795,23 @@ mod tests {
             &acp::Error::new(-32603, "absolute URL required for endpoint"),
             attempted,
         ));
+        assert!(!is_retryable_cwd_rejection(
+            &acp::Error::new(
+                -32603,
+                "ENOENT: no such file or directory, open 'C:\\WINDOWS\\system32\\AGENTS.md'"
+            ),
+            attempted,
+        ));
+        assert!(!is_retryable_cwd_rejection(
+            &acp::Error::new(-32603, "The requested model does not exist").data(
+                serde_json::json!({
+                    "request": {
+                        "cwd": r"C:\WINDOWS\system32"
+                    }
+                }),
+            ),
+            attempted,
+        ));
     }
 
     #[test]
@@ -857,5 +922,36 @@ mod tests {
 
         assert!(matches!(result, Err(CwdAttemptFailure::Agent(_))));
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cwd_rejection_retries_once_and_returns_winning_cwd() {
+        let attempts = vec![PathBuf::from(r"C:\repo"), PathBuf::from("/mnt/c/repo")];
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let calls_for_operation = std::sync::Arc::clone(&calls);
+        let result = run_cwd_attempts(
+            &attempts,
+            Instant::now() + Duration::from_secs(1),
+            move |cwd| {
+                let calls = std::sync::Arc::clone(&calls_for_operation);
+                async move {
+                    let mut calls = calls.lock().unwrap();
+                    calls.push(cwd.clone());
+                    if calls.len() == 1 {
+                        Err(acp::Error::new(
+                            -32603,
+                            "Directory path must be absolute: C:\\repo",
+                        ))
+                    } else {
+                        Ok("created")
+                    }
+                }
+            },
+        )
+        .await
+        .expect("the namespace fallback should succeed");
+
+        assert_eq!(result, ("created", PathBuf::from("/mnt/c/repo")));
+        assert_eq!(*calls.lock().unwrap(), attempts);
     }
 }
