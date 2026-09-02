@@ -199,12 +199,7 @@ pub(crate) fn to_wsl_format(distro: &str, path: &Path) -> Option<PathBuf> {
             )));
         }
     }
-    let lower = normalized.to_ascii_lowercase();
-    if lower.starts_with("//wsl.localhost/")
-        || lower.starts_with("//wsl$/")
-        || lower.starts_with("//?/unc/wsl.localhost/")
-        || lower.starts_with("//?/unc/wsl$/")
-    {
+    if is_wsl_unc_path(Path::new(raw)) {
         return None;
     }
     if raw.starts_with('/') {
@@ -233,7 +228,13 @@ pub fn build_attempts(value: &Path, target: CwdTarget) -> Vec<PathBuf> {
             push(PathBuf::from("/tmp"));
         }
         CwdTarget::ExplicitWsl(distro) => {
-            push(to_wsl_format(&distro, value).unwrap_or_else(|| to_linux_format(value)));
+            push(to_wsl_format(&distro, value).unwrap_or_else(|| {
+                if is_wsl_unc_path(value) {
+                    PathBuf::from("/tmp")
+                } else {
+                    to_linux_format(value)
+                }
+            }));
             push(PathBuf::from("/tmp"));
         }
         CwdTarget::Detected(PathFormat::Windows) => {
@@ -277,6 +278,12 @@ where
     F: FnMut(PathBuf) -> Fut,
     Fut: Future<Output = acp::Result<T>>,
 {
+    if attempts.is_empty() {
+        return Err(CwdAttemptFailure::Agent(acp::Error::new(
+            -32603,
+            "no cwd candidates",
+        )));
+    }
     for (index, cwd) in attempts.iter().enumerate() {
         let remaining = deadline
             .checked_duration_since(Instant::now())
@@ -299,7 +306,10 @@ where
             Err(_) => return Err(CwdAttemptFailure::Timeout),
         }
     }
-    unreachable!("cwd candidate builder always returns at least one path")
+    Err(CwdAttemptFailure::Agent(acp::Error::new(
+        -32603,
+        "no cwd candidates",
+    )))
 }
 
 fn is_retryable_cwd_rejection(error: &acp::Error, attempted: &Path) -> bool {
@@ -342,6 +352,15 @@ fn references_path_value(evidence: &str, attempted: &str) -> bool {
 
 fn is_path_boundary(ch: char) -> bool {
     !ch.is_alphanumeric() && !matches!(ch, '/' | '\\' | '.' | '_' | '-' | '~' | ':')
+}
+
+pub(crate) fn is_wsl_unc_path(path: &Path) -> bool {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    lower.starts_with("//wsl.localhost/")
+        || lower.starts_with("//wsl$/")
+        || lower.starts_with("//?/unc/wsl.localhost/")
+        || lower.starts_with("//?/unc/wsl$/")
 }
 
 // --- internals ---------------------------------------------------------
@@ -629,6 +648,11 @@ mod tests {
             Some(PathBuf::from("/mnt/c/Users/me/プロジェクト")),
             "non-ASCII Windows paths must convert without slicing panics"
         );
+        assert!(is_wsl_unc_path(Path::new("//wsl$/Ubuntu/home/me")));
+        assert!(is_wsl_unc_path(Path::new(
+            r"\\?\UNC\wsl.localhost\Ubuntu\home\me"
+        )));
+        assert!(!is_wsl_unc_path(Path::new("/home/me")));
     }
 
     #[test]
@@ -829,6 +853,13 @@ mod tests {
             build_attempts(Path::new("/home/u"), CwdTarget::Explicit(PathFormat::Posix),),
             vec![PathBuf::from("/home/u"), PathBuf::from("/tmp")]
         );
+        assert_eq!(
+            build_attempts(
+                Path::new("//wsl$/Debian/home/me"),
+                CwdTarget::ExplicitWsl("Ubuntu".to_string()),
+            ),
+            vec![PathBuf::from("/tmp")]
+        );
     }
 
     #[test]
@@ -953,5 +984,15 @@ mod tests {
 
         assert_eq!(result, ("created", PathBuf::from("/mnt/c/repo")));
         assert_eq!(*calls.lock().unwrap(), attempts);
+    }
+
+    #[tokio::test]
+    async fn empty_attempts_return_an_agent_error() {
+        let result = run_cwd_attempts(&[], Instant::now() + Duration::from_secs(1), |_cwd| async {
+            Ok::<_, acp::Error>(())
+        })
+        .await;
+
+        assert!(matches!(result, Err(CwdAttemptFailure::Agent(_))));
     }
 }

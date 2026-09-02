@@ -118,13 +118,17 @@ pub async fn resolve_source_cwd(source: &AgentSource, reported: Option<&str>) ->
         Some(relative) if relative.starts_with("~/") => {
             Some(format!("{}/{}", home.trim_end_matches('/'), &relative[2..]))
         }
-        Some(relative) if !relative.contains(':') && !relative.starts_with('\\') => Some(format!(
+        Some(relative) if is_wsl_relative_cwd(relative) => Some(format!(
             "{}/{}",
             home.trim_end_matches('/'),
             normalize_wsl_relative_cwd(relative)
         )),
         _ => Some(home),
     }
+}
+
+fn is_wsl_relative_cwd(cwd: &str) -> bool {
+    !cwd.contains(':') && !cwd.starts_with('\\') && !cwd.starts_with('/')
 }
 
 fn normalize_wsl_relative_cwd(cwd: &str) -> String {
@@ -247,6 +251,9 @@ mod tests {
 
     #[test]
     fn wsl_relative_cwd_uses_posix_separators() {
+        assert!(is_wsl_relative_cwd("foo/bar"));
+        assert!(!is_wsl_relative_cwd("//wsl$/Debian/home/me"));
+        assert!(!is_wsl_relative_cwd(r"\\wsl$\Debian\home\me"));
         assert_eq!(normalize_wsl_relative_cwd(r"foo\bar"), "foo/bar");
         assert_eq!(normalize_wsl_relative_cwd(r".\foo"), "foo");
         assert_eq!(normalize_wsl_relative_cwd("./foo"), "foo");

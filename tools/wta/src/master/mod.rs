@@ -3238,9 +3238,9 @@ impl HelperHandler {
                 return Err(error);
             }
         };
+        let original_cwd = args.cwd.clone();
         let cwd_target = resolve_agent_cwd_target(&agent).await;
         args.cwd = convert_cwd_for_single_attempt(&args.cwd, cwd_target);
-        let cwd_for_registry = args.cwd.clone();
         let forwarder = match self.forwarder_for_route("load_session") {
             Ok(forwarder) => forwarder,
             Err(error) => {
@@ -3278,6 +3278,11 @@ impl HelperHandler {
             orphans
                 .get_mut(&agent.cmd_key)
                 .is_some_and(|set| set.remove(&session_id))
+        };
+        let cwd_for_registry = if is_orphan_rebind {
+            original_cwd
+        } else {
+            args.cwd.clone()
         };
         // Both a re-bind and a real `session/load` resume the session; only a
         // genuine load failure rolls back. Resolve the response, then register
@@ -5892,8 +5897,13 @@ fn convert_cwd_for_single_attempt(
             crate::protocol::acp::cwd_format::to_linux_format(cwd)
         }
         CwdTarget::ExplicitWsl(distro) => {
-            crate::protocol::acp::cwd_format::to_wsl_format(&distro, cwd)
-                .unwrap_or_else(|| crate::protocol::acp::cwd_format::to_linux_format(cwd))
+            crate::protocol::acp::cwd_format::to_wsl_format(&distro, cwd).unwrap_or_else(|| {
+                if crate::protocol::acp::cwd_format::is_wsl_unc_path(cwd) {
+                    PathBuf::from("/tmp")
+                } else {
+                    crate::protocol::acp::cwd_format::to_linux_format(cwd)
+                }
+            })
         }
         CwdTarget::Unknown => cwd.to_path_buf(),
     }
