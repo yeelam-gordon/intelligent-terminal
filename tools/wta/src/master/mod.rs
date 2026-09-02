@@ -2422,7 +2422,7 @@ impl HelperHandler {
         timeout: std::time::Duration,
     ) -> acp::Result<(acp::schema::v1::NewSessionResponse, PathBuf)> {
         let timeout_secs = timeout.as_secs();
-        let started = std::time::Instant::now();
+        let started = tokio::time::Instant::now();
         let deadline = started + timeout;
         let agent = self.resolved_agent("new_session")?;
         let target = resolve_agent_cwd_target(&agent).await;
@@ -3239,8 +3239,6 @@ impl HelperHandler {
             }
         };
         let original_cwd = args.cwd.clone();
-        let cwd_target = resolve_agent_cwd_target(&agent).await;
-        args.cwd = convert_cwd_for_single_attempt(&args.cwd, cwd_target);
         let forwarder = match self.forwarder_for_route("load_session") {
             Ok(forwarder) => forwarder,
             Err(error) => {
@@ -3287,6 +3285,8 @@ impl HelperHandler {
                 .map(|info| info.cwd.clone())
                 .unwrap_or(original_cwd)
         } else {
+            let cwd_target = resolve_agent_cwd_target(&agent).await;
+            args.cwd = convert_cwd_for_single_attempt(&args.cwd, cwd_target);
             args.cwd.clone()
         };
         // Both a re-bind and a real `session/load` resume the session; only a

@@ -31,10 +31,11 @@
 //!    the one matching the target and never has to reason about the source
 //!    format.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::{future::Future, time::Instant};
 
 use agent_client_protocol as acp;
+use tokio::time::Instant;
 
 /// A path's namespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -956,25 +957,25 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn attempts_share_one_deadline_and_stop_on_timeout() {
         let attempts = vec![PathBuf::from(r"C:\repo"), PathBuf::from("/mnt/c/repo")];
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let calls_for_operation = std::sync::Arc::clone(&calls);
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(250);
         let result = run_cwd_attempts(&attempts, deadline, move |_cwd| {
             let calls = std::sync::Arc::clone(&calls_for_operation);
             async move {
-                let attempt = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                if attempt > 0 {
-                    std::future::pending().await
-                }
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(150)).await;
                 Err::<(), _>(acp::Error::new(-32603, "Invalid working directory"))
             }
         })
         .await;
 
         assert!(matches!(result, Err(CwdAttemptFailure::Timeout)));
+        assert_eq!(Instant::now() - started, Duration::from_millis(250));
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             2,
