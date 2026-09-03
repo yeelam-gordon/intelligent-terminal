@@ -5894,19 +5894,26 @@ fn convert_cwd_for_single_attempt(
     target: crate::protocol::acp::cwd_format::CwdTarget,
 ) -> PathBuf {
     use crate::protocol::acp::cwd_format::{CwdTarget, PathFormat};
+    let to_posix = |cwd: &Path| {
+        let converted = crate::protocol::acp::cwd_format::to_linux_format(cwd);
+        match crate::protocol::acp::cwd_format::classify(&converted) {
+            PathFormat::Posix => converted,
+            PathFormat::Windows => PathBuf::from("/tmp"),
+        }
+    };
     match target {
         CwdTarget::Explicit(PathFormat::Windows) | CwdTarget::Detected(PathFormat::Windows) => {
             crate::protocol::acp::cwd_format::to_windows_format(cwd)
         }
         CwdTarget::Explicit(PathFormat::Posix) | CwdTarget::Detected(PathFormat::Posix) => {
-            crate::protocol::acp::cwd_format::to_linux_format(cwd)
+            to_posix(cwd)
         }
         CwdTarget::ExplicitWsl(distro) => {
             crate::protocol::acp::cwd_format::to_wsl_format(&distro, cwd).unwrap_or_else(|| {
                 if crate::protocol::acp::cwd_format::is_wsl_unc_path(cwd) {
                     PathBuf::from("/tmp")
                 } else {
-                    crate::protocol::acp::cwd_format::to_linux_format(cwd)
+                    to_posix(cwd)
                 }
             })
         }

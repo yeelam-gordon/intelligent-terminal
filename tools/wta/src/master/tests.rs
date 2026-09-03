@@ -2185,6 +2185,23 @@ fn load_session_cwd_conversion_is_single_attempt_and_namespace_aware() {
         ),
         PathBuf::from("/home/me/repo")
     );
+    for cwd in ["C:", r"C:relative"] {
+        assert_eq!(
+            convert_cwd_for_single_attempt(Path::new(cwd), CwdTarget::Explicit(PathFormat::Posix),),
+            PathBuf::from("/tmp")
+        );
+        assert_eq!(
+            convert_cwd_for_single_attempt(
+                Path::new(cwd),
+                CwdTarget::ExplicitWsl("Ubuntu".to_string()),
+            ),
+            PathBuf::from("/tmp")
+        );
+        assert_eq!(
+            convert_cwd_for_single_attempt(Path::new(cwd), CwdTarget::Unknown),
+            PathBuf::from(cwd)
+        );
+    }
 }
 
 #[tokio::test]
