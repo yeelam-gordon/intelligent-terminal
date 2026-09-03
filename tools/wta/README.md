@@ -167,18 +167,29 @@ WTA writes structured logs under the package log dir, in a per-version
 subfolder: `…\LocalCache\Local\IntelligentTerminal\logs\<pkgver>\` when
 packaged (or bare `%LOCALAPPDATA%\IntelligentTerminal\logs\` unpackaged):
 
+If that directory cannot be created or opened, packaged WTA preserves the
+package version under `%TEMP%\IntelligentTerminal\logs\<pkgver>\`; unpackaged
+runs use the flat `%TEMP%\IntelligentTerminal\logs\` directory. If that
+fallback also fails, bootstrap diagnostics use the same daily rotation and
+retain up to three files directly under `%TEMP%`.
+
 | File | Contents |
 |------|----------|
-| `wta-main_master.log` | `wta-master`: agent CLI pool, pipe accept loop, per-helper routing |
-| `wta-main_helper-{pid}.log` | each `wta-helper`: pipe connect, ACP init, prompts, agent responses, TUI lifecycle |
-| `wta-cli.log` | short-lived CLI helpers (`list-*`, `capture-pane`, `listen`, `sessions`) |
+| `wta-main_master.<date>.log` | `wta-master`: agent CLI pool, pipe accept loop, per-helper routing |
+| `wta-main_helper-{pid}.<date>.log` | each `wta-helper`: pipe connect, ACP init, prompts, agent responses, TUI lifecycle |
+| `wta-cli.<date>.log` | short-lived CLI helpers (`list-*`, `capture-pane`, `listen`, `sessions`) |
 | `terminal-agent-pane.log` | Agent-pane chrome (C++ TerminalApp side) |
 | `wta-ensure-host.log` | Background host startup / COM connection / SharedWta lifecycle |
 | `wta-acp-debug.log` | ACP protocol debug trace |
-| `wta-delegate.log` | `?<prompt>` delegation flow |
-| `wta-probe.log` | Agent/model/session capability probes |
-| `wta-install-hooks.log` | Hook installation and upgrade diagnostics |
+| `wta-delegate.<date>.log` | `?<prompt>` delegation flow |
+| `wta-probe.<date>.log` | Agent/model/session capability probes |
+| `wta-install-hooks.<date>.log` | Hook installation and upgrade diagnostics |
+| `wta-panic.<date>.log` | Synchronous panic backstop when the normal buffered record may not flush |
+| `%TEMP%\wta-bootstrap.<date>.log` | Last-resort diagnostics when both normal log directories are unavailable |
 | `hook-trace.log` | Shell-hook event diagnostics |
+
+All Rust WTA log streams rotate daily and retain up to three matching files.
+Per-PID helper logs are also reclaimed after three days.
 
 Set `WTA_LOG=debug` for verbose output (debug builds default to `debug`, release
 to `info`). The F12 debug panel in the TUI shows protocol traffic live without

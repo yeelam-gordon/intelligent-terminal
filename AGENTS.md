@@ -156,20 +156,28 @@ Packaged state and cache data are package-private:
 - Logs: `logs\<package-version>\`
 
 Unpackaged development falls back to
-`%LOCALAPPDATA%\IntelligentTerminal`. Resolve paths through the shared runtime
-path helpers; do not hard-code `%TEMP%` or a bare LocalAppData path.
+`%LOCALAPPDATA%\IntelligentTerminal`. Resolve normal runtime paths through the
+shared runtime path helpers; do not hard-code a bare LocalAppData path. Logging
+is the explicit exception: when the normal log directory is unusable, packaged
+runs may fall back to `%TEMP%\IntelligentTerminal\logs\<package-version>\`
+(unpackaged runs use the flat `%TEMP%\IntelligentTerminal\logs\`) and then to
+the daily `%TEMP%\wta-bootstrap.<date>.log` stream.
 
 Primary logs are:
 
-- `wta-main_master.log`
-- `wta-main_helper-{pid}.log`
-- `wta-cli.log`
-- `wta-delegate.log`
-- `wta-probe.log`
-- `wta-install-hooks.log`
+- `wta-main_master.<date>.log`
+- `wta-main_helper-{pid}.<date>.log`
+- `wta-cli.<date>.log`
+- `wta-delegate.<date>.log`
+- `wta-probe.<date>.log`
+- `wta-install-hooks.<date>.log`
+- `wta-panic.<date>.log`
 - `wta-ensure-host.log`
 - `wta-acp-debug.log`
 - `terminal-agent-pane.log`
+
+Rust WTA log streams rotate daily and retain up to three matching files.
+Per-PID helper logs are also reclaimed after three days.
 
 Use `WTA_LOG=debug` or `WTA_LOG=trace` for additional Rust tracing. See
 `tools/wta/README.md` for current diagnostics and CLI usage.

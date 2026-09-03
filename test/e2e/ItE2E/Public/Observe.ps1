@@ -42,7 +42,16 @@ function Get-ItLogText {
         $dir = Get-ItLogDir -App $App
         if (-not $dir) { return '' }
         $sb = [System.Text.StringBuilder]::new()
-        foreach ($f in Get-ChildItem $dir -Filter *.log -ErrorAction SilentlyContinue | Where-Object Name -like $Name) {
+        $datedName = if ($Name -notmatch '[*?]' -and $Name -match '^(.+)\.log$') { "$($Matches[1]).*.log" } else { $null }
+        $files = @(Get-ChildItem $dir -Filter *.log -ErrorAction SilentlyContinue)
+        $datedFiles = if ($datedName) { @($files | Where-Object Name -like $datedName) } else { @() }
+        $matchingFiles = if ($datedFiles.Count -gt 0) {
+            $datedFiles
+        }
+        else {
+            @($files | Where-Object Name -like $Name)
+        }
+        foreach ($f in $matchingFiles) {
             $start = if ($SinceStart -and $App.LogStartOffset.ContainsKey($f.Name)) { [int64]$App.LogStartOffset[$f.Name] } else { 0 }
             try {
                 $fs = [System.IO.FileStream]::new($f.FullName, 'Open', 'Read', 'ReadWrite')
