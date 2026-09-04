@@ -1982,10 +1982,10 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         const std::wstring hooksRemovedSummary{ RS_(L"AIAgents_HooksRemovedSummary") };
         const std::wstring hooksInstalledSummary{ RS_(L"AIAgents_HooksInstalledSummary") };
         const auto hooksLogDir = ::IntelligentTerminal::LogDirVersioned();
-        const auto hooksInstallLogPath = (hooksLogDir / L"wta-install-hooks.log").wstring();
+        const auto hooksLogLocation = hooksLogDir.wstring();
         const std::wstring hooksRemovalFailedSummary{ RS_fmt(L"AIAgents_HooksRemovalFailedSummary", hooksLogDir.wstring()) };
         const std::wstring hooksInstallationFailedSummary{
-            RS_fmt(L"AIAgents_HooksInstallationFailedSummary", hooksInstallLogPath)
+            RS_fmt(L"AIAgents_HooksInstallationFailedSummary", hooksLogLocation)
         };
         std::wstring summary;
         bool ok = false;
@@ -2031,7 +2031,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
                     const auto failed = ::Microsoft::Terminal::AgentHooks::FormatFailedCliList(*report);
                     if (!failed.empty())
                     {
-                        summary = RS_fmt(L"AIAgents_HooksInstallationFailedForSummary", failed, hooksInstallLogPath);
+                        summary = RS_fmt(L"AIAgents_HooksInstallationFailedForSummary", failed, hooksLogLocation);
                     }
                 }
             }

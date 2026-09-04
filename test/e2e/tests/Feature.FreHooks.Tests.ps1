@@ -47,9 +47,11 @@ Describe 'Feature §0 FRE session-management hook install' -Tag 'Feature' -Skip:
             # Hook logs are available: the install writes its decisions to the WTA hook log.
             $logDir = Get-ItLogDir -App $app
             if ($logDir) {
-                $hookLog = Join-Path $logDir 'wta-install-hooks.log'
-                Test-Path $hookLog | Should -BeTrue -Because 'hook install decisions must be recorded in wta-install-hooks.log'
-                (Get-Item $hookLog).Length | Should -BeGreaterThan 0
+                $hookLog = Get-ChildItem $logDir -Filter 'wta-install-hooks.*.log' |
+                    Sort-Object LastWriteTime -Descending |
+                    Select-Object -First 1
+                $hookLog | Should -Not -BeNullOrEmpty -Because 'hook install decisions must be recorded in a dated hook log'
+                $hookLog.Length | Should -BeGreaterThan 0
             }
         }
         finally { Stop-Terminal -App $app }
