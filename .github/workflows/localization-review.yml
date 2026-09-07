@@ -32,40 +32,36 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Classify localization changes
+      - name: Gate localization changes
         id: gate
-        shell: bash
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           SAME_REPO: ${{ github.event.pull_request.head.repo.id == github.repository_id }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = 'Stop'
+          $remoteRef = "refs/remotes/origin/localization-pr-$env:PR_NUMBER"
+          git fetch --no-tags origin "+refs/pull/$env:PR_NUMBER/head:$remoteRef"
+          $fetchedHead = (git rev-parse $remoteRef).Trim()
+          if ($fetchedHead -ne $env:HEAD_SHA) {
+            throw "PR head changed before localization review started. Expected $env:HEAD_SHA, found $fetchedHead."
+          }
 
-          remote_ref="refs/remotes/origin/localization-pr-${PR_NUMBER}"
-          basic_auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${basic_auth}" \
-            fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:${remote_ref}"
-          fetched_head="$(git rev-parse "$remote_ref")"
-          if [ "$fetched_head" != "$HEAD_SHA" ]; then
-            echo "::error::PR head changed before localization review started. Expected $HEAD_SHA, found $fetched_head."
-            exit 1
-          fi
-
-          if [ "$SAME_REPO" = "true" ] &&
-             git log -1 --pretty=%s "$HEAD_SHA" | grep -Eq '\[localization-expert\]$'; then
-            author_login="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.author.login // ""')"
-            committer_login="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.committer.login // ""')"
-            verified="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.commit.verification.verified')"
-            parent_count="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.parents | length')"
-            if [ "$author_login" = "github-actions[bot]" ] &&
-               [ "$committer_login" = "web-flow" ] &&
-               [ "$verified" = "true" ] &&
-               [ "$parent_count" = "1" ]; then
-              echo "should_run=false" >> "$GITHUB_OUTPUT"
-              echo "reason=workflow-completion" >> "$GITHUB_OUTPUT"
+          if ($env:SAME_REPO -eq 'true' -and (git log -1 --pretty=%s $env:HEAD_SHA) -match '\[localization-expert\]$') {
+            $commit = gh api "repos/$env:REPOSITORY/commits/$env:HEAD_SHA" | ConvertFrom-Json -AsHashtable
+            $authorLogin = $commit.author.login
+            $committerLogin = $commit.committer.login
+            $verified = [bool]$commit.commit.verification.verified
+            $parentCount = @($commit.parents).Count
+            if ($authorLogin -eq 'github-actions[bot]' -and $committerLogin -eq 'web-flow' -and $verified -and $parentCount -eq 1) {
+              "should_run=false" >> $env:GITHUB_OUTPUT
+              "reason=workflow-completion" >> $env:GITHUB_OUTPUT
+              "gate_status=PASS" >> $env:GITHUB_OUTPUT
+              "gate_action=NONE" >> $env:GITHUB_OUTPUT
               {
                 echo "## Localization review"
                 echo
@@ -73,31 +69,30 @@ jobs:
                 echo
                 echo "- AI Credits: **0**"
                 echo "- Internal GHAW run: not required"
-              } >> "$GITHUB_STEP_SUMMARY"
+              } >> $env:GITHUB_STEP_SUMMARY
               exit 0
-            fi
-          fi
+            }
+          }
 
-          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
-          echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
+          $jsonl = Join-Path $PWD 'localization-review.gate.jsonl'
+          & .github/scripts/localization_checks.ps1 -Mode Gate -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA | Tee-Object -FilePath $jsonl | Out-Null
+          $exitCode = $LASTEXITCODE
+          if (@(0, 10, 30) -notcontains $exitCode) {
+            throw "Unexpected localization gate exit code: $exitCode"
+          }
 
-          classification_failed=false
-          if ! should_run="$(python3 .github/scripts/localization_content_gate.py "$merge_base" "$HEAD_SHA")"; then
-            should_run=true
-            classification_failed=true
-          fi
-          if [ "$should_run" != "true" ] && [ "$should_run" != "false" ]; then
-            should_run=true
-            classification_failed=true
-          fi
+          $summary = Get-Content -LiteralPath $jsonl | Select-Object -Last 1 | ConvertFrom-Json -AsHashtable
+          if ($summary.kind -ne 'summary') {
+            throw 'Localization gate did not emit a summary record.'
+          }
 
-          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
-          if [ "$classification_failed" = "true" ]; then
-            echo "reason=classifier-failed-open" >> "$GITHUB_OUTPUT"
-          elif [ "$should_run" = "true" ]; then
-            echo "reason=meaningful-localization-change" >> "$GITHUB_OUTPUT"
-          else
-            echo "reason=no-semantic-localization-change" >> "$GITHUB_OUTPUT"
+          $shouldRun = if ([bool]$summary.should_run) { 'true' } else { 'false' }
+          "should_run=$shouldRun" >> $env:GITHUB_OUTPUT
+          "reason=$($summary.action.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "gate_status=$($summary.status)" >> $env:GITHUB_OUTPUT
+          "gate_action=$($summary.action)" >> $env:GITHUB_OUTPUT
+
+          if ($shouldRun -eq 'false') {
             {
               echo "## Localization review"
               echo
@@ -105,8 +100,8 @@ jobs:
               echo
               echo "- AI Credits: **0**"
               echo "- Internal GHAW run: not required"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+            } >> $env:GITHUB_STEP_SUMMARY
+          }
 
       - name: Dispatch and wait for internal GHAW
         id: worker

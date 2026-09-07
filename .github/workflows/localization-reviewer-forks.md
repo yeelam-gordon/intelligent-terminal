@@ -1,6 +1,6 @@
 ---
 description: 'Review customer-facing localization changes from fork pull requests'
-intent: 'Give external contributors safe localization feedback without executing or modifying fork code.'
+intent: 'Validate fork localization changes read-only without checking out or executing fork code.'
 
 on:
   workflow_dispatch:
@@ -53,122 +53,69 @@ imports:
 
 checkout:
   repository: ${{ github.repository }}
-  ref: ${{ github.ref }}
+  ref: ${{ github.event.inputs.expected_base_sha }}
+  fetch-depth: 0
 
 tools:
   edit: false
-  bash: []
+  bash:
+    - 'git fetch:*'
+    - 'git rev-parse:*'
+    - 'pwsh:*'
   cli-proxy: false
   github:
     toolsets: [pull_requests]
 
 jobs:
-  localization_content_gate:
-    if: github.event.inputs.same_repo == 'false'
+  prepare:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     outputs:
-      should_run: ${{ steps.finalize.outputs.should_run }}
-      merge_base: ${{ steps.finalize.outputs.merge_base }}
+      comparison_base: ${{ steps.prepare.outputs.comparison_base }}
+      initial_status: ${{ steps.prepare.outputs.initial_status }}
+      initial_action: ${{ steps.prepare.outputs.initial_action }}
     steps:
-      - name: Validate workflow_dispatch inputs
-        shell: bash
-        env:
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
-          EXPECTED_BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
-          EXPECTED_HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::Invalid workflow_dispatch input 'pr_number'; expected a positive decimal integer."
-            exit 1
-          fi
-
-          if [[ ! "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Invalid workflow_dispatch input 'expected_base_sha'; expected exactly 40 hexadecimal characters."
-            exit 1
-          fi
-
-          if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Invalid workflow_dispatch input 'expected_head_sha'; expected exactly 40 hexadecimal characters."
-            exit 1
-          fi
       - name: Checkout trusted base
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.expected_base_sha }}
           fetch-depth: 0
           persist-credentials: true
-      - name: Classify localization content changes
-        id: classify
-        shell: bash
+      - name: Validate immutable fork head without checkout
+        id: prepare
+        shell: pwsh
         env:
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
           BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
           HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
-          PR_NUMBER: ${{ github.event.inputs.pr_number }}
         run: |
-          set -euo pipefail
-          remote_ref="refs/remotes/origin/localization-pr-${PR_NUMBER}"
-          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:${remote_ref}"
-          current_head="$(git rev-parse "$remote_ref")"
-          if [ "$current_head" != "$HEAD_SHA" ]; then
-            echo "::error::Fork PR head changed after controller dispatch. Expected $HEAD_SHA, found $current_head."
-            exit 1
-          fi
+          $ErrorActionPreference = 'Stop'
+          $remoteRef = "refs/remotes/origin/localization-pr-$env:PR_NUMBER"
+          git fetch --no-tags origin "+refs/pull/$env:PR_NUMBER/head:$remoteRef"
+          $currentHead = (git rev-parse $remoteRef).Trim()
+          if ($currentHead -ne $env:HEAD_SHA) {
+            throw "Fork PR head changed after controller dispatch. Expected $env:HEAD_SHA, found $currentHead."
+          }
 
-          if ! MERGE_BASE="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"; then
-            echo "merge_base=$BASE_SHA" >> "$GITHUB_OUTPUT"
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "Classification failed while resolving the merge base; running Localization Reviewer as a fail-open review." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          echo "merge_base=$MERGE_BASE" >> "$GITHUB_OUTPUT"
+          $jsonl = Join-Path $PWD 'localization-reviewer-forks.validate.jsonl'
+          & .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA | Tee-Object -FilePath $jsonl | Out-Null
+          $exitCode = $LASTEXITCODE
+          if (@(0, 20, 30) -notcontains $exitCode) {
+            throw "Unexpected localization validator exit code: $exitCode"
+          }
+          $summary = Get-Content -LiteralPath $jsonl | Select-Object -Last 1 | ConvertFrom-Json -AsHashtable
+          if ($summary.kind -ne 'summary') {
+            throw 'Localization validator did not emit a summary record.'
+          }
 
-          classification_failed=false
-          if ! should_run="$(python3 .github/scripts/localization_content_gate.py "$MERGE_BASE" "$HEAD_SHA")"; then
-            should_run=true
-            classification_failed=true
-          fi
-
-          if [ "$should_run" != "true" ] && [ "$should_run" != "false" ]; then
-            should_run=true
-            classification_failed=true
-          fi
-
-          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
-          if [ "$classification_failed" = "true" ]; then
-            echo "Semantic classification failed; running Localization Reviewer as a fail-open review." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$should_run" != "true" ]; then
-            echo "Skipping: fork resource files changed, but their localization entries are semantically unchanged." >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Finalize localization gate outputs
-        id: finalize
-        if: always()
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
-          CLASSIFY_OUTCOME: ${{ steps.classify.outcome }}
-          CLASSIFIED_MERGE_BASE: ${{ steps.classify.outputs.merge_base }}
-          CLASSIFIED_SHOULD_RUN: ${{ steps.classify.outputs.should_run }}
-        run: |
-          if [ "$CLASSIFY_OUTCOME" != "success" ]; then
-            echo "::error::Fork localization provenance validation failed; refusing to review an unverified PR head."
-            exit 1
-          fi
-          merge_base="${CLASSIFIED_MERGE_BASE:-$BASE_SHA}"
-          should_run="$CLASSIFIED_SHOULD_RUN"
-          if [ "$should_run" != "true" ] && [ "$should_run" != "false" ]; then
-            echo "::error::Fork localization gate did not produce a valid verdict."
-            exit 1
-          fi
-          echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
-          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          "comparison_base=$($summary.comparison_base)" >> $env:GITHUB_OUTPUT
+          "initial_status=$($summary.status)" >> $env:GITHUB_OUTPUT
+          "initial_action=$($summary.action)" >> $env:GITHUB_OUTPUT
 
   agent:
-    needs: [localization_content_gate]
-    if: needs.localization_content_gate.outputs.should_run == 'true'
+    needs: [prepare]
 
 safe-outputs:
   add-comment:
@@ -187,39 +134,22 @@ concurrency:
 run-name: 'Localization Reviewer Fork ${{ github.event.inputs.dispatch_id }}'
 ---
 
-Review localization changes in fork pull request
-#${{ github.event.inputs.pr_number }} in `${{ github.event.inputs.repo }}` as the
-imported Localization Reviewer.
+Fork localization review for pull request #${{ github.event.inputs.pr_number }} in
+`${{ github.event.inputs.repo }}`.
 
-A deterministic content gate compared the fork head with merge base
-`${{ needs.localization_content_gate.outputs.merge_base }}` before scheduling
-this agent.
+The workspace remains on trusted base `${{ github.event.inputs.expected_base_sha }}`.
+Do not check out or execute fork code. If you need immutable fork content for the
+shared validator, fetch the pull request head into a detached remote ref only and
+inspect it through Git objects.
 
-This is a detached `workflow_dispatch` run. The workspace contains only the
-trusted base commit `${{ github.event.inputs.expected_base_sha }}`. Do not check
-out, execute, edit, or import files from the pull request head. Inspect pull
-request #${{ github.event.inputs.pr_number }} in
-`${{ github.event.inputs.repo }}` only through the read-only GitHub tools.
-This is explicitly an API-only fork review for the purposes of the imported
-Localization Reviewer instructions.
+Deterministic context:
+- immutable fork head: `${{ github.event.inputs.expected_head_sha }}`
+- comparison base used by the validator: `${{ needs.prepare.outputs.comparison_base }}`
+- initial validator summary: `${{ needs.prepare.outputs.initial_status }}` /
+  `${{ needs.prepare.outputs.initial_action }}`
 
-Apply both authoritative instruction files from the trusted base branch:
-
-- `.github/instructions/localization.instructions.md`
-- `.github/instructions/rust-localization.instructions.md`
-
-Because GitHub's API diff does not expose original file bytes or a complete
-checkout of the fork head, BOM preservation, full-file XML/YAML parsing, and
-whole-tree key parity are not verifiable in this workflow. Do not claim those
-checks passed and do not fail solely because they are unavailable. State the
-limitation in the review evidence and ask maintainers to confirm those checks
-before merge.
-
-If the localization is complete and correct, use `add_comment` once with a
-concise visible `PASS` report. If it is missing or defective, use `add_comment`
-once with actionable findings: the resource key, affected locale scope, exact
-rule violated, and the changes the contributor must make. Every `add_comment`
-call must explicitly set `item_number` to
-`${{ github.event.inputs.pr_number }}` and `repo` to
-`${{ github.event.inputs.repo }}`. Never attempt to push to a contributor-owned
-fork.
+Required flow:
+1. Use `pwsh .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber "${{ github.event.inputs.pr_number }}" -BaseRevision "${{ github.event.inputs.expected_base_sha }}" -HeadRevision "${{ github.event.inputs.expected_head_sha }}"` for deterministic read-only checks.
+2. Use GitHub pull-request tools for human-readable diff context and review comments.
+3. Return a concise visible `PASS` or actionable `FAIL` comment. Every failure must cite `check_id`, file, resource, observed problem, expected result, and suggested action.
+4. Never push, never edit files, and never claim a check passed if you could not actually observe it.
