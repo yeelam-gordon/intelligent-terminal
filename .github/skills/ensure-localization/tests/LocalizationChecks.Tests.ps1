@@ -16,6 +16,7 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
             'PullRequestNumber'
             'BaseRevision'
             'HeadRevision'
+            'ReviewedHeadRevision'
             'RepositoryRoot'
             'LocalizationPathspecs'
             'ExitCodes'
@@ -116,6 +117,284 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
             param([Parameter(Mandatory)][string]$Text)
 
             return ([System.Text.UTF8Encoding]::new($false)).GetBytes($Text)
+        }
+
+        function Write-Utf8TextFile {
+            param(
+                [Parameter(Mandatory)][string]$Path,
+                [Parameter(Mandatory)][string]$Content,
+                [bool]$WithBom = $false
+            )
+
+            $directory = Split-Path -Path $Path -Parent
+            if (-not [string]::IsNullOrWhiteSpace($directory)) {
+                [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+            }
+
+            $encoding = [System.Text.UTF8Encoding]::new($false)
+            $bytes = $encoding.GetBytes($Content)
+            if ($WithBom) {
+                $bytes = [byte[]](@(0xEF, 0xBB, 0xBF) + $bytes)
+            }
+
+            [System.IO.File]::WriteAllBytes($Path, $bytes)
+        }
+
+        function Write-ReswFixtureFile {
+            param(
+                [Parameter(Mandatory)][string]$Path,
+                [Parameter(Mandatory)][object[]]$Resources
+            )
+
+            $builder = [System.Text.StringBuilder]::new()
+            [void]$builder.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
+            [void]$builder.AppendLine('<root>')
+            foreach ($resource in $Resources) {
+                $name = [System.Security.SecurityElement]::Escape([string]$resource.Name)
+                $value = [System.Security.SecurityElement]::Escape([string]$resource.Value)
+                [void]$builder.AppendLine("  <data name=""$name"" xml:space=""preserve"">")
+                [void]$builder.AppendLine("    <value>$value</value>")
+                if ($resource.ContainsKey('Comment') -and $null -ne $resource.Comment) {
+                    $comment = [System.Security.SecurityElement]::Escape([string]$resource.Comment)
+                    [void]$builder.AppendLine("    <comment>$comment</comment>")
+                }
+                [void]$builder.AppendLine('  </data>')
+            }
+            [void]$builder.AppendLine('</root>')
+
+            Write-Utf8TextFile -Path $Path -Content $builder.ToString() -WithBom $true
+        }
+
+        function Write-WtaFixtureFile {
+            param(
+                [Parameter(Mandatory)][string]$Path,
+                [Parameter(Mandatory)][object[]]$Entries
+            )
+
+            $lines = [System.Collections.Generic.List[string]]::new()
+            foreach ($entry in $Entries) {
+                $value = ConvertTo-Json -InputObject ([string]$entry.Value) -Compress
+                $lines.Add(('{0}: {1}' -f $entry.Name, $value))
+            }
+
+            Write-Utf8TextFile -Path $Path -Content ($lines -join "`n") -WithBom $false
+        }
+
+        function Invoke-TestGit {
+            param(
+                [Parameter(Mandatory)][string]$RepositoryPath,
+                [Parameter(Mandatory)][string[]]$Arguments
+            )
+
+            $output = & git -C $RepositoryPath @Arguments 2>&1
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+                throw "git $($Arguments -join ' ') failed with exit code $exitCode. $(@($output) -join "`n")"
+            }
+
+            return (@($output) -join "`n").Trim()
+        }
+
+        function New-ReviewedSourceScenario {
+            param(
+                [Parameter(Mandatory)][ValidateSet('resw', 'wta')][string]$Kind,
+                [Parameter(Mandatory)][ValidateSet('deleted-source', 'edited-source', 'missing-locale', 'translated-targets', 'reviewed-source-change-accepted')][string]$Scenario
+            )
+
+            $repoPath = Join-Path $TestDrive ([Guid]::NewGuid().ToString('N'))
+            [System.IO.Directory]::CreateDirectory($repoPath) | Out-Null
+
+            Invoke-TestGit -RepositoryPath $repoPath -Arguments @('init') | Out-Null
+            Invoke-TestGit -RepositoryPath $repoPath -Arguments @('config', 'user.name', 'Test User') | Out-Null
+            Invoke-TestGit -RepositoryPath $repoPath -Arguments @('config', 'user.email', 'test@example.com') | Out-Null
+
+            if ($Kind -eq 'resw') {
+                $sourcePath = Join-Path $repoPath 'src\cascadia\Demo\Resources\en-US\Strings.resw'
+                $localePath = Join-Path $repoPath 'src\cascadia\Demo\Resources\fr-FR\Strings.resw'
+                $writeSource = {
+                    param([object[]]$Entries)
+                    Write-ReswFixtureFile -Path $sourcePath -Resources $Entries
+                }
+                $writeLocale = {
+                    param([object[]]$Entries)
+                    Write-ReswFixtureFile -Path $localePath -Resources $Entries
+                }
+            } else {
+                $sourcePath = Join-Path $repoPath 'tools\wta\locales\en-US.yml'
+                $localePath = Join-Path $repoPath 'tools\wta\locales\fr-FR.yml'
+                Write-ReswFixtureFile -Path (Join-Path $repoPath 'src\cascadia\TerminalApp\Resources\en-US\Resources.resw') -Resources @(
+                    @{ Name = 'terminal.existing'; Value = 'Terminal existing' }
+                )
+                Write-ReswFixtureFile -Path (Join-Path $repoPath 'src\cascadia\TerminalApp\Resources\fr-FR\Resources.resw') -Resources @(
+                    @{ Name = 'terminal.existing'; Value = 'Terminal existant' }
+                )
+                $writeSource = {
+                    param([object[]]$Entries)
+                    Write-WtaFixtureFile -Path $sourcePath -Entries $Entries
+                }
+                $writeLocale = {
+                    param([object[]]$Entries)
+                    Write-WtaFixtureFile -Path $localePath -Entries $Entries
+                }
+            }
+
+            $baseSourceEntries = @(
+                @{ Name = 'demo.existing'; Value = 'Base source value' },
+                @{ Name = 'demo.legacy'; Value = 'Legacy source value' }
+            )
+            $baseLocaleEntries = @(
+                @{ Name = 'demo.existing'; Value = 'Base locale value' },
+                @{ Name = 'demo.legacy'; Value = 'Legacy locale value' }
+            )
+
+            $reviewedSourceEntries = $baseSourceEntries
+            $reviewedLocaleEntries = $baseLocaleEntries
+            $worktreeSourceEntries = $null
+            $worktreeLocaleEntries = $null
+
+            switch ($Scenario) {
+                'deleted-source' {
+                    $baseSourceEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base source value' }
+                    )
+                    $baseLocaleEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base locale value' }
+                    )
+                    $reviewedSourceEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base source value' },
+                        @{ Name = 'demo.new'; Value = 'Reviewed source addition' }
+                    )
+                    $reviewedLocaleEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base locale value' }
+                    )
+                    $worktreeSourceEntries = $baseSourceEntries
+                    $worktreeLocaleEntries = $baseLocaleEntries
+                }
+                'edited-source' {
+                    $baseSourceEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base source value' }
+                    )
+                    $baseLocaleEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base locale value' }
+                    )
+                    $reviewedSourceEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Reviewed source value' }
+                    )
+                    $reviewedLocaleEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Reviewed locale value' }
+                    )
+                    $worktreeSourceEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Worker-mutated source value' }
+                    )
+                    $worktreeLocaleEntries = $reviewedLocaleEntries
+                }
+                'missing-locale' {
+                    $baseSourceEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base source value' }
+                    )
+                    $baseLocaleEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base locale value' }
+                    )
+                    $reviewedSourceEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base source value' },
+                        @{ Name = 'demo.new'; Value = 'Reviewed source addition' }
+                    )
+                    $reviewedLocaleEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base locale value' }
+                    )
+                    $worktreeSourceEntries = $reviewedSourceEntries
+                    $worktreeLocaleEntries = $reviewedLocaleEntries
+                }
+                'translated-targets' {
+                    $baseSourceEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base source value' }
+                    )
+                    $baseLocaleEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base locale value' }
+                    )
+                    $reviewedSourceEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base source value' },
+                        @{ Name = 'demo.new'; Value = 'Reviewed source addition' }
+                    )
+                    $reviewedLocaleEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base locale value' }
+                    )
+                    $worktreeSourceEntries = $reviewedSourceEntries
+                    $worktreeLocaleEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base locale value' },
+                        @{ Name = 'demo.new'; Value = 'Reviewed locale addition' }
+                    )
+                }
+                'reviewed-source-change-accepted' {
+                    $reviewedSourceEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base source value' }
+                    )
+                    $reviewedLocaleEntries = @(
+                        @{ Name = 'demo.existing'; Value = 'Base locale value' }
+                    )
+                    $worktreeSourceEntries = $reviewedSourceEntries
+                    $worktreeLocaleEntries = $reviewedLocaleEntries
+                }
+            }
+
+            & $writeSource $baseSourceEntries
+            & $writeLocale $baseLocaleEntries
+            Invoke-TestGit -RepositoryPath $repoPath -Arguments @('add', '.') | Out-Null
+            Invoke-TestGit -RepositoryPath $repoPath -Arguments @('commit', '-m', 'base') | Out-Null
+            $baseSha = Invoke-TestGit -RepositoryPath $repoPath -Arguments @('rev-parse', 'HEAD')
+
+            & $writeSource $reviewedSourceEntries
+            & $writeLocale $reviewedLocaleEntries
+            Invoke-TestGit -RepositoryPath $repoPath -Arguments @('add', '.') | Out-Null
+            Invoke-TestGit -RepositoryPath $repoPath -Arguments @('commit', '-m', 'reviewed head') | Out-Null
+            $reviewedHeadSha = Invoke-TestGit -RepositoryPath $repoPath -Arguments @('rev-parse', 'HEAD')
+
+            & $writeSource $worktreeSourceEntries
+            & $writeLocale $worktreeLocaleEntries
+
+            return [pscustomobject]@{
+                RepoPath = $repoPath
+                BaseSha = $baseSha
+                ReviewedHeadSha = $reviewedHeadSha
+                SourcePath = ($sourcePath.Substring($repoPath.Length + 1) -replace '\\', '/')
+                LocalePath = ($localePath.Substring($repoPath.Length + 1) -replace '\\', '/')
+            }
+        }
+
+        function Invoke-ValidationWithReviewedHead {
+            param(
+                [Parameter(Mandatory)]$Fixture,
+                [string]$HeadRevision
+            )
+
+            $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+            $arguments = @(
+                '-NoLogo',
+                '-NoProfile',
+                '-NonInteractive',
+                '-File',
+                $script:checkerScript,
+                '-Mode',
+                'Validate',
+                '-BaseRevision',
+                $Fixture.BaseSha,
+                '-ReviewedHeadRevision',
+                $Fixture.ReviewedHeadSha,
+                '-RepositoryRoot',
+                $Fixture.RepoPath
+            )
+            if (-not [string]::IsNullOrWhiteSpace($HeadRevision)) {
+                $arguments += @('-HeadRevision', $HeadRevision)
+            }
+
+            $lines = & $pwsh @arguments
+            $exitCode = $LASTEXITCODE
+            $records = @($lines | ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
+            return [pscustomobject]@{
+                ExitCode = $exitCode
+                Records = $records
+                Summary = $records[-1]
+            }
         }
     }
     Describe 'Localization validator completion contract' {
@@ -373,6 +652,104 @@ Start-Sleep -Seconds 30
         Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' |
             Should -BeTrue
     }
+    }
+
+    Describe 'Guide step summary rendering' {
+        It 'allows intentional blank summary lines without weakening required argument binding' {
+            $workflowPath = Join-Path $PSScriptRoot '..\..\..\workflows\ensure-localizationguide-forkedrepo.md'
+            (Get-Content -LiteralPath $workflowPath -Raw) | Should -Match '\[AllowEmptyString\(\)\]\[string\[\]\]\$Lines'
+
+            $summaryPath = Join-Path $TestDrive 'step-summary.md'
+            $originalSummary = $env:GITHUB_STEP_SUMMARY
+            try {
+                $env:GITHUB_STEP_SUMMARY = $summaryPath
+
+                function Write-StepSummary {
+                    param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines)
+
+                    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($Lines -join "`n")
+                }
+
+                { Write-StepSummary -Lines @('## Localization review', '', 'Line after blank') } | Should -Not -Throw
+                (Get-Content -LiteralPath $summaryPath -Raw) | Should -Match "## Localization review`r?`n`r?`nLine after blank"
+                { Write-StepSummary } | Should -Throw
+            } finally {
+                $env:GITHUB_STEP_SUMMARY = $originalSummary
+            }
+        }
+    }
+
+    Describe 'Reviewed source locale preservation' {
+        It 'keeps an immutable reviewed source authority when a new source key is deleted locally' -TestCases @(
+            @{ Kind = 'resw' }
+            @{ Kind = 'wta' }
+        ) {
+            param([string]$Kind)
+
+            $fixture = New-ReviewedSourceScenario -Kind $Kind -Scenario 'deleted-source'
+            $result = Invoke-ValidationWithReviewedHead -Fixture $fixture
+
+            $result.ExitCode | Should -Be 20
+            $result.Summary.status | Should -Be 'FIXABLE'
+            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -eq 'validate.source-locale-preserved' }).Count | Should -BeGreaterThan 0
+        }
+
+        It 'rejects source value edits that drift from the reviewed head' -TestCases @(
+            @{ Kind = 'resw' }
+            @{ Kind = 'wta' }
+        ) {
+            param([string]$Kind)
+
+            $fixture = New-ReviewedSourceScenario -Kind $Kind -Scenario 'edited-source'
+            $result = Invoke-ValidationWithReviewedHead -Fixture $fixture
+
+            $result.ExitCode | Should -Be 20
+            $result.Summary.status | Should -Be 'FIXABLE'
+            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -eq 'validate.source-locale-preserved' }).Count | Should -BeGreaterThan 0
+        }
+
+        It 'reports missing localized targets as fixable when the reviewed source stays intact' -TestCases @(
+            @{ Kind = 'resw' }
+            @{ Kind = 'wta' }
+        ) {
+            param([string]$Kind)
+
+            $fixture = New-ReviewedSourceScenario -Kind $Kind -Scenario 'missing-locale'
+            $result = Invoke-ValidationWithReviewedHead -Fixture $fixture
+
+            $result.ExitCode | Should -Be 20
+            $result.Summary.status | Should -Be 'FIXABLE'
+            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -match 'key-parity' }).Count | Should -BeGreaterThan 0
+            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -eq 'validate.source-locale-preserved' }).Count | Should -Be 0
+        }
+
+        It 'passes once translated targets are added without changing the reviewed source' -TestCases @(
+            @{ Kind = 'resw' }
+            @{ Kind = 'wta' }
+        ) {
+            param([string]$Kind)
+
+            $fixture = New-ReviewedSourceScenario -Kind $Kind -Scenario 'translated-targets'
+            $result = Invoke-ValidationWithReviewedHead -Fixture $fixture
+
+            $result.ExitCode | Should -Be 0
+            $result.Summary.status | Should -Be 'PASS'
+            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.status -ne 'PASS' }).Count | Should -Be 0
+        }
+
+        It 'accepts legitimate source edits or removals when the worktree still matches the reviewed head' -TestCases @(
+            @{ Kind = 'resw' }
+            @{ Kind = 'wta' }
+        ) {
+            param([string]$Kind)
+
+            $fixture = New-ReviewedSourceScenario -Kind $Kind -Scenario 'reviewed-source-change-accepted'
+            $result = Invoke-ValidationWithReviewedHead -Fixture $fixture
+
+            $result.ExitCode | Should -Be 0
+            $result.Summary.status | Should -Be 'PASS'
+            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -eq 'validate.source-locale-preserved' }).Count | Should -Be 0
+        }
     }
 
     Describe 'WTA locked token validation' {

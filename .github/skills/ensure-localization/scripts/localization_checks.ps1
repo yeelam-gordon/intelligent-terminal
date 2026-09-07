@@ -9,8 +9,11 @@
 
     `Validate` mode performs deterministic checks against either immutable git
     revisions (`-HeadRevision`) or the current working tree (omit
-    `-HeadRevision`). It validates only the localization files changed in the
-    comparison scope.
+    `-HeadRevision`). When repair validation must preserve the reviewed
+    source-language authority, pass `-ReviewedHeadRevision` so en-US source
+    files are compared against the immutable reviewed head instead of the
+    mutable worktree. Validation only considers localization files changed in
+    the comparison scope.
 
     The script writes JSONL records to stdout. The final line is always the
     summary record.
@@ -38,6 +41,12 @@
     Immutable head commit SHA for read-only git-object inspection. Omit in
     `Validate` mode to compare the working tree against the computed merge base.
 
+.PARAMETER ReviewedHeadRevision
+    Optional immutable reviewed pull request head for `Validate` mode source
+    authority. Use this when validating repair edits in the current working tree
+    so reviewed en-US source files must remain content-identical to the reviewed
+    head, with source comments and BOM preserved.
+
 .PARAMETER RepositoryRoot
     Repository root containing `.git`. Defaults to the current location.
 
@@ -46,6 +55,9 @@
 
 .EXAMPLE
     pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha>
+
+.EXAMPLE
+    pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha> -ReviewedHeadRevision <reviewed-head-sha>
 #>
 [CmdletBinding()]
 param(
@@ -56,6 +68,8 @@ param(
     [string]$BaseRevision,
 
     [string]$HeadRevision,
+
+    [string]$ReviewedHeadRevision,
 
     [string]$RepositoryRoot = (Get-Location).Path
 )
@@ -419,6 +433,9 @@ function Invoke-ProcessBytes {
     $startInfo.RedirectStandardError = $true
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
+    if (-not [string]::IsNullOrWhiteSpace($script:RepositoryRootPath)) {
+        $startInfo.WorkingDirectory = $script:RepositoryRootPath
+    }
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -637,6 +654,97 @@ function Resolve-ComparisonBase {
     }
 
     return $result.Output.Trim()
+}
+
+function Get-ValidationChangedLocalizationPaths {
+    param(
+        [Parameter(Mandatory)][string]$ComparisonBase,
+        [string]$TargetViewRevision,
+        [string]$ReviewedHeadRevision
+    )
+
+    $paths = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($path in @(Get-ChangedLocalizationPath -ComparisonBase $ComparisonBase -HeadRevision $TargetViewRevision)) {
+        $null = $paths.Add($path)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReviewedHeadRevision)) {
+        foreach ($path in @(Get-ChangedLocalizationPath -ComparisonBase $ComparisonBase -HeadRevision $ReviewedHeadRevision)) {
+            $null = $paths.Add($path)
+        }
+    }
+    return @($paths)
+}
+
+function Test-SourceLocalePreserved {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('resw', 'wta')]
+        [string]$Kind,
+
+        [Parameter(Mandatory)][string]$Path,
+
+        [Parameter(Mandatory)][string]$ReviewedRevision,
+
+        [string]$TargetRevision,
+
+        [Parameter(Mandatory)][string]$ComparisonBase
+    )
+
+    $reviewedBytes = Get-FileBytesFromView -Path $Path -Revision $ReviewedRevision
+    $targetBytes = Get-FileBytesFromView -Path $Path -Revision $TargetRevision
+    $sourceLabel = if ($Kind -eq 'resw') { 'source-language .resw file' } else { 'source-language WTA locale file' }
+
+    if ($null -eq $reviewedBytes) {
+        if ($null -ne $targetBytes) {
+            Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.source-locale-preserved' `
+                -File $Path -Resource $null -Observed 'present' -Expected 'removed' `
+                -Message "The reviewed $sourceLabel was removed in the reviewed head and must stay removed during localization repair." `
+                -SuggestedAction 'Restore the exact reviewed source state before validating translations.' `
+                -ComparisonBase $ComparisonBase | Out-Null
+        }
+        return
+    }
+
+    if ($null -eq $targetBytes) {
+        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.source-locale-preserved' `
+            -File $Path -Resource $null -Observed 'missing' -Expected 'present' `
+            -Message "The reviewed $sourceLabel is missing from the validation target." `
+            -SuggestedAction 'Restore the exact reviewed source file before validating translations.' `
+            -ComparisonBase $ComparisonBase | Out-Null
+        return
+    }
+
+    $reviewedHasBom = Test-HasUtf8Bom -Bytes $reviewedBytes
+    $targetHasBom = Test-HasUtf8Bom -Bytes $targetBytes
+    if ($reviewedHasBom -ne $targetHasBom) {
+        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.source-locale-preserved' `
+            -File $Path -Resource $null -Observed $(if ($targetHasBom) { 'utf-8-bom' } else { 'utf-8-no-bom' }) `
+            -Expected $(if ($reviewedHasBom) { 'utf-8-bom' } else { 'utf-8-no-bom' }) `
+            -Message "The reviewed $sourceLabel changed after review. Localization repair must preserve the reviewed source encoding." `
+            -SuggestedAction 'Restore the exact reviewed source file before validating translations.' `
+            -ComparisonBase $ComparisonBase | Out-Null
+        return
+    }
+
+    try {
+        $reviewedText = (Get-Utf8Text -Bytes $reviewedBytes -Path $Path -Kind $sourceLabel) -replace "`r`n|`r", "`n"
+        $targetText = (Get-Utf8Text -Bytes $targetBytes -Path $Path -Kind $sourceLabel) -replace "`r`n|`r", "`n"
+    } catch {
+        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.source-locale-preserved' `
+            -File $Path -Resource $null -Observed 'invalid source text' -Expected 'reviewed source text' `
+            -Message "The reviewed $sourceLabel became unreadable after review. Localization repair must restore the reviewed source content before validating translations." `
+            -SuggestedAction 'Restore the exact reviewed source file before validating translations.' `
+            -ComparisonBase $ComparisonBase | Out-Null
+        return
+    }
+
+    if ($reviewedText -cne $targetText) {
+        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.source-locale-preserved' `
+            -File $Path -Resource $null -Observed 'changed after reviewed head' -Expected 'reviewed source content' `
+            -Message "The reviewed $sourceLabel changed after review. Localization repair must preserve reviewed source keys, values, comments, and ordering." `
+            -SuggestedAction 'Restore the exact reviewed source file before validating translations.' `
+            -ComparisonBase $ComparisonBase | Out-Null
+    }
 }
 
 function Test-HasUtf8Bom {
@@ -1552,21 +1660,32 @@ function Invoke-Gate {
 }
 
 function Invoke-Validation {
-    Test-PullRequestNumber -Value $PullRequestNumber | Out-Null
-    $baseRevision = Test-GitObjectId -Value $BaseRevision -ParameterName 'BaseRevision'
+    Test-PullRequestNumber -Value $script:PullRequestNumber | Out-Null
+    $baseRevision = Test-GitObjectId -Value $script:BaseRevision -ParameterName 'BaseRevision'
     Assert-GitCommitExists -Revision $baseRevision
 
     $targetRevision = $null
-    if ($HeadRevision) {
-        $targetRevision = Test-GitObjectId -Value $HeadRevision -ParameterName 'HeadRevision'
+    $targetViewRevision = $null
+    if ($script:HeadRevision) {
+        $targetRevision = Test-GitObjectId -Value $script:HeadRevision -ParameterName 'HeadRevision'
         Assert-GitCommitExists -Revision $targetRevision
+        $targetViewRevision = $targetRevision
     } else {
         $targetRevision = (Invoke-GitText -Arguments @('rev-parse', 'HEAD')).Output.Trim()
     }
 
+    $reviewedHeadRevision = $null
+    if ($script:ReviewedHeadRevision) {
+        $reviewedHeadRevision = Test-GitObjectId -Value $script:ReviewedHeadRevision -ParameterName 'ReviewedHeadRevision'
+        Assert-GitCommitExists -Revision $reviewedHeadRevision
+    }
+
+    $comparisonTargetRevision = if ($reviewedHeadRevision) { $reviewedHeadRevision } else { $targetRevision }
+    $sourceAuthorityRevision = if ($reviewedHeadRevision) { $reviewedHeadRevision } elseif ($targetViewRevision) { $targetViewRevision } else { $null }
+
     $comparisonBase = $null
     try {
-        $comparisonBase = Resolve-ComparisonBase -BaseRevision $baseRevision -TargetRevision $targetRevision
+        $comparisonBase = Resolve-ComparisonBase -BaseRevision $baseRevision -TargetRevision $comparisonTargetRevision
     } catch {
         Report-BlockedCheck -CheckId 'validate.git.merge-base' -File $null -Resource $null `
             -Message $_.Exception.Message -SuggestedAction 'Review the pull request manually; merge-base resolution failed.' `
@@ -1575,7 +1694,7 @@ function Invoke-Validation {
             -Message 'Validation could not resolve the comparison base safely.' -ComparisonBase $null
     }
 
-    $changedPaths = @(Get-ChangedLocalizationPath -ComparisonBase $comparisonBase -HeadRevision $HeadRevision)
+    $changedPaths = @(Get-ValidationChangedLocalizationPaths -ComparisonBase $comparisonBase -TargetViewRevision $targetViewRevision -ReviewedHeadRevision $reviewedHeadRevision)
     if ($changedPaths.Count -eq 0) {
         return Complete-LocalizationRun -Status 'PASS' -Action 'NONE' -ShouldRun $false `
             -Message 'No localization changes detected in scope.' -ComparisonBase $comparisonBase
@@ -1588,13 +1707,13 @@ function Invoke-Validation {
     ).Count -gt 0
 
     if ($wtaChanged.Count -gt 0 -or $terminalAppLocaleChanged) {
-        Test-WtaLocaleSetParity -ComparisonBase $comparisonBase -Revision $HeadRevision
+        Test-WtaLocaleSetParity -ComparisonBase $comparisonBase -Revision $targetViewRevision
     }
 
     $reswGroups = @{}
     foreach ($path in $reswChanged) {
         $baseBytes = Get-FileBytesFromView -Path $path -Revision $comparisonBase
-        $targetBytes = Get-FileBytesFromView -Path $path -Revision $HeadRevision
+        $targetBytes = Get-FileBytesFromView -Path $path -Revision $targetViewRevision
         if ($null -eq $targetBytes) {
             Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.file.exists' `
                 -File $path -Resource $null -Observed 'missing from target view' -Expected 'file present' `
@@ -1618,7 +1737,7 @@ function Invoke-Validation {
 
         $after = $null
         try {
-            $after = Get-ParsedReswFromView -Path $path -Revision $HeadRevision
+            $after = Get-ParsedReswFromView -Path $path -Revision $targetViewRevision
         } catch {
             Report-BlockedCheck -CheckId 'validate.resw.xml-well-formed' -File $path -Resource $null `
                 -Message $_.Exception.Message -SuggestedAction 'Fix the XML and rerun validation.' `
@@ -1628,20 +1747,38 @@ function Invoke-Validation {
 
         Test-ReswBomPreserved -Path $path -BaseBytes $baseBytes -TargetBytes $targetBytes -ComparisonBase $comparisonBase
 
+        $reviewed = $after
+        if ($reviewedHeadRevision) {
+            try {
+                $reviewed = Get-ParsedReswFromView -Path $path -Revision $reviewedHeadRevision
+            } catch {
+                Report-BlockedCheck -CheckId 'validate.resw.xml-well-formed' -File $path -Resource $null `
+                    -Message $_.Exception.Message -SuggestedAction 'Fix the reviewed source XML before validating parity.' `
+                    -ComparisonBase $comparisonBase
+                continue
+            }
+        }
+
         $sourcePath = Get-ReswSourcePath -Path $path
         if (-not $reswGroups.ContainsKey($sourcePath)) {
             $reswGroups[$sourcePath] = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
         }
-        foreach ($resource in Get-ChangedReswResources -Before $before -After $after) {
+        $changedResources = Get-SortedUnion -Left @(Get-ChangedReswResources -Before $before -After $after) -Right @(Get-ChangedReswResources -Before $before -After $reviewed)
+        foreach ($resource in $changedResources) {
             $null = $reswGroups[$sourcePath].Add($resource)
         }
     }
 
     foreach ($sourcePath in @($reswGroups.Keys | Sort-Object)) {
+        if ($reviewedHeadRevision) {
+            Test-SourceLocalePreserved -Kind 'resw' -Path $sourcePath -ReviewedRevision $reviewedHeadRevision `
+                -TargetRevision $targetViewRevision -ComparisonBase $comparisonBase
+        }
+
         $source = $null
         try {
-            $source = Get-ParsedReswFromView -Path $sourcePath -Revision $HeadRevision
-            if ($null -eq $source) {
+            $source = Get-ParsedReswFromView -Path $sourcePath -Revision $sourceAuthorityRevision
+            if ($null -eq $source -and -not $reviewedHeadRevision) {
                 Report-BlockedCheck -CheckId 'validate.resw.source-file' -File $sourcePath -Resource $null `
                     -Message 'The source-language .resw file is not present in the target view.' `
                     -SuggestedAction 'Restore the source-language file before validating locale parity.' `
@@ -1655,7 +1792,7 @@ function Invoke-Validation {
             continue
         }
 
-        $localePaths = Get-ReswLocalePaths -SourcePath $sourcePath -Revision $HeadRevision
+        $localePaths = Get-ReswLocalePaths -SourcePath $sourcePath -Revision $targetViewRevision
         foreach ($localePath in $localePaths) {
             if ($localePath -eq $sourcePath) {
                 continue
@@ -1664,7 +1801,7 @@ function Invoke-Validation {
             $localeCode = Get-ReswLocaleCode -Path $localePath
             $locale = $null
             try {
-                $locale = Get-ParsedReswFromView -Path $localePath -Revision $HeadRevision
+                    $locale = Get-ParsedReswFromView -Path $localePath -Revision $targetViewRevision
             } catch {
                 Report-BlockedCheck -CheckId 'validate.resw.xml-well-formed' -File $localePath -Resource $null `
                     -Message $_.Exception.Message -SuggestedAction 'Fix the locale XML before validating parity.' `
@@ -1673,7 +1810,7 @@ function Invoke-Validation {
             }
 
             foreach ($resource in @($reswGroups[$sourcePath])) {
-                $sourceEntry = if ($source.Resources.ContainsKey($resource)) { $source.Resources[$resource] } else { $null }
+                $sourceEntry = if ($source -and $source.Resources.ContainsKey($resource)) { $source.Resources[$resource] } else { $null }
                 $localeEntry = if ($locale -and $locale.Resources.ContainsKey($resource)) { $locale.Resources[$resource] } else { $null }
 
                 if ($null -eq $sourceEntry) {
@@ -1711,7 +1848,7 @@ function Invoke-Validation {
         $affectedWtaKeys = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($path in $wtaChanged) {
             $baseBytes = Get-FileBytesFromView -Path $path -Revision $comparisonBase
-            $targetBytes = Get-FileBytesFromView -Path $path -Revision $HeadRevision
+            $targetBytes = Get-FileBytesFromView -Path $path -Revision $targetViewRevision
             if ($null -eq $targetBytes) {
                 Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.file.exists' `
                     -File $path -Resource $null -Observed 'missing from target view' -Expected 'file present' `
@@ -1735,7 +1872,7 @@ function Invoke-Validation {
 
             $after = $null
             try {
-                $after = Get-ParsedWtaFromView -Path $path -Revision $HeadRevision
+                $after = Get-ParsedWtaFromView -Path $path -Revision $targetViewRevision
             } catch {
                 Report-BlockedCheck -CheckId 'validate.wta.parse' -File $path -Resource $null `
                     -Message $_.Exception.Message -SuggestedAction 'Fix the YAML and rerun validation.' `
@@ -1743,14 +1880,31 @@ function Invoke-Validation {
                 continue
             }
 
-            foreach ($resource in Get-ChangedWtaKeys -Before $before -After $after) {
+            $reviewed = $after
+            if ($reviewedHeadRevision) {
+                try {
+                    $reviewed = Get-ParsedWtaFromView -Path $path -Revision $reviewedHeadRevision
+                } catch {
+                    Report-BlockedCheck -CheckId 'validate.wta.parse' -File $path -Resource $null `
+                        -Message $_.Exception.Message -SuggestedAction 'Fix the reviewed source YAML before validating parity.' `
+                        -ComparisonBase $comparisonBase
+                    continue
+                }
+            }
+
+            $changedKeys = Get-SortedUnion -Left @(Get-ChangedWtaKeys -Before $before -After $after) -Right @(Get-ChangedWtaKeys -Before $before -After $reviewed)
+            foreach ($resource in $changedKeys) {
                 $null = $affectedWtaKeys.Add($resource)
             }
         }
 
         $sourceLocale = $null
+        if ($reviewedHeadRevision) {
+            Test-SourceLocalePreserved -Kind 'wta' -Path 'tools/wta/locales/en-US.yml' -ReviewedRevision $reviewedHeadRevision `
+                -TargetRevision $targetViewRevision -ComparisonBase $comparisonBase
+        }
         try {
-            $sourceLocale = Get-ParsedWtaFromView -Path 'tools/wta/locales/en-US.yml' -Revision $HeadRevision
+            $sourceLocale = Get-ParsedWtaFromView -Path 'tools/wta/locales/en-US.yml' -Revision $sourceAuthorityRevision
         } catch {
             Report-BlockedCheck -CheckId 'validate.wta.parse' -File 'tools/wta/locales/en-US.yml' -Resource $null `
                 -Message $_.Exception.Message -SuggestedAction 'Fix en-US.yml before validating other locales.' `
@@ -1759,7 +1913,7 @@ function Invoke-Validation {
         }
 
         if ($null -ne $sourceLocale) {
-            foreach ($localePath in Get-WtaLocalePaths -Revision $HeadRevision) {
+            foreach ($localePath in Get-WtaLocalePaths -Revision $targetViewRevision) {
                 $localeCode = Get-WtaLocaleCode -Path $localePath
                 if ($localeCode -eq 'en-US') {
                     continue
@@ -1767,7 +1921,7 @@ function Invoke-Validation {
 
                 $locale = $null
                 try {
-                    $locale = Get-ParsedWtaFromView -Path $localePath -Revision $HeadRevision
+                    $locale = Get-ParsedWtaFromView -Path $localePath -Revision $targetViewRevision
                 } catch {
                     Report-BlockedCheck -CheckId 'validate.wta.parse' -File $localePath -Resource $null `
                         -Message $_.Exception.Message -SuggestedAction 'Fix this locale file before validating parity.' `
@@ -1838,10 +1992,22 @@ function Initialize-LocalizationInvocation {
 
     if ($script:Mode -eq 'Gate') {
         $script:HeadRevision = Test-GitObjectId -Value $HeadRevision -ParameterName 'HeadRevision'
+        if (-not [string]::IsNullOrWhiteSpace($ReviewedHeadRevision)) {
+            throw [System.ArgumentException]::new('ReviewedHeadRevision is only supported in Validate mode.')
+        }
+        $script:ReviewedHeadRevision = $null
     } elseif ([string]::IsNullOrWhiteSpace($HeadRevision)) {
         $script:HeadRevision = $null
     } else {
         $script:HeadRevision = Test-GitObjectId -Value $HeadRevision -ParameterName 'HeadRevision'
+    }
+
+    if ($script:Mode -eq 'Validate') {
+        if ([string]::IsNullOrWhiteSpace($ReviewedHeadRevision)) {
+            $script:ReviewedHeadRevision = $null
+        } else {
+            $script:ReviewedHeadRevision = Test-GitObjectId -Value $ReviewedHeadRevision -ParameterName 'ReviewedHeadRevision'
+        }
     }
 }
 

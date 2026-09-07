@@ -108,6 +108,7 @@ Run it with repository-relative paths:
 ```powershell
 pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Gate -PullRequestNumber 13 -BaseRevision <base-sha> -HeadRevision <head-sha>
 pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha>
+pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha> -ReviewedHeadRevision <reviewed-head-sha>
 ```
 
 - `Gate` mode decides whether customer-facing semantics changed enough to
@@ -116,6 +117,9 @@ pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Va
 - `Validate` mode owns deterministic checks such as XML or UTF-8 parsing, BOM
   preservation, locale/key parity, placeholder parity, locked-token
   preservation, and pseudo-locale shape.
+- Use `-ReviewedHeadRevision` when validating same-repo repair edits in the
+  current worktree so reviewed en-US source files remain the immutable source
+  authority even after local edits.
 - The script writes JSONL to stdout. The final line is the summary record.
 - Translation quality, tone, and terminology judgment still require reviewer or
   expert judgment.
@@ -126,7 +130,9 @@ Use this flow when edits are allowed:
 
 1. Run `Validate` before editing and treat the checker as authoritative.
 2. If the result is `FIXABLE`, repair only the reported files and resources.
-3. Re-run `Validate` after the repair.
+3. Re-run `Validate` after the repair. When validating the mutable worktree,
+   pass `-ReviewedHeadRevision <immutable-pr-head-sha>` so repair validation
+   cannot rewrite the reviewed source-language authority.
 4. If the result is `BLOCKED` or an invalid-input summary, stop and surface the
    exact `check_id`, file, resource, observed value, expected value, and
    suggested action.

@@ -131,7 +131,7 @@ jobs:
           }
 
           function Write-StepSummary {
-            param([Parameter(Mandatory)][string[]]$Lines)
+            param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines)
 
             Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($Lines -join "`n")
           }
@@ -327,7 +327,7 @@ jobs:
             $promptLines.Add($line)
           }
           $promptLines.Add('')
-          $promptLines.Add('Use the localization skill as the workflow authority. Use the wrapper file or files above only to confirm which file-type scope applies. Update every required locale already shipped for the affected component(s), preserve placeholders, locked values and locked tokens, translator comments, BOM and encoding, XML or YAML structure, required ordering, and pseudo-locale style, and do not change unrelated files or source-language en-US strings unless the PR explicitly changes source text. Follow the skill''s validate → repair → validate → independent review flow before committing and pushing the localization-only updates for this PR branch.')
+          $promptLines.Add('Use the localization skill as the workflow authority. Use the wrapper file or files above only to confirm which file-type scope applies. Update every required locale already shipped for the affected component(s), preserve placeholders, locked values and locked tokens, translator comments, BOM and encoding, XML or YAML structure, required ordering, and pseudo-locale style, and do not change unrelated files or source-language en-US strings unless the PR explicitly changes source text. After any edits and before committing, rerun the deterministic validator against your worktree with the reviewed source authority pinned to this immutable head SHA: `pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha> -ReviewedHeadRevision <head-sha>`. Follow the skill''s validate → repair → validate → independent review flow before committing and pushing the localization-only updates for this PR branch.')
           $promptBody = ($promptLines.ToArray() -join "`n")
 
           $cardLines = [System.Collections.Generic.List[string]]::new()

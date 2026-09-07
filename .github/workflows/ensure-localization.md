@@ -193,6 +193,14 @@ Deterministic context:
 - initial validator summary: `${{ needs.prepare.outputs.initial_status }}` /
   `${{ needs.prepare.outputs.initial_action }}`
 
+If you edit localization files in this workspace, rerun deterministic validation
+against the current worktree before any commit or push with:
+
+`pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision ${{ github.event.inputs.expected_base_sha }} -ReviewedHeadRevision ${{ github.event.inputs.expected_head_sha }}`
+
+That immutable reviewed head is the source-language authority for repair
+validation. Do not change source-language files to make translation checks pass.
+
 ## agent: `localization-review-gate`
 
 ---
