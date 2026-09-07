@@ -1,0 +1,16 @@
+{
+  "author": {
+    "login": "github-actions[bot]"
+  },
+  "committer": null,
+  "commit": {
+    "verification": {
+      "verified": true
+    }
+  },
+  "parents": [
+    {
+      "sha": "0123456789012345678901234567890123456789"
+    }
+  ]
+}
