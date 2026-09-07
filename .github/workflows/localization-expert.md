@@ -189,6 +189,6 @@ Never modify files under `.github/` from this workflow.
 description: 'Performs the independent final localization review for the same-repo workflow'
 ---
 
-Read `.github/agents/localization-reviewer.agent.md`, review the final diff or
-pull request state supplied by the caller, and return explicit `PASS` or `FAIL`.
-Do not edit, stage, commit, delete, or push files.
+{{#runtime-import .github/agents/localization-reviewer.agent.md}}
+
+## end agent: `localization-review-gate`
