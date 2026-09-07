@@ -1,5 +1,5 @@
 ---
-applyTo: "wta/locales/**/*.yml"
+applyTo: "tools/wta/locales/*.yml"
 ---
 
 # Localization Instructions for Rust WTA (YAML Locale Files)
@@ -11,7 +11,7 @@ The WTA (Windows Terminal Agent) Rust project uses **`rust-i18n` v3** with YAML 
 ### File structure
 
 ```
-wta/locales/
+tools/wta/locales/
 ├── en-US.yml          ← source of truth (developers edit this first)
 ├── zh-CN.yml          ← Simplified Chinese
 ├── zh-TW.yml          ← Traditional Chinese
@@ -84,6 +84,24 @@ hint.confirm: "Press Enter to confirm"  # {Locked="Enter"} keyboard key name
   - Use this for product names like "Intelligent Terminal" that real locales should translate but pseudo-locales should not mangle. This mirrors the `.resw` `{Locked=qps-ploc,qps-ploca,qps-plocm}` convention.
 - **Translation rule:** Tokens marked with `{Locked}` (full lock) or `{Locked="token"}` (token lock) must appear **verbatim** (in English) in all locale files. Tokens marked with `{Locked=qps-ploc,qps-ploca,qps-plocm}` (pseudo-locale-only lock) must be kept verbatim only in pseudo-locale files — real locales should translate them. See `.github/instructions/localization.instructions.md` for the full list of non-translatable terms.
 
+## Pseudo-Locale Requirements
+
+Treat `qps-ploc.yml`, `qps-ploca.yml`, and `qps-plocm.yml` as generated test
+locales, not ordinary English locales. For every new or changed translatable
+source value:
+
+- `qps-ploc` must use the existing bracketed, accented, length-expanded style.
+- `qps-ploca` must use the existing `[!!_..._!!]` wrapper style.
+- `qps-plocm` must use the existing `[!! ... !!]` mirrored/mnemonic style,
+  including its underscore transformation.
+- Preserve placeholders and locked tokens exactly inside each transformation.
+- Never copy the plain `en-US` value unchanged into a pseudo-locale unless the
+  entire value is explicitly `{Locked}`.
+
+Derive each transformation from neighboring entries in the same pseudo-locale
+file. Before accepting a localization change, compare every affected
+pseudo-locale value with `en-US`; an unchanged translatable value is a failure.
+
 ## Context Comments for Ambiguous Strings (REQUIRED)
 
 Short strings (1–2 words) and strings with unclear context **must** have a comment explaining when and where the label is shown to the user. Without context, translators will guess — and guesses lead to translation errors that can be politically embarrassing or internationally offensive.
@@ -139,7 +157,7 @@ Align translations using these sources **in priority order**:
    - `src/cascadia/TerminalApp/Resources/{locale}/Resources.resw`
    - `src/cascadia/TerminalSettingsEditor/Resources/{locale}/Resources.resw`
    - `src/cascadia/TerminalSettingsModel/Resources/{locale}/Resources.resw`
-2. **Existing `.yml` translations** in `wta/locales/` — ensures internal consistency within WTA
+2. **Existing `.yml` translations** in `tools/wta/locales/` — ensures internal consistency within WTA
 3. **Microsoft Learn localized documentation** — for new terms not yet in `.resw` or `.yml`, check the official localized docs (`learn.microsoft.com/{locale}/...`) for Microsoft-standard translations
 
 ### Process
@@ -160,7 +178,7 @@ Before translating, determine which strings are new or changed:
 ```bash
 # New strings: keys in en-US.yml that don't exist in other locale files
 # Changed strings: diff en-US.yml against the main branch
-git diff main -- wta/locales/en-US.yml
+git diff main -- tools/wta/locales/en-US.yml
 ```
 
 If a key was **added** → it must be translated in all locale files.
@@ -176,42 +194,88 @@ The locale set is **not hardcoded**. Derive it from the `.resw` locale folders:
 ls src/cascadia/TerminalApp/Resources/
 ```
 
-Every folder there (except `en-US`) must have a corresponding `wta/locales/{locale}.yml`. If a new `.resw` locale folder was added (e.g., Terminal now supports a new language), create a new `.yml` file for it.
+Every folder there (except `en-US`) must have a corresponding `tools/wta/locales/{locale}.yml`. If a new `.resw` locale folder was added (e.g., Terminal now supports a new language), create a new `.yml` file for it.
 
 ### Step 2: Translate to all locales
 
 The developer has already added/modified strings in `en-US.yml` as part of their feature work. Step 0 discovers those changes. Now translate them:
 
-Use per-language sub-agents that:
+For each target language:
 1. Read `en-US.yml` for source strings (only the new/changed keys from Step 0)
 2. Read existing translations in target locale for tone/style consistency
 3. Follow the [Terminology Alignment](#terminology-alignment) process for term choices
 4. Follow the [Non-Translatable Token Rules](#non-translatable-token-rules) — locked tokens must appear verbatim
 5. Produce translations
 
+Apply the reviewed translation map to every target YAML file with one
+deterministic Python or Node script. Do not use one top-level agent turn, tool
+call, or sub-agent invocation per locale; the locale set exceeds bounded
+automation budgets. Interactive workflows may use language specialists to
+research uncertain terminology, but file updates must remain batched.
+
 ### Step 3: QA review
 
-Use a separate reviewer sub-agent that checks:
+Use one independent reviewer sub-agent to check every affected language for:
 - **`{Locked}` tokens** preserved verbatim (see [Non-Translatable Token Rules](#non-translatable-token-rules))
 - **Terminology** aligned with existing translations (see [Terminology Alignment](#terminology-alignment))
 - RTL languages have correct logical string order
 - No mojibake or encoding issues
 
-### Step 4: Rebuild
+### Step 4: Validate and rebuild
 
-```bash
-cd wta
-cargo build --target x86_64-pc-windows-msvc
+In Linux-based agentic workflows, use the edit tool to save this as
+`verify-wta-locales.py` in the repository root; do not use a shell heredoc or
+output redirection. Run it with `python3 verify-wta-locales.py`, then delete it
+before staging. It uses only the Python standard library and checks UTF-8
+decoding, duplicate keys, and parity with `en-US.yml`:
+
+```python
+from pathlib import Path
+import re
+
+locale_dir = Path("tools/wta/locales")
+key_pattern = re.compile(r"^([A-Za-z0-9_.-]+)\s*:")
+
+def keys(path):
+    content = path.read_text(encoding="utf-8")
+    result = []
+    for line_number, line in enumerate(content.splitlines(), 1):
+        match = key_pattern.match(line)
+        if match:
+            result.append(match.group(1))
+        elif line.strip() and not line.lstrip().startswith("#"):
+            raise SystemExit(f"{path}:{line_number}: unsupported YAML structure")
+    duplicates = sorted({key for key in result if result.count(key) > 1})
+    if duplicates:
+        raise SystemExit(f"{path}: duplicate keys: {duplicates}")
+    return set(result)
+
+expected = keys(locale_dir / "en-US.yml")
+for path in sorted(locale_dir.glob("*.yml")):
+    actual = keys(path)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise SystemExit(f"{path}: missing={missing}, extra={extra}")
 ```
 
-Translations are only picked up after rebuild (compile-time codegen).
+Translations are baked in at compile time. When a Windows MSVC build
+environment is available, rebuild from the repository root:
+
+```powershell
+cargo build --target x86_64-pc-windows-msvc --manifest-path tools/wta/Cargo.toml
+```
+
+Do not attempt the Windows MSVC build from an `ubuntu-latest` workflow runner;
+record the standard-library validation result and leave the full rebuild to
+Windows CI or a maintainer environment.
 
 ## Runtime Behavior
 
 - `rust-i18n` detects the OS locale via `sys-locale` crate at startup
 - Fallback chain: exact locale → strip territory (e.g., `de-AT` → `de`) → `en-US`
 - **MRT parity:** Windows MRT treats `de-DE` as the canonical "German" resource — any `de-*` locale automatically matches. We replicate this behavior via `normalize_locale()` in `main.rs`, which maps unmatched locales to the closest available regional variant (e.g., `de-AT` → `de-DE`) before calling `set_locale()`.
-- **Limitation — hardcoded affinity table:** Unlike MRT (which uses a full BCP-47 language distance matrix from Windows), our `normalize_locale()` uses a manually maintained affinity table covering multi-variant languages (zh, en, es, fr, pt, sr). If a new locale is added that introduces a second regional variant for an existing language (e.g., adding `de-CH.yml` alongside `de-DE.yml`), you **must** also update the affinity table in `normalize_locale()` (`wta/src/main.rs`) to specify which unlisted `de-*` regions map to which variant. Without this, the prefix-based fallback (step 3) picks non-deterministically.
+- **Limitation — hardcoded affinity table:** Unlike MRT (which uses a full BCP-47 language distance matrix from Windows), our `normalize_locale()` uses a manually maintained affinity table covering multi-variant languages (zh, en, es, fr, pt, sr). If a new locale is added that introduces a second regional variant for an existing language (e.g., adding `de-CH.yml` alongside `de-DE.yml`), you **must** also update the affinity table in `normalize_locale()` (`tools/wta/src/main.rs`) to specify which unlisted `de-*` regions map to which variant. Without this, the prefix-based fallback (step 3) picks non-deterministically.
 - `t!()` macro returns `Cow<'_, str>` — use `.into_owned()` when `String` is needed
 
 ## Common Pitfalls
