@@ -426,6 +426,12 @@ function Normalize-CommentText {
     return ([regex]::Replace($Text.Trim(), '\s+', ' '))
 }
 
+function Test-WtaSectionHeaderComment {
+    param([string]$Line)
+
+    return [regex]::IsMatch($Line, '^\s*#\s*──\s+.+?\s+─{2,}\s*$')
+}
+
 function Parse-QuotedTokenList {
     param([string]$Text)
 
@@ -704,6 +710,8 @@ function Read-WtaLocaleEntries {
     $entries = @{}
     $fileComments = @()
     $pendingComments = [System.Collections.Generic.List[string]]::new()
+    $sectionComments = @()
+    $collectingSectionComments = $false
     $seenEntry = $false
 
     for ($index = 0; $index -lt $lines.Count; $index++) {
@@ -716,10 +724,19 @@ function Read-WtaLocaleEntries {
                 $fileComments = @($pendingComments)
             }
             $pendingComments.Clear()
+            $sectionComments = @()
+            $collectingSectionComments = $false
             continue
         }
 
         if ($trimmed.StartsWith('#')) {
+            if ($seenEntry -or $fileComments.Count -gt 0) {
+                if (Test-WtaSectionHeaderComment -Line $trimmed) {
+                    $sectionComments = @()
+                    $pendingComments.Clear()
+                    $collectingSectionComments = $true
+                }
+            }
             $pendingComments.Add((Normalize-CommentText -Text $trimmed))
             continue
         }
@@ -728,6 +745,13 @@ function Read-WtaLocaleEntries {
             $fileComments = @($pendingComments)
         }
         $seenEntry = $true
+
+        $leadingComments = @($pendingComments)
+        if ($collectingSectionComments) {
+            $sectionComments = @($pendingComments)
+            $leadingComments = @()
+            $collectingSectionComments = $false
+        }
 
         $entry = Parse-WtaEntryLine -Line $line -Path $Path -LineNumber $lineNumber
         if ($entries.ContainsKey($entry.Key)) {
@@ -738,7 +762,8 @@ function Read-WtaLocaleEntries {
             Key = $entry.Key
             Value = $entry.Value
             FileComments = @($fileComments)
-            LeadingComments = @($pendingComments)
+            SectionComments = @($sectionComments)
+            LeadingComments = @($leadingComments)
             InlineComment = $entry.InlineComment
             LineNumber = $lineNumber
         }
@@ -925,11 +950,24 @@ function Get-WtaLocaleCode {
     return [System.IO.Path]::GetFileNameWithoutExtension($Path)
 }
 
+function Get-TerminalAppLocaleCodes {
+    param([string]$Revision)
+
+    $set = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($path in Get-PathsInView -Prefix 'src/cascadia/TerminalApp/Resources' -Revision $Revision) {
+        $match = [regex]::Match($path, '^src/cascadia/TerminalApp/Resources/(?<locale>[^/]+)/Resources\.resw$')
+        if ($match.Success) {
+            $null = $set.Add($match.Groups['locale'].Value)
+        }
+    }
+    return @($set)
+}
+
 function Get-WtaEntryComments {
     param($Entry)
 
     $comments = [System.Collections.Generic.List[string]]::new()
-    foreach ($comment in @($Entry.FileComments + $Entry.LeadingComments)) {
+    foreach ($comment in @($Entry.FileComments + $Entry.SectionComments + $Entry.LeadingComments)) {
         if (-not [string]::IsNullOrWhiteSpace($comment)) {
             $comments.Add($comment)
         }
@@ -1051,6 +1089,35 @@ function Test-WtaPseudoLocale {
             -File $File -Resource $Resource -Observed $TargetValue -Expected $Locale `
             -Message "Pseudo-locale '$Locale' does not match its expected wrapper style." `
             -SuggestedAction 'Regenerate the pseudo-locale value using the established style for this locale.' `
+            -ComparisonBase $ComparisonBase | Out-Null
+    }
+}
+
+function Test-WtaLocaleSetParity {
+    param(
+        [Parameter(Mandatory)][string]$ComparisonBase,
+        [string]$Revision
+    )
+
+    $terminalLocales = @(Get-TerminalAppLocaleCodes -Revision $Revision)
+    $wtaLocales = @(
+        Get-WtaLocalePaths -Revision $Revision |
+            ForEach-Object { Get-WtaLocaleCode -Path $_ }
+    )
+
+    foreach ($locale in @($terminalLocales | Where-Object { $wtaLocales -notcontains $_ })) {
+        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.wta.locale-set-parity' `
+            -File ("tools/wta/locales/{0}.yml" -f $locale) -Resource $locale -Observed 'missing' -Expected 'present' `
+            -Message 'WTA locale coverage is missing a locale shipped by TerminalApp Resources.' `
+            -SuggestedAction 'Add the matching WTA locale file or remove the unmatched TerminalApp locale addition.' `
+            -ComparisonBase $ComparisonBase | Out-Null
+    }
+
+    foreach ($locale in @($wtaLocales | Where-Object { $terminalLocales -notcontains $_ })) {
+        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.wta.locale-set-parity' `
+            -File ("tools/wta/locales/{0}.yml" -f $locale) -Resource $locale -Observed 'present' -Expected 'removed' `
+            -Message 'WTA locale coverage includes a locale missing from TerminalApp Resources.' `
+            -SuggestedAction 'Remove the extra WTA locale file or add the matching TerminalApp locale resources.' `
             -ComparisonBase $ComparisonBase | Out-Null
     }
 }
@@ -1180,6 +1247,13 @@ function Invoke-Validation {
 
     $reswChanged = @($changedPaths | Where-Object { $_.EndsWith('.resw', [System.StringComparison]::OrdinalIgnoreCase) })
     $wtaChanged = @($changedPaths | Where-Object { $_.EndsWith('.yml', [System.StringComparison]::OrdinalIgnoreCase) })
+    $terminalAppLocaleChanged = @(
+        $changedPaths | Where-Object { $_ -match '^src/cascadia/TerminalApp/Resources/[^/]+/[^/]+\.resw$' }
+    ).Count -gt 0
+
+    if ($wtaChanged.Count -gt 0 -or $terminalAppLocaleChanged) {
+        Test-WtaLocaleSetParity -ComparisonBase $comparisonBase -Revision $HeadRevision
+    }
 
     $reswGroups = @{}
     foreach ($path in $reswChanged) {

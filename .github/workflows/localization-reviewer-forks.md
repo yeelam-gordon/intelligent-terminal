@@ -92,15 +92,34 @@ jobs:
           HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $remoteRef = "refs/remotes/origin/localization-pr-$env:PR_NUMBER"
-          git fetch --no-tags origin "+refs/pull/$env:PR_NUMBER/head:$remoteRef"
-          $currentHead = (git rev-parse $remoteRef).Trim()
-          if ($currentHead -ne $env:HEAD_SHA) {
-            throw "Fork PR head changed after controller dispatch. Expected $env:HEAD_SHA, found $currentHead."
+          function Get-ValidatedPrepareInputs {
+            if ($env:PR_NUMBER -notmatch '^[1-9][0-9]*$') {
+              throw "Invalid PR_NUMBER '$env:PR_NUMBER'; expected a positive decimal integer."
+            }
+            if ($env:BASE_SHA -notmatch '^[0-9a-fA-F]{40}$') {
+              throw "Invalid BASE_SHA '$env:BASE_SHA'; expected exactly 40 hexadecimal characters."
+            }
+            if ($env:HEAD_SHA -notmatch '^[0-9a-fA-F]{40}$') {
+              throw "Invalid HEAD_SHA '$env:HEAD_SHA'; expected exactly 40 hexadecimal characters."
+            }
+
+            return @{
+              PrNumber = $env:PR_NUMBER
+              BaseSha = $env:BASE_SHA.ToLowerInvariant()
+              HeadSha = $env:HEAD_SHA.ToLowerInvariant()
+            }
+          }
+
+          $inputs = Get-ValidatedPrepareInputs
+          $remoteRef = "refs/remotes/origin/localization-pr-$($inputs.PrNumber)"
+          git fetch --no-tags origin "+refs/pull/$($inputs.PrNumber)/head:$remoteRef"
+          $currentHead = (git rev-parse $remoteRef).Trim().ToLowerInvariant()
+          if ($currentHead -ne $inputs.HeadSha) {
+            throw "Fork PR head changed after controller dispatch. Expected $($inputs.HeadSha), found $currentHead."
           }
 
           $jsonl = Join-Path $PWD 'localization-reviewer-forks.validate.jsonl'
-          & .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA | Tee-Object -FilePath $jsonl | Out-Null
+          & .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
           $exitCode = $LASTEXITCODE
           if (@(0, 20, 30) -notcontains $exitCode) {
             throw "Unexpected localization validator exit code: $exitCode"

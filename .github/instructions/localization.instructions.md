@@ -18,8 +18,9 @@ applyTo: "src/cascadia/**/Resources/*.resw, src/cascadia/**/Resources/**/*.resw"
 
 - Compare source-language entries first and update only the affected keys.
 - Update every locale file that already exists for that component.
-- Always update `qps-ploc`, `qps-ploca`, and `qps-plocm`, but keep their values as
-  English fallback text rather than pseudo-translating them.
+- Always update `qps-ploc`, `qps-ploca`, and `qps-plocm`, preserving each
+  pseudo-locale's established pseudo-translation style rather than reverting to
+  plain English.
 - Do not add a component-localized file for a locale that component does not
   already ship.
 - For multi-locale edits, batch the whole change with one deterministic,
