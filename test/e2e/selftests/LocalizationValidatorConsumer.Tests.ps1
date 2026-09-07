@@ -130,6 +130,23 @@ AfterAll {
 }
 
 Describe 'Localization validator consumer' -Tag 'Unit' {
+    It 'builds a scoped GitHub extraheader for transient authenticated fetches' {
+        $config = Get-GitHubScopedExtraHeaderConfig -RemoteUrl 'https://github.com/yeelam-gordon/intelligent-terminal-ghaw-test.git' -Token 'test-token'
+
+        $config | Should -Match '^http\.https://github\.com/\.extraheader=AUTHORIZATION: basic '
+
+        $encodedCredential = $config.Substring($config.LastIndexOf(' ') + 1)
+        [System.Text.Encoding]::ASCII.GetString([Convert]::FromBase64String($encodedCredential)) |
+            Should -Be 'x-access-token:test-token'
+    }
+
+    It 'rejects GitHub git auth setup when GH_TOKEN is missing or the remote is not https' {
+        { Get-GitHubScopedExtraHeaderConfig -RemoteUrl 'https://github.com/yeelam-gordon/intelligent-terminal-ghaw-test.git' -Token '' } |
+            Should -Throw '*GH_TOKEN is required*'
+        { Get-GitHubScopedExtraHeaderConfig -RemoteUrl 'git@github.com:yeelam-gordon/intelligent-terminal-ghaw-test.git' -Token 'test-token' } |
+            Should -Throw '*must be an https remote*'
+    }
+
     It 'accepts exit 64 when the summary is BLOCKED/ESCALATE and suppresses follow-up work' {
         $result = Resolve-LocalizationValidatorCompletion -JsonlPath (Join-Path $PSScriptRoot 'fixtures\localization-validator\exit64-summary.jsonl') -ExitCode 64
 

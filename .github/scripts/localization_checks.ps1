@@ -278,21 +278,89 @@ function Invoke-GitText {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string[]]$Arguments,
-        [switch]$AllowFailure
+        [switch]$AllowFailure,
+        [string]$CommandDisplay
     )
+
+    if ([string]::IsNullOrWhiteSpace($CommandDisplay)) {
+        $CommandDisplay = "git $($Arguments -join ' ')"
+    }
 
     $output = & git @Arguments 2>&1
     $exitCode = $LASTEXITCODE
     $text = (@($output) -join "`n").TrimEnd("`r", "`n")
 
     if (-not $AllowFailure -and $exitCode -ne 0) {
-        throw "git $($Arguments -join ' ') failed with exit code $exitCode. $text"
+        $messageSuffix = if ([string]::IsNullOrWhiteSpace($text)) { '' } else { " $text" }
+        throw "$CommandDisplay failed with exit code $exitCode.$messageSuffix"
     }
 
     return [pscustomobject]@{
         ExitCode = $exitCode
         Output = $text
     }
+}
+
+function Get-GitRemoteUrl {
+    [CmdletBinding()]
+    param([string]$RemoteName = 'origin')
+
+    $result = Invoke-GitText -Arguments @('remote', 'get-url', $RemoteName)
+    if ([string]::IsNullOrWhiteSpace($result.Output)) {
+        throw [System.ArgumentException]::new("Git remote '$RemoteName' does not have a fetch URL.")
+    }
+
+    return $result.Output.Trim()
+}
+
+function Get-GitHubScopedExtraHeaderConfig {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RemoteUrl,
+        [string]$Token = $env:GH_TOKEN
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RemoteUrl)) {
+        throw [System.ArgumentException]::new('RemoteUrl is required to scope the temporary GitHub authorization header.')
+    }
+    if ([string]::IsNullOrWhiteSpace($Token)) {
+        throw [System.ArgumentException]::new('GH_TOKEN is required to authenticate GitHub git fetch operations.')
+    }
+
+    try {
+        $uri = [System.Uri]$RemoteUrl
+    } catch {
+        throw [System.ArgumentException]::new("RemoteUrl '$RemoteUrl' is not a valid absolute URI.")
+    }
+
+    if (-not $uri.IsAbsoluteUri -or $uri.Scheme -ne 'https') {
+        throw [System.ArgumentException]::new("RemoteUrl '$RemoteUrl' must be an https remote to scope the temporary GitHub authorization header.")
+    }
+
+    $authority = $uri.GetLeftPart([System.UriPartial]::Authority).TrimEnd('/')
+    $credential = [Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("x-access-token:$Token"))
+    return "http.$authority/.extraheader=AUTHORIZATION: basic $credential"
+}
+
+function Invoke-GitHubPullRequestHeadFetch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$PullRequestNumber,
+        [Parameter(Mandatory)][string]$RemoteRef,
+        [string]$RemoteName = 'origin'
+    )
+
+    $validatedPullRequestNumber = Test-PullRequestNumber -Value $PullRequestNumber
+    if ([string]::IsNullOrWhiteSpace($RemoteRef)) {
+        throw [System.ArgumentException]::new('RemoteRef is required to store the fetched pull request head.')
+    }
+
+    $remoteUrl = Get-GitRemoteUrl -RemoteName $RemoteName
+    $extraHeaderConfig = Get-GitHubScopedExtraHeaderConfig -RemoteUrl $remoteUrl
+    $refSpec = "+refs/pull/$validatedPullRequestNumber/head:$RemoteRef"
+    $commandDisplay = "git fetch --no-tags $RemoteName <pull-request-head-refspec>"
+
+    return Invoke-GitText -Arguments @('-c', $extraHeaderConfig, 'fetch', '--no-tags', $RemoteName, $refSpec) -CommandDisplay $commandDisplay
 }
 
 function Invoke-ProcessBytes {

@@ -47,8 +47,9 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           $ErrorActionPreference = 'Stop'
+          . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
           $remoteRef = "refs/remotes/origin/localization-pr-$env:PR_NUMBER"
-          git fetch --no-tags origin "+refs/pull/$env:PR_NUMBER/head:$remoteRef"
+          Invoke-GitHubPullRequestHeadFetch -PullRequestNumber $env:PR_NUMBER -RemoteRef $remoteRef | Out-Null
           $fetchedHead = (git rev-parse $remoteRef).Trim()
           if ($fetchedHead -ne $env:HEAD_SHA) {
             throw "PR head changed before localization review started. Expected $env:HEAD_SHA, found $fetchedHead."
@@ -86,7 +87,6 @@ jobs:
           } finally {
             $PSNativeCommandUseErrorActionPreference = $previousNativePreference
           }
-          . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
           $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 10, 30, 64)
           $summary = $completion.Summary
 

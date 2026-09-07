@@ -88,7 +88,7 @@ jobs:
         with:
           ref: ${{ github.event.inputs.expected_base_sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
       - name: Validate immutable PR head and deterministic checks
         id: prepare
         shell: pwsh
@@ -100,6 +100,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
+          . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
           function Get-ValidatedPrepareInputs {
             if ($env:PR_NUMBER -notmatch '^[1-9][0-9]*$') {
               throw "Invalid PR_NUMBER '$env:PR_NUMBER'; expected a positive decimal integer."
@@ -120,7 +121,7 @@ jobs:
 
           $inputs = Get-ValidatedPrepareInputs
           $remoteRef = "refs/remotes/origin/localization-pr-$($inputs.PrNumber)"
-          git fetch --no-tags origin "+refs/pull/$($inputs.PrNumber)/head:$remoteRef"
+          Invoke-GitHubPullRequestHeadFetch -PullRequestNumber $inputs.PrNumber -RemoteRef $remoteRef | Out-Null
           $currentHead = (git rev-parse $remoteRef).Trim().ToLowerInvariant()
           if ($currentHead -ne $inputs.HeadSha) {
             throw "PR head changed after controller dispatch. Expected $($inputs.HeadSha), found $currentHead."
@@ -147,7 +148,6 @@ jobs:
           } finally {
             $PSNativeCommandUseErrorActionPreference = $previousNativePreference
           }
-          . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
           $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 20, 30, 64)
           $summary = $completion.Summary
 
