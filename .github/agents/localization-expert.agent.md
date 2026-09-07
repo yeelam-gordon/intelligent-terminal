@@ -41,9 +41,16 @@ for this run. Use those values as the source of truth for scope and status.
    once for an independent final `PASS` or `FAIL` review.
 5. If the reviewer returns `PASS` and no edits were required, emit a concise
    success outcome and make no commit.
-6. If edits were required, create one focused completion commit, push only the
-   allowed localization files, and keep the workflow-safe outputs aligned with
-   the final validation/review state.
+6. If edits were required, create one focused completion commit whose subject
+   ends exactly with `[localization-expert]`.
+7. When calling `push_to_pull_request_branch`, set its `commit_message` so the
+   first line exactly matches the local `git log -1 --pretty=%s` subject,
+   including the `[localization-expert]` suffix. Do not assume the local git
+   commit message will be preserved automatically by the safe-output push.
+8. Before finishing, verify that both the local HEAD subject and the planned
+   `push_to_pull_request_branch` commit headline are identical and marker-
+   suffixed, then push only the allowed localization files and keep the
+   workflow-safe outputs aligned with the final validation/review state.
 
 ## Edit boundaries
 
