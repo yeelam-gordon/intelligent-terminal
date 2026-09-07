@@ -257,6 +257,23 @@ function Test-PullRequestNumber {
     return $Value
 }
 
+function Test-GitHubRepositoryName {
+    param(
+        [string]$Value,
+        [Parameter(Mandatory)][string]$ParameterName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        throw [System.ArgumentException]::new("$ParameterName is required; expected owner/repository.")
+    }
+
+    if ($Value -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+        throw [System.ArgumentException]::new("Invalid $ParameterName '$Value'; expected owner/repository.")
+    }
+
+    return $Value
+}
+
 function Test-GitObjectId {
     param(
         [string]$Value,
@@ -385,8 +402,13 @@ function Invoke-ProcessBytes {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$FilePath,
-        [Parameter(Mandatory)][string[]]$Arguments
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [int]$TimeoutMilliseconds = 120000
     )
+
+    if ($TimeoutMilliseconds -le 0) {
+        throw [System.ArgumentException]::new("TimeoutMilliseconds '$TimeoutMilliseconds' must be a positive integer.")
+    }
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $FilePath
@@ -400,20 +422,50 @@ function Invoke-ProcessBytes {
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
-    $null = $process.Start()
+    $stdoutBuffer = [System.IO.MemoryStream]::new()
+    $processStarted = $false
 
     try {
-        $buffer = [System.IO.MemoryStream]::new()
-        $process.StandardOutput.BaseStream.CopyTo($buffer)
-        $stderr = $process.StandardError.ReadToEnd().TrimEnd("`r", "`n")
+        $null = $process.Start()
+        $processStarted = $true
+
+        $stdoutCopyTask = $process.StandardOutput.BaseStream.CopyToAsync($stdoutBuffer)
+        $stderrReadTask = $process.StandardError.ReadToEndAsync()
+
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            $ownedProcessId = $process.Id
+            try {
+                if (-not $process.HasExited) {
+                    $process.Kill($true)
+                }
+            } catch [System.InvalidOperationException] {
+            }
+
+            [void]$process.WaitForExit(5000)
+            throw [System.TimeoutException]::new("Process '$FilePath' timed out after $TimeoutMilliseconds ms (PID $ownedProcessId).")
+        }
+
         $process.WaitForExit()
+        [void]$stdoutCopyTask.GetAwaiter().GetResult()
+        $stderr = $stderrReadTask.GetAwaiter().GetResult().TrimEnd("`r", "`n")
 
         return [pscustomobject]@{
             ExitCode = $process.ExitCode
-            Bytes = $buffer.ToArray()
+            Bytes = $stdoutBuffer.ToArray()
             Stderr = $stderr
         }
     } finally {
+        if ($processStarted) {
+            try {
+                if (-not $process.HasExited) {
+                    $process.Kill($true)
+                    [void]$process.WaitForExit(5000)
+                }
+            } catch [System.InvalidOperationException] {
+            }
+        }
+
+        $stdoutBuffer.Dispose()
         $process.Dispose()
     }
 }
@@ -432,7 +484,7 @@ function Invoke-GitHubApiJson {
     $result = Invoke-ProcessBytes -FilePath 'gh' -Arguments @('api', $Path)
     $stdout = [System.Text.Encoding]::UTF8.GetString($result.Bytes).Trim()
 
-    return (Resolve-GitHubApiJson -Context $Context -ExitCode $result.ExitCode -Stdout $stdout)
+    return (Resolve-GitHubApiJson -Context $Context -ExitCode $result.ExitCode -Stdout $stdout -Stderr $result.Stderr)
 }
 
 function Resolve-GitHubApiJson {
@@ -440,11 +492,13 @@ function Resolve-GitHubApiJson {
     param(
         [Parameter(Mandatory)][string]$Context,
         [Parameter(Mandatory)][int]$ExitCode,
-        [string]$Stdout
+        [string]$Stdout,
+        [string]$Stderr
     )
 
     if ($ExitCode -ne 0) {
-        throw "$Context failed with exit code $ExitCode."
+        $messageSuffix = if ([string]::IsNullOrWhiteSpace($Stderr)) { '' } else { " $Stderr" }
+        throw "$Context failed with exit code $ExitCode.$messageSuffix"
     }
 
     if ([string]::IsNullOrWhiteSpace($Stdout)) {
@@ -456,6 +510,90 @@ function Resolve-GitHubApiJson {
     } catch {
         throw "$Context returned invalid JSON output."
     }
+}
+
+function Resolve-TrustedGitHubRepository {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][string]$TrustedRepository
+    )
+
+    $validatedRepository = Test-GitHubRepositoryName -Value $Repository -ParameterName 'Repository'
+    $validatedTrustedRepository = Test-GitHubRepositoryName -Value $TrustedRepository -ParameterName 'TrustedRepository'
+
+    if (-not $validatedRepository.Equals($validatedTrustedRepository, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw [System.ArgumentException]::new("Repository '$validatedRepository' does not match trusted repository '$validatedTrustedRepository'.")
+    }
+
+    return $validatedTrustedRepository
+}
+
+function Get-GitHubPullRequestFiles {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][string]$PullRequestNumber
+    )
+
+    $trustedRepository = Test-GitHubRepositoryName -Value $Repository -ParameterName 'Repository'
+    $validatedPullRequestNumber = Test-PullRequestNumber -Value $PullRequestNumber
+    $pullRequest = Invoke-GitHubApiJson -Path "repos/$trustedRepository/pulls/$validatedPullRequestNumber" -Context "GitHub pull request metadata for $trustedRepository#$validatedPullRequestNumber"
+
+    if ($null -eq $pullRequest.changed_files) {
+        throw "GitHub pull request metadata for $trustedRepository#$validatedPullRequestNumber did not include changed_files."
+    }
+
+    try {
+        $changedFilesCount = [int]$pullRequest.changed_files
+    } catch {
+        throw "GitHub pull request metadata for $trustedRepository#$validatedPullRequestNumber returned a non-integer changed_files value."
+    }
+
+    if ($changedFilesCount -lt 0) {
+        throw "GitHub pull request metadata for $trustedRepository#$validatedPullRequestNumber returned a negative changed_files value."
+    }
+
+    $maximumPullRequestFiles = 3000
+    if ($changedFilesCount -gt $maximumPullRequestFiles) {
+        throw "GitHub pull request $trustedRepository#$validatedPullRequestNumber reports $changedFilesCount changed files, exceeding the documented $maximumPullRequestFiles-file API limit. Guidance is blocked to avoid partial results."
+    }
+
+    if ($changedFilesCount -eq 0) {
+        return @()
+    }
+
+    $perPage = 100
+    $expectedPages = [int][Math]::Ceiling($changedFilesCount / [double]$perPage)
+    $files = [System.Collections.Generic.List[object]]::new()
+
+    for ($page = 1; $page -le $expectedPages; $page++) {
+        $batch = Invoke-GitHubApiJson -Path "repos/$trustedRepository/pulls/$validatedPullRequestNumber/files?per_page=$perPage&page=$page" -Context "GitHub pull request file listing page $page for $trustedRepository#$validatedPullRequestNumber"
+        $items = @($batch)
+        $remainingFiles = $changedFilesCount - $files.Count
+
+        if ($items.Count -eq 0) {
+            throw "GitHub pull request file listing for $trustedRepository#$validatedPullRequestNumber stopped after $($files.Count) of $changedFilesCount files (empty page $page)."
+        }
+
+        if ($page -lt $expectedPages -and $items.Count -ne $perPage) {
+            throw "GitHub pull request file listing for $trustedRepository#$validatedPullRequestNumber returned $($items.Count) files on page $page before reaching changed_files=$changedFilesCount."
+        }
+
+        if ($items.Count -gt $remainingFiles) {
+            throw "GitHub pull request file listing for $trustedRepository#$validatedPullRequestNumber returned more than the expected $changedFilesCount files."
+        }
+
+        foreach ($item in $items) {
+            $files.Add($item)
+        }
+    }
+
+    if ($files.Count -ne $changedFilesCount) {
+        throw "GitHub pull request file listing for $trustedRepository#$validatedPullRequestNumber returned $($files.Count) of $changedFilesCount files."
+    }
+
+    return @($files)
 }
 
 function Assert-RepositoryRoot {

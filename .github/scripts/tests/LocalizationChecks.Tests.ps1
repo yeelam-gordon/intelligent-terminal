@@ -171,6 +171,168 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
             $result.verified | Should -BeTrue
         }
     }
+    Describe 'Process byte capture' {
+        It 'drains stdout bytes and stderr concurrently without deadlocking and preserves raw stdout bytes' {
+            $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+            $scriptPath = Join-Path $TestDrive 'mixed-streams.ps1'
+            @'
+$chunk = [byte[]](0..255)
+$stdout = [Console]::OpenStandardOutput()
+for ($i = 0; $i -lt 256; $i++) {
+    $stdout.Write($chunk, 0, $chunk.Length)
+    [Console]::Error.WriteLine(('stderr-block-{0}:{1}' -f $i, ('x' * 4096)))
+}
+$stdout.Flush()
+'@ | Set-Content -LiteralPath $scriptPath -Encoding utf8
+
+            $result = Invoke-ProcessBytes -FilePath $pwsh -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $scriptPath) -TimeoutMilliseconds 10000
+
+            $result.ExitCode | Should -Be 0
+            $result.Bytes.Length | Should -Be (256 * 256)
+            $result.Bytes[0] | Should -Be 0
+            $result.Bytes[255] | Should -Be 255
+            $result.Bytes[256] | Should -Be 0
+            $result.Stderr | Should -Match 'stderr-block-255'
+        }
+
+        It 'returns nonzero exit codes and stderr without throwing' {
+            $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+            $scriptPath = Join-Path $TestDrive 'nonzero.ps1'
+            @'
+[Console]::Error.WriteLine('boom')
+exit 23
+'@ | Set-Content -LiteralPath $scriptPath -Encoding utf8
+
+            $result = Invoke-ProcessBytes -FilePath $pwsh -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $scriptPath)
+
+            $result.ExitCode | Should -Be 23
+            $result.Stderr | Should -Be 'boom'
+        }
+
+        It 'times out and terminates the owned process tree' {
+            $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+            $scriptPath = Join-Path $TestDrive 'timeout.ps1'
+            $pidPath = Join-Path $TestDrive 'timeout.pid'
+            @'
+param([string]$PidPath)
+[System.IO.File]::WriteAllText($PidPath, [string]$PID)
+Start-Sleep -Seconds 30
+'@ | Set-Content -LiteralPath $scriptPath -Encoding utf8
+
+            { Invoke-ProcessBytes -FilePath $pwsh -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $scriptPath, $pidPath) -TimeoutMilliseconds 500 } |
+                Should -Throw '*timed out after 500 ms*'
+
+            $processId = $null
+            $deadline = [DateTime]::UtcNow.AddSeconds(5)
+            while ([DateTime]::UtcNow -lt $deadline) {
+                if (Test-Path -LiteralPath $pidPath) {
+                    $processId = [int](Get-Content -LiteralPath $pidPath -Raw)
+                    break
+                }
+
+                Start-Sleep -Milliseconds 100
+            }
+
+            $processId | Should -Not -BeNullOrEmpty
+
+            $deadline = [DateTime]::UtcNow.AddSeconds(5)
+            do {
+                $runningProcess = Get-Process -Id $processId -ErrorAction SilentlyContinue
+                if ($null -eq $runningProcess) {
+                    break
+                }
+
+                Start-Sleep -Milliseconds 100
+            } while ([DateTime]::UtcNow -lt $deadline)
+
+            (Get-Process -Id $processId -ErrorAction SilentlyContinue) | Should -Be $null
+        }
+    }
+    Describe 'Trusted repository and pull request file paging' {
+        It 'requires the requested repository to match the trusted repository' {
+            { Resolve-TrustedGitHubRepository -Repository 'octocat/hello-world' -TrustedRepository 'microsoft/intelligent-terminal' } |
+                Should -Throw "*does not match trusted repository 'microsoft/intelligent-terminal'*"
+        }
+
+        It 'returns the trusted repository when the input matches case-insensitively' {
+            Resolve-TrustedGitHubRepository -Repository 'Microsoft/Intelligent-Terminal' -TrustedRepository 'microsoft/intelligent-terminal' |
+                Should -Be 'microsoft/intelligent-terminal'
+        }
+
+        It 'pages exactly to the reported changed_files count and stops there' {
+            $apiPaths = [System.Collections.Generic.List[string]]::new()
+            Mock Invoke-GitHubApiJson {
+                param([string]$Path, [string]$Context)
+
+                $apiPaths.Add($Path) | Out-Null
+                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/17') {
+                    return @{ changed_files = 201 }
+                }
+
+                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/17/files?per_page=100&page=1') {
+                    return @(1..100 | ForEach-Object { @{ filename = "file-$_.txt" } })
+                }
+
+                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/17/files?per_page=100&page=2') {
+                    return @(101..200 | ForEach-Object { @{ filename = "file-$_.txt" } })
+                }
+
+                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/17/files?per_page=100&page=3') {
+                    return @(@{ filename = 'file-201.txt' })
+                }
+
+                throw "Unexpected API path: $Path"
+            }
+
+            $files = Get-GitHubPullRequestFiles -Repository 'microsoft/intelligent-terminal' -PullRequestNumber '17'
+
+            $files.Count | Should -Be 201
+            $apiPaths | Should -HaveCount 4
+            $apiPaths[-1] | Should -Be 'repos/microsoft/intelligent-terminal/pulls/17/files?per_page=100&page=3'
+        }
+
+        It 'blocks when pull request metadata exceeds the documented file limit' {
+            Mock Invoke-GitHubApiJson {
+                param([string]$Path, [string]$Context)
+
+                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/18') {
+                    return @{ changed_files = 3001 }
+                }
+
+                throw "Unexpected API path: $Path"
+            }
+
+            { Get-GitHubPullRequestFiles -Repository 'microsoft/intelligent-terminal' -PullRequestNumber '18' } |
+                Should -Throw '*exceeding the documented 3000-file API limit*'
+        }
+
+        It 'blocks when the paged file listing returns fewer files than changed_files' {
+            Mock Invoke-GitHubApiJson {
+                param([string]$Path, [string]$Context)
+
+                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/19') {
+                    return @{ changed_files = 250 }
+                }
+
+                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/19/files?per_page=100&page=1') {
+                    return @(1..100 | ForEach-Object { @{ filename = "file-$_.txt" } })
+                }
+
+                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/19/files?per_page=100&page=2') {
+                    return @(101..200 | ForEach-Object { @{ filename = "file-$_.txt" } })
+                }
+
+                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/19/files?per_page=100&page=3') {
+                    return @()
+                }
+
+                throw "Unexpected API path: $Path"
+            }
+
+            { Get-GitHubPullRequestFiles -Repository 'microsoft/intelligent-terminal' -PullRequestNumber '19' } |
+                Should -Throw '*stopped after 200 of 250 files*'
+        }
+    }
     Describe 'Localization checker provenance' {
     It 'treats a null author as not-completion' {
         $commit = Get-LocalizationValidatorCommitFixture -Name 'commit-null-author.json'

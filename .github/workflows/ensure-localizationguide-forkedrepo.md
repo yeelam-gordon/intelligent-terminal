@@ -90,6 +90,7 @@ jobs:
           BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
           HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
           REPOSITORY: ${{ github.event.inputs.repo }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
@@ -106,15 +107,13 @@ jobs:
             if ($env:HEAD_SHA -notmatch '^[0-9a-fA-F]{40}$') {
               throw "Invalid HEAD_SHA '$env:HEAD_SHA'; expected exactly 40 hexadecimal characters."
             }
-            if ($env:REPOSITORY -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
-              throw "Invalid REPOSITORY '$env:REPOSITORY'; expected owner/repository."
-            }
+            $trustedRepository = Resolve-TrustedGitHubRepository -Repository $env:REPOSITORY -TrustedRepository $env:GITHUB_REPOSITORY
 
             return @{
               PrNumber = $env:PR_NUMBER
               BaseSha = $env:BASE_SHA.ToLowerInvariant()
               HeadSha = $env:HEAD_SHA.ToLowerInvariant()
-              Repository = $env:REPOSITORY
+              Repository = $trustedRepository
               ServerUrl = $env:GITHUB_SERVER_URL.TrimEnd('/')
             }
           }
@@ -129,32 +128,6 @@ jobs:
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "$Name<<$delimiter"
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value $Value
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value $delimiter
-          }
-
-          function Get-GitHubPullRequestFiles {
-            param(
-              [Parameter(Mandatory)][string]$Repository,
-              [Parameter(Mandatory)][string]$PullRequestNumber
-            )
-
-            $files = [System.Collections.Generic.List[object]]::new()
-            for ($page = 1; $page -le 20; $page++) {
-                $batch = Invoke-GitHubApiJson -Path "repos/$Repository/pulls/$PullRequestNumber/files?per_page=100&page=$page" -Context "GitHub pull request file listing page $page for $Repository#$PullRequestNumber"
-              $items = @($batch)
-              if ($items.Count -eq 0) {
-                break
-              }
-
-              foreach ($item in $items) {
-                $files.Add($item)
-              }
-
-              if ($items.Count -lt 100) {
-                break
-              }
-            }
-
-            return @($files)
           }
 
           function Write-StepSummary {
