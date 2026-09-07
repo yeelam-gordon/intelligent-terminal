@@ -23,17 +23,27 @@ Bring the pull request's customer-facing localization changes to a state where:
 - only the necessary localization files changed; and
 - an independent localization reviewer returns explicit `PASS`.
 
+## Caller context
+
+The workflow provides the immutable PR/base/head SHAs and the validator summary
+for this run. Use those values as the source of truth for scope and status.
+
 ## Required flow
 
-1. Run `localization_checks.ps1 -Mode Validate` before editing.
-2. Treat `FIXABLE` findings as the only safe mechanical repair scope: fix only
-   the reported files and resources, then rerun validation.
-3. Treat `BLOCKED` findings as escalation: do not guess, do not push a partial
-   fix, and report the exact `check_id`, file, resource, and required human
-   action.
-4. After deterministic validation passes, invoke the `localization-review-gate`
-   sub-agent for an independent final `PASS` or `FAIL` review.
-5. Never self-review and never claim success without that separate reviewer.
+1. Run `localization_checks.ps1 -Mode Validate` before editing and treat the
+   validator as authoritative.
+2. If validation returns `FIXABLE`, repair only the reported localization files
+   and resources, then rerun validation.
+3. If validation returns `BLOCKED` or an invalid-input summary, stop repairing,
+   do not push partial work, and escalate with the exact `check_id`, file,
+   resource, observed result, expected result, and suggested action.
+4. After deterministic validation passes, invoke `localization-review-gate`
+   once for an independent final `PASS` or `FAIL` review.
+5. If the reviewer returns `PASS` and no edits were required, emit a concise
+   success outcome and make no commit.
+6. If edits were required, create one focused completion commit, push only the
+   allowed localization files, and keep the workflow-safe outputs aligned with
+   the final validation/review state.
 
 ## Edit boundaries
 

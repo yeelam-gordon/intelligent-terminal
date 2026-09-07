@@ -158,15 +158,10 @@ Do not check out or execute fork code. If you need immutable fork content for th
 shared validator, fetch the pull request head into a detached remote ref only and
 inspect it through Git objects.
 
+Imported runtime role: `localization-reviewer`.
+
 Deterministic context:
 - immutable fork head: `${{ github.event.inputs.expected_head_sha }}`
 - comparison base used by the validator: `${{ needs.prepare.outputs.comparison_base }}`
 - initial validator summary: `${{ needs.prepare.outputs.initial_status }}` /
   `${{ needs.prepare.outputs.initial_action }}`
-
-Required flow:
-1. Use `pwsh .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber "${{ github.event.inputs.pr_number }}" -BaseRevision "${{ github.event.inputs.expected_base_sha }}" -HeadRevision "${{ github.event.inputs.expected_head_sha }}"` for deterministic read-only checks.
-2. Use GitHub pull-request tools for human-readable diff context and review comments.
-3. Return a concise visible `PASS` or actionable `FAIL` comment. Every failure must cite `check_id`, file, resource, observed problem, expected result, and suggested action.
-4. Never push, never edit files, and never claim a check passed if you could not actually observe it.
-5. If the validator reports exit `64`, surface the blocked invalid-input summary instead of treating it as an unexpected failure.

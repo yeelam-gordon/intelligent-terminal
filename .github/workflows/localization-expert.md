@@ -182,22 +182,14 @@ run-name: 'Localization Expert ${{ github.event.inputs.dispatch_id }}'
 Same-repo localization repair for pull request #${{ github.event.inputs.pr_number }} in
 `${{ github.event.inputs.repo }}`.
 
+Imported runtime role: `localization-expert`.
+
 Deterministic context:
 - immutable base: `${{ github.event.inputs.expected_base_sha }}`
 - immutable head: `${{ github.event.inputs.expected_head_sha }}`
 - comparison base used by the validator: `${{ needs.prepare.outputs.comparison_base }}`
 - initial validator summary: `${{ needs.prepare.outputs.initial_status }}` /
   `${{ needs.prepare.outputs.initial_action }}`
-
-Required flow:
-1. Run `pwsh .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber "${{ github.event.inputs.pr_number }}" -BaseRevision "${{ github.event.inputs.expected_base_sha }}"` before editing. Treat exit `20` as fixable findings, exit `30` as escalation, and exit `64` as blocked invalid input surfaced through the summary.
-2. Fix only the reported localization files and resources. Rerun validation until it exits `0` or remains `30`.
-3. Invoke `localization-review-gate` exactly once per final candidate. It must return explicit `PASS` or `FAIL`.
-4. If deterministic validation passes and the reviewer returns `PASS` without requiring edits, post one concise success comment and make no commit.
-5. If edits were required, stage only the allowed localization files, create one completion commit whose subject ends with `[localization-expert]`, and push it with a safe-output message that also ends with `[localization-expert]`.
-6. If validation or the independent reviewer stays blocked or fails, do not push partial work. Post one concise escalation comment citing each unresolved `check_id`, file, resource, and suggested action.
-
-Never modify files under `.github/` from this workflow.
 
 ## agent: `localization-review-gate`
 
