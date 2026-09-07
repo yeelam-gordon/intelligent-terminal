@@ -1,7 +1,5 @@
-﻿# PR-facing wrapper for the single-check workaround.
-# Dispatches GHAW workers on the trusted base ref so their internal jobs do not
-# populate the PR checklist; reports their outcome as Localization review.
-# Contains orchestration, not localization rules.
+﻿# Single-PR-check wrapper: dispatches detached GHAW workers so internal jobs do not
+# appear on the PR; publishes result and AIC. Not an agent definition.
 
 name: Localization Review
 run-name: Localization Review for PR #${{ github.event.pull_request.number }}
@@ -79,10 +77,10 @@ jobs:
             }
           }
 
-          $jsonl = Join-Path $PWD 'localization-review.gate.jsonl'
+          $jsonl = Join-Path $PWD 'localization-controller.gate.jsonl'
           & .github/scripts/localization_checks.ps1 -Mode Gate -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA | Tee-Object -FilePath $jsonl | Out-Null
           $exitCode = $LASTEXITCODE
-          . (Join-Path $PWD '.github/scripts/localization_validator_output.ps1')
+          . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
           $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 10, 30, 64)
           $summary = $completion.Summary
 
@@ -144,13 +142,13 @@ jobs:
               base_sha: process.env.EXPECTED_BASE_SHA,
               root_repo: `${context.repo.owner}/${context.repo.repo}`,
               root_run_id: String(context.runId),
-              root_workflow_id: "localization-review"
+              root_workflow_id: "localization-controller"
             }) : JSON.stringify({
               event_type: "workflow_dispatch",
               source_pr_number: pr.number,
               root_repo: `${context.repo.owner}/${context.repo.repo}`,
               root_run_id: String(context.runId),
-              root_workflow_id: "localization-review"
+              root_workflow_id: "localization-controller"
             });
 
             const inputs = {

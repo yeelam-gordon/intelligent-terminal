@@ -1,7 +1,7 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 
 BeforeAll {
-    . (Join-Path $PSScriptRoot '..\..\..\.github\scripts\localization_validator_output.ps1')
+    . (Join-Path $PSScriptRoot '..\..\..\.github\scripts\localization_checks.ps1')
     $script:exit64Fixture = Join-Path $PSScriptRoot 'fixtures\localization-validator\exit64-summary.jsonl'
 }
 
@@ -17,5 +17,11 @@ Describe 'Localization validator consumer' -Tag 'Unit' {
     It 'throws on unexpected exit codes before trusting the summary payload' {
         { Resolve-LocalizationValidatorCompletion -JsonlPath $script:exit64Fixture -ExitCode 99 } |
             Should -Throw '*Unexpected localization validator exit code: 99*'
+    }
+
+    It 'can dot-source the shared checker without running Gate or Validate' {
+        Get-Command Resolve-LocalizationValidatorCompletion -CommandType Function -ErrorAction Stop |
+            Select-Object -ExpandProperty Name |
+            Should -Be 'Resolve-LocalizationValidatorCompletion'
     }
 }

@@ -14,6 +14,8 @@
 
     The script writes JSONL records to stdout. The final line is always the
     summary record.
+    Dot-source the script to reuse the summary-reading helpers without running
+    `Gate` or `Validate`.
 
     Exit codes:
       0  PASS      (`action = NONE`)
@@ -47,13 +49,10 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)]
-    [ValidateSet('Gate', 'Validate')]
     [string]$Mode,
 
     [string]$PullRequestNumber,
 
-    [Parameter(Mandatory)]
     [string]$BaseRevision,
 
     [string]$HeadRevision,
@@ -179,6 +178,71 @@ function Complete-LocalizationRun {
     return [pscustomobject]@{ Summary = $summary; ExitCode = $exitCode }
 }
 
+function Get-LocalizationValidatorSummary {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$JsonlPath
+    )
+
+    if (-not (Test-Path -LiteralPath $JsonlPath)) {
+        throw [System.IO.FileNotFoundException]::new("Localization validator output file '$JsonlPath' was not found.")
+    }
+
+    $summary = Get-Content -LiteralPath $JsonlPath | Select-Object -Last 1 | ConvertFrom-Json -AsHashtable
+    if ($summary.kind -ne 'summary') {
+        throw 'Localization validator did not emit a summary record.'
+    }
+
+    return $summary
+}
+
+function Resolve-LocalizationValidatorCompletion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$JsonlPath,
+        [Parameter(Mandatory)][int]$ExitCode,
+        [int[]]$AllowedExitCodes = @(0, 10, 20, 30, 64)
+    )
+
+    if ($AllowedExitCodes -notcontains $ExitCode) {
+        throw "Unexpected localization validator exit code: $ExitCode"
+    }
+
+    $summary = Get-LocalizationValidatorSummary -JsonlPath $JsonlPath
+    if ($ExitCode -eq 64) {
+        if ($summary.status -ne 'BLOCKED' -or $summary.action -ne 'ESCALATE') {
+            throw 'Localization validator exit 64 must emit a BLOCKED/ESCALATE summary record.'
+        }
+    }
+
+    $shouldRun = if ($summary.action -eq 'ESCALATE') {
+        $false
+    } elseif ($null -ne $summary.should_run) {
+        [bool]$summary.should_run
+    } else {
+        $false
+    }
+
+    return [pscustomobject]@{
+        Summary = $summary
+        ShouldRun = $shouldRun
+    }
+}
+
+function Test-LocalizationMode {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        throw [System.ArgumentException]::new("Mode is required; expected 'Gate' or 'Validate'.")
+    }
+
+    if ($Value -cnotin @('Gate', 'Validate')) {
+        throw [System.ArgumentException]::new("Invalid Mode '$Value'; expected 'Gate' or 'Validate'.")
+    }
+
+    return $Value
+}
+
 function Test-PullRequestNumber {
     param([string]$Value)
 
@@ -195,9 +259,13 @@ function Test-PullRequestNumber {
 
 function Test-GitObjectId {
     param(
-        [Parameter(Mandatory)][string]$Value,
+        [string]$Value,
         [Parameter(Mandatory)][string]$ParameterName
     )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        throw [System.ArgumentException]::new("$ParameterName is required; expected exactly 40 hexadecimal characters.")
+    }
 
     if ($Value -notmatch '^[0-9a-fA-F]{40}$') {
         throw [System.ArgumentException]::new("Invalid $ParameterName '$Value'; expected exactly 40 hexadecimal characters.")
@@ -1495,7 +1563,26 @@ function Invoke-Validation {
         -Message 'Deterministic localization validation passed.' -ComparisonBase $comparisonBase
 }
 
+function Initialize-LocalizationInvocation {
+    $script:Mode = Test-LocalizationMode -Value $Mode
+    $script:PullRequestNumber = Test-PullRequestNumber -Value $PullRequestNumber
+    $script:BaseRevision = Test-GitObjectId -Value $BaseRevision -ParameterName 'BaseRevision'
+
+    if ($script:Mode -eq 'Gate') {
+        $script:HeadRevision = Test-GitObjectId -Value $HeadRevision -ParameterName 'HeadRevision'
+    } elseif ([string]::IsNullOrWhiteSpace($HeadRevision)) {
+        $script:HeadRevision = $null
+    } else {
+        $script:HeadRevision = Test-GitObjectId -Value $HeadRevision -ParameterName 'HeadRevision'
+    }
+}
+
+if ($MyInvocation.InvocationName -eq '.') {
+    return
+}
+
 try {
+    Initialize-LocalizationInvocation
     Assert-RepositoryRoot
     $result = if ($Mode -eq 'Gate') { Invoke-Gate } else { Invoke-Validation }
     exit $result.ExitCode

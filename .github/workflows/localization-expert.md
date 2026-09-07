@@ -1,6 +1,6 @@
 ---
-description: 'Localization repair worker for same-repository PRs; validates, repairs, and obtains independent review before a completion commit. Dispatched by localization-review.yml.'
-intent: 'Use one deterministic PowerShell validator, then repair only the reported localization defects.'
+description: 'Detached same-repo localization repair worker; validates, fixes, and requests final review. Dispatched by localization-controller.yml.'
+intent: 'Validate immutable same-repo localization changes, repair deterministic issues, and request final review.'
 
 on:
   workflow_dispatch:
@@ -141,7 +141,7 @@ jobs:
           $jsonl = Join-Path $PWD 'localization-expert.validate.jsonl'
           & .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
           $exitCode = $LASTEXITCODE
-          . (Join-Path $PWD '.github/scripts/localization_validator_output.ps1')
+          . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
           $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 20, 30, 64)
           $summary = $completion.Summary
 
@@ -179,15 +179,14 @@ concurrency:
 run-name: 'Localization Expert ${{ github.event.inputs.dispatch_id }}'
 ---
 
-Same-repo localization repair for pull request #${{ github.event.inputs.pr_number }} in
-`${{ github.event.inputs.repo }}`.
+Same-repo localization repair for PR #${{ github.event.inputs.pr_number }} in `${{ github.event.inputs.repo }}`.
 
 Imported runtime role: `localization-expert`.
 
 Deterministic context:
-- immutable base: `${{ github.event.inputs.expected_base_sha }}`
+- trusted base workspace: `${{ github.event.inputs.expected_base_sha }}`
 - immutable head: `${{ github.event.inputs.expected_head_sha }}`
-- comparison base used by the validator: `${{ needs.prepare.outputs.comparison_base }}`
+- comparison base: `${{ needs.prepare.outputs.comparison_base }}`
 - initial validator summary: `${{ needs.prepare.outputs.initial_status }}` /
   `${{ needs.prepare.outputs.initial_action }}`
 

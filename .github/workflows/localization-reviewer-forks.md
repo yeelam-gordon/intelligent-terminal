@@ -1,6 +1,6 @@
 ---
-description: 'Read-only localization worker for contributor-fork PRs; reports findings without pushing to fork branches. Dispatched by localization-review.yml; not the single-check wrapper.'
-intent: 'Validate fork localization changes read-only without checking out or executing fork code.'
+description: 'Detached fork-PR localization reviewer; validates immutable fork content read-only and reports findings. Dispatched by localization-controller.yml.'
+intent: 'Validate immutable fork localization changes read-only on the trusted base workspace.'
 
 on:
   workflow_dispatch:
@@ -121,7 +121,7 @@ jobs:
           $jsonl = Join-Path $PWD 'localization-reviewer-forks.validate.jsonl'
           & .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
           $exitCode = $LASTEXITCODE
-          . (Join-Path $PWD '.github/scripts/localization_validator_output.ps1')
+          . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
           $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 20, 30, 64)
           $summary = $completion.Summary
 
@@ -150,18 +150,13 @@ concurrency:
 run-name: 'Localization Reviewer Fork ${{ github.event.inputs.dispatch_id }}'
 ---
 
-Fork localization review for pull request #${{ github.event.inputs.pr_number }} in
-`${{ github.event.inputs.repo }}`.
-
-The workspace remains on trusted base `${{ github.event.inputs.expected_base_sha }}`.
-Do not check out or execute fork code. If you need immutable fork content for the
-shared validator, fetch the pull request head into a detached remote ref only and
-inspect it through Git objects.
+Fork localization review for PR #${{ github.event.inputs.pr_number }} in `${{ github.event.inputs.repo }}`.
 
 Imported runtime role: `localization-reviewer`.
 
 Deterministic context:
+- trusted base workspace: `${{ github.event.inputs.expected_base_sha }}`
 - immutable fork head: `${{ github.event.inputs.expected_head_sha }}`
-- comparison base used by the validator: `${{ needs.prepare.outputs.comparison_base }}`
+- comparison base: `${{ needs.prepare.outputs.comparison_base }}`
 - initial validator summary: `${{ needs.prepare.outputs.initial_status }}` /
   `${{ needs.prepare.outputs.initial_action }}`
