@@ -131,7 +131,7 @@ jobs:
             const sameRepo = process.env.SAME_REPO === "true";
             const worker = sameRepo
               ? "ensure-localization.lock.yml"
-              : "ensure-localization-read-only.lock.yml";
+              : "ensure-localizationguide-forkedrepo.lock.yml";
             const dispatchId =
               `ensure-localization-${pr.number}-${process.env.EXPECTED_HEAD_SHA}-${context.runId}-${context.runAttempt}`;
             const baseRef = process.env.BASE_REF;
@@ -227,6 +227,7 @@ jobs:
           RUN_ID: ${{ steps.worker.outputs.run_id }}
           RUN_URL: ${{ steps.worker.outputs.run_url }}
           WORKER_CONCLUSION: ${{ steps.worker.outputs.conclusion }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.id == github.repository_id }}
         run: |
           set -euo pipefail
           usage_dir="$RUNNER_TEMP/localization-usage"
@@ -294,13 +295,24 @@ jobs:
           {
             echo "## Localization review"
             echo
-            echo "- Result: **${WORKER_CONCLUSION}**"
+            if [ "$SAME_REPO" = "true" ]; then
+              echo "- Result: **${WORKER_CONCLUSION}**"
+            else
+              echo "- Fork localization worker: **${WORKER_CONCLUSION}**"
+              echo "- This fork path runs trusted-base deterministic localization checks without editing fork code."
+              echo "- A PR comment is posted only when actionable localization findings are detected."
+              echo "- Independent language-quality review is not performed automatically in this fork path."
+            fi
             echo "- Internal GHAW run: [${RUN_ID}](${RUN_URL})"
             echo "- Total AI Credits: **${total_aic}**"
             echo "- Main agent: ${agent_aic} AIC; model \`${agent_model}\`; ${agent_input} input, ${agent_output} output, ${agent_cache_read} cache-read tokens"
             echo "- Threat detection: ${detection_aic} AIC; model \`${detection_model}\`; ${detection_input} input, ${detection_output} output, ${detection_cache_read} cache-read tokens"
             echo
-            echo "The internal run retains all activation, agent, threat-detection, safe-output, conclusion, logs, and artifacts."
+            if [ "$SAME_REPO" = "true" ]; then
+              echo "The internal run retains all activation, agent, threat-detection, safe-output, conclusion, logs, and artifacts."
+            else
+              echo "The internal run retained the fork guidance preparation, safe-output comment delivery, logs, and artifacts."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$WORKER_CONCLUSION" = "success" ] && [ "$total_aic" = "unavailable" ]; then
