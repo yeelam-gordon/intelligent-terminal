@@ -132,8 +132,12 @@ Use this flow when edits are allowed:
    suggested action.
 5. After deterministic validation passes, invoke one independent read-only
    reviewer pass.
-6. If the reviewer returns `PASS` and no edits were required, emit a concise
-   success result and make no commit.
+6. If the reviewer returns `PASS` and no edits were required, emit exactly one
+   visible `add_comment` safe output for the PR. The comment must report the
+   source keys, the applicable locale count, the validations that passed, and
+   the literal review outcome lines `Independent Localization Reviewer: PASS`
+   and `No localization changes were required.` Do not use `noop` for this
+   same-repo no-change success path, and make no commit.
 7. If edits were required, create one focused completion commit whose subject
    ends exactly with `[localization-expert]`.
 8. When a safe-output push is used, set its `message` so the first line exactly
