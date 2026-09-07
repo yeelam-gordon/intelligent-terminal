@@ -1375,6 +1375,10 @@ function Test-LockedToken {
     }
 
     foreach ($token in @($Rules.Tokens)) {
+        if (-not $SourceValue.Contains($token, [System.StringComparison]::Ordinal)) {
+            continue
+        }
+
         if (-not $TargetValue.Contains($token, [System.StringComparison]::Ordinal)) {
             Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId $CheckId `
                 -File $File -Resource $Resource -Observed $TargetValue -Expected $token `

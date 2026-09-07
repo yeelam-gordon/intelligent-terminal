@@ -98,6 +98,13 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
 
             $records | ForEach-Object { $_ | ConvertTo-Json -Compress -Depth 6 } | Set-Content -LiteralPath $Path -Encoding utf8
         }
+
+        function Get-LocalizationValidatorFixtureBytes {
+            param([Parameter(Mandatory)][string]$Name)
+
+            $fixturePath = Join-Path $script:fixtureRoot $Name
+            [System.IO.File]::ReadAllBytes($fixturePath)
+        }
     }
     Describe 'Localization validator completion contract' {
     It 'reads the final JSONL summary line and suppresses follow-up work for exit 64' {
@@ -354,5 +361,62 @@ Start-Sleep -Seconds 30
         Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' |
             Should -BeTrue
     }
+    }
+
+    Describe 'WTA locked token validation' {
+        BeforeAll {
+            $fixtureBytes = Get-LocalizationValidatorFixtureBytes -Name 'wta-clean-c-locked-source.yml'
+            $script:wtaLockedSourceFixture = Read-WtaLocaleEntries -Bytes $fixtureBytes -Path 'tools/wta/locales/en-US.yml'
+        }
+
+        It 'does not invent file-level locked tokens for a fully locked source value that lacks them' {
+            $sourceEntry = $script:wtaLockedSourceFixture.Entries['demo.clean_c.visible_review']
+            $rules = Get-LockedRules -Comments (Get-WtaEntryComments -Entry $sourceEntry) -Locale 'qps-ploc'
+
+            Test-LockedToken -CheckId 'validate.wta.locked-token' -File 'tools/wta/locales/qps-ploc.yml' `
+                -Resource $sourceEntry.Key -Locale 'qps-ploc' -SourceValue $sourceEntry.Value -TargetValue $sourceEntry.Value `
+                -Rules $rules -ComparisonBase '533f42bbae811f03fdb58957803259213dea143c'
+
+            @($script:ResultRecords).Count | Should -Be 0
+        }
+
+        It 'reports a missing locale-scoped token when the source value contains it literally' {
+            $sourceEntry = $script:wtaLockedSourceFixture.Entries['demo.clean_c.visible_review_with_product']
+            $rules = Get-LockedRules -Comments (Get-WtaEntryComments -Entry $sourceEntry) -Locale 'qps-ploc'
+
+            Test-LockedToken -CheckId 'validate.wta.locked-token' -File 'tools/wta/locales/qps-ploc.yml' `
+                -Resource $sourceEntry.Key -Locale 'qps-ploc' -SourceValue $sourceEntry.Value -TargetValue 'GHAW Visible Review' `
+                -Rules $rules -ComparisonBase '533f42bbae811f03fdb58957803259213dea143c'
+
+            $script:ResultRecords | Should -HaveCount 1
+            $script:ResultRecords[0].status | Should -Be 'FIXABLE'
+            $script:ResultRecords[0].expected | Should -Be 'Intelligent Terminal'
+            $script:ResultRecords[0].message | Should -Match "Locked token 'Intelligent Terminal' is missing"
+        }
+
+        It 'requires full-lock equality instead of suggesting phrase insertion' {
+            $sourceEntry = $script:wtaLockedSourceFixture.Entries['demo.clean_c.visible_review']
+            $rules = Get-LockedRules -Comments (Get-WtaEntryComments -Entry $sourceEntry) -Locale 'qps-ploc'
+
+            Test-LockedToken -CheckId 'validate.wta.locked-token' -File 'tools/wta/locales/qps-ploc.yml' `
+                -Resource $sourceEntry.Key -Locale 'qps-ploc' -SourceValue $sourceEntry.Value `
+                -TargetValue 'GHAW Visible Review — Intelligent Terminal' -Rules $rules `
+                -ComparisonBase '533f42bbae811f03fdb58957803259213dea143c'
+
+            $script:ResultRecords | Should -HaveCount 1
+            $script:ResultRecords[0].expected | Should -Be 'GHAW Visible Review'
+            $script:ResultRecords[0].message | Should -Be 'This value is fully locked and must remain identical to the source.'
+        }
+
+        It 'applies locale-scoped locked tokens only to the matching locales' {
+            $sourceEntry = $script:wtaLockedSourceFixture.Entries['demo.clean_c.visible_review_with_product']
+            $rules = Get-LockedRules -Comments (Get-WtaEntryComments -Entry $sourceEntry) -Locale 'lv-LV'
+
+            Test-LockedToken -CheckId 'validate.wta.locked-token' -File 'tools/wta/locales/lv-LV.yml' `
+                -Resource $sourceEntry.Key -Locale 'lv-LV' -SourceValue $sourceEntry.Value -TargetValue 'GHAW Visible Review' `
+                -Rules $rules -ComparisonBase '533f42bbae811f03fdb58957803259213dea143c'
+
+            @($script:ResultRecords).Count | Should -Be 0
+        }
     }
 }
