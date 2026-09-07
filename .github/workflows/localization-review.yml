@@ -77,22 +77,27 @@ jobs:
           $jsonl = Join-Path $PWD 'localization-review.gate.jsonl'
           & .github/scripts/localization_checks.ps1 -Mode Gate -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA | Tee-Object -FilePath $jsonl | Out-Null
           $exitCode = $LASTEXITCODE
-          if (@(0, 10, 30) -notcontains $exitCode) {
-            throw "Unexpected localization gate exit code: $exitCode"
-          }
+          . (Join-Path $PWD '.github/scripts/localization_validator_output.ps1')
+          $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 10, 30, 64)
+          $summary = $completion.Summary
 
-          $summary = Get-Content -LiteralPath $jsonl | Select-Object -Last 1 | ConvertFrom-Json -AsHashtable
-          if ($summary.kind -ne 'summary') {
-            throw 'Localization gate did not emit a summary record.'
-          }
-
-          $shouldRun = if ([bool]$summary.should_run) { 'true' } else { 'false' }
+          $shouldRun = if ($completion.ShouldRun -and $summary.action -ne 'ESCALATE') { 'true' } else { 'false' }
           "should_run=$shouldRun" >> $env:GITHUB_OUTPUT
           "reason=$($summary.action.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "gate_status=$($summary.status)" >> $env:GITHUB_OUTPUT
           "gate_action=$($summary.action)" >> $env:GITHUB_OUTPUT
 
-          if ($shouldRun -eq 'false') {
+          if ($summary.action -eq 'ESCALATE') {
+            {
+              echo "## Localization review"
+              echo
+              echo "The validator blocked this review."
+              echo
+              echo "- Status: **$($summary.status)**"
+              echo "- Action: **$($summary.action)**"
+              echo "- Message: $($summary.message)"
+            } >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($shouldRun -eq 'false') {
             {
               echo "## Localization review"
               echo

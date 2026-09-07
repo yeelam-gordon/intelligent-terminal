@@ -141,13 +141,9 @@ jobs:
           $jsonl = Join-Path $PWD 'localization-expert.validate.jsonl'
           & .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
           $exitCode = $LASTEXITCODE
-          if (@(0, 20, 30) -notcontains $exitCode) {
-            throw "Unexpected localization validator exit code: $exitCode"
-          }
-          $summary = Get-Content -LiteralPath $jsonl | Select-Object -Last 1 | ConvertFrom-Json -AsHashtable
-          if ($summary.kind -ne 'summary') {
-            throw 'Localization validator did not emit a summary record.'
-          }
+          . (Join-Path $PWD '.github/scripts/localization_validator_output.ps1')
+          $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 20, 30, 64)
+          $summary = $completion.Summary
 
           "already_complete=$alreadyComplete" >> $env:GITHUB_OUTPUT
           "comparison_base=$($summary.comparison_base)" >> $env:GITHUB_OUTPUT
@@ -156,7 +152,7 @@ jobs:
 
   agent:
     needs: [prepare]
-    if: needs.prepare.outputs.already_complete != 'true'
+    if: needs.prepare.outputs.already_complete != 'true' && needs.prepare.outputs.initial_action != 'ESCALATE'
 
 safe-outputs:
   push-to-pull-request-branch:
@@ -194,7 +190,7 @@ Deterministic context:
   `${{ needs.prepare.outputs.initial_action }}`
 
 Required flow:
-1. Run `pwsh .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber "${{ github.event.inputs.pr_number }}" -BaseRevision "${{ github.event.inputs.expected_base_sha }}"` before editing. Treat exit `20` as fixable findings and exit `30` as escalation.
+1. Run `pwsh .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber "${{ github.event.inputs.pr_number }}" -BaseRevision "${{ github.event.inputs.expected_base_sha }}"` before editing. Treat exit `20` as fixable findings, exit `30` as escalation, and exit `64` as blocked invalid input surfaced through the summary.
 2. Fix only the reported localization files and resources. Rerun validation until it exits `0` or remains `30`.
 3. Invoke `localization-review-gate` exactly once per final candidate. It must return explicit `PASS` or `FAIL`.
 4. If deterministic validation passes and the reviewer returns `PASS` without requiring edits, post one concise success comment and make no commit.

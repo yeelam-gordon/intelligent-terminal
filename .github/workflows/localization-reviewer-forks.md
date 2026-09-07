@@ -121,13 +121,9 @@ jobs:
           $jsonl = Join-Path $PWD 'localization-reviewer-forks.validate.jsonl'
           & .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
           $exitCode = $LASTEXITCODE
-          if (@(0, 20, 30) -notcontains $exitCode) {
-            throw "Unexpected localization validator exit code: $exitCode"
-          }
-          $summary = Get-Content -LiteralPath $jsonl | Select-Object -Last 1 | ConvertFrom-Json -AsHashtable
-          if ($summary.kind -ne 'summary') {
-            throw 'Localization validator did not emit a summary record.'
-          }
+          . (Join-Path $PWD '.github/scripts/localization_validator_output.ps1')
+          $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 20, 30, 64)
+          $summary = $completion.Summary
 
           "comparison_base=$($summary.comparison_base)" >> $env:GITHUB_OUTPUT
           "initial_status=$($summary.status)" >> $env:GITHUB_OUTPUT
@@ -135,6 +131,7 @@ jobs:
 
   agent:
     needs: [prepare]
+    if: needs.prepare.outputs.initial_action != 'ESCALATE'
 
 safe-outputs:
   add-comment:
@@ -172,3 +169,4 @@ Required flow:
 2. Use GitHub pull-request tools for human-readable diff context and review comments.
 3. Return a concise visible `PASS` or actionable `FAIL` comment. Every failure must cite `check_id`, file, resource, observed problem, expected result, and suggested action.
 4. Never push, never edit files, and never claim a check passed if you could not actually observe it.
+5. If the validator reports exit `64`, surface the blocked invalid-input summary instead of treating it as an unexpected failure.
