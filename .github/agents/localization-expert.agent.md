@@ -43,7 +43,7 @@ for this run. Use those values as the source of truth for scope and status.
    success outcome and make no commit.
 6. If edits were required, create one focused completion commit whose subject
    ends exactly with `[localization-expert]`.
-7. When calling `push_to_pull_request_branch`, set its `commit_message` so the
+7. When calling `push_to_pull_request_branch`, set its `message` so the
    first line exactly matches the local `git log -1 --pretty=%s` subject,
    including the `[localization-expert]` suffix. Do not assume the local git
    commit message will be preserved automatically by the safe-output push.
