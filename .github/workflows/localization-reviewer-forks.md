@@ -53,7 +53,7 @@ imports:
 
 checkout:
   repository: ${{ github.repository }}
-  ref: ${{ github.event.inputs.expected_base_sha }}
+  ref: ${{ github.ref }}
 
 tools:
   edit: false
@@ -73,6 +73,28 @@ jobs:
       should_run: ${{ steps.finalize.outputs.should_run }}
       merge_base: ${{ steps.finalize.outputs.merge_base }}
     steps:
+      - name: Validate workflow_dispatch inputs
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          EXPECTED_BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid workflow_dispatch input 'pr_number'; expected a positive decimal integer."
+            exit 1
+          fi
+
+          if [[ ! "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Invalid workflow_dispatch input 'expected_base_sha'; expected exactly 40 hexadecimal characters."
+            exit 1
+          fi
+
+          if [[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Invalid workflow_dispatch input 'expected_head_sha'; expected exactly 40 hexadecimal characters."
+            exit 1
+          fi
       - name: Checkout trusted base
         uses: actions/checkout@v7
         with:
