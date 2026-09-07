@@ -1,5 +1,5 @@
 ---
-description: 'Review and complete customer-facing localization changes in same-repo pull requests'
+description: 'Localization repair worker for same-repository PRs; validates, repairs, and obtains independent review before a completion commit. Dispatched by localization-review.yml.'
 intent: 'Use one deterministic PowerShell validator, then repair only the reported localization defects.'
 
 on:

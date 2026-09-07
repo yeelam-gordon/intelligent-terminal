@@ -1,5 +1,5 @@
 ---
-description: 'Review customer-facing localization changes from fork pull requests'
+description: 'Read-only localization worker for contributor-fork PRs; reports findings without pushing to fork branches. Dispatched by localization-review.yml; not the single-check wrapper.'
 intent: 'Validate fork localization changes read-only without checking out or executing fork code.'
 
 on:
