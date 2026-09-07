@@ -80,6 +80,7 @@ jobs:
           try {
             & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/scripts/localization_checks.ps1') -Mode Gate -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA | Tee-Object -FilePath $jsonl | Out-Null
             $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
           } finally {
             $PSNativeCommandUseErrorActionPreference = $previousNativePreference
           }

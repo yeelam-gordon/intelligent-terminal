@@ -71,6 +71,7 @@ try {
     & pwsh -NoLogo -NoProfile -NonInteractive -File $ChildScriptPath -Status $Status -Action $Action -ShouldRun:$ShouldRun -ExitCode $ExitCode.ToString() -StdErrMessage $StdErrMessage |
         Tee-Object -FilePath $JsonlPath | Out-Null
     $childExitCode = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
 
 . $ResolverScriptPath
 $resolvedAllowedExitCodes = if ($ConsumerKind -eq 'controller') {
@@ -92,6 +93,37 @@ finally {
 }
 '@ | Set-Content -LiteralPath $script:consumerScript -Encoding utf8
 
+    $script:actionsWrapperScript = Join-Path $script:generatedRoot 'validator-actions-wrapper.ps1'
+    @'
+param(
+    [Parameter(Mandatory)][string]$ConsumerScriptPath,
+    [Parameter(Mandatory)][string]$ChildScriptPath,
+    [Parameter(Mandatory)][string]$ResolverScriptPath,
+    [Parameter(Mandatory)][string]$JsonlPath,
+    [ValidateSet('controller', 'validate')][string]$ConsumerKind,
+    [Parameter(Mandatory)][string]$Status,
+    [Parameter(Mandatory)][string]$Action,
+    [Parameter(Mandatory)][bool]$ShouldRun,
+    [Parameter(Mandatory)][int]$ExitCode,
+    [Parameter(Mandatory)][string]$StdErrMessage
+)
+
+. $ConsumerScriptPath `
+    -ChildScriptPath $ChildScriptPath `
+    -ResolverScriptPath $ResolverScriptPath `
+    -JsonlPath $JsonlPath `
+    -ConsumerKind $ConsumerKind `
+    -Status $Status `
+    -Action $Action `
+    -ShouldRun:$ShouldRun `
+    -ExitCode $ExitCode `
+    -StdErrMessage $StdErrMessage
+
+if (Test-Path -LiteralPath variable:\LASTEXITCODE) {
+    exit $LASTEXITCODE
+}
+'@ | Set-Content -LiteralPath $script:actionsWrapperScript -Encoding utf8
+
     Set-Item -Path function:Invoke-LocalizationValidatorConsumerBoundary -Value {
         param(
             [Parameter(Mandatory)][string]$Status,
@@ -109,6 +141,48 @@ finally {
             '-NoProfile'
             '-NonInteractive'
             '-File'
+            $script:consumerScript
+            '-ChildScriptPath'
+            $script:childScript
+            '-ResolverScriptPath'
+            $script:resolverScript
+            '-JsonlPath'
+            $jsonlPath
+            '-ConsumerKind'
+            $ConsumerKind
+            '-Status'
+            $Status
+            '-Action'
+            $Action
+            "-ShouldRun:$($ShouldRun.ToString().ToLowerInvariant())"
+            '-ExitCode'
+            $ExitCode.ToString()
+            '-StdErrMessage'
+            "stderr-$Status"
+        )
+
+        Invoke-Native -FilePath 'pwsh' -Arguments $arguments -TimeoutSec 30
+    }
+
+    Set-Item -Path function:Invoke-LocalizationValidatorActionsWrapper -Value {
+        param(
+            [Parameter(Mandatory)][string]$Status,
+            [Parameter(Mandatory)][string]$Action,
+            [Parameter(Mandatory)][bool]$ShouldRun,
+            [Parameter(Mandatory)][int]$ExitCode,
+            [ValidateSet('controller', 'validate')][string]$ConsumerKind
+        )
+
+        $jsonlPath = Join-Path $script:generatedRoot ("gha-boundary-{0}-{1}.jsonl" -f $Status.ToLowerInvariant(), $ExitCode)
+        Remove-Item -LiteralPath $jsonlPath -Force -ErrorAction SilentlyContinue
+
+        $arguments = @(
+            '-NoLogo'
+            '-NoProfile'
+            '-NonInteractive'
+            '-File'
+            $script:actionsWrapperScript
+            '-ConsumerScriptPath'
             $script:consumerScript
             '-ChildScriptPath'
             $script:childScript
@@ -239,6 +313,64 @@ Describe 'Localization validator consumer' -Tag 'Unit' {
             $jsonlRecord = $jsonlLines[0] | ConvertFrom-Json
             $jsonlRecord.status | Should -Be $case.Status
             $jsonlRecord.should_run | Should -Be $case.ShouldRun
+        }
+    }
+
+    It 'clears LASTEXITCODE so a GitHub Actions pwsh wrapper stays green after handled child exits' {
+        $cases = @(
+            @{
+                Name = 'controller-review'
+                Status = 'PASS'
+                Action = 'REVIEW'
+                ShouldRun = $true
+                CompletionShouldRun = $true
+                ExitCode = 10
+                ConsumerKind = 'controller'
+            }
+            @{
+                Name = 'worker-fixable'
+                Status = 'FIXABLE'
+                Action = 'FIX'
+                ShouldRun = $true
+                CompletionShouldRun = $true
+                ExitCode = 20
+                ConsumerKind = 'validate'
+            }
+            @{
+                Name = 'worker-blocked'
+                Status = 'BLOCKED'
+                Action = 'ESCALATE'
+                ShouldRun = $true
+                CompletionShouldRun = $false
+                ExitCode = 30
+                ConsumerKind = 'validate'
+            }
+            @{
+                Name = 'worker-invalid-input'
+                Status = 'BLOCKED'
+                Action = 'ESCALATE'
+                ShouldRun = $true
+                CompletionShouldRun = $false
+                ExitCode = 64
+                ConsumerKind = 'validate'
+            }
+        )
+
+        foreach ($case in $cases) {
+            $result = Invoke-LocalizationValidatorActionsWrapper -Status $case.Status -Action $case.Action -ShouldRun $case.ShouldRun -ExitCode $case.ExitCode -ConsumerKind $case.ConsumerKind
+
+            $result.ExitCode | Should -Be 0
+
+            $stdoutLines = @($result.StdOut -split "`r?`n" | Where-Object { $_ })
+            $stdoutLines[-1] | Should -Be 'CONTINUATION_MARKER'
+
+            $payload = $stdoutLines[0] | ConvertFrom-Json
+            $payload.exit_code | Should -Be $case.ExitCode
+            $payload.status | Should -Be $case.Status
+            $payload.action | Should -Be $case.Action
+            $payload.should_run | Should -Be $case.CompletionShouldRun
+
+            $result.StdErr | Should -Match "stderr-$($case.Status)"
         }
     }
 
