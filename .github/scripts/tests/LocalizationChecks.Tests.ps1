@@ -99,7 +99,6 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
             $records | ForEach-Object { $_ | ConvertTo-Json -Compress -Depth 6 } | Set-Content -LiteralPath $Path -Encoding utf8
         }
     }
-
     Describe 'Localization validator completion contract' {
     It 'reads the final JSONL summary line and suppresses follow-up work for exit 64' {
         $jsonlPath = Join-Path $TestDrive 'exit64-summary.jsonl'
@@ -136,7 +135,6 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
         $completion.Summary.action | Should -Be $SummaryAction
         $completion.ShouldRun | Should -Be $ExpectedShouldRun
     }
-
     It 'rejects unsupported native exit codes before trusting the JSONL payload' {
         $jsonlPath = Join-Path $TestDrive 'unexpected-exit.jsonl'
         New-LocalizationValidatorJsonl -Path $jsonlPath -Status 'PASS' -Action 'NONE' -ShouldRun $false
@@ -144,7 +142,6 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
         { Resolve-LocalizationValidatorCompletion -JsonlPath $jsonlPath -ExitCode 99 } |
             Should -Throw '*Unexpected localization validator exit code: 99*'
     }
-
     It 'rejects exit 64 when the summary is not BLOCKED/ESCALATE' {
         $jsonlPath = Join-Path $TestDrive 'invalid-exit64.jsonl'
         New-LocalizationValidatorJsonl -Path $jsonlPath -Status 'PASS' -Action 'REVIEW' -ShouldRun $true
@@ -153,7 +150,27 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
             Should -Throw '*exit 64 must emit a BLOCKED/ESCALATE summary record*'
     }
     }
+    Describe 'GitHub API JSON capture' {
+        It 'fails closed on a nonzero exit before using the payload' {
+            { Resolve-GitHubApiJson -Context 'GitHub commit lookup' -ExitCode 1 -Stdout '{"login":"github-actions[bot]"}' } |
+                Should -Throw '*GitHub commit lookup failed with exit code 1.*'
+        }
+        It 'fails closed when gh returns no JSON output' {
+            { Resolve-GitHubApiJson -Context 'GitHub commit lookup' -ExitCode 0 -Stdout '' } |
+                Should -Throw '*GitHub commit lookup returned no JSON output.*'
+        }
+        It 'fails closed when gh returns invalid JSON' {
+            { Resolve-GitHubApiJson -Context 'GitHub commit lookup' -ExitCode 0 -Stdout '{not json}' } |
+                Should -Throw '*GitHub commit lookup returned invalid JSON output.*'
+        }
+        It 'returns parsed JSON for a valid payload' {
+            $result = Resolve-GitHubApiJson -Context 'GitHub commit lookup' -ExitCode 0 -Stdout '{"login":"github-actions[bot]","id":1,"verified":true}'
 
+            $result.login | Should -Be 'github-actions[bot]'
+            $result.id | Should -Be 1
+            $result.verified | Should -BeTrue
+        }
+    }
     Describe 'Localization checker provenance' {
     It 'treats a null author as not-completion' {
         $commit = Get-LocalizationValidatorCommitFixture -Name 'commit-null-author.json'
@@ -175,5 +192,5 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
         Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' |
             Should -BeTrue
     }
-}
+    }
 }

@@ -139,7 +139,7 @@ jobs:
 
             $files = [System.Collections.Generic.List[object]]::new()
             for ($page = 1; $page -le 20; $page++) {
-              $batch = gh api "repos/$Repository/pulls/$PullRequestNumber/files?per_page=100&page=$page" | ConvertFrom-Json -AsHashtable
+                $batch = Invoke-GitHubApiJson -Path "repos/$Repository/pulls/$PullRequestNumber/files?per_page=100&page=$page" -Context "GitHub pull request file listing page $page for $Repository#$PullRequestNumber"
               $items = @($batch)
               if ($items.Count -eq 0) {
                 break

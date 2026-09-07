@@ -418,6 +418,46 @@ function Invoke-ProcessBytes {
     }
 }
 
+function Invoke-GitHubApiJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$Context
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Context)) {
+        $Context = "gh api $Path"
+    }
+
+    $result = Invoke-ProcessBytes -FilePath 'gh' -Arguments @('api', $Path)
+    $stdout = [System.Text.Encoding]::UTF8.GetString($result.Bytes).Trim()
+
+    return (Resolve-GitHubApiJson -Context $Context -ExitCode $result.ExitCode -Stdout $stdout)
+}
+
+function Resolve-GitHubApiJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Context,
+        [Parameter(Mandatory)][int]$ExitCode,
+        [string]$Stdout
+    )
+
+    if ($ExitCode -ne 0) {
+        throw "$Context failed with exit code $ExitCode."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Stdout)) {
+        throw "$Context returned no JSON output."
+    }
+
+    try {
+        return ($Stdout | ConvertFrom-Json -AsHashtable -ErrorAction Stop)
+    } catch {
+        throw "$Context returned invalid JSON output."
+    }
+}
+
 function Assert-RepositoryRoot {
     $root = [System.IO.Path]::GetFullPath($RepositoryRoot)
     if (-not (Test-Path -LiteralPath $root)) {

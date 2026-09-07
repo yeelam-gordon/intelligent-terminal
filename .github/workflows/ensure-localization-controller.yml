@@ -56,7 +56,7 @@ jobs:
           }
 
           if ($env:SAME_REPO -eq 'true' -and (git log -1 --pretty=%s $env:HEAD_SHA) -match '\[localization-expert\]$') {
-            $commit = gh api "repos/$env:REPOSITORY/commits/$env:HEAD_SHA" | ConvertFrom-Json -AsHashtable
+            $commit = Invoke-GitHubApiJson -Path "repos/$env:REPOSITORY/commits/$env:HEAD_SHA" -Context 'GitHub commit lookup for localization completion'
             if (Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha $env:HEAD_SHA) {
               "should_run=false" >> $env:GITHUB_OUTPUT
               "reason=workflow-completion" >> $env:GITHUB_OUTPUT
