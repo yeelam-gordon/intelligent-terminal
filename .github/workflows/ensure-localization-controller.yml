@@ -47,7 +47,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           $ErrorActionPreference = 'Stop'
-          . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
+          . (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1')
           $remoteRef = "refs/remotes/origin/localization-pr-$env:PR_NUMBER"
           Invoke-GitHubPullRequestHeadFetch -PullRequestNumber $env:PR_NUMBER -RemoteRef $remoteRef | Out-Null
           $fetchedHead = (git rev-parse $remoteRef).Trim()
@@ -78,7 +78,7 @@ jobs:
           $previousNativePreference = $PSNativeCommandUseErrorActionPreference
           $PSNativeCommandUseErrorActionPreference = $false
           try {
-            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/scripts/localization_checks.ps1') -Mode Gate -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA | Tee-Object -FilePath $jsonl | Out-Null
+            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1') -Mode Gate -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA | Tee-Object -FilePath $jsonl | Out-Null
             $exitCode = $LASTEXITCODE
             $global:LASTEXITCODE = 0
           } finally {

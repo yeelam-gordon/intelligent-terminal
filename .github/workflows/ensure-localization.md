@@ -100,7 +100,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
+          . (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1')
           function Get-ValidatedPrepareInputs {
             if ($env:PR_NUMBER -notmatch '^[1-9][0-9]*$') {
               throw "Invalid PR_NUMBER '$env:PR_NUMBER'; expected a positive decimal integer."
@@ -139,7 +139,7 @@ jobs:
           $previousNativePreference = $PSNativeCommandUseErrorActionPreference
           $PSNativeCommandUseErrorActionPreference = $false
           try {
-            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
+            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
             $exitCode = $LASTEXITCODE
             $global:LASTEXITCODE = 0
           } finally {

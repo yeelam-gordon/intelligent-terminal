@@ -95,7 +95,7 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: |
           $ErrorActionPreference = 'Stop'
-          . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
+          . (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1')
 
           function Get-ValidatedPrepareInputs {
             if ($env:PR_NUMBER -notmatch '^[1-9][0-9]*$') {
@@ -178,7 +178,7 @@ jobs:
           $previousNativePreference = $PSNativeCommandUseErrorActionPreference
           $PSNativeCommandUseErrorActionPreference = $false
           try {
-            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
+            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
             $exitCode = $LASTEXITCODE
             $global:LASTEXITCODE = 0
           } finally {
@@ -257,28 +257,33 @@ jobs:
           )
           $relevantPaths = if ($findingPaths.Count -gt 0) { $findingPaths } else { @($reswPaths + $wtaPaths | Sort-Object -Unique) }
 
-          $instructionItems = [System.Collections.Generic.List[hashtable]]::new()
+          $referenceItems = [System.Collections.Generic.List[hashtable]]::new()
+          $skillPath = '.github/skills/ensure-localization/SKILL.md'
+          $referenceItems.Add(@{
+            Path = $skillPath
+            Url = "$($inputs.ServerUrl)/$($inputs.Repository)/blob/$($inputs.BaseSha)/.github/skills/ensure-localization/SKILL.md"
+          })
           if (@($relevantPaths | Where-Object { $_ -match '\.resw$' }).Count -gt 0) {
-            $instructionItems.Add(@{
+            $referenceItems.Add(@{
               Path = '.github/instructions/localization.instructions.md'
               Url = "$($inputs.ServerUrl)/$($inputs.Repository)/blob/$($inputs.BaseSha)/.github/instructions/localization.instructions.md"
             })
           }
           if (@($relevantPaths | Where-Object { $_ -match '^tools/wta/locales/[^/]+\.yml$' }).Count -gt 0) {
-            $instructionItems.Add(@{
+            $referenceItems.Add(@{
               Path = '.github/instructions/rust-localization.instructions.md'
               Url = "$($inputs.ServerUrl)/$($inputs.Repository)/blob/$($inputs.BaseSha)/.github/instructions/rust-localization.instructions.md"
             })
           }
-          if ($instructionItems.Count -eq 0) {
+          if ($referenceItems.Count -le 1) {
             throw 'Localization findings did not map to a supported localization instruction file.'
           }
 
-          $instructionLinks = @(
-            $instructionItems | ForEach-Object { "- [``$($_.Path)``]($($_.Url))" }
+          $referenceLinks = @(
+            $referenceItems | ForEach-Object { "- [``$($_.Path)``]($($_.Url))" }
           ) -join "`n"
-          $instructionPromptLines = @(
-            $instructionItems | ForEach-Object { "- $($_.Path)" }
+          $referencePromptLines = @(
+            $referenceItems | ForEach-Object { "- $($_.Path)" }
           ) -join "`n"
 
           $typeLines = [System.Collections.Generic.List[string]]::new()
@@ -290,16 +295,6 @@ jobs:
           }
           $changedTypeLines = if ($typeLines.Count -gt 0) { $typeLines.ToArray() -join "`n" } else { '- localized files reported by the validator' }
           $codeFence = '```'
-
-          $agentPromptLine = ''
-          $agentNote = ''
-          $agentPath = '.github/agents/localization-expert.agent.md'
-          $agentFullPath = Join-Path $PWD $agentPath
-          if (Test-Path -LiteralPath $agentFullPath -PathType Leaf) {
-            $agentUrl = "$($inputs.ServerUrl)/$($inputs.Repository)/blob/$($inputs.BaseSha)/.github/agents/localization-expert.agent.md"
-            $agentPromptLine = "If available in this repository, you may also consult $agentPath ($agentUrl) for the repository's same-repo repair and review expectations."
-            $agentNote = "Optional background: [``$agentPath``]($agentUrl)."
-          }
 
           $findingLines = @(
             $fixableFindings |
@@ -317,8 +312,8 @@ jobs:
           $promptLines.Add("Head SHA: $($inputs.HeadSha)")
           $promptLines.Add("Comparison base: $($summary.comparison_base)")
           $promptLines.Add('')
-          $promptLines.Add('Follow only these repository instructions:')
-          foreach ($line in @($instructionPromptLines -split "`r?`n" | Where-Object { $_ })) {
+          $promptLines.Add('Follow these trusted repository localization references:')
+          foreach ($line in @($referencePromptLines -split "`r?`n" | Where-Object { $_ })) {
             $promptLines.Add($line)
           }
           $promptLines.Add('')
@@ -332,10 +327,7 @@ jobs:
             $promptLines.Add($line)
           }
           $promptLines.Add('')
-          $promptLines.Add('Update every required locale already shipped for the affected component(s). Preserve placeholders, locked values and locked tokens, translator comments, BOM and encoding, XML or YAML structure, required ordering, and pseudo-locale style. Do not change unrelated files or strings. Re-run the repository''s existing localization validation after editing. If this repository already has an independent localization reviewer or review step available, run it after validation before you finish. Then commit and push only the localization updates for this PR branch.')
-          if (-not [string]::IsNullOrWhiteSpace($agentPromptLine)) {
-            $promptLines.Add($agentPromptLine)
-          }
+          $promptLines.Add('Use the localization skill as the workflow authority. Use the wrapper file or files above only to confirm which file-type scope applies. Update every required locale already shipped for the affected component(s), preserve placeholders, locked values and locked tokens, translator comments, BOM and encoding, XML or YAML structure, required ordering, and pseudo-locale style, and do not change unrelated files or source-language en-US strings unless the PR explicitly changes source text. Follow the skill''s validate → repair → validate → independent review flow before committing and pushing the localization-only updates for this PR branch.')
           $promptBody = ($promptLines.ToArray() -join "`n")
 
           $cardLines = [System.Collections.Generic.List[string]]::new()
@@ -352,8 +344,8 @@ jobs:
             $cardLines.Add($line)
           }
           $cardLines.Add('')
-          $cardLines.Add('Applicable repository instructions for this PR (trusted base):')
-          foreach ($line in @($instructionLinks -split "`r?`n" | Where-Object { $_ })) {
+          $cardLines.Add('Applicable repository localization references for this PR (trusted base):')
+          foreach ($line in @($referenceLinks -split "`r?`n" | Where-Object { $_ })) {
             $cardLines.Add($line)
           }
           $cardLines.Add('')
@@ -365,12 +357,9 @@ jobs:
           $cardLines.Add('1. Check out this PR branch locally.')
           $cardLines.Add('2. Open Copilot in that local checkout.')
           $cardLines.Add('3. Paste the prompt below.')
-          $cardLines.Add('4. Inspect the translations, run the existing localization validation or review available in this repo, then commit and push the updates back to this PR branch.')
+          $cardLines.Add('4. Follow the skill''s repair flow, run the validator and independent review it defines, then commit and push the updates back to this PR branch.')
           $cardLines.Add('')
           $cardLines.Add($missingFilesNote)
-          if (-not [string]::IsNullOrWhiteSpace($agentNote)) {
-            $cardLines.Add($agentNote)
-          }
           $cardLines.Add('')
           $cardLines.Add("$($codeFence)text")
           foreach ($line in @($promptBody -split "`r?`n")) {

@@ -1,10 +1,7 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 
-# Unit tests for .github/scripts/localization_checks.ps1.
-# Fixture purposes:
-# - exit64-summary.jsonl: JSONL summary contract for the exit-64 path, including last-line parsing.
-# - commit-null-author.json / commit-null-committer.json: missing GitHub commit metadata must fail closed.
-# - commit-valid-bot-verified-single-parent.json: verified completion commit happy path.
+# Unit tests for .github/skills/ensure-localization/scripts/localization_checks.ps1.
+# Fixtures are defined inline or in TestDrive to keep the skill self-contained.
 
 Describe 'Localization checker unit tests' -Tag 'Unit' {
     BeforeEach {
@@ -12,8 +9,7 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
     }
 
     BeforeAll {
-        $script:checkerScript = Join-Path $PSScriptRoot '..\localization_checks.ps1'
-        $script:fixtureRoot = Join-Path $PSScriptRoot 'fixtures\localization-validator'
+        $script:checkerScript = Join-Path $PSScriptRoot '..\scripts\localization_checks.ps1'
 
         foreach ($name in @(
             'Mode'
@@ -33,13 +29,6 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
         }
 
         . $script:checkerScript
-
-        function Get-LocalizationValidatorCommitFixture {
-            param([Parameter(Mandatory)][string]$Name)
-
-            $fixturePath = Join-Path $script:fixtureRoot $Name
-            Get-Content -LiteralPath $fixturePath -Raw | ConvertFrom-Json -AsHashtable
-        }
 
         function New-LocalizationValidatorJsonl {
             param(
@@ -99,17 +88,40 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
             $records | ForEach-Object { $_ | ConvertTo-Json -Compress -Depth 6 } | Set-Content -LiteralPath $Path -Encoding utf8
         }
 
-        function Get-LocalizationValidatorFixtureBytes {
-            param([Parameter(Mandatory)][string]$Name)
+        function New-LocalizationValidatorCommit {
+            param(
+                [AllowNull()][string]$AuthorLogin = 'github-actions[bot]',
+                [AllowNull()][string]$CommitterLogin = 'web-flow',
+                [bool]$Verified = $true,
+                [string]$ParentSha = '0123456789012345678901234567890123456789'
+            )
 
-            $fixturePath = Join-Path $script:fixtureRoot $Name
-            [System.IO.File]::ReadAllBytes($fixturePath)
+            return @{
+                author = if ($null -eq $AuthorLogin) { $null } else { @{ login = $AuthorLogin } }
+                committer = if ($null -eq $CommitterLogin) { $null } else { @{ login = $CommitterLogin } }
+                commit = @{
+                    verification = @{
+                        verified = $Verified
+                    }
+                }
+                parents = @(
+                    @{
+                        sha = $ParentSha
+                    }
+                )
+            }
+        }
+
+        function New-Utf8Bytes {
+            param([Parameter(Mandatory)][string]$Text)
+
+            return ([System.Text.UTF8Encoding]::new($false)).GetBytes($Text)
         }
     }
     Describe 'Localization validator completion contract' {
     It 'reads the final JSONL summary line and suppresses follow-up work for exit 64' {
         $jsonlPath = Join-Path $TestDrive 'exit64-summary.jsonl'
-        Copy-Item -LiteralPath (Join-Path $script:fixtureRoot 'exit64-summary.jsonl') -Destination $jsonlPath
+        New-LocalizationValidatorJsonl -Path $jsonlPath -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true
 
         $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonlPath -ExitCode 64
 
@@ -342,21 +354,21 @@ Start-Sleep -Seconds 30
     }
     Describe 'Localization checker provenance' {
     It 'treats a null author as not-completion' {
-        $commit = Get-LocalizationValidatorCommitFixture -Name 'commit-null-author.json'
+        $commit = New-LocalizationValidatorCommit -AuthorLogin $null
 
         Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha '0123456789012345678901234567890123456789' |
             Should -BeFalse
     }
 
     It 'treats a null committer as not-completion' {
-        $commit = Get-LocalizationValidatorCommitFixture -Name 'commit-null-committer.json'
+        $commit = New-LocalizationValidatorCommit -CommitterLogin $null
 
         Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha '0123456789012345678901234567890123456789' |
             Should -BeFalse
     }
 
     It 'accepts the verified bot single-parent completion commit' {
-        $commit = Get-LocalizationValidatorCommitFixture -Name 'commit-valid-bot-verified-single-parent.json'
+        $commit = New-LocalizationValidatorCommit -ParentSha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
         Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' |
             Should -BeTrue
@@ -365,7 +377,13 @@ Start-Sleep -Seconds 30
 
     Describe 'WTA locked token validation' {
         BeforeAll {
-            $fixtureBytes = Get-LocalizationValidatorFixtureBytes -Name 'wta-clean-c-locked-source.yml'
+            $fixtureBytes = New-Utf8Bytes -Text @'
+# ── File-level locks ─────────────────────────────────────────────────────────
+# {Locked=qps-ploc,qps-ploca,qps-plocm} "Intelligent Terminal" is the product name
+
+demo.clean_c.visible_review: "GHAW Visible Review" # {Locked}
+demo.clean_c.visible_review_with_product: "GHAW Visible Review — Intelligent Terminal"
+'@
             $script:wtaLockedSourceFixture = Read-WtaLocaleEntries -Bytes $fixtureBytes -Path 'tools/wta/locales/en-US.yml'
         }
 

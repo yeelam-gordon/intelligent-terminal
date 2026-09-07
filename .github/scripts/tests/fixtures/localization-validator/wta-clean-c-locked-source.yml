@@ -1,5 +1,0 @@
-# ── File-level locks ─────────────────────────────────────────────────────────
-# {Locked=qps-ploc,qps-ploca,qps-plocm} "Intelligent Terminal" is the product name
-
-demo.clean_c.visible_review: "GHAW Visible Review" # {Locked}
-demo.clean_c.visible_review_with_product: "GHAW Visible Review — Intelligent Terminal"

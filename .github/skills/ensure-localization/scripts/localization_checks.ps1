@@ -42,10 +42,10 @@
     Repository root containing `.git`. Defaults to the current location.
 
 .EXAMPLE
-    pwsh .github/scripts/localization_checks.ps1 -Mode Gate -PullRequestNumber 13 -BaseRevision <base-sha> -HeadRevision <head-sha>
+    pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Gate -PullRequestNumber 13 -BaseRevision <base-sha> -HeadRevision <head-sha>
 
 .EXAMPLE
-    pwsh .github/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha>
+    pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha>
 #>
 [CmdletBinding()]
 param(
