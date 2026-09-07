@@ -1,6 +1,6 @@
 ---
-description: 'Detached fork-PR localization reviewer; validates immutable fork content read-only and reports findings. Dispatched by localization-controller.yml.'
-intent: 'Validate immutable fork localization changes read-only on the trusted base workspace.'
+description: 'Detached same-repo localization repair worker; validates, fixes, and requests final review. Dispatched by ensure-localization-controller.yml.'
+intent: 'Validate immutable same-repo localization changes, repair deterministic issues, and request final review.'
 
 on:
   workflow_dispatch:
@@ -49,22 +49,26 @@ permissions:
 
 engine: copilot
 imports:
-  - .github/agents/localization-reviewer.agent.md
+  - .github/agents/localization-expert.agent.md
 
 checkout:
-  repository: ${{ github.repository }}
-  ref: ${{ github.event.inputs.expected_base_sha }}
+  ref: ${{ github.event.inputs.expected_head_sha }}
   fetch-depth: 0
 
+network:
+  allowed:
+    - defaults
+    - rust
+    - 'learn.microsoft.com'
+
 tools:
-  edit: false
+  edit:
   bash:
-    - 'git fetch:*'
-    - 'git rev-parse:*'
+    - 'git status:*'
+    - 'git diff:*'
+    - 'git add:*'
+    - 'git commit:*'
     - 'pwsh:*'
-  cli-proxy: false
-  github:
-    toolsets: [pull_requests]
 
 jobs:
   prepare:
@@ -72,7 +76,9 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      pull-requests: read
     outputs:
+      already_complete: ${{ steps.prepare.outputs.already_complete }}
       comparison_base: ${{ steps.prepare.outputs.comparison_base }}
       initial_status: ${{ steps.prepare.outputs.initial_status }}
       initial_action: ${{ steps.prepare.outputs.initial_action }}
@@ -83,13 +89,15 @@ jobs:
           ref: ${{ github.event.inputs.expected_base_sha }}
           fetch-depth: 0
           persist-credentials: true
-      - name: Validate immutable fork head without checkout
+      - name: Validate immutable PR head and deterministic checks
         id: prepare
         shell: pwsh
         env:
           PR_NUMBER: ${{ github.event.inputs.pr_number }}
           BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
           HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           function Get-ValidatedPrepareInputs {
@@ -115,48 +123,79 @@ jobs:
           git fetch --no-tags origin "+refs/pull/$($inputs.PrNumber)/head:$remoteRef"
           $currentHead = (git rev-parse $remoteRef).Trim().ToLowerInvariant()
           if ($currentHead -ne $inputs.HeadSha) {
-            throw "Fork PR head changed after controller dispatch. Expected $($inputs.HeadSha), found $currentHead."
+            throw "PR head changed after controller dispatch. Expected $($inputs.HeadSha), found $currentHead."
           }
 
-          $jsonl = Join-Path $PWD 'localization-reviewer-forks.validate.jsonl'
+          $alreadyComplete = 'false'
+          if ((git log -1 --pretty=%s $inputs.HeadSha) -match '\[localization-expert\]$') {
+            $commit = gh api "repos/$env:REPOSITORY/commits/$($inputs.HeadSha)" | ConvertFrom-Json -AsHashtable
+            $authorLogin = $commit.author.login
+            $committerLogin = $commit.committer.login
+            $verified = [bool]$commit.commit.verification.verified
+            $parentCount = @($commit.parents).Count
+            if ($authorLogin -eq 'github-actions[bot]' -and $committerLogin -eq 'web-flow' -and $verified -and $parentCount -eq 1) {
+              $alreadyComplete = 'true'
+            }
+          }
+
+          $jsonl = Join-Path $PWD 'ensure-localization.validate.jsonl'
           & .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
           $exitCode = $LASTEXITCODE
           . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
           $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 20, 30, 64)
           $summary = $completion.Summary
 
+          "already_complete=$alreadyComplete" >> $env:GITHUB_OUTPUT
           "comparison_base=$($summary.comparison_base)" >> $env:GITHUB_OUTPUT
           "initial_status=$($summary.status)" >> $env:GITHUB_OUTPUT
           "initial_action=$($summary.action)" >> $env:GITHUB_OUTPUT
 
   agent:
     needs: [prepare]
-    if: needs.prepare.outputs.initial_action != 'ESCALATE'
+    if: needs.prepare.outputs.already_complete != 'true' && needs.prepare.outputs.initial_action != 'ESCALATE'
 
 safe-outputs:
+  push-to-pull-request-branch:
+    base-branch: ${{ github.event.inputs.expected_head_sha }}
+    allowed-files:
+      - 'src/cascadia/**/Resources/*.resw'
+      - 'src/cascadia/**/Resources/**/*.resw'
+      - 'tools/wta/locales/*.yml'
+    protected-files: blocked
+    fallback-as-pull-request: false
   add-comment:
-    target: '*'
+    target: triggering
     max: 1
     hide-older-comments: true
 
-timeout-minutes: 30
-max-turns: 30
-max-ai-credits: 500
-max-daily-ai-credits: 2500
+timeout-minutes: 45
+max-turns: 70
+max-ai-credits: 1000
+max-daily-ai-credits: 5000
 concurrency:
-  group: 'localization-reviewer-fork-${{ github.event.inputs.pr_number }}'
+  group: 'localization-expert-${{ github.event.inputs.pr_number }}'
   job-discriminator: ${{ github.run_id }}
-  cancel-in-progress: true
-run-name: 'Localization Reviewer Fork ${{ github.event.inputs.dispatch_id }}'
+  cancel-in-progress: false
+run-name: 'Ensure Localization ${{ github.event.inputs.dispatch_id }}'
 ---
 
-Fork localization review for PR #${{ github.event.inputs.pr_number }} in `${{ github.event.inputs.repo }}`.
+Same-repo localization repair for PR #${{ github.event.inputs.pr_number }} in `${{ github.event.inputs.repo }}`.
 
-Imported runtime role: `localization-reviewer`.
+Imported runtime role: `localization-expert`.
 
 Deterministic context:
 - trusted base workspace: `${{ github.event.inputs.expected_base_sha }}`
-- immutable fork head: `${{ github.event.inputs.expected_head_sha }}`
+- immutable head: `${{ github.event.inputs.expected_head_sha }}`
 - comparison base: `${{ needs.prepare.outputs.comparison_base }}`
 - initial validator summary: `${{ needs.prepare.outputs.initial_status }}` /
   `${{ needs.prepare.outputs.initial_action }}`
+
+## agent: `localization-review-gate`
+
+---
+description: 'Performs the independent final localization review for the same-repo workflow'
+---
+
+{{#runtime-import .github/agents/localization-reviewer.agent.md}}
+
+## end agent: `localization-review-gate`

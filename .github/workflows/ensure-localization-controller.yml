@@ -77,7 +77,7 @@ jobs:
             }
           }
 
-          $jsonl = Join-Path $PWD 'localization-controller.gate.jsonl'
+          $jsonl = Join-Path $PWD 'ensure-localization-controller.gate.jsonl'
           & .github/scripts/localization_checks.ps1 -Mode Gate -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA | Tee-Object -FilePath $jsonl | Out-Null
           $exitCode = $LASTEXITCODE
           . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
@@ -127,10 +127,10 @@ jobs:
             const pr = context.payload.pull_request;
             const sameRepo = process.env.SAME_REPO === "true";
             const worker = sameRepo
-              ? "localization-expert.lock.yml"
-              : "localization-reviewer-forks.lock.yml";
+              ? "ensure-localization.lock.yml"
+              : "ensure-localization-read-only.lock.yml";
             const dispatchId =
-              `localization-${pr.number}-${process.env.EXPECTED_HEAD_SHA}-${context.runId}-${context.runAttempt}`;
+              `ensure-localization-${pr.number}-${process.env.EXPECTED_HEAD_SHA}-${context.runId}-${context.runAttempt}`;
             const baseRef = process.env.BASE_REF;
             const startedAt = Date.now() - 5000;
             const awContext = sameRepo ? JSON.stringify({
@@ -142,13 +142,13 @@ jobs:
               base_sha: process.env.EXPECTED_BASE_SHA,
               root_repo: `${context.repo.owner}/${context.repo.repo}`,
               root_run_id: String(context.runId),
-              root_workflow_id: "localization-controller"
+              root_workflow_id: "ensure-localization-controller"
             }) : JSON.stringify({
               event_type: "workflow_dispatch",
               source_pr_number: pr.number,
               root_repo: `${context.repo.owner}/${context.repo.repo}`,
               root_run_id: String(context.runId),
-              root_workflow_id: "localization-controller"
+              root_workflow_id: "ensure-localization-controller"
             });
 
             const inputs = {
