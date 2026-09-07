@@ -57,11 +57,7 @@ jobs:
 
           if ($env:SAME_REPO -eq 'true' -and (git log -1 --pretty=%s $env:HEAD_SHA) -match '\[localization-expert\]$') {
             $commit = gh api "repos/$env:REPOSITORY/commits/$env:HEAD_SHA" | ConvertFrom-Json -AsHashtable
-            $authorLogin = $commit.author.login
-            $committerLogin = $commit.committer.login
-            $verified = [bool]$commit.commit.verification.verified
-            $parentCount = @($commit.parents).Count
-            if ($authorLogin -eq 'github-actions[bot]' -and $committerLogin -eq 'web-flow' -and $verified -and $parentCount -eq 1) {
+            if (Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha $env:HEAD_SHA) {
               "should_run=false" >> $env:GITHUB_OUTPUT
               "reason=workflow-completion" >> $env:GITHUB_OUTPUT
               "gate_status=PASS" >> $env:GITHUB_OUTPUT

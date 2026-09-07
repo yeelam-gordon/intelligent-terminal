@@ -363,6 +363,24 @@ function Invoke-GitHubPullRequestHeadFetch {
     return Invoke-GitText -Arguments @('-c', $extraHeaderConfig, 'fetch', '--no-tags', $RemoteName, $refSpec) -CommandDisplay $commandDisplay
 }
 
+function Test-LocalizationWorkflowCompletionCommit {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Commit,
+        [Parameter(Mandatory)][string]$ExpectedHeadSha
+    )
+
+    $authorLogin = if ($null -ne $Commit.author) { $Commit.author.login } else { $null }
+    $committerLogin = if ($null -ne $Commit.committer) { $Commit.committer.login } else { $null }
+    $verified = [bool]$Commit.commit.verification.verified
+    $parentCount = @($Commit.parents).Count
+    if ($authorLogin -ne 'github-actions[bot]' -or $committerLogin -ne 'web-flow' -or -not $verified -or $parentCount -ne 1) {
+        return $false
+    }
+
+    return $Commit.parents[0].sha -eq $ExpectedHeadSha
+}
+
 function Invoke-ProcessBytes {
     [CmdletBinding()]
     param(

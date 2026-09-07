@@ -130,11 +130,7 @@ jobs:
           $alreadyComplete = 'false'
           if ((git log -1 --pretty=%s $inputs.HeadSha) -match '\[localization-expert\]$') {
             $commit = gh api "repos/$env:REPOSITORY/commits/$($inputs.HeadSha)" | ConvertFrom-Json -AsHashtable
-            $authorLogin = $commit.author.login
-            $committerLogin = $commit.committer.login
-            $verified = [bool]$commit.commit.verification.verified
-            $parentCount = @($commit.parents).Count
-            if ($authorLogin -eq 'github-actions[bot]' -and $committerLogin -eq 'web-flow' -and $verified -and $parentCount -eq 1) {
+            if (Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha $inputs.HeadSha) {
               $alreadyComplete = 'true'
             }
           }

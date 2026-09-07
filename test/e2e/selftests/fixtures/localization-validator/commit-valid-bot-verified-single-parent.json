@@ -1,0 +1,18 @@
+{
+  "author": {
+    "login": "github-actions[bot]"
+  },
+  "committer": {
+    "login": "web-flow"
+  },
+  "commit": {
+    "verification": {
+      "verified": true
+    }
+  },
+  "parents": [
+    {
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

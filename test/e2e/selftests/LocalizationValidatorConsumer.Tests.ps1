@@ -5,8 +5,16 @@ BeforeAll {
     $script:resolverScript = Join-Path $PSScriptRoot '..\..\..\.github\scripts\localization_checks.ps1'
     . $script:resolverScript
 
+    $script:fixtureRoot = Join-Path $PSScriptRoot 'fixtures\localization-validator'
     $script:generatedRoot = Join-Path $PSScriptRoot 'fixtures\localization-validator\generated'
     New-Item -ItemType Directory -Force -Path $script:generatedRoot | Out-Null
+
+    function Get-LocalizationValidatorCommitFixture {
+        param([Parameter(Mandatory)][string]$Name)
+
+        $fixturePath = Join-Path $script:fixtureRoot $Name
+        Get-Content -LiteralPath $fixturePath -Raw | ConvertFrom-Json -AsHashtable
+    }
 
     $script:childScript = Join-Path $script:generatedRoot 'validator-child.ps1'
     @'
@@ -238,5 +246,33 @@ Describe 'Localization validator consumer' -Tag 'Unit' {
         Get-Command Resolve-LocalizationValidatorCompletion -CommandType Function -ErrorAction Stop |
             Select-Object -ExpandProperty Name |
             Should -Be 'Resolve-LocalizationValidatorCompletion'
+    }
+}
+
+Describe 'Localization workflow provenance gate' -Tag 'Unit' {
+    It 'treats a null author as not-completion' {
+        $commit = Get-LocalizationValidatorCommitFixture -Name 'commit-null-author.json'
+
+        Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha '0123456789012345678901234567890123456789' |
+            Should -BeFalse
+    }
+
+    It 'treats a null committer as not-completion' {
+        $commit = Get-LocalizationValidatorCommitFixture -Name 'commit-null-committer.json'
+
+        Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha '0123456789012345678901234567890123456789' |
+            Should -BeFalse
+    }
+
+    It 'accepts the verified bot single-parent completion commit' {
+        $commit = Get-LocalizationValidatorCommitFixture -Name 'commit-valid-bot-verified-single-parent.json'
+
+        Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' |
+            Should -BeTrue
+    }
+
+    It 'fails closed on malformed API error payloads' {
+        { Get-Content -LiteralPath (Join-Path $script:fixtureRoot 'commit-malformed-api-error.txt') -Raw | ConvertFrom-Json -AsHashtable } |
+            Should -Throw
     }
 }
