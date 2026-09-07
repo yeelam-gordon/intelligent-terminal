@@ -119,8 +119,14 @@ jobs:
           }
 
           $jsonl = Join-Path $PWD 'ensure-localization-read-only.validate.jsonl'
-          & .github/scripts/localization_checks.ps1 -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
-          $exitCode = $LASTEXITCODE
+          $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+          $PSNativeCommandUseErrorActionPreference = $false
+          try {
+            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
+            $exitCode = $LASTEXITCODE
+          } finally {
+            $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+          }
           . (Join-Path $PWD '.github/scripts/localization_checks.ps1')
           $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 20, 30, 64)
           $summary = $completion.Summary
