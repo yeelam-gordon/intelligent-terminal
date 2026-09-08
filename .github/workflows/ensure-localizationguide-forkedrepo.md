@@ -97,27 +97,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           . (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1')
 
-          function Get-ValidatedPrepareInputs {
-            if ($env:PR_NUMBER -notmatch '^[1-9][0-9]*$') {
-              throw "Invalid PR_NUMBER '$env:PR_NUMBER'; expected a positive decimal integer."
-            }
-            if ($env:BASE_SHA -notmatch '^[0-9a-fA-F]{40}$') {
-              throw "Invalid BASE_SHA '$env:BASE_SHA'; expected exactly 40 hexadecimal characters."
-            }
-            if ($env:HEAD_SHA -notmatch '^[0-9a-fA-F]{40}$') {
-              throw "Invalid HEAD_SHA '$env:HEAD_SHA'; expected exactly 40 hexadecimal characters."
-            }
-            $trustedRepository = Resolve-TrustedGitHubRepository -Repository $env:REPOSITORY -TrustedRepository $env:GITHUB_REPOSITORY
-
-            return @{
-              PrNumber = $env:PR_NUMBER
-              BaseSha = $env:BASE_SHA.ToLowerInvariant()
-              HeadSha = $env:HEAD_SHA.ToLowerInvariant()
-              Repository = $trustedRepository
-              ServerUrl = $env:GITHUB_SERVER_URL.TrimEnd('/')
-            }
-          }
-
           function Set-GitHubOutputValue {
             param(
               [Parameter(Mandatory)][string]$Name,
@@ -163,22 +142,23 @@ jobs:
             return ($segments -join ' — ')
           }
 
-          $inputs = Get-ValidatedPrepareInputs
-          Assert-GitCommitExists -Revision $inputs.BaseSha
+          $inputs = Get-ValidatedWorkflowPrepareInputs -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA -Repository $env:REPOSITORY -TrustedRepository $env:GITHUB_REPOSITORY
+          $serverUrl = $env:GITHUB_SERVER_URL.TrimEnd('/')
+          Assert-GitCommitExists -Revision $inputs.BaseRevision
 
-          $remoteRef = "refs/remotes/origin/localization-pr-$($inputs.PrNumber)"
-          Invoke-GitHubPullRequestHeadFetch -PullRequestNumber $inputs.PrNumber -RemoteRef $remoteRef | Out-Null
+          $remoteRef = "refs/remotes/origin/localization-pr-$($inputs.PullRequestNumber)"
+          Invoke-GitHubPullRequestHeadFetch -PullRequestNumber $inputs.PullRequestNumber -RemoteRef $remoteRef | Out-Null
           $currentHead = (git rev-parse $remoteRef).Trim().ToLowerInvariant()
-          if ($currentHead -ne $inputs.HeadSha) {
-            throw "Fork PR head changed after controller dispatch. Expected $($inputs.HeadSha), found $currentHead."
+          if ($currentHead -ne $inputs.HeadRevision) {
+            throw "Fork PR head changed after controller dispatch. Expected $($inputs.HeadRevision), found $currentHead."
           }
-          Assert-GitCommitExists -Revision $inputs.HeadSha
+          Assert-GitCommitExists -Revision $inputs.HeadRevision
 
           $jsonl = Join-Path $PWD 'ensure-localizationguide-forkedrepo.validate.jsonl'
           $previousNativePreference = $PSNativeCommandUseErrorActionPreference
           $PSNativeCommandUseErrorActionPreference = $false
           try {
-            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
+            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PullRequestNumber -BaseRevision $inputs.BaseRevision -HeadRevision $inputs.HeadRevision | Tee-Object -FilePath $jsonl | Out-Null
             $exitCode = $LASTEXITCODE
             $global:LASTEXITCODE = 0
           } finally {
@@ -232,47 +212,42 @@ jobs:
             throw 'Localization validation requested guidance, but no FIXABLE findings were available to cite.'
           }
 
-          $files = @(Get-GitHubPullRequestFiles -Repository $inputs.Repository -PullRequestNumber $inputs.PrNumber)
-          $filePaths = @(
-            $files |
-              ForEach-Object { $_.filename } |
-              Sort-Object -Unique
-          )
-          $reswPaths = @(
-            $filePaths |
-              Where-Object { $_ -match '^src/cascadia/.+/Resources(?:/[^/]+)*/[^/]+\.resw$' } |
-              Sort-Object -Unique
-          )
-          $wtaPaths = @(
-            $filePaths |
-              Where-Object { $_ -match '^tools/wta/locales/[^/]+\.yml$' } |
-              Sort-Object -Unique
-          )
+          $pathKinds = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
+          $relevantPathSet = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
+          foreach ($finding in $fixableFindings) {
+            if ([string]::IsNullOrWhiteSpace($finding.file)) {
+              throw "Localization guidance requires every FIXABLE finding to include a supported file path. Missing file for check '$($finding.check_id)'."
+            }
 
-          $findingPaths = @(
-            $fixableFindings |
-              ForEach-Object { $_.file } |
-              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-              Sort-Object -Unique
-          )
-          $relevantPaths = if ($findingPaths.Count -gt 0) { $findingPaths } else { @($reswPaths + $wtaPaths | Sort-Object -Unique) }
+            $kind = Get-LocalizationFileKind -Path $finding.file
+            if ($null -eq $kind) {
+              throw "Localization guidance does not support validator finding path '$($finding.file)'."
+            }
+
+            $null = $pathKinds.Add($kind)
+            $null = $relevantPathSet.Add($finding.file)
+          }
+          $relevantPaths = @($relevantPathSet)
+          if ($relevantPaths.Count -eq 0) {
+            throw 'Localization guidance requires at least one validator-reported localization file path.'
+          }
 
           $referenceItems = [System.Collections.Generic.List[hashtable]]::new()
           $skillPath = '.github/skills/ensure-localization/SKILL.md'
           $referenceItems.Add(@{
             Path = $skillPath
-            Url = "$($inputs.ServerUrl)/$($inputs.Repository)/blob/$($inputs.BaseSha)/.github/skills/ensure-localization/SKILL.md"
+            Url = "$serverUrl/$($inputs.Repository)/blob/$($inputs.BaseRevision)/.github/skills/ensure-localization/SKILL.md"
           })
-          if (@($relevantPaths | Where-Object { $_ -match '\.resw$' }).Count -gt 0) {
+          if ($pathKinds.Contains('resw')) {
             $referenceItems.Add(@{
               Path = '.github/instructions/localization.instructions.md'
-              Url = "$($inputs.ServerUrl)/$($inputs.Repository)/blob/$($inputs.BaseSha)/.github/instructions/localization.instructions.md"
+              Url = "$serverUrl/$($inputs.Repository)/blob/$($inputs.BaseRevision)/.github/instructions/localization.instructions.md"
             })
           }
-          if (@($relevantPaths | Where-Object { $_ -match '^tools/wta/locales/[^/]+\.yml$' }).Count -gt 0) {
+          if ($pathKinds.Contains('wta')) {
             $referenceItems.Add(@{
               Path = '.github/instructions/rust-localization.instructions.md'
-              Url = "$($inputs.ServerUrl)/$($inputs.Repository)/blob/$($inputs.BaseSha)/.github/instructions/rust-localization.instructions.md"
+              Url = "$serverUrl/$($inputs.Repository)/blob/$($inputs.BaseRevision)/.github/instructions/rust-localization.instructions.md"
             })
           }
           if ($referenceItems.Count -le 1) {
@@ -287,10 +262,10 @@ jobs:
           ) -join "`n"
 
           $typeLines = [System.Collections.Generic.List[string]]::new()
-          if ($reswPaths.Count -gt 0) {
+          if ($pathKinds.Contains('resw')) {
             $typeLines.Add('- `.resw` resource files')
           }
-          if ($wtaPaths.Count -gt 0) {
+          if ($pathKinds.Contains('wta')) {
             $typeLines.Add('- `tools/wta/locales/*.yml` locale files')
           }
           $changedTypeLines = if ($typeLines.Count -gt 0) { $typeLines.ToArray() -join "`n" } else { '- localized files reported by the validator' }
@@ -308,8 +283,8 @@ jobs:
           $promptLines.Add('Fix only the customer-facing localization issues reported below in this pull request.')
           $promptLines.Add('')
           $promptLines.Add("Repository: $($inputs.Repository)")
-          $promptLines.Add("Pull request: #$($inputs.PrNumber)")
-          $promptLines.Add("Head SHA: $($inputs.HeadSha)")
+          $promptLines.Add("Pull request: #$($inputs.PullRequestNumber)")
+          $promptLines.Add("Head SHA: $($inputs.HeadRevision)")
           $promptLines.Add("Comparison base: $($summary.comparison_base)")
           $promptLines.Add('')
           $promptLines.Add('Follow these trusted repository localization references:')
@@ -317,7 +292,7 @@ jobs:
             $promptLines.Add($line)
           }
           $promptLines.Add('')
-          $promptLines.Add('Changed localization file types in this PR:')
+          $promptLines.Add('Validator-reported localization file types:')
           foreach ($line in @($changedTypeLines -split "`r?`n" | Where-Object { $_ })) {
             $promptLines.Add($line)
           }
@@ -327,7 +302,7 @@ jobs:
             $promptLines.Add($line)
           }
           $promptLines.Add('')
-          $promptLines.Add('Use the localization skill as the workflow authority. Use the wrapper file or files above only to confirm which file-type scope applies. Update every required locale already shipped for the affected component(s), preserve placeholders, locked values and locked tokens, translator comments, BOM and encoding, XML or YAML structure, required ordering, and pseudo-locale style, and do not change unrelated files or source-language en-US strings unless the PR explicitly changes source text. After any edits and before committing, rerun the deterministic validator against your worktree with the reviewed source authority pinned to this immutable head SHA: `pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha> -ReviewedHeadRevision <head-sha>`. Follow the skill''s validate → repair → validate → independent review flow before committing and pushing the localization-only updates for this PR branch.')
+          $promptLines.Add('Use the shared localization skill for the repair procedure. Use the wrapper references above only to confirm the applicable file types. Do normal diff inspection yourself, fix only the validator-reported entries, preserve placeholders, locks, comments, BOM, structure, ordering, and pseudo-locale style, and do not change unrelated files or en-US source unless the PR intentionally changed source text. Before commit or push, rerun `pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha> -ReviewedHeadRevision <head-sha>` and finish with an independent read-only review.')
           $promptBody = ($promptLines.ToArray() -join "`n")
 
           $cardLines = [System.Collections.Generic.List[string]]::new()
@@ -349,7 +324,7 @@ jobs:
             $cardLines.Add($line)
           }
           $cardLines.Add('')
-          $cardLines.Add('Detected localization file types:')
+          $cardLines.Add('Validator-reported localization file types:')
           foreach ($line in @($changedTypeLines -split "`r?`n" | Where-Object { $_ })) {
             $cardLines.Add($line)
           }
@@ -390,7 +365,6 @@ safe-outputs:
     hide-older-comments: true
 
 timeout-minutes: 15
-max-turns: 12
 max-ai-credits: 150
 max-daily-ai-credits: 750
 concurrency:

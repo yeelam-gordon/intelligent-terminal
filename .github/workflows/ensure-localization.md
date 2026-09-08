@@ -101,36 +101,18 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           . (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1')
-          function Get-ValidatedPrepareInputs {
-            if ($env:PR_NUMBER -notmatch '^[1-9][0-9]*$') {
-              throw "Invalid PR_NUMBER '$env:PR_NUMBER'; expected a positive decimal integer."
-            }
-            if ($env:BASE_SHA -notmatch '^[0-9a-fA-F]{40}$') {
-              throw "Invalid BASE_SHA '$env:BASE_SHA'; expected exactly 40 hexadecimal characters."
-            }
-            if ($env:HEAD_SHA -notmatch '^[0-9a-fA-F]{40}$') {
-              throw "Invalid HEAD_SHA '$env:HEAD_SHA'; expected exactly 40 hexadecimal characters."
-            }
-
-            return @{
-              PrNumber = $env:PR_NUMBER
-              BaseSha = $env:BASE_SHA.ToLowerInvariant()
-              HeadSha = $env:HEAD_SHA.ToLowerInvariant()
-            }
-          }
-
-          $inputs = Get-ValidatedPrepareInputs
-          $remoteRef = "refs/remotes/origin/localization-pr-$($inputs.PrNumber)"
-          Invoke-GitHubPullRequestHeadFetch -PullRequestNumber $inputs.PrNumber -RemoteRef $remoteRef | Out-Null
+          $inputs = Get-ValidatedWorkflowPrepareInputs -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA
+          $remoteRef = "refs/remotes/origin/localization-pr-$($inputs.PullRequestNumber)"
+          Invoke-GitHubPullRequestHeadFetch -PullRequestNumber $inputs.PullRequestNumber -RemoteRef $remoteRef | Out-Null
           $currentHead = (git rev-parse $remoteRef).Trim().ToLowerInvariant()
-          if ($currentHead -ne $inputs.HeadSha) {
-            throw "PR head changed after controller dispatch. Expected $($inputs.HeadSha), found $currentHead."
+          if ($currentHead -ne $inputs.HeadRevision) {
+            throw "PR head changed after controller dispatch. Expected $($inputs.HeadRevision), found $currentHead."
           }
 
           $alreadyComplete = 'false'
-          if ((git log -1 --pretty=%s $inputs.HeadSha) -match '\[localization-expert\]$') {
-            $commit = Invoke-GitHubApiJson -Path "repos/$env:REPOSITORY/commits/$($inputs.HeadSha)" -Context 'GitHub commit lookup for localization completion'
-            if (Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha $inputs.HeadSha) {
+          if ((git log -1 --pretty=%s $inputs.HeadRevision) -match '\[localization-expert\]$') {
+            $commit = Invoke-GitHubApiJson -Path "repos/$env:REPOSITORY/commits/$($inputs.HeadRevision)" -Context 'GitHub commit lookup for localization completion'
+            if (Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha $inputs.HeadRevision) {
               $alreadyComplete = 'true'
             }
           }
@@ -139,7 +121,7 @@ jobs:
           $previousNativePreference = $PSNativeCommandUseErrorActionPreference
           $PSNativeCommandUseErrorActionPreference = $false
           try {
-            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PrNumber -BaseRevision $inputs.BaseSha -HeadRevision $inputs.HeadSha | Tee-Object -FilePath $jsonl | Out-Null
+            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PullRequestNumber -BaseRevision $inputs.BaseRevision -HeadRevision $inputs.HeadRevision | Tee-Object -FilePath $jsonl | Out-Null
             $exitCode = $LASTEXITCODE
             $global:LASTEXITCODE = 0
           } finally {
@@ -172,7 +154,6 @@ safe-outputs:
     hide-older-comments: true
 
 timeout-minutes: 45
-max-turns: 70
 max-ai-credits: 1000
 max-daily-ai-credits: 5000
 concurrency:
@@ -200,6 +181,13 @@ against the current worktree before any commit or push with:
 
 That immutable reviewed head is the source-language authority for repair
 validation. Do not change source-language files to make translation checks pass.
+
+Desired result:
+- Repair only actionable localization issues for this PR.
+- Do ordinary inspection, diff reading, and edit planning yourself.
+- Preserve the trusted-head and reviewed-source invariants above.
+- If no edits are needed, use `add-comment`; do not substitute `noop`.
+- If edits are needed, create one focused completion commit whose subject ends exactly with `[localization-expert]`, then complete the independent read-only reviewer pass.
 
 ## agent: `localization-review-gate`
 

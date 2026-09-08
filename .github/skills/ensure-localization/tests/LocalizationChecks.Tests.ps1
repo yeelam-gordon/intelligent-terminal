@@ -448,19 +448,96 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
             Should -Throw '*exit 64 must emit a BLOCKED/ESCALATE summary record*'
     }
     }
+    Describe 'Common localization mistake checks' {
+        It 'rejects malformed localizable files at parse time' -TestCases @(
+            @{ Kind = 'resw'; Path = 'src/cascadia/Demo/Resources/fr-FR/Strings.resw'; Text = '<root><data name="demo"><value>oops</root>'; Message = 'not well-formed XML' }
+            @{ Kind = 'wta'; Path = 'tools/wta/locales/fr-FR.yml'; Text = 'demo: [nested]'; Message = 'unsupported YAML structure' }
+        ) {
+            param([string]$Kind, [string]$Path, [string]$Text, [string]$Message)
+
+            $parser = if ($Kind -eq 'resw') { ${function:Read-ReswResources} } else { ${function:Read-WtaLocaleEntries} }
+            $bytes = New-Utf8Bytes -Text $Text
+            { & $parser -Bytes $bytes -Path $Path } | Should -Throw "*$Message*"
+        }
+
+        It 'treats format-only localization churn as non-semantic' -TestCases @(
+            @{ Kind = 'resw' }
+            @{ Kind = 'wta' }
+        ) {
+            param([string]$Kind)
+
+            if ($Kind -eq 'resw') {
+                $before = [pscustomobject]@{ Resources = @{ 'demo.first' = [pscustomobject]@{ Value = 'Hello' }; 'demo.second' = [pscustomobject]@{ Value = 'World' } } }
+                $after = [pscustomobject]@{ Resources = @{ 'demo.second' = [pscustomobject]@{ Value = 'World' }; 'demo.first' = [pscustomobject]@{ Value = 'Hello' } } }
+                Test-ReswSemanticChange -Before $before -After $after | Should -BeFalse
+                return
+            }
+
+            $before = [pscustomobject]@{ Entries = @{ 'demo.first' = [pscustomobject]@{ Value = 'Hello' }; 'demo.second' = [pscustomobject]@{ Value = 'World' } } }
+            $after = [pscustomobject]@{ Entries = @{ 'demo.second' = [pscustomobject]@{ Value = 'World' }; 'demo.first' = [pscustomobject]@{ Value = 'Hello' } } }
+            Test-WtaSemanticChange -Before $before -After $after | Should -BeFalse
+        }
+
+        It 'reports placeholder mismatches as fixable' {
+            Test-PlaceholderParity -CheckId 'validate.resw.placeholder-parity' -File 'src/cascadia/Demo/Resources/fr-FR/Strings.resw' `
+                -Resource 'demo.placeholders' -SourceValue 'Hello {0} from %{agent}' -TargetValue 'Bonjour' `
+                -ComparisonBase '0123456789abcdef0123456789abcdef01234567'
+
+            $script:ResultRecords | Should -HaveCount 1
+            $script:ResultRecords[0].status | Should -Be 'FIXABLE'
+            $script:ResultRecords[0].expected | Should -Match '\{0\}'
+            $script:ResultRecords[0].expected | Should -Match '%\{agent\}'
+        }
+
+        It 'reports missing WTA locale coverage when TerminalApp ships the locale' {
+            $repoPath = Join-Path $TestDrive ([Guid]::NewGuid().ToString('N'))
+            [System.IO.Directory]::CreateDirectory($repoPath) | Out-Null
+            Write-ReswFixtureFile -Path (Join-Path $repoPath 'src\cascadia\TerminalApp\Resources\en-US\Resources.resw') -Resources @(
+                @{ Name = 'demo.greeting'; Value = 'Hello' }
+            )
+            Write-ReswFixtureFile -Path (Join-Path $repoPath 'src\cascadia\TerminalApp\Resources\fr-FR\Resources.resw') -Resources @(
+                @{ Name = 'demo.greeting'; Value = 'Bonjour' }
+            )
+            Write-WtaFixtureFile -Path (Join-Path $repoPath 'tools\wta\locales\en-US.yml') -Entries @(
+                @{ Name = 'demo.greeting'; Value = 'Hello' }
+            )
+
+            $originalRoot = $script:RepositoryRootPath
+            $originalFileBytesCache = $script:FileBytesCache
+            $originalParsedReswCache = $script:ParsedReswCache
+            $originalParsedWtaCache = $script:ParsedWtaCache
+            try {
+                $script:RepositoryRootPath = [System.IO.Path]::GetFullPath($repoPath)
+                $script:FileBytesCache = @{}
+                $script:ParsedReswCache = @{}
+                $script:ParsedWtaCache = @{}
+
+                Test-WtaLocaleSetParity -ComparisonBase '0123456789abcdef0123456789abcdef01234567' -Revision $null
+
+                $script:ResultRecords | Should -HaveCount 1
+                $script:ResultRecords[0].check_id | Should -Be 'validate.wta.locale-set-parity'
+                $script:ResultRecords[0].file | Should -Be 'tools/wta/locales/fr-FR.yml'
+                $script:ResultRecords[0].status | Should -Be 'FIXABLE'
+            } finally {
+                $script:RepositoryRootPath = $originalRoot
+                $script:FileBytesCache = $originalFileBytesCache
+                $script:ParsedReswCache = $originalParsedReswCache
+                $script:ParsedWtaCache = $originalParsedWtaCache
+            }
+        }
+    }
     Describe 'GitHub API JSON capture' {
-        It 'fails closed on a nonzero exit before using the payload' {
-            { Resolve-GitHubApiJson -Context 'GitHub commit lookup' -ExitCode 1 -Stdout '{"login":"github-actions[bot]"}' } |
-                Should -Throw '*GitHub commit lookup failed with exit code 1.*'
+        It 'fails closed on invalid GitHub API payloads' -TestCases @(
+            @{ ExitCode = 1; Stdout = '{"login":"github-actions[bot]"}'; Stderr = ''; Message = 'failed with exit code 1' }
+            @{ ExitCode = 0; Stdout = ''; Stderr = ''; Message = 'returned no JSON output' }
+            @{ ExitCode = 0; Stdout = '{not json}'; Stderr = ''; Message = 'returned invalid JSON output' }
+        ) {
+            param([int]$ExitCode, [string]$Stdout, [string]$Stderr, [string]$Message)
+
+            { Resolve-GitHubApiJson -Context 'GitHub commit lookup' -ExitCode $ExitCode -Stdout $Stdout -Stderr $Stderr } |
+                Should -Throw "*$Message*"
         }
-        It 'fails closed when gh returns no JSON output' {
-            { Resolve-GitHubApiJson -Context 'GitHub commit lookup' -ExitCode 0 -Stdout '' } |
-                Should -Throw '*GitHub commit lookup returned no JSON output.*'
-        }
-        It 'fails closed when gh returns invalid JSON' {
-            { Resolve-GitHubApiJson -Context 'GitHub commit lookup' -ExitCode 0 -Stdout '{not json}' } |
-                Should -Throw '*GitHub commit lookup returned invalid JSON output.*'
-        }
+
         It 'returns parsed JSON for a valid payload' {
             $result = Resolve-GitHubApiJson -Context 'GitHub commit lookup' -ExitCode 0 -Stdout '{"login":"github-actions[bot]","id":1,"verified":true}'
 
@@ -546,209 +623,99 @@ Start-Sleep -Seconds 30
             (Get-Process -Id $processId -ErrorAction SilentlyContinue) | Should -Be $null
         }
     }
-    Describe 'Trusted repository and pull request file paging' {
-        It 'requires the requested repository to match the trusted repository' {
-            { Resolve-TrustedGitHubRepository -Repository 'octocat/hello-world' -TrustedRepository 'microsoft/intelligent-terminal' } |
-                Should -Throw "*does not match trusted repository 'microsoft/intelligent-terminal'*"
+    Describe 'Workflow prepare inputs and finding path classification' {
+        It 'normalizes immutable workflow inputs and trusted repository scope' {
+            $inputs = Get-ValidatedWorkflowPrepareInputs `
+                -PullRequestNumber '17' `
+                -BaseRevision '0123456789abcdef0123456789abcdef01234567' `
+                -HeadRevision '89abcdef0123456789abcdef0123456789abcdef' `
+                -Repository 'Microsoft/Intelligent-Terminal' `
+                -TrustedRepository 'microsoft/intelligent-terminal'
+
+            $inputs.PullRequestNumber | Should -Be '17'
+            $inputs.BaseRevision | Should -Be '0123456789abcdef0123456789abcdef01234567'
+            $inputs.HeadRevision | Should -Be '89abcdef0123456789abcdef0123456789abcdef'
+            $inputs.Repository | Should -Be 'microsoft/intelligent-terminal'
         }
 
-        It 'returns the trusted repository when the input matches case-insensitively' {
-            Resolve-TrustedGitHubRepository -Repository 'Microsoft/Intelligent-Terminal' -TrustedRepository 'microsoft/intelligent-terminal' |
-                Should -Be 'microsoft/intelligent-terminal'
+        It 'rejects an untrusted repository before workflow git inspection starts' {
+            {
+                Get-ValidatedWorkflowPrepareInputs `
+                    -PullRequestNumber '17' `
+                    -BaseRevision '0123456789abcdef0123456789abcdef01234567' `
+                    -HeadRevision '89abcdef0123456789abcdef0123456789abcdef' `
+                    -Repository 'octocat/hello-world' `
+                    -TrustedRepository 'microsoft/intelligent-terminal'
+            } | Should -Throw "*does not match trusted repository 'microsoft/intelligent-terminal'*"
         }
 
-        It 'pages exactly to the reported changed_files count and stops there' {
-            $apiPaths = [System.Collections.Generic.List[string]]::new()
-            Mock Invoke-GitHubApiJson {
-                param([string]$Path, [string]$Context)
+        It 'classifies supported finding file paths without extra pull request scans' -TestCases @(
+            @{ Path = 'src/cascadia/TerminalApp/Resources/fr-FR/Resources.resw'; Expected = 'resw'; IsSupported = $true }
+            @{ Path = 'tools/wta/locales/fr-FR.yml'; Expected = 'wta'; IsSupported = $true }
+            @{ Path = 'docs/specs/localization.md'; Expected = ''; IsSupported = $false }
+        ) {
+            param([string]$Path, [string]$Expected, [bool]$IsSupported)
 
-                $apiPaths.Add($Path) | Out-Null
-                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/17') {
-                    return @{ changed_files = 201 }
-                }
-
-                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/17/files?per_page=100&page=1') {
-                    return @(1..100 | ForEach-Object { @{ filename = "file-$_.txt" } })
-                }
-
-                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/17/files?per_page=100&page=2') {
-                    return @(101..200 | ForEach-Object { @{ filename = "file-$_.txt" } })
-                }
-
-                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/17/files?per_page=100&page=3') {
-                    return @(@{ filename = 'file-201.txt' })
-                }
-
-                throw "Unexpected API path: $Path"
+            $actual = Get-LocalizationFileKind -Path $Path
+            if (-not $IsSupported) {
+                $actual | Should -Be $null
+            } else {
+                $actual | Should -Be $Expected
             }
-
-            $files = Get-GitHubPullRequestFiles -Repository 'microsoft/intelligent-terminal' -PullRequestNumber '17'
-
-            $files.Count | Should -Be 201
-            $apiPaths | Should -HaveCount 4
-            $apiPaths[-1] | Should -Be 'repos/microsoft/intelligent-terminal/pulls/17/files?per_page=100&page=3'
-        }
-
-        It 'blocks when pull request metadata exceeds the documented file limit' {
-            Mock Invoke-GitHubApiJson {
-                param([string]$Path, [string]$Context)
-
-                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/18') {
-                    return @{ changed_files = 3001 }
-                }
-
-                throw "Unexpected API path: $Path"
-            }
-
-            { Get-GitHubPullRequestFiles -Repository 'microsoft/intelligent-terminal' -PullRequestNumber '18' } |
-                Should -Throw '*exceeding the documented 3000-file API limit*'
-        }
-
-        It 'blocks when the paged file listing returns fewer files than changed_files' {
-            Mock Invoke-GitHubApiJson {
-                param([string]$Path, [string]$Context)
-
-                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/19') {
-                    return @{ changed_files = 250 }
-                }
-
-                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/19/files?per_page=100&page=1') {
-                    return @(1..100 | ForEach-Object { @{ filename = "file-$_.txt" } })
-                }
-
-                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/19/files?per_page=100&page=2') {
-                    return @(101..200 | ForEach-Object { @{ filename = "file-$_.txt" } })
-                }
-
-                if ($Path -eq 'repos/microsoft/intelligent-terminal/pulls/19/files?per_page=100&page=3') {
-                    return @()
-                }
-
-                throw "Unexpected API path: $Path"
-            }
-
-            { Get-GitHubPullRequestFiles -Repository 'microsoft/intelligent-terminal' -PullRequestNumber '19' } |
-                Should -Throw '*stopped after 200 of 250 files*'
         }
     }
     Describe 'Localization checker provenance' {
-    It 'treats a null author as not-completion' {
-        $commit = New-LocalizationValidatorCommit -AuthorLogin $null
+        It 'accepts only the verified bot single-parent completion commit shape' -TestCases @(
+            @{ AuthorLogin = $null; CommitterLogin = 'web-flow'; Verified = $true; ParentSha = '0123456789012345678901234567890123456789'; Expected = $false }
+            @{ AuthorLogin = 'github-actions[bot]'; CommitterLogin = $null; Verified = $true; ParentSha = '0123456789012345678901234567890123456789'; Expected = $false }
+            @{ AuthorLogin = 'github-actions[bot]'; CommitterLogin = 'web-flow'; Verified = $true; ParentSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; Expected = $true }
+        ) {
+            param(
+                [AllowNull()][string]$AuthorLogin,
+                [AllowNull()][string]$CommitterLogin,
+                [bool]$Verified,
+                [string]$ParentSha,
+                [bool]$Expected
+            )
 
-        Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha '0123456789012345678901234567890123456789' |
-            Should -BeFalse
-    }
+            $commit = New-LocalizationValidatorCommit -AuthorLogin $AuthorLogin -CommitterLogin $CommitterLogin -Verified $Verified -ParentSha $ParentSha
 
-    It 'treats a null committer as not-completion' {
-        $commit = New-LocalizationValidatorCommit -CommitterLogin $null
-
-        Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha '0123456789012345678901234567890123456789' |
-            Should -BeFalse
-    }
-
-    It 'accepts the verified bot single-parent completion commit' {
-        $commit = New-LocalizationValidatorCommit -ParentSha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-
-        Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' |
-            Should -BeTrue
-    }
-    }
-
-    Describe 'Guide step summary rendering' {
-        It 'allows intentional blank summary lines without weakening required argument binding' {
-            $workflowPath = Join-Path $PSScriptRoot '..\..\..\workflows\ensure-localizationguide-forkedrepo.md'
-            (Get-Content -LiteralPath $workflowPath -Raw) | Should -Match '\[AllowEmptyString\(\)\]\[string\[\]\]\$Lines'
-
-            $summaryPath = Join-Path $TestDrive 'step-summary.md'
-            $originalSummary = $env:GITHUB_STEP_SUMMARY
-            try {
-                $env:GITHUB_STEP_SUMMARY = $summaryPath
-
-                function Write-StepSummary {
-                    param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines)
-
-                    Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($Lines -join "`n")
-                }
-
-                { Write-StepSummary -Lines @('## Localization review', '', 'Line after blank') } | Should -Not -Throw
-                (Get-Content -LiteralPath $summaryPath -Raw) | Should -Match "## Localization review`r?`n`r?`nLine after blank"
-                { Write-StepSummary } | Should -Throw
-            } finally {
-                $env:GITHUB_STEP_SUMMARY = $originalSummary
-            }
+            Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha $ParentSha |
+                Should -Be $Expected
         }
     }
 
     Describe 'Reviewed source locale preservation' {
-        It 'keeps an immutable reviewed source authority when a new source key is deleted locally' -TestCases @(
-            @{ Kind = 'resw' }
-            @{ Kind = 'wta' }
-        ) {
-            param([string]$Kind)
-
-            $fixture = New-ReviewedSourceScenario -Kind $Kind -Scenario 'deleted-source'
-            $result = Invoke-ValidationWithReviewedHead -Fixture $fixture
-
-            $result.ExitCode | Should -Be 20
-            $result.Summary.status | Should -Be 'FIXABLE'
-            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -eq 'validate.source-locale-preserved' }).Count | Should -BeGreaterThan 0
+        It 'flags reviewed source drift regressions as fixable' {
+            foreach ($kind in @('resw', 'wta')) {
+                foreach ($scenario in @('deleted-source', 'edited-source')) {
+                    $result = Invoke-ValidationWithReviewedHead -Fixture (New-ReviewedSourceScenario -Kind $kind -Scenario $scenario)
+                    $result.ExitCode | Should -Be 20
+                    $result.Summary.status | Should -Be 'FIXABLE'
+                    @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -eq 'validate.source-locale-preserved' }).Count | Should -BeGreaterThan 0
+                }
+            }
         }
 
-        It 'rejects source value edits that drift from the reviewed head' -TestCases @(
-            @{ Kind = 'resw' }
-            @{ Kind = 'wta' }
-        ) {
-            param([string]$Kind)
-
-            $fixture = New-ReviewedSourceScenario -Kind $Kind -Scenario 'edited-source'
-            $result = Invoke-ValidationWithReviewedHead -Fixture $fixture
-
-            $result.ExitCode | Should -Be 20
-            $result.Summary.status | Should -Be 'FIXABLE'
-            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -eq 'validate.source-locale-preserved' }).Count | Should -BeGreaterThan 0
+        It 'reports missing localized targets without blaming the reviewed source' {
+            foreach ($kind in @('resw', 'wta')) {
+                $result = Invoke-ValidationWithReviewedHead -Fixture (New-ReviewedSourceScenario -Kind $kind -Scenario 'missing-locale')
+                $result.ExitCode | Should -Be 20
+                $result.Summary.status | Should -Be 'FIXABLE'
+                @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -match 'key-parity' }).Count | Should -BeGreaterThan 0
+                @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -eq 'validate.source-locale-preserved' }).Count | Should -Be 0
+            }
         }
 
-        It 'reports missing localized targets as fixable when the reviewed source stays intact' -TestCases @(
-            @{ Kind = 'resw' }
-            @{ Kind = 'wta' }
-        ) {
-            param([string]$Kind)
-
-            $fixture = New-ReviewedSourceScenario -Kind $Kind -Scenario 'missing-locale'
-            $result = Invoke-ValidationWithReviewedHead -Fixture $fixture
-
-            $result.ExitCode | Should -Be 20
-            $result.Summary.status | Should -Be 'FIXABLE'
-            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -match 'key-parity' }).Count | Should -BeGreaterThan 0
-            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -eq 'validate.source-locale-preserved' }).Count | Should -Be 0
-        }
-
-        It 'passes once translated targets are added without changing the reviewed source' -TestCases @(
-            @{ Kind = 'resw' }
-            @{ Kind = 'wta' }
-        ) {
-            param([string]$Kind)
-
-            $fixture = New-ReviewedSourceScenario -Kind $Kind -Scenario 'translated-targets'
-            $result = Invoke-ValidationWithReviewedHead -Fixture $fixture
-
-            $result.ExitCode | Should -Be 0
-            $result.Summary.status | Should -Be 'PASS'
-            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.status -ne 'PASS' }).Count | Should -Be 0
-        }
-
-        It 'accepts legitimate source edits or removals when the worktree still matches the reviewed head' -TestCases @(
-            @{ Kind = 'resw' }
-            @{ Kind = 'wta' }
-        ) {
-            param([string]$Kind)
-
-            $fixture = New-ReviewedSourceScenario -Kind $Kind -Scenario 'reviewed-source-change-accepted'
-            $result = Invoke-ValidationWithReviewedHead -Fixture $fixture
-
-            $result.ExitCode | Should -Be 0
-            $result.Summary.status | Should -Be 'PASS'
-            @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.check_id -eq 'validate.source-locale-preserved' }).Count | Should -Be 0
+        It 'passes once targets are repaired or the worktree still matches the reviewed source' {
+            foreach ($kind in @('resw', 'wta')) {
+                foreach ($scenario in @('translated-targets', 'reviewed-source-change-accepted')) {
+                    $result = Invoke-ValidationWithReviewedHead -Fixture (New-ReviewedSourceScenario -Kind $kind -Scenario $scenario)
+                    $result.ExitCode | Should -Be 0
+                    $result.Summary.status | Should -Be 'PASS'
+                    @($result.Records | Where-Object { $_.kind -eq 'check' -and $_.status -ne 'PASS' }).Count | Should -Be 0
+                }
+            }
         }
     }
 

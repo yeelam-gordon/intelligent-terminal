@@ -110,16 +110,13 @@ pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Va
 - Repair only the reported localization files and resources, then re-run `Validate`. When validating a mutable worktree against an immutable reviewed source authority, pass `-ReviewedHeadRevision <reviewed-head-sha>`.
 - If validation returns `BLOCKED` or invalid input, stop and surface the exact `check_id`, file, resource, observed value, expected value, and suggested action.
 - After deterministic validation passes, run one independent read-only reviewer pass.
-- If no edits were required and the caller's safe-output contract expects a visible success, use `add_comment`; do not substitute `noop`.
-- If edits were required, create one focused completion commit whose subject ends exactly with `[localization-expert]`.
-- When the caller's automation pushes a safe-output message, make its first line exactly match `git log -1 --pretty=%s`, including `[localization-expert]`.
+- Leave commit shape, visible output, and push behavior to the caller's explicit contract.
 
 ### Read-Only Review
 
 - Stay read-only: do not edit, stage, commit, or push.
 - Run `Validate` only when the caller provides immutable git objects or a safe local comparison target.
 - If the review is API-only, do not claim checks that require unavailable file bytes or whole-tree content.
-- If the checker exits `64`, surface the blocked invalid-input summary instead of treating it as an unexpected failure.
 - Return only `PASS` with concise evidence or `FAIL` with actionable findings.
 - Every failure must cite `check_id`, file, resource, observed problem, expected result, and suggested action.
 
@@ -128,7 +125,7 @@ pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Va
 - Never check out or execute untrusted fork source objects just to inspect localization content.
 - Use trusted base content plus immutable git objects or pull-request APIs.
 - If `Gate` or `Validate` says no relevant customer-facing semantics changed, post no contributor comment.
-- If deterministic findings are `FIXABLE`, post one concise guidance card that links this skill and only the applicable wrapper instructions for the changed file types.
+- If deterministic findings are `FIXABLE`, return actionable guidance tied to the validator findings and only the applicable file-type references.
 - If validation is blocked, fail honestly with the blocked summary and do not post a misleading success or repair comment.
 
 ## Gotchas

@@ -305,6 +305,33 @@ function Test-GitObjectId {
     return $Value.ToLowerInvariant()
 }
 
+function Get-ValidatedWorkflowPrepareInputs {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$PullRequestNumber,
+        [Parameter(Mandatory)][string]$BaseRevision,
+        [Parameter(Mandatory)][string]$HeadRevision,
+        [string]$Repository,
+        [string]$TrustedRepository
+    )
+
+    $inputs = [ordered]@{
+        PullRequestNumber = Test-PullRequestNumber -Value $PullRequestNumber
+        BaseRevision = Test-GitObjectId -Value $BaseRevision -ParameterName 'BaseRevision'
+        HeadRevision = Test-GitObjectId -Value $HeadRevision -ParameterName 'HeadRevision'
+    }
+
+    if ($PSBoundParameters.ContainsKey('Repository')) {
+        $inputs.Repository = if ($PSBoundParameters.ContainsKey('TrustedRepository') -and -not [string]::IsNullOrWhiteSpace($TrustedRepository)) {
+            Resolve-TrustedGitHubRepository -Repository $Repository -TrustedRepository $TrustedRepository
+        } else {
+            Test-GitHubRepositoryName -Value $Repository -ParameterName 'Repository'
+        }
+    }
+
+    return [pscustomobject]$inputs
+}
+
 function Invoke-GitText {
     [CmdletBinding()]
     param(
@@ -546,73 +573,6 @@ function Resolve-TrustedGitHubRepository {
     return $validatedTrustedRepository
 }
 
-function Get-GitHubPullRequestFiles {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$Repository,
-        [Parameter(Mandatory)][string]$PullRequestNumber
-    )
-
-    $trustedRepository = Test-GitHubRepositoryName -Value $Repository -ParameterName 'Repository'
-    $validatedPullRequestNumber = Test-PullRequestNumber -Value $PullRequestNumber
-    $pullRequest = Invoke-GitHubApiJson -Path "repos/$trustedRepository/pulls/$validatedPullRequestNumber" -Context "GitHub pull request metadata for $trustedRepository#$validatedPullRequestNumber"
-
-    if ($null -eq $pullRequest.changed_files) {
-        throw "GitHub pull request metadata for $trustedRepository#$validatedPullRequestNumber did not include changed_files."
-    }
-
-    try {
-        $changedFilesCount = [int]$pullRequest.changed_files
-    } catch {
-        throw "GitHub pull request metadata for $trustedRepository#$validatedPullRequestNumber returned a non-integer changed_files value."
-    }
-
-    if ($changedFilesCount -lt 0) {
-        throw "GitHub pull request metadata for $trustedRepository#$validatedPullRequestNumber returned a negative changed_files value."
-    }
-
-    $maximumPullRequestFiles = 3000
-    if ($changedFilesCount -gt $maximumPullRequestFiles) {
-        throw "GitHub pull request $trustedRepository#$validatedPullRequestNumber reports $changedFilesCount changed files, exceeding the documented $maximumPullRequestFiles-file API limit. Guidance is blocked to avoid partial results."
-    }
-
-    if ($changedFilesCount -eq 0) {
-        return @()
-    }
-
-    $perPage = 100
-    $expectedPages = [int][Math]::Ceiling($changedFilesCount / [double]$perPage)
-    $files = [System.Collections.Generic.List[object]]::new()
-
-    for ($page = 1; $page -le $expectedPages; $page++) {
-        $batch = Invoke-GitHubApiJson -Path "repos/$trustedRepository/pulls/$validatedPullRequestNumber/files?per_page=$perPage&page=$page" -Context "GitHub pull request file listing page $page for $trustedRepository#$validatedPullRequestNumber"
-        $items = @($batch)
-        $remainingFiles = $changedFilesCount - $files.Count
-
-        if ($items.Count -eq 0) {
-            throw "GitHub pull request file listing for $trustedRepository#$validatedPullRequestNumber stopped after $($files.Count) of $changedFilesCount files (empty page $page)."
-        }
-
-        if ($page -lt $expectedPages -and $items.Count -ne $perPage) {
-            throw "GitHub pull request file listing for $trustedRepository#$validatedPullRequestNumber returned $($items.Count) files on page $page before reaching changed_files=$changedFilesCount."
-        }
-
-        if ($items.Count -gt $remainingFiles) {
-            throw "GitHub pull request file listing for $trustedRepository#$validatedPullRequestNumber returned more than the expected $changedFilesCount files."
-        }
-
-        foreach ($item in $items) {
-            $files.Add($item)
-        }
-    }
-
-    if ($files.Count -ne $changedFilesCount) {
-        throw "GitHub pull request file listing for $trustedRepository#$validatedPullRequestNumber returned $($files.Count) of $changedFilesCount files."
-    }
-
-    return @($files)
-}
-
 function Assert-RepositoryRoot {
     $root = [System.IO.Path]::GetFullPath($RepositoryRoot)
     if (-not (Test-Path -LiteralPath $root)) {
@@ -673,6 +633,24 @@ function Get-ValidationChangedLocalizationPaths {
         }
     }
     return @($paths)
+}
+
+function Get-LocalizationFileKind {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+
+    if ($Path -match '^src/cascadia/.+/Resources(?:/[^/]+)*/[^/]+\.resw$') {
+        return 'resw'
+    }
+
+    if ($Path -match '^tools/wta/locales/[^/]+\.yml$') {
+        return 'wta'
+    }
+
+    return $null
 }
 
 function Test-SourceLocalePreserved {
