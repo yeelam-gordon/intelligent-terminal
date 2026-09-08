@@ -48,10 +48,12 @@ permissions:
   copilot-requests: write
 
 engine: copilot
+imports:
+  - .github/agents/localization-reviewer.agent.md
 
 checkout:
   repository: ${{ github.repository }}
-  ref: ${{ github.event.inputs.expected_base_sha }}
+  ref: ${{ github.workflow_sha }}
   fetch-depth: 0
 
 tools:
@@ -73,8 +75,11 @@ jobs:
       pull-requests: read
     outputs:
       comparison_base: ${{ steps.prepare.outputs.comparison_base }}
+      summary_status: ${{ steps.prepare.outputs.summary_status }}
+      summary_action: ${{ steps.prepare.outputs.summary_action }}
+      trusted_code_revision: ${{ steps.prepare.outputs.trusted_code_revision }}
+      guidance_context_json: ${{ steps.prepare.outputs.guidance_context_json }}
       should_comment: ${{ steps.prepare.outputs.should_comment }}
-      comment_body: ${{ steps.prepare.outputs.comment_body }}
     steps:
       - name: Checkout trusted workflow revision
         uses: actions/checkout@v7
@@ -93,6 +98,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_SERVER_URL: ${{ github.server_url }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           $ErrorActionPreference = 'Stop'
           . (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1')
@@ -109,41 +115,10 @@ jobs:
             Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value $delimiter
           }
 
-          function Write-StepSummary {
-            param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Lines)
-
-            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($Lines -join "`n")
-          }
-
-          function Format-FindingMarkdown {
-            param([Parameter(Mandatory)][object]$Finding)
-
-            $segments = [System.Collections.Generic.List[string]]::new()
-            $segments.Add("- **$($Finding.check_id)**")
-            if (-not [string]::IsNullOrWhiteSpace($Finding.file)) {
-              $segments.Add("file ``$($Finding.file)``")
-            }
-            if (-not [string]::IsNullOrWhiteSpace($Finding.resource)) {
-              $segments.Add("resource ``$($Finding.resource)``")
-            }
-            if (-not [string]::IsNullOrWhiteSpace($Finding.message)) {
-              $segments.Add($Finding.message)
-            }
-            if ($null -ne $Finding.observed -and "$($Finding.observed)" -ne '') {
-              $segments.Add("Observed: ``$($Finding.observed)``")
-            }
-            if ($null -ne $Finding.expected -and "$($Finding.expected)" -ne '') {
-              $segments.Add("Expected: ``$($Finding.expected)``")
-            }
-            if (-not [string]::IsNullOrWhiteSpace($Finding.suggested_action)) {
-              $segments.Add("Suggested action: $($Finding.suggested_action)")
-            }
-
-            return ($segments -join ' — ')
-          }
-
           $inputs = Get-ValidatedWorkflowPrepareInputs -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA -Repository $env:REPOSITORY -TrustedRepository $env:GITHUB_REPOSITORY
+          $workflowRevision = Test-GitObjectId -Value $env:WORKFLOW_SHA -ParameterName 'WorkflowSha'
           $serverUrl = $env:GITHUB_SERVER_URL.TrimEnd('/')
+          Assert-GitCommitExists -Revision $workflowRevision
           Assert-GitCommitExists -Revision $inputs.BaseRevision
 
           $remoteRef = "refs/remotes/origin/localization-pr-$($inputs.PullRequestNumber)"
@@ -167,34 +142,31 @@ jobs:
           $completion = Resolve-LocalizationValidatorCompletion -JsonlPath $jsonl -ExitCode $exitCode -AllowedExitCodes @(0, 20, 30, 64)
           $summary = $completion.Summary
           "comparison_base=$($summary.comparison_base)" >> $env:GITHUB_OUTPUT
+          "summary_status=$($summary.status)" >> $env:GITHUB_OUTPUT
+          "summary_action=$($summary.action)" >> $env:GITHUB_OUTPUT
+          "trusted_code_revision=$workflowRevision" >> $env:GITHUB_OUTPUT
 
           $records = @(Get-Content -LiteralPath $jsonl | ForEach-Object { $_ | ConvertFrom-Json -AsHashtable })
           $checkRecords = @($records | Where-Object { $_.kind -eq 'check' })
 
           if ($summary.action -eq 'ESCALATE') {
             $blockedFindings = @($checkRecords | Where-Object { $_.status -eq 'BLOCKED' })
-            $summaryLines = [System.Collections.Generic.List[string]]::new()
-            $summaryLines.Add('## Localization review')
-            $summaryLines.Add('')
-            $summaryLines.Add('Fork localization validation blocked before any guidance comment could be posted.')
-            $summaryLines.Add('')
-            $summaryLines.Add("- Status: **$($summary.status)**")
-            $summaryLines.Add("- Action: **$($summary.action)**")
-            $summaryLines.Add("- Message: $($summary.message)")
-            if ($blockedFindings.Count -gt 0) {
-              $summaryLines.Add('')
-              $summaryLines.Add('Blocked diagnostics:')
-              foreach ($finding in $blockedFindings) {
-                $summaryLines.Add((Format-FindingMarkdown -Finding $finding))
-              }
-            }
-            Write-StepSummary -Lines $summaryLines.ToArray()
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value (@(
+              '## Localization review',
+              '',
+              'Fork localization validation blocked before any guidance comment could be posted.',
+              '',
+              "- Status: **$($summary.status)**",
+              "- Action: **$($summary.action)**",
+              "- Message: $($summary.message)",
+              "- Blocked findings: **$($blockedFindings.Count)**"
+            ) -join "`n")
             throw "Fork localization validation blocked: $($summary.message)"
           }
 
           if ($summary.action -ne 'FIX') {
             "should_comment=false" >> $env:GITHUB_OUTPUT
-            Write-StepSummary -Lines @(
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value (@(
               '## Localization review',
               '',
               'Trusted-base deterministic localization validation found no actionable issues in this fork PR.',
@@ -203,7 +175,7 @@ jobs:
               "- Action: **$($summary.action)**",
               '- PR comment: not posted',
               '- Note: This fork path does not perform independent language-quality review or edit the fork branch.'
-            )
+            ) -join "`n")
             return
           }
 
@@ -213,7 +185,6 @@ jobs:
           }
 
           $pathKinds = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
-          $relevantPathSet = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
           foreach ($finding in $fixableFindings) {
             if ([string]::IsNullOrWhiteSpace($finding.file)) {
               throw "Localization guidance requires every FIXABLE finding to include a supported file path. Missing file for check '$($finding.check_id)'."
@@ -225,134 +196,89 @@ jobs:
             }
 
             $null = $pathKinds.Add($kind)
-            $null = $relevantPathSet.Add($finding.file)
-          }
-          $relevantPaths = @($relevantPathSet)
-          if ($relevantPaths.Count -eq 0) {
-            throw 'Localization guidance requires at least one validator-reported localization file path.'
           }
 
           $referenceItems = [System.Collections.Generic.List[hashtable]]::new()
           $skillPath = '.github/skills/ensure-localization/SKILL.md'
           $referenceItems.Add(@{
             Path = $skillPath
-            Url = "$serverUrl/$($inputs.Repository)/blob/$($inputs.BaseRevision)/.github/skills/ensure-localization/SKILL.md"
+            Url = "$serverUrl/$($inputs.Repository)/blob/$workflowRevision/.github/skills/ensure-localization/SKILL.md"
           })
           if ($pathKinds.Contains('resw')) {
             $referenceItems.Add(@{
               Path = '.github/instructions/localization.instructions.md'
-              Url = "$serverUrl/$($inputs.Repository)/blob/$($inputs.BaseRevision)/.github/instructions/localization.instructions.md"
+              Url = "$serverUrl/$($inputs.Repository)/blob/$workflowRevision/.github/instructions/localization.instructions.md"
             })
           }
           if ($pathKinds.Contains('wta')) {
             $referenceItems.Add(@{
               Path = '.github/instructions/rust-localization.instructions.md'
-              Url = "$serverUrl/$($inputs.Repository)/blob/$($inputs.BaseRevision)/.github/instructions/rust-localization.instructions.md"
+              Url = "$serverUrl/$($inputs.Repository)/blob/$workflowRevision/.github/instructions/rust-localization.instructions.md"
             })
           }
           if ($referenceItems.Count -le 1) {
             throw 'Localization findings did not map to a supported localization instruction file.'
           }
 
-          $referenceLinks = @(
-            $referenceItems | ForEach-Object { "- [``$($_.Path)``]($($_.Url))" }
-          ) -join "`n"
-          $referencePromptLines = @(
-            $referenceItems | ForEach-Object { "- $($_.Path)" }
-          ) -join "`n"
+          foreach ($referenceItem in $referenceItems) {
+            if ($null -eq (Get-FileBytesFromView -Path $referenceItem.Path -Revision $workflowRevision)) {
+              throw "Trusted workflow revision '$workflowRevision' does not contain '$($referenceItem.Path)'."
+            }
+          }
 
-          $typeLines = [System.Collections.Generic.List[string]]::new()
-          if ($pathKinds.Contains('resw')) {
-            $typeLines.Add('- `.resw` resource files')
+          $guidanceContext = [ordered]@{
+            repository = $inputs.Repository
+            pull_request_number = $inputs.PullRequestNumber
+            expected_base_revision = $inputs.BaseRevision
+            expected_head_revision = $inputs.HeadRevision
+            comparison_base = $summary.comparison_base
+            trusted_code_revision = $workflowRevision
+            validator_summary = [ordered]@{
+              status = $summary.status
+              action = $summary.action
+              message = $summary.message
+              total_count = $summary.total_count
+              pass_count = $summary.pass_count
+              fixable_count = $summary.fixable_count
+              blocked_count = $summary.blocked_count
+            }
+            applicable_formats = @($pathKinds)
+            references = @(
+              $referenceItems |
+                ForEach-Object {
+                  [ordered]@{
+                    path = $_.Path
+                    url = $_.Url
+                  }
+                }
+            )
+            findings = @(
+              $fixableFindings |
+                ForEach-Object {
+                  [ordered]@{
+                    check_id = $_.check_id
+                    file = $_.file
+                    resource = $_.resource
+                    message = $_.message
+                    observed = $_.observed
+                    expected = $_.expected
+                    suggested_action = $_.suggested_action
+                  }
+                }
+            )
           }
-          if ($pathKinds.Contains('wta')) {
-            $typeLines.Add('- `tools/wta/locales/*.yml` locale files')
-          }
-          $changedTypeLines = if ($typeLines.Count -gt 0) { $typeLines.ToArray() -join "`n" } else { '- localized files reported by the validator' }
-          $codeFence = '```'
-
-          $findingLines = @(
-            $fixableFindings |
-              Select-Object -First 12 |
-              ForEach-Object { Format-FindingMarkdown -Finding $_ }
-          ) -join "`n"
-
-          $missingFilesNote = 'If your local clone does not yet contain one of the linked files, open it from the trusted base repository links above and include it in Copilot context.'
-
-          $promptLines = [System.Collections.Generic.List[string]]::new()
-          $promptLines.Add('Fix only the customer-facing localization issues reported below in this pull request.')
-          $promptLines.Add('')
-          $promptLines.Add("Repository: $($inputs.Repository)")
-          $promptLines.Add("Pull request: #$($inputs.PullRequestNumber)")
-          $promptLines.Add("Head SHA: $($inputs.HeadRevision)")
-          $promptLines.Add("Comparison base: $($summary.comparison_base)")
-          $promptLines.Add('')
-          $promptLines.Add('Follow these trusted repository localization references:')
-          foreach ($line in @($referencePromptLines -split "`r?`n" | Where-Object { $_ })) {
-            $promptLines.Add($line)
-          }
-          $promptLines.Add('')
-          $promptLines.Add('Validator-reported localization file types:')
-          foreach ($line in @($changedTypeLines -split "`r?`n" | Where-Object { $_ })) {
-            $promptLines.Add($line)
-          }
-          $promptLines.Add('')
-          $promptLines.Add('Deterministic findings to fix:')
-          foreach ($line in @($findingLines -split "`r?`n" | Where-Object { $_ })) {
-            $promptLines.Add($line)
-          }
-          $promptLines.Add('')
-          $promptLines.Add('Use the shared localization skill for the repair procedure. Use the wrapper references above only to confirm the applicable file types. Do normal diff inspection yourself, fix only the validator-reported entries, preserve placeholders, locks, comments, BOM, structure, ordering, and pseudo-locale style, and do not change unrelated files or en-US source unless the PR intentionally changed source text. Before commit or push, rerun `pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha> -ReviewedHeadRevision <head-sha>` and finish with an independent read-only review.')
-          $promptBody = ($promptLines.ToArray() -join "`n")
-
-          $cardLines = [System.Collections.Generic.List[string]]::new()
-          $cardLines.Add('## Localization action required')
-          $cardLines.Add('')
-          $cardLines.Add('Trusted-base deterministic localization checks found actionable issues in this fork PR.')
-          $cardLines.Add('')
-          $cardLines.Add('Automatic same-repo localization repair is unavailable for fork PRs under the current repository token.')
-          $cardLines.Add('')
-          $cardLines.Add('Guidance only — this workflow validated immutable localization data but did not change the fork branch or perform independent language-quality review.')
-          $cardLines.Add('')
-          $cardLines.Add('Actionable findings:')
-          foreach ($line in @($findingLines -split "`r?`n" | Where-Object { $_ })) {
-            $cardLines.Add($line)
-          }
-          $cardLines.Add('')
-          $cardLines.Add('Applicable repository localization references for this PR (trusted base):')
-          foreach ($line in @($referenceLinks -split "`r?`n" | Where-Object { $_ })) {
-            $cardLines.Add($line)
-          }
-          $cardLines.Add('')
-          $cardLines.Add('Validator-reported localization file types:')
-          foreach ($line in @($changedTypeLines -split "`r?`n" | Where-Object { $_ })) {
-            $cardLines.Add($line)
-          }
-          $cardLines.Add('')
-          $cardLines.Add('1. Check out this PR branch locally.')
-          $cardLines.Add('2. Open Copilot in that local checkout.')
-          $cardLines.Add('3. Paste the prompt below.')
-          $cardLines.Add('4. Follow the skill''s repair flow, run the validator and independent review it defines, then commit and push the updates back to this PR branch.')
-          $cardLines.Add('')
-          $cardLines.Add($missingFilesNote)
-          $cardLines.Add('')
-          $cardLines.Add("$($codeFence)text")
-          foreach ($line in @($promptBody -split "`r?`n")) {
-            $cardLines.Add($line)
-          }
-          $cardLines.Add($codeFence)
-          $cardBody = ($cardLines.ToArray() -join "`n")
 
           "should_comment=true" >> $env:GITHUB_OUTPUT
-          Set-GitHubOutputValue -Name 'comment_body' -Value $cardBody
-          Write-StepSummary -Lines @(
+          Set-GitHubOutputValue -Name 'guidance_context_json' -Value ($guidanceContext | ConvertTo-Json -Compress -Depth 6)
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value (@(
             '## Localization review',
             '',
             'Trusted-base deterministic localization validation found actionable fork issues. A guidance comment will be posted.',
             '',
             "- Findings: **$($fixableFindings.Count)**",
-            "- Comparison base: ``$($summary.comparison_base)``"
-          )
+            "- Comparison base: ``$($summary.comparison_base)``",
+            "- Trusted code revision: ``$workflowRevision``"
+          ) -join "`n")
 
   agent:
     needs: [prepare]
@@ -365,6 +291,7 @@ safe-outputs:
     hide-older-comments: true
 
 timeout-minutes: 15
+max-turns: 12
 max-ai-credits: 150
 max-daily-ai-credits: 750
 concurrency:
@@ -374,14 +301,54 @@ concurrency:
 run-name: 'Ensure Localization Guide Forked Repo ${{ github.event.inputs.dispatch_id }}'
 ---
 
+Imported runtime role: `localization-reviewer`.
+
 Fork localization guidance for PR #${{ github.event.inputs.pr_number }} in `${{ github.event.inputs.repo }}`.
 
-The prepare job already ran deterministic localization validation against the
-immutable fork head with trusted git objects only. It prepared a Markdown card
-only because actionable FIXABLE findings were detected.
+## Minimal context
 
-Post exactly one comment via `add-comment` using this prepared body. Do not
-claim that localization is fully validated or repaired, and do not add any
-other visible output:
+- Goal: post one fork-safe localization guidance comment only because the
+  trusted checker found actionable deterministic issues.
+- Read-only only: do not edit, stage, commit, push, or claim independent
+  language-quality validation.
+- Trusted code revision for all skill and instruction links:
+  `${{ needs.prepare.outputs.trusted_code_revision }}`
+- Deterministic PR data revisions:
+  - base `${{ github.event.inputs.expected_base_sha }}`
+  - head `${{ github.event.inputs.expected_head_sha }}`
+  - comparison base `${{ needs.prepare.outputs.comparison_base }}`
+- Validator summary:
+  `${{ needs.prepare.outputs.summary_status }}` /
+  `${{ needs.prepare.outputs.summary_action }}`
 
-${{ needs.prepare.outputs.comment_body }}
+```json
+${{ needs.prepare.outputs.guidance_context_json }}
+```
+
+## Preflight
+
+1. Read `.github/skills/ensure-localization/SKILL.md`.
+2. Read only the trusted repository instruction file or files listed in
+   `references`.
+3. Treat `findings` as the authoritative actual `FIXABLE` checker output. Do
+   not invent more findings or browse unrelated files.
+4. If any finding lacks `check_id` or `file`, or if any reference URL is not
+   pinned to `trusted_code_revision`, stop instead of fabricating guidance.
+5. Do not mention `@copilot`, do not imply this workflow wrote to the branch,
+   and do not emit any visible output other than the one PR comment.
+
+## Result contract
+
+- Use `add-comment` exactly once on the authoritative PR.
+- Write one concise card that:
+  - says trusted-base deterministic localization validation found actionable
+    issues;
+  - lists only the actual findings from `findings`;
+  - links only the applicable trusted repository references from `references`;
+  - includes one copyable local Copilot prompt that tells the contributor to
+    fix only those findings in a local checkout, rerun
+    `pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha> -ReviewedHeadRevision <head-sha>`,
+    and finish with an independent read-only review;
+  - states this workflow did not edit the fork branch and did not perform full
+    language-quality validation.
+- No branch writes, no extra comment, and no `noop`.
