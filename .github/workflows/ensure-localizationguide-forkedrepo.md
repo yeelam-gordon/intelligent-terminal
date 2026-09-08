@@ -285,7 +285,6 @@ safe-outputs:
     hide-older-comments: true
 
 timeout-minutes: 15
-max-turns: 12
 max-ai-credits: 150
 max-daily-ai-credits: 750
 concurrency:
