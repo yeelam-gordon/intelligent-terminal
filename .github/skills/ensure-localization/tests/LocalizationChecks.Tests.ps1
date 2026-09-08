@@ -94,8 +94,20 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
                 [AllowNull()][string]$AuthorLogin = 'github-actions[bot]',
                 [AllowNull()][string]$CommitterLogin = 'web-flow',
                 [bool]$Verified = $true,
-                [string]$ParentSha = '0123456789012345678901234567890123456789'
+                [AllowNull()][string]$CommitSha = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                [string]$ParentSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                [object[]]$Parents
             )
+
+            $resolvedParents = if ($PSBoundParameters.ContainsKey('Parents')) {
+                @($Parents)
+            } else {
+                @(
+                    @{
+                        sha = $ParentSha
+                    }
+                )
+            }
 
             return @{
                 author = if ($null -eq $AuthorLogin) { $null } else { @{ login = $AuthorLogin } }
@@ -105,11 +117,8 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
                         verified = $Verified
                     }
                 }
-                parents = @(
-                    @{
-                        sha = $ParentSha
-                    }
-                )
+                sha = $CommitSha
+                parents = $resolvedParents
             }
         }
 
@@ -723,22 +732,41 @@ Start-Sleep -Seconds 30
         }
     }
     Describe 'Localization checker provenance' {
-        It 'accepts only the verified bot single-parent completion commit shape' -TestCases @(
-            @{ AuthorLogin = $null; CommitterLogin = 'web-flow'; Verified = $true; ParentSha = '0123456789012345678901234567890123456789'; Expected = $false }
-            @{ AuthorLogin = 'github-actions[bot]'; CommitterLogin = $null; Verified = $true; ParentSha = '0123456789012345678901234567890123456789'; Expected = $false }
-            @{ AuthorLogin = 'github-actions[bot]'; CommitterLogin = 'web-flow'; Verified = $true; ParentSha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; Expected = $true }
+        It 'accepts a verified bot completion commit when the current head identity matches' {
+            $commit = New-LocalizationValidatorCommit
+
+            Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedCommitSha $commit.sha |
+                Should -Be $true
+        }
+
+        It 'rejects a parent and self identity mixup when the parent is supplied explicitly' {
+            $parentSha = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
+            $commitSha = 'ffffffffffffffffffffffffffffffffffffffff'
+            $commit = New-LocalizationValidatorCommit -CommitSha $commitSha -ParentSha $parentSha
+
+            Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedCommitSha $commitSha -ExpectedParentSha $commitSha |
+                Should -Be $false
+        }
+
+        It 'rejects malformed, null, non-bot, multiparent, and unverified completion shapes' -TestCases @(
+            @{ AuthorLogin = $null; CommitterLogin = 'web-flow'; Verified = $true; CommitSha = '1111111111111111111111111111111111111111'; Parents = @(@{ sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }); Expected = $false }
+            @{ AuthorLogin = 'github-actions[bot]'; CommitterLogin = $null; Verified = $true; CommitSha = '1111111111111111111111111111111111111111'; Parents = @(@{ sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }); Expected = $false }
+            @{ AuthorLogin = 'github-actions[bot]'; CommitterLogin = 'web-flow'; Verified = $false; CommitSha = '1111111111111111111111111111111111111111'; Parents = @(@{ sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }); Expected = $false }
+            @{ AuthorLogin = 'github-actions[bot]'; CommitterLogin = 'web-flow'; Verified = $true; CommitSha = $null; Parents = @(@{ sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }); Expected = $false }
+            @{ AuthorLogin = 'github-actions[bot]'; CommitterLogin = 'web-flow'; Verified = $true; CommitSha = '1111111111111111111111111111111111111111'; Parents = @(@{ sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }, @{ sha = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }); Expected = $false }
         ) {
             param(
                 [AllowNull()][string]$AuthorLogin,
                 [AllowNull()][string]$CommitterLogin,
                 [bool]$Verified,
-                [string]$ParentSha,
+                [AllowNull()][string]$CommitSha,
+                [object[]]$Parents,
                 [bool]$Expected
             )
 
-            $commit = New-LocalizationValidatorCommit -AuthorLogin $AuthorLogin -CommitterLogin $CommitterLogin -Verified $Verified -ParentSha $ParentSha
+            $commit = New-LocalizationValidatorCommit -AuthorLogin $AuthorLogin -CommitterLogin $CommitterLogin -Verified $Verified -CommitSha $CommitSha -Parents $Parents
 
-            Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha $ParentSha |
+            Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedCommitSha '1111111111111111111111111111111111111111' |
                 Should -Be $Expected
         }
     }

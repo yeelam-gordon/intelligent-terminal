@@ -112,7 +112,7 @@ jobs:
           $alreadyComplete = 'false'
           if ((git log -1 --pretty=%s $inputs.HeadRevision) -match '\[localization-expert\]$') {
             $commit = Invoke-GitHubApiJson -Path "repos/$env:REPOSITORY/commits/$($inputs.HeadRevision)" -Context 'GitHub commit lookup for localization completion'
-            if (Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedHeadSha $inputs.HeadRevision) {
+            if (Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedCommitSha $inputs.HeadRevision) {
               $alreadyComplete = 'true'
             }
           }

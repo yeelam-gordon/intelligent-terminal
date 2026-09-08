@@ -422,7 +422,8 @@ function Test-LocalizationWorkflowCompletionCommit {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Commit,
-        [Parameter(Mandatory)][string]$ExpectedHeadSha
+        [string]$ExpectedCommitSha,
+        [string]$ExpectedParentSha
     )
 
     $authorLogin = if ($null -ne $Commit.author) { $Commit.author.login } else { $null }
@@ -433,7 +434,15 @@ function Test-LocalizationWorkflowCompletionCommit {
         return $false
     }
 
-    return $Commit.parents[0].sha -eq $ExpectedHeadSha
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedCommitSha) -and $Commit.sha -ne $ExpectedCommitSha) {
+        return $false
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedParentSha) -and $Commit.parents[0].sha -ne $ExpectedParentSha) {
+        return $false
+    }
+
+    return $true
 }
 
 function Invoke-ProcessBytes {

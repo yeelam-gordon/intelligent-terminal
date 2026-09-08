@@ -280,7 +280,7 @@ jobs:
 
 safe-outputs:
   add-comment:
-    target: '*'
+    target: '${{ github.event.inputs.pr_number }}'
     max: 1
     hide-older-comments: true
 
