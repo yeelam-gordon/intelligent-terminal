@@ -64,14 +64,14 @@ jobs:
               "reason=workflow-completion" >> $env:GITHUB_OUTPUT
               "gate_status=PASS" >> $env:GITHUB_OUTPUT
               "gate_action=NONE" >> $env:GITHUB_OUTPUT
-              @'
-              ## Localization review
-
-              The current head is the verified workflow localization completion commit.
-
-              - AI Credits: **0**
-              - Internal GHAW run: not required
-              '@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value (@(
+                '## Localization review'
+                ''
+                'The current head is the verified workflow localization completion commit.'
+                ''
+                '- AI Credits: **0**'
+                '- Internal GHAW run: not required'
+              ) -join "`n")
               exit 0
             }
           }
@@ -96,25 +96,25 @@ jobs:
           "gate_action=$($summary.action)" >> $env:GITHUB_OUTPUT
 
           if ($summary.action -eq 'ESCALATE') {
-            @"
-            ## Localization review
-
-            The validator blocked this review.
-
-            - Status: **$($summary.status)**
-            - Action: **$($summary.action)**
-            - Message: $($summary.message)
-            "@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value (@(
+              '## Localization review'
+              ''
+              'The validator blocked this review.'
+              ''
+              "- Status: **$($summary.status)**"
+              "- Action: **$($summary.action)**"
+              "- Message: $($summary.message)"
+            ) -join "`n")
             throw "Localization review escalated after diagnostics were written."
           } elseif ($shouldRun -eq 'false') {
-            @'
-            ## Localization review
-
-            No semantic customer-facing localization change was detected.
-
-            - AI Credits: **0**
-            - Internal GHAW run: not required
-            '@ | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value (@(
+              '## Localization review'
+              ''
+              'No semantic customer-facing localization change was detected.'
+              ''
+              '- AI Credits: **0**'
+              '- Internal GHAW run: not required'
+            ) -join "`n")
           }
 
       - name: Dispatch and wait for internal GHAW
