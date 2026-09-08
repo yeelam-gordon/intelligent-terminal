@@ -303,7 +303,7 @@ Fork localization guidance for PR #${{ github.event.inputs.pr_number }} in `${{ 
 
 - Goal: post one fork-safe localization guidance comment only because the
   trusted checker found actionable deterministic issues.
-- Read-only only: do not edit, stage, commit, push, or claim independent
+- Read-only: do not edit, stage, commit, push, or claim independent
   language-quality validation.
 - Trusted code revision for all skill and instruction links:
   `${{ needs.prepare.outputs.trusted_code_revision }}`

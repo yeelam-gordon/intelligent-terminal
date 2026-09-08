@@ -74,9 +74,6 @@ param(
     [string]$RepositoryRoot = (Get-Location).Path
 )
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-
 $script:LocalizationPathspecs = @(
     'src/cascadia/**/Resources/*.resw',
     'src/cascadia/**/Resources/**/*.resw',
@@ -1989,28 +1986,35 @@ function Initialize-LocalizationInvocation {
     }
 }
 
+function Invoke-LocalizationMain {
+    Set-StrictMode -Version Latest
+    $ErrorActionPreference = 'Stop'
+
+    try {
+        Initialize-LocalizationInvocation
+        Assert-RepositoryRoot
+        $result = if ($Mode -eq 'Gate') { Invoke-Gate } else { Invoke-Validation }
+        exit $result.ExitCode
+    } catch [System.ArgumentException] {
+        Write-LocalizationResult -Kind 'summary' -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true `
+            -CheckId 'input.validation' -File $null -Resource $null -Observed $null -Expected $null `
+            -Message $_.Exception.Message -SuggestedAction 'Fix the invocation arguments and rerun the workflow.' `
+            -ComparisonBase $null -TotalCount 0 -PassCount 0 -FixableCount 0 -BlockedCount 1 | Out-Null
+        exit $script:ExitCodes.InvalidInput
+    } catch {
+        Write-LocalizationResult -Kind 'summary' -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true `
+            -CheckId 'runtime.failure' -File $null -Resource $null -Observed $null -Expected $null `
+            -Message $_.Exception.Message -SuggestedAction 'Escalate for manual review; deterministic validation failed unexpectedly.' `
+            -ComparisonBase $null -TotalCount $script:ResultRecords.Count `
+            -PassCount @($script:ResultRecords | Where-Object { $_.status -eq 'PASS' }).Count `
+            -FixableCount @($script:ResultRecords | Where-Object { $_.status -eq 'FIXABLE' }).Count `
+            -BlockedCount (@($script:ResultRecords | Where-Object { $_.status -eq 'BLOCKED' }).Count + 1) | Out-Null
+        exit $script:ExitCodes.Blocked
+    }
+}
+
 if ($MyInvocation.InvocationName -eq '.') {
     return
 }
 
-try {
-    Initialize-LocalizationInvocation
-    Assert-RepositoryRoot
-    $result = if ($Mode -eq 'Gate') { Invoke-Gate } else { Invoke-Validation }
-    exit $result.ExitCode
-} catch [System.ArgumentException] {
-    Write-LocalizationResult -Kind 'summary' -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true `
-        -CheckId 'input.validation' -File $null -Resource $null -Observed $null -Expected $null `
-        -Message $_.Exception.Message -SuggestedAction 'Fix the invocation arguments and rerun the workflow.' `
-        -ComparisonBase $null -TotalCount 0 -PassCount 0 -FixableCount 0 -BlockedCount 1 | Out-Null
-    exit $script:ExitCodes.InvalidInput
-} catch {
-    Write-LocalizationResult -Kind 'summary' -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true `
-        -CheckId 'runtime.failure' -File $null -Resource $null -Observed $null -Expected $null `
-        -Message $_.Exception.Message -SuggestedAction 'Escalate for manual review; deterministic validation failed unexpectedly.' `
-        -ComparisonBase $null -TotalCount $script:ResultRecords.Count `
-        -PassCount @($script:ResultRecords | Where-Object { $_.status -eq 'PASS' }).Count `
-        -FixableCount @($script:ResultRecords | Where-Object { $_.status -eq 'FIXABLE' }).Count `
-        -BlockedCount (@($script:ResultRecords | Where-Object { $_.status -eq 'BLOCKED' }).Count + 1) | Out-Null
-    exit $script:ExitCodes.Blocked
-}
+Invoke-LocalizationMain

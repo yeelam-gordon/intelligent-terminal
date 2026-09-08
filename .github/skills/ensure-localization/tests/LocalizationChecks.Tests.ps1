@@ -397,6 +397,64 @@ Describe 'Localization checker unit tests' -Tag 'Unit' {
             }
         }
     }
+    Describe 'Execution scope contract' {
+        It 'keeps caller preferences unchanged when dot-sourced and still blocks malformed CLI input' {
+            $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+            $escapedCheckerScript = $script:checkerScript.Replace("'", "''")
+
+            $dotSourceProbe = Join-Path $TestDrive 'dot-source-probe.ps1'
+            @(
+                '$ErrorActionPreference = ''Continue'''
+                'Set-StrictMode -Off'
+                '$before = [ordered]@{'
+                '    error_action = [string]$ErrorActionPreference'
+                '    strict_probe = if ($null -eq $undefinedStrictProbe) { ''loose'' } else { ''strict'' }'
+                '}'
+                ". '$escapedCheckerScript'"
+                '$after = [ordered]@{'
+                '    error_action = [string]$ErrorActionPreference'
+                '    strict_probe = if ($null -eq $undefinedStrictProbe) { ''loose'' } else { ''strict'' }'
+                '}'
+                '[pscustomobject]@{'
+                '    before = $before'
+                '    after = $after'
+                '} | ConvertTo-Json -Compress -Depth 4'
+            ) | Set-Content -LiteralPath $dotSourceProbe -Encoding utf8
+
+            $probeResult = Invoke-ProcessBytes -FilePath $pwsh -Arguments @(
+                '-NoLogo',
+                '-NoProfile',
+                '-NonInteractive',
+                '-File',
+                $dotSourceProbe
+            )
+
+            $probeResult.ExitCode | Should -Be 0
+            $probeText = [System.Text.Encoding]::UTF8.GetString($probeResult.Bytes).Trim()
+            $probeText | Should -Match '"before":\{"error_action":"Continue","strict_probe":"loose"\}'
+            $probeText | Should -Match '"after":\{"error_action":"Continue","strict_probe":"loose"\}'
+
+            $cliResult = Invoke-ProcessBytes -FilePath $pwsh -Arguments @(
+                '-NoLogo',
+                '-NoProfile',
+                '-NonInteractive',
+                '-File',
+                $script:checkerScript,
+                '-Mode',
+                'Bogus',
+                '-BaseRevision',
+                '0123456789abcdef0123456789abcdef01234567'
+            )
+
+            $cliResult.ExitCode | Should -Be 64
+            $cliOutput = [System.Text.Encoding]::UTF8.GetString($cliResult.Bytes).Trim()
+            $cliRecords = @($cliOutput -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_ | ConvertFrom-Json })
+            $cliRecords[-1].kind | Should -Be 'summary'
+            $cliRecords[-1].status | Should -Be 'BLOCKED'
+            $cliRecords[-1].action | Should -Be 'ESCALATE'
+            $cliRecords[-1].check_id | Should -Be 'input.validation'
+        }
+    }
     Describe 'Localization validator completion contract' {
     It 'reads the final JSONL summary line and suppresses follow-up work for exit 64' {
         $jsonlPath = Join-Path $TestDrive 'exit64-summary.jsonl'
