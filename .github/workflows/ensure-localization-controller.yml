@@ -57,6 +57,7 @@ jobs:
 
           if ($env:SAME_REPO -eq 'true' -and (git log -1 --pretty=%s $env:HEAD_SHA) -match '\[localization-expert\]$') {
             $commit = Invoke-GitHubApiJson -Path "repos/$env:REPOSITORY/commits/$env:HEAD_SHA" -Context 'GitHub commit lookup for localization completion'
+            # Short-circuit only when the checked head itself is the verified completion commit.
             if (Test-LocalizationWorkflowCompletionCommit -Commit $commit -ExpectedCommitSha $env:HEAD_SHA) {
               "should_run=false" >> $env:GITHUB_OUTPUT
               "reason=workflow-completion" >> $env:GITHUB_OUTPUT
