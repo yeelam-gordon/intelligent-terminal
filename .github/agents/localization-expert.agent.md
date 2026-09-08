@@ -10,6 +10,4 @@ disable-model-invocation: false
 
 Repair customer-facing localization changes only.
 
-Use `.github/skills/ensure-localization/SKILL.md` as the complete workflow
-authority for scope, validator usage, reviewer handoff, commit marker, and
-safe-output completion rules.
+Use `.github/skills/ensure-localization/SKILL.md` as the workflow authority.

@@ -1,192 +1,141 @@
 ---
 name: ensure-localization
-description: 'Shared localization workflow for Intelligent Terminal. Use when reviewing or repairing src/cascadia Resources .resw files or tools/wta/locales/*.yml, running deterministic localization Gate or Validate checks, preparing fork guidance, or invoking the Localization Expert/Reviewer agents.'
+description: 'Reusable localization guidance for Intelligent Terminal. Use for customer-facing `.resw` resources or flat locale YAML, terminology consistency across UI and WTA, deterministic Gate or Validate checks on the repo''s automated paths, and read-only or repair localization review.'
 ---
 
 # Ensure Localization
 
-Use this skill as the single process authority for Intelligent Terminal
-localization work. It owns the reusable repair/review flow, the deterministic
-checker path, and the output contract for same-repo repair, read-only review,
-and fork guidance.
+Use this skill for reusable localization principles and the deterministic checker contract. The caller owns runtime context: whether the work is same-repo repair, read-only review, or fork guidance, plus any trusted revisions, changed paths, or safe-output requirements.
 
 ## When to Use This Skill
 
-- Pull requests or edits touch `src/cascadia/**/Resources/*.resw`.
-- Pull requests or edits touch `tools/wta/locales/*.yml`.
-- You need to run deterministic localization gate or validation checks.
-- You are acting as the `Localization Expert` or `Localization Reviewer`.
-- You need to prepare a fork-safe localization guidance card without checking
-  out untrusted fork content.
+- Review or repair customer-facing localized `.resw` resources.
+- Review or repair flat locale YAML used as translated strings, not arbitrary configuration YAML.
+- Keep wording consistent within a locale and across `.resw` plus WTA locale YAML for the same locale.
+- Run deterministic localization `Gate` or `Validate` checks for the repo's current automated scope.
+- Act as the `Localization Expert` or `Localization Reviewer`.
 
-## Owned Files
+## Scope and Caller Context
 
-- Deterministic checker:
-  [`./scripts/localization_checks.ps1`](./scripts/localization_checks.ps1)
-- Checker-only unit tests:
-  [`./tests/LocalizationChecks.Tests.ps1`](./tests/LocalizationChecks.Tests.ps1)
-- Same-repo workflow source:
-  [`../../workflows/ensure-localization.md`](../../workflows/ensure-localization.md)
-- Fork guidance workflow source:
-  [`../../workflows/ensure-localizationguide-forkedrepo.md`](../../workflows/ensure-localizationguide-forkedrepo.md)
+- This skill can guide localized `.resw` and flat locale YAML work in this repo beyond today's workflow allowlists.
+- The checked-in automation, wrappers, and deterministic checker currently target only:
+  - `src/cascadia/**/Resources/*.resw`
+  - `src/cascadia/**/Resources/**/*.resw`
+  - `tools/wta/locales/*.yml`
+- Do not claim script coverage for other YAML shapes or arbitrary configuration files. Those still need agent judgment unless the checker is extended.
+- The caller decides whether the task is same-repo repair, read-only review, or fork guidance.
+- The caller supplies the trusted base or head revisions, workspace state, or changed-file list needed for validation.
+- When same-repo repair validation must preserve the reviewed source authority in a mutable worktree, the caller supplies `ReviewedHeadRevision`.
+- When automation expects a visible safe output, the caller supplies that channel and any message-shape requirements.
 
 ## Source Authority and Edit Scope
 
-- `src/cascadia/**/Resources/en-US/*.resw` and direct
-  `src/cascadia/**/Resources/*.resw` entries are the source-language authority
-  for `.resw`.
-- `tools/wta/locales/en-US.yml` is the source-language authority for WTA
-  locale files.
-- **Do not change `en-US` or other source-language strings just to make a
-  translation pass.** Change source text only when the caller explicitly
-  changes customer-facing English copy.
-- Discover locale sets from the repository. Never hardcode locale counts.
-- Update every locale file the component already ships, including
-  `qps-ploc`, `qps-ploca`, and `qps-plocm`.
-- Do not add a new locale file for a component that does not already ship it.
-- Keep changes surgical: touch only the reported localization files, resources,
-  and directly required translator comments.
+- Source-language authority for `.resw` is `src/cascadia/**/Resources/en-US/*.resw` plus direct `src/cascadia/**/Resources/*.resw` source entries.
+- Source-language authority for WTA locale YAML is `tools/wta/locales/en-US.yml`.
+- Do not change `en-US` or another source-language string just to make a translation pass.
+- Discover locale sets from what the component already ships; do not hardcode locale counts.
+- Update every shipped locale for the affected component, including `qps-ploc`, `qps-ploca`, and `qps-plocm`, but do not add brand-new locale files.
+- Keep edits surgical: only the reported localization entries and directly required translator guidance.
 
 ## Format Rules
 
-### `.resw` resource files
+### `.resw`
 
 - Keep files well-formed XML.
 - Preserve the existing UTF-8 BOM. New `.resw` files must be UTF-8 with BOM.
-- Preserve `xml:space="preserve"`, resource names, comments, and unaffected
-  ordering.
-- Use XML-aware or byte-preserving edits. Never do line-oriented text rewrites
-  of `.resw` payloads.
-- Ambiguous user-facing strings need translator comments.
+- Preserve `xml:space="preserve"`, resource names, comments, and unaffected ordering.
+- Use XML-aware or byte-preserving edits. Never rewrite `.resw` values with line-oriented text tooling.
+- Add translator comments when the user-facing English is ambiguous.
 
-### `tools/wta/locales/*.yml`
+### Flat locale YAML
 
-- Keep the existing flat `key: "value"` structure. Do not introduce nested
-  YAML objects.
+- Keep the existing flat `key: "value"` locale structure.
 - Preserve UTF-8 text, comments, section headers, and neighboring ordering.
-- YAML comments are translator guidance and are part of the contract.
-- Avoid ad-hoc YAML rewrites that can drop comments or change scalar meaning.
+- YAML comments are translator guidance and part of the localization contract.
+- Avoid rewrites that can drop comments or change scalar meaning.
+- These YAML rules are for translated locale content, not arbitrary configuration YAML.
 
 ## Locked Content, Placeholders, and Pseudo-Locales
 
-- `{Locked}` means the value must stay identical to the source.
+- Preserve placeholders exactly in every format, including `{0}` and `%{agent}`-style tokens.
+- `{Locked}` means the localized value must stay identical to the source.
 - `{Locked="token"}` or `{Locked="token1","token2"}` preserves verbatim tokens
   inside localized text.
 - Locale-scoped locks such as `{Locked=qps-ploc,qps-ploca,qps-plocm}` apply
   only to the listed locales.
-- Preserve placeholders exactly, including `{0}` and `%{agent}`-style tokens.
-- Lock brand names and technical tokens that should not be translated,
-  including `ACP`, `CLI`, `Copilot`, `Claude`, `Codex`, `Gemini`, `Hooks`,
-  `JSON`, `OpenCode`, `PATH`, `PowerShell`, `XML`, and `YAML`.
-- Preserve pseudo-locale style:
-  - `qps-ploc` uses the established bracketed/accented style.
-  - `qps-ploca` uses the `[!!_..._!!]` wrapper style.
-  - `qps-plocm` uses the `[!! ... !!]` mirrored or mnemonic style.
-- A translatable pseudo-locale value must not remain identical to `en-US`
-  unless the source is fully locked for that locale.
+- In `.resw`, read lock directives from translator comments on the source entry; in flat locale YAML, read them from the source YAML comments attached to the key.
+- Keep brand names and technical tokens untranslated when the source marks or clearly treats them as fixed product terms, including `ACP`, `CLI`, `Copilot`, `Claude`, `Codex`, `Gemini`, `Hooks`, `JSON`, `OpenCode`, `PATH`, `PowerShell`, `XML`, and `YAML`.
+- Preserve each format's established pseudo-locale style instead of forcing one format's wrapper onto another:
+  - `tools/wta/locales/*.yml`: `qps-ploc` bracketed or accented style,
+    `qps-ploca` `[!!_..._!!]`, `qps-plocm` `[!! ... !!]`
+  - `.resw`: keep the pseudo-locale form already shipped by that component; preserve its existing placeholders, locked content, and style
+- A translatable pseudo-locale value must not remain identical to the source unless the source is fully locked for that locale.
 
-## Terminology Alignment
+## Consistency and Terminology
 
-Use terminology sources in this order:
-
-1. Existing `.resw` translations in this repository.
-2. Existing `tools/wta/locales/*.yml` translations for the same locale.
-3. Microsoft Learn localized terminology.
-4. Broader community usage only when repository and Microsoft sources are
-   silent.
-
-When a native-language term implies the wrong concept, keep the English term or
-use a well-established transliteration instead.
+- Keep terminology consistent within each locale across strings, phrases, and sentences.
+- Keep terminology equally consistent across `.resw` and flat locale YAML for the same locale; they are the same product surface.
+- Reuse existing repository translations before inventing new wording.
+- Resolve terms in this order:
+  1. Existing `.resw` translations in this repository.
+  2. Existing `tools/wta/locales/*.yml` translations for the same locale.
+  3. Microsoft Learn localized terminology.
+  4. Wider established usage only when repository and Microsoft sources are silent.
+- If a native-language term would imply the wrong product concept, keep the English term or use a well-established transliteration instead.
 
 ## Deterministic Checker Contract
 
-The only checked-in deterministic localization gate is
-[`./scripts/localization_checks.ps1`](./scripts/localization_checks.ps1).
+The checked-in deterministic checker is [`./scripts/localization_checks.ps1`](./scripts/localization_checks.ps1). It currently automates only the repo paths listed in
+[Scope and Caller Context](#scope-and-caller-context).
 
-Run it with repository-relative paths:
+Use repository-relative commands that match the caller's context:
 
 ```powershell
-pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Gate -PullRequestNumber 13 -BaseRevision <base-sha> -HeadRevision <head-sha>
+pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Gate -PullRequestNumber <pr-number> -BaseRevision <base-sha> -HeadRevision <head-sha>
 pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha>
 pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha> -ReviewedHeadRevision <reviewed-head-sha>
 ```
 
-- `Gate` mode decides whether customer-facing semantics changed enough to
-  require review. It intentionally ignores BOM, EOL, comment, order, and
-  formatting-only churn.
-- `Validate` mode owns deterministic checks such as XML or UTF-8 parsing, BOM
-  preservation, locale/key parity, placeholder parity, locked-token
-  preservation, and pseudo-locale shape.
-- Use `-ReviewedHeadRevision` when validating same-repo repair edits in the
-  current worktree so reviewed en-US source files remain the immutable source
-  authority even after local edits.
-- The script writes JSONL to stdout. The final line is the summary record.
-- Translation quality, tone, and terminology judgment still require reviewer or
-  expert judgment.
+- `Gate` decides whether customer-facing semantics changed enough to require review and ignores BOM, EOL, comment, order, and formatting-only churn.
+- `Validate` performs deterministic parsing and parity checks for the automated scope, including XML or UTF-8 parsing, BOM preservation, locale/key parity, placeholder parity, locked-token preservation, and pseudo-locale shape.
+- `ReviewedHeadRevision` is only for mutable-worktree `Validate` runs that must keep reviewed source-language content authoritative.
+- The script writes JSONL to stdout; the final line is the summary record.
+- Translation quality, tone, and terminology judgment still require reviewer or expert judgment.
 
-## Same-Repo Expert Flow
+## Review and Repair Contract
 
-Use this flow when edits are allowed:
+### Same-Repo Repair
 
-1. Run `Validate` before editing and treat the checker as authoritative.
-2. If the result is `FIXABLE`, repair only the reported files and resources.
-3. Re-run `Validate` after the repair. When validating the mutable worktree,
-   pass `-ReviewedHeadRevision <immutable-pr-head-sha>` so repair validation
-   cannot rewrite the reviewed source-language authority.
-4. If the result is `BLOCKED` or an invalid-input summary, stop and surface the
-   exact `check_id`, file, resource, observed value, expected value, and
-   suggested action.
-5. After deterministic validation passes, invoke one independent read-only
-   reviewer pass.
-6. If the reviewer returns `PASS` and no edits were required, emit exactly one
-   visible `add_comment` safe output for the PR. The comment must report the
-   source keys, the applicable locale count, the validations that passed, and
-   the literal review outcome lines `Independent Localization Reviewer: PASS`
-   and `No localization changes were required.` Do not use `noop` for this
-   same-repo no-change success path, and make no commit.
-7. If edits were required, create one focused completion commit whose subject
-   ends exactly with `[localization-expert]`.
-8. When a safe-output push is used, set its `message` so the first line exactly
-   matches `git log -1 --pretty=%s`, including `[localization-expert]`.
+- Run `Validate` before editing and treat its findings as authoritative for deterministic issues.
+- Repair only the reported localization files and resources, then re-run `Validate`. When validating a mutable worktree against an immutable reviewed source authority, pass `-ReviewedHeadRevision <reviewed-head-sha>`.
+- If validation returns `BLOCKED` or invalid input, stop and surface the exact `check_id`, file, resource, observed value, expected value, and suggested action.
+- After deterministic validation passes, run one independent read-only reviewer pass.
+- If no edits were required and the caller's safe-output contract expects a visible success, use `add_comment`; do not substitute `noop`.
+- If edits were required, create one focused completion commit whose subject ends exactly with `[localization-expert]`.
+- When the caller's automation pushes a safe-output message, make its first line exactly match `git log -1 --pretty=%s`, including `[localization-expert]`.
 
-## Read-Only Reviewer Flow
+### Read-Only Review
 
-Use this flow when reviewing without edits:
+- Stay read-only: do not edit, stage, commit, or push.
+- Run `Validate` only when the caller provides immutable git objects or a safe local comparison target.
+- If the review is API-only, do not claim checks that require unavailable file bytes or whole-tree content.
+- If the checker exits `64`, surface the blocked invalid-input summary instead of treating it as an unexpected failure.
+- Return only `PASS` with concise evidence or `FAIL` with actionable findings.
+- Every failure must cite `check_id`, file, resource, observed problem, expected result, and suggested action.
 
-- Stay read-only. Do not edit, stage, commit, or push files.
-- Run `Validate` when the caller provides immutable git objects or a safe local
-  comparison target.
-- If the review is API-only, do not claim checks that require unavailable file
-  bytes or whole-tree content.
-- If the checker exits `64`, surface the blocked invalid-input summary instead
-  of treating it as an unexpected failure.
-- Return only:
-  - `PASS` with concise evidence, or
-  - `FAIL` with actionable findings.
-- Every failure must cite `check_id`, file, resource, observed problem,
-  expected result, and suggested action.
+### Fork Guidance
 
-## Fork Guidance Rules
-
-- Never check out or execute untrusted fork source objects just to inspect
-  localization content.
+- Never check out or execute untrusted fork source objects just to inspect localization content.
 - Use trusted base content plus immutable git objects or pull-request APIs.
-- If `Gate` or `Validate` says no relevant customer-facing semantics changed,
-  post no contributor comment.
-- If deterministic findings are `FIXABLE`, post one concise card that links
-  this skill and only the applicable wrapper instructions for the changed file
-  types.
-- If validation is blocked, fail honestly with the blocked summary and do not
-  post a misleading success or repair comment.
+- If `Gate` or `Validate` says no relevant customer-facing semantics changed, post no contributor comment.
+- If deterministic findings are `FIXABLE`, post one concise guidance card that links this skill and only the applicable wrapper instructions for the changed file types.
+- If validation is blocked, fail honestly with the blocked summary and do not post a misleading success or repair comment.
 
 ## Gotchas
 
-- **Do not duplicate this procedure elsewhere.** The skill is the reusable
-  workflow authority; instruction wrappers stay thin and agent files stay
-  role-only.
-- **Do not invent locked-token fixes.** If the source string is fully locked,
-  the target must match it exactly.
-- **Do not translate `en-US` to repair locale-only issues.** Fix the localized
-  files instead.
+- **The caller, not the skill, decides runtime situation.** Do not infer fork vs. same-repo vs. read-only from the skill alone.
+- **Current automation allowlists are narrower than the skill.** Do not claim the checker parses arbitrary YAML or unsupported localization file shapes.
+- **Do not invent locked-token fixes.** If the source string or token is locked, preserve it exactly.
+- **Do not change source-language text to repair locale-only issues.** Fix the localized files instead.
 - **Do not skip the independent reviewer.** Deterministic validation does not
-  replace final translation review.
+  replace final language review.

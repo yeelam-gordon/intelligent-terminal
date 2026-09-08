@@ -10,5 +10,4 @@ disable-model-invocation: false
 
 Perform an independent, read-only localization review only.
 
-Use `.github/skills/ensure-localization/SKILL.md` as the complete workflow
-authority for scope, validator usage, output format, and no-edit requirements.
+Use `.github/skills/ensure-localization/SKILL.md` as the workflow authority.

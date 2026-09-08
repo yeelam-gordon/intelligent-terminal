@@ -4,9 +4,8 @@ applyTo: "src/cascadia/**/Resources/*.resw, src/cascadia/**/Resources/**/*.resw"
 
 # Localization Instructions for `.resw` Resource Files
 
-Use `.github/skills/ensure-localization/SKILL.md` for the shared localization
-workflow, deterministic checker path, source-authority rules, locked-token
-rules, placeholder parity, pseudo-locale requirements, and reviewer contract.
+Auto-load `.github/skills/ensure-localization/SKILL.md` for `.resw`
+localization work in `src/cascadia/**/Resources/`.
 
-This wrapper exists only to auto-load the shared skill for `.resw` edits. Use
-the skill's `.resw` section when working in `src/cascadia/**/Resources/`.
+This wrapper only declares the current `.resw` file scope. The skill carries
+the reusable principles, checker contract, and review or repair rules.
