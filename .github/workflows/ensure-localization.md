@@ -83,17 +83,10 @@ jobs:
       initial_status: ${{ steps.prepare.outputs.initial_status }}
       initial_action: ${{ steps.prepare.outputs.initial_action }}
     steps:
-      - name: Checkout trusted base
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.inputs.expected_base_sha }}
-          fetch-depth: 0
-          persist-credentials: false
       - name: Checkout trusted workflow revision
         uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
-          path: workflow-helpers
           fetch-depth: 0
           persist-credentials: false
       - name: Validate immutable PR head and deterministic checks
@@ -107,8 +100,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $trustedWorkflowRoot = Join-Path $PWD 'workflow-helpers'
-          . (Join-Path $trustedWorkflowRoot '.github/skills/ensure-localization/scripts/localization_checks.ps1')
+          . (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1')
           $inputs = Get-ValidatedWorkflowPrepareInputs -PullRequestNumber $env:PR_NUMBER -BaseRevision $env:BASE_SHA -HeadRevision $env:HEAD_SHA
           $remoteRef = "refs/remotes/origin/localization-pr-$($inputs.PullRequestNumber)"
           Invoke-GitHubPullRequestHeadFetch -PullRequestNumber $inputs.PullRequestNumber -RemoteRef $remoteRef | Out-Null
@@ -129,7 +121,7 @@ jobs:
           $previousNativePreference = $PSNativeCommandUseErrorActionPreference
           $PSNativeCommandUseErrorActionPreference = $false
           try {
-            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $trustedWorkflowRoot '.github/skills/ensure-localization/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PullRequestNumber -BaseRevision $inputs.BaseRevision -HeadRevision $inputs.HeadRevision | Tee-Object -FilePath $jsonl | Out-Null
+            & pwsh -NoLogo -NoProfile -NonInteractive -File (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1') -Mode Validate -PullRequestNumber $inputs.PullRequestNumber -BaseRevision $inputs.BaseRevision -HeadRevision $inputs.HeadRevision | Tee-Object -FilePath $jsonl | Out-Null
             $exitCode = $LASTEXITCODE
             $global:LASTEXITCODE = 0
           } finally {
