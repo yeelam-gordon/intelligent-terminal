@@ -1,734 +1,201 @@
 <#
 .SYNOPSIS
-    Deterministic localization gate and validation checks for `.resw` and WTA locale files.
+    Read-only file-based localization checks for `.resw` and flat localization `.yml` files.
 
 .DESCRIPTION
-    `Gate` mode compares customer-facing localization semantics between the pull
-    request base and target head. It ignores BOM, end-of-line, comment, order,
-    and formatting-only churn.
+    Public checks:
+      Test-ResourceSyntax(File) - validate one supported localization file.
+      Test-RequiredKeys(SourceFile, TargetFile, Keys optional) - find missing or stale keys.
+      Test-PlaceholderParity(SourceFile, TargetFile, Keys optional) - preserve placeholder identity and count.
+      Test-LockedContent(SourceFile, TargetFile, Locale when scoped, Keys optional) - preserve source-defined locked values or tokens.
+      Test-ResourceEncoding(File, OriginalFile optional) - require UTF-8 and enforce the expected BOM behavior.
+      Test-PseudoLocale(SourceFile, TargetFile, Locale, Keys optional) - catch plain-English fallback or wrapper mistakes.
 
-    `Validate` mode performs deterministic checks against either immutable git
-    revisions (`-HeadRevision`) or the current working tree (omit
-    `-HeadRevision`). When repair validation must preserve the reviewed
-    source-language authority, pass `-ReviewedHeadRevision` so en-US source
-    files are compared against the immutable reviewed head instead of the
-    mutable worktree. Validation only considers localization files changed in
-    the comparison scope.
-
-    The script writes JSONL records to stdout. The final line is always the
-    summary record.
-    Dot-source the script to reuse the summary-reading helpers without running
-    `Gate` or `Validate`.
+    The checks only read caller-supplied files and write exactly one JSON bundle
+    to stdout per CLI invocation. CLI key scoping is supplied with -KeysJson;
+    public PowerShell functions continue to accept [string[]] -Keys directly.
+    They do not perform Git, PR, SHA, auth, discovery, translation-quality, or
+    code-edit-policy work.
 
     Exit codes:
-      0  PASS      (`action = NONE`)
-      10 PASS      (`action = REVIEW`; Gate found semantic changes)
-      20 FIXABLE   (`action = FIX`)
-      30 BLOCKED   (`action = ESCALATE`)
+      0  PASS
+      20 FIXABLE
+      30 BLOCKED
       64 INVALID_INPUT
-
-.PARAMETER Mode
-    `Gate` or `Validate`.
-
-.PARAMETER PullRequestNumber
-    Optional positive decimal pull request number. When provided, validated
-    before git object inspection.
-
-.PARAMETER BaseRevision
-    Immutable base commit SHA from workflow dispatch or manual invocation.
-
-.PARAMETER HeadRevision
-    Immutable head commit SHA for read-only git-object inspection. Omit in
-    `Validate` mode to compare the working tree against the computed merge base.
-
-.PARAMETER ReviewedHeadRevision
-    Optional immutable reviewed pull request head for `Validate` mode source
-    authority. Use this when validating repair edits in the current working tree
-    so reviewed en-US source files must remain content-identical to the reviewed
-    head, with source comments and BOM preserved.
-
-.PARAMETER RepositoryRoot
-    Repository root containing `.git`. Defaults to the current location.
-
-.EXAMPLE
-    pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Gate -PullRequestNumber 13 -BaseRevision <base-sha> -HeadRevision <head-sha>
-
-.EXAMPLE
-    pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha>
-
-.EXAMPLE
-    pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Mode Validate -BaseRevision <base-sha> -ReviewedHeadRevision <reviewed-head-sha>
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
-    [string]$Mode,
-
-    [string]$PullRequestNumber,
-
-    [string]$BaseRevision,
-
-    [string]$HeadRevision,
-
-    [string]$ReviewedHeadRevision,
-
-    [string]$RepositoryRoot = (Get-Location).Path
+    [string]$Check,
+    [string]$File,
+    [string]$SourceFile,
+    [string]$TargetFile,
+    [string]$OriginalFile,
+    [string]$Locale,
+    [string]$KeysJson,
+    [Parameter(ValueFromRemainingArguments)]
+    [AllowEmptyCollection()]
+    [string[]]$UnexpectedArguments
 )
 
-$script:LocalizationPathspecs = @(
-    'src/cascadia/**/Resources/*.resw',
-    'src/cascadia/**/Resources/**/*.resw',
-    'tools/wta/locales/*.yml'
+$script:TopLevelBoundParameters = @{} + $PSBoundParameters
+
+$script:SupportedChecks = @(
+    'Test-ResourceSyntax',
+    'Test-RequiredKeys',
+    'Test-PlaceholderParity',
+    'Test-LockedContent',
+    'Test-ResourceEncoding',
+    'Test-PseudoLocale'
 )
+$script:SupportedPseudoLocales = @('qps-ploc', 'qps-ploca', 'qps-plocm')
 $script:ExitCodes = @{
     Pass = 0
-    Review = 10
     Fixable = 20
     Blocked = 30
     InvalidInput = 64
 }
-$script:ResultRecords = [System.Collections.Generic.List[object]]::new()
-$script:FileBytesCache = @{}
-$script:ParsedReswCache = @{}
-$script:ParsedWtaCache = @{}
-$script:RepositoryRootPath = [System.IO.Path]::GetFullPath($RepositoryRoot)
 
-function ConvertTo-RepoPath {
-    param([Parameter(Mandatory)][string]$Path)
-
-    $relative = [System.IO.Path]::GetRelativePath($script:RepositoryRootPath, $Path)
-    return ($relative -replace '\\', '/')
-}
-
-function ConvertTo-PlatformPath {
-    param([Parameter(Mandatory)][string]$Path)
-
-    return ($Path -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-}
-
-function Write-LocalizationResult {
-    [CmdletBinding()]
+function New-CheckRecord {
     param(
-        [Parameter(Mandatory)][ValidateSet('check', 'summary')][string]$Kind,
-        [Parameter(Mandatory)][string]$Status,
-        [Parameter(Mandatory)][string]$Action,
-        [bool]$ShouldRun,
-        [string]$CheckId,
+        [Parameter(Mandatory)][ValidateSet('PASS', 'FIXABLE', 'BLOCKED')][string]$Status,
+        [Parameter(Mandatory)][string]$CheckName,
         [string]$File,
         [string]$Resource,
-        $Observed,
         $Expected,
-        [string]$Message,
-        [string]$SuggestedAction,
-        [string]$ComparisonBase,
-        [int]$TotalCount = 0,
-        [int]$PassCount = 0,
-        [int]$FixableCount = 0,
-        [int]$BlockedCount = 0
+        $Observed,
+        [Parameter(Mandatory)][string]$Message,
+        [string]$SuggestedAction
     )
 
-    $record = [ordered]@{
-        kind = $Kind
-        mode = $Mode
+    return [pscustomobject][ordered]@{
+        check = $CheckName
         status = $Status
-        action = $Action
-        should_run = if ($Kind -eq 'summary') { $ShouldRun } else { $null }
-        check_id = $CheckId
         file = $File
         resource = $Resource
-        observed = $Observed
         expected = $Expected
+        observed = $Observed
         message = $Message
-        suggested_action = $SuggestedAction
-        comparison_base = $ComparisonBase
-        total_count = if ($Kind -eq 'summary') { $TotalCount } else { $null }
-        pass_count = if ($Kind -eq 'summary') { $PassCount } else { $null }
-        fixable_count = if ($Kind -eq 'summary') { $FixableCount } else { $null }
-        blocked_count = if ($Kind -eq 'summary') { $BlockedCount } else { $null }
+        suggestedAction = $SuggestedAction
     }
-
-    if ($Kind -eq 'check') {
-        $script:ResultRecords.Add([pscustomobject]$record)
-    }
-
-    [Console]::Out.WriteLine(($record | ConvertTo-Json -Compress -Depth 6))
-    return [pscustomobject]$record
 }
 
-function Complete-LocalizationRun {
-    [CmdletBinding()]
+function Complete-CheckBundle {
     param(
-        [Parameter(Mandatory)][string]$Status,
-        [Parameter(Mandatory)][string]$Action,
-        [Parameter(Mandatory)][bool]$ShouldRun,
-        [Parameter(Mandatory)][string]$Message,
-        [string]$ComparisonBase
+        [Parameter(Mandatory)][string]$CheckName,
+        [AllowEmptyCollection()][object[]]$Results,
+        [Parameter(Mandatory)][string]$PassMessage,
+        [string]$PassFile,
+        [string]$PassResource
     )
 
-    $passCount = @($script:ResultRecords | Where-Object { $_.status -eq 'PASS' }).Count
-    $fixableCount = @($script:ResultRecords | Where-Object { $_.status -eq 'FIXABLE' }).Count
-    $blockedCount = @($script:ResultRecords | Where-Object { $_.status -eq 'BLOCKED' }).Count
-    $totalCount = $script:ResultRecords.Count
+    $resolved = @($Results | Where-Object { $null -ne $_ })
+    if ($resolved.Count -eq 0) {
+        $resolved = @(
+            (New-CheckRecord -Status 'PASS' -CheckName $CheckName -File $PassFile -Resource $PassResource `
+                -Expected $null -Observed $null -Message $PassMessage -SuggestedAction $null)
+        )
+    }
 
-    $summary = Write-LocalizationResult -Kind 'summary' -Status $Status -Action $Action -ShouldRun $ShouldRun `
-        -CheckId $null -File $null -Resource $null -Observed $null -Expected $null `
-        -Message $Message -SuggestedAction $null -ComparisonBase $ComparisonBase `
-        -TotalCount $totalCount -PassCount $passCount -FixableCount $fixableCount -BlockedCount $blockedCount
+    $status = if (@($resolved | Where-Object { $_.status -eq 'BLOCKED' }).Count -gt 0) {
+        'BLOCKED'
+    } elseif (@($resolved | Where-Object { $_.status -eq 'FIXABLE' }).Count -gt 0) {
+        'FIXABLE'
+    } else {
+        'PASS'
+    }
 
-    $exitCode = switch ($Status) {
+    $exitCode = switch ($status) {
         'BLOCKED' { $script:ExitCodes.Blocked; break }
         'FIXABLE' { $script:ExitCodes.Fixable; break }
-        default {
-            if ($Mode -eq 'Gate' -and $ShouldRun) {
-                $script:ExitCodes.Review
-            } else {
-                $script:ExitCodes.Pass
-            }
+        default { $script:ExitCodes.Pass }
+    }
+
+    return [pscustomobject][ordered]@{
+        check = $CheckName
+        status = $status
+        exitCode = $exitCode
+        summary = [ordered]@{
+            totalCount = $resolved.Count
+            passCount = @($resolved | Where-Object { $_.status -eq 'PASS' }).Count
+            fixableCount = @($resolved | Where-Object { $_.status -eq 'FIXABLE' }).Count
+            blockedCount = @($resolved | Where-Object { $_.status -eq 'BLOCKED' }).Count
         }
+        results = @($resolved)
     }
-
-    return [pscustomobject]@{ Summary = $summary; ExitCode = $exitCode }
 }
 
-function Get-LocalizationValidatorSummary {
-    [CmdletBinding()]
+function New-InvalidInputBundle {
     param(
-        [Parameter(Mandatory)][string]$JsonlPath
+        [string]$CheckName,
+        [Parameter(Mandatory)][string]$Message
     )
 
-    if (-not (Test-Path -LiteralPath $JsonlPath)) {
-        throw [System.IO.FileNotFoundException]::new("Localization validator output file '$JsonlPath' was not found.")
-    }
-
-    $summary = Get-Content -LiteralPath $JsonlPath | Select-Object -Last 1 | ConvertFrom-Json -AsHashtable
-    if ($summary.kind -ne 'summary') {
-        throw 'Localization validator did not emit a summary record.'
-    }
-
-    return $summary
-}
-
-function Resolve-LocalizationValidatorCompletion {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$JsonlPath,
-        [Parameter(Mandatory)][int]$ExitCode,
-        [int[]]$AllowedExitCodes = @(0, 10, 20, 30, 64)
-    )
-
-    if ($AllowedExitCodes -notcontains $ExitCode) {
-        throw "Unexpected localization validator exit code: $ExitCode"
-    }
-
-    $summary = Get-LocalizationValidatorSummary -JsonlPath $JsonlPath
-    if ($ExitCode -eq 64) {
-        if ($summary.status -ne 'BLOCKED' -or $summary.action -ne 'ESCALATE') {
-            throw 'Localization validator exit 64 must emit a BLOCKED/ESCALATE summary record.'
+    return [pscustomobject][ordered]@{
+        check = $CheckName
+        status = 'INVALID_INPUT'
+        exitCode = $script:ExitCodes.InvalidInput
+        summary = [ordered]@{
+            totalCount = 0
+            passCount = 0
+            fixableCount = 0
+            blockedCount = 0
         }
-    }
-
-    $shouldRun = if ($summary.action -eq 'ESCALATE') {
-        $false
-    } elseif ($null -ne $summary.should_run) {
-        [bool]$summary.should_run
-    } else {
-        $false
-    }
-
-    return [pscustomobject]@{
-        Summary = $summary
-        ShouldRun = $shouldRun
+        message = $Message
+        results = @()
     }
 }
 
-function Test-LocalizationMode {
-    param([string]$Value)
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        throw [System.ArgumentException]::new("Mode is required; expected 'Gate' or 'Validate'.")
-    }
-
-    if ($Value -cnotin @('Gate', 'Validate')) {
-        throw [System.ArgumentException]::new("Invalid Mode '$Value'; expected 'Gate' or 'Validate'.")
-    }
-
-    return $Value
-}
-
-function Test-PullRequestNumber {
-    param([string]$Value)
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        return $null
-    }
-
-    if ($Value -notmatch '^[1-9][0-9]*$') {
-        throw [System.ArgumentException]::new("Invalid pull request number '$Value'; expected a positive decimal integer.")
-    }
-
-    return $Value
-}
-
-function Test-GitHubRepositoryName {
+function New-BlockedBundle {
     param(
-        [string]$Value,
-        [Parameter(Mandatory)][string]$ParameterName
+        [Parameter(Mandatory)][string]$CheckName,
+        [string]$File,
+        [string]$Resource,
+        [Parameter(Mandatory)][string]$Message,
+        [Parameter(Mandatory)][string]$SuggestedAction,
+        $Expected = $null,
+        $Observed = $null
     )
 
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        throw [System.ArgumentException]::new("$ParameterName is required; expected owner/repository.")
-    }
-
-    if ($Value -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
-        throw [System.ArgumentException]::new("Invalid $ParameterName '$Value'; expected owner/repository.")
-    }
-
-    return $Value
+    return Complete-CheckBundle -CheckName $CheckName -Results @(
+        New-CheckRecord -Status 'BLOCKED' -CheckName $CheckName -File $File -Resource $Resource `
+            -Expected $Expected -Observed $Observed -Message $Message -SuggestedAction $SuggestedAction
+    ) -PassMessage 'blocked'
 }
 
-function Test-GitObjectId {
-    param(
-        [string]$Value,
-        [Parameter(Mandatory)][string]$ParameterName
-    )
-
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        throw [System.ArgumentException]::new("$ParameterName is required; expected exactly 40 hexadecimal characters.")
-    }
-
-    if ($Value -notmatch '^[0-9a-fA-F]{40}$') {
-        throw [System.ArgumentException]::new("Invalid $ParameterName '$Value'; expected exactly 40 hexadecimal characters.")
-    }
-
-    return $Value.ToLowerInvariant()
-}
-
-function Get-ValidatedWorkflowPrepareInputs {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$PullRequestNumber,
-        [Parameter(Mandatory)][string]$BaseRevision,
-        [Parameter(Mandatory)][string]$HeadRevision,
-        [string]$Repository,
-        [string]$TrustedRepository
-    )
-
-    $inputs = [ordered]@{
-        PullRequestNumber = Test-PullRequestNumber -Value $PullRequestNumber
-        BaseRevision = Test-GitObjectId -Value $BaseRevision -ParameterName 'BaseRevision'
-        HeadRevision = Test-GitObjectId -Value $HeadRevision -ParameterName 'HeadRevision'
-    }
-
-    if ($PSBoundParameters.ContainsKey('Repository')) {
-        $inputs.Repository = if ($PSBoundParameters.ContainsKey('TrustedRepository') -and -not [string]::IsNullOrWhiteSpace($TrustedRepository)) {
-            Resolve-TrustedGitHubRepository -Repository $Repository -TrustedRepository $TrustedRepository
-        } else {
-            Test-GitHubRepositoryName -Value $Repository -ParameterName 'Repository'
-        }
-    }
-
-    return [pscustomobject]$inputs
-}
-
-function Invoke-GitText {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string[]]$Arguments,
-        [switch]$AllowFailure,
-        [string]$CommandDisplay
-    )
-
-    if ([string]::IsNullOrWhiteSpace($CommandDisplay)) {
-        $CommandDisplay = "git $($Arguments -join ' ')"
-    }
-
-    $output = & git @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
-    $text = (@($output) -join "`n").TrimEnd("`r", "`n")
-
-    if (-not $AllowFailure -and $exitCode -ne 0) {
-        $messageSuffix = if ([string]::IsNullOrWhiteSpace($text)) { '' } else { " $text" }
-        throw "$CommandDisplay failed with exit code $exitCode.$messageSuffix"
-    }
-
-    return [pscustomobject]@{
-        ExitCode = $exitCode
-        Output = $text
-    }
-}
-
-function Get-GitRemoteUrl {
-    [CmdletBinding()]
-    param([string]$RemoteName = 'origin')
-
-    $result = Invoke-GitText -Arguments @('remote', 'get-url', $RemoteName)
-    if ([string]::IsNullOrWhiteSpace($result.Output)) {
-        throw [System.ArgumentException]::new("Git remote '$RemoteName' does not have a fetch URL.")
-    }
-
-    return $result.Output.Trim()
-}
-
-function Get-GitHubScopedExtraHeaderConfig {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$RemoteUrl,
-        [string]$Token = $env:GH_TOKEN
-    )
-
-    if ([string]::IsNullOrWhiteSpace($RemoteUrl)) {
-        throw [System.ArgumentException]::new('RemoteUrl is required to scope the temporary GitHub authorization header.')
-    }
-    if ([string]::IsNullOrWhiteSpace($Token)) {
-        throw [System.ArgumentException]::new('GH_TOKEN is required to authenticate GitHub git fetch operations.')
-    }
-
-    try {
-        $uri = [System.Uri]$RemoteUrl
-    } catch {
-        throw [System.ArgumentException]::new("RemoteUrl '$RemoteUrl' is not a valid absolute URI.")
-    }
-
-    if (-not $uri.IsAbsoluteUri -or $uri.Scheme -ne 'https') {
-        throw [System.ArgumentException]::new("RemoteUrl '$RemoteUrl' must be an https remote to scope the temporary GitHub authorization header.")
-    }
-
-    $authority = $uri.GetLeftPart([System.UriPartial]::Authority).TrimEnd('/')
-    $credential = [Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("x-access-token:$Token"))
-    return "http.$authority/.extraheader=AUTHORIZATION: basic $credential"
-}
-
-function Invoke-GitHubPullRequestHeadFetch {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$PullRequestNumber,
-        [Parameter(Mandatory)][string]$RemoteRef,
-        [string]$RemoteName = 'origin'
-    )
-
-    $validatedPullRequestNumber = Test-PullRequestNumber -Value $PullRequestNumber
-    if ([string]::IsNullOrWhiteSpace($RemoteRef)) {
-        throw [System.ArgumentException]::new('RemoteRef is required to store the fetched pull request head.')
-    }
-
-    $remoteUrl = Get-GitRemoteUrl -RemoteName $RemoteName
-    $extraHeaderConfig = Get-GitHubScopedExtraHeaderConfig -RemoteUrl $remoteUrl
-    $refSpec = "+refs/pull/$validatedPullRequestNumber/head:$RemoteRef"
-    $commandDisplay = "git fetch --no-tags $RemoteName <pull-request-head-refspec>"
-
-    return Invoke-GitText -Arguments @('-c', $extraHeaderConfig, 'fetch', '--no-tags', $RemoteName, $refSpec) -CommandDisplay $commandDisplay
-}
-
-function Test-LocalizationWorkflowCompletionCommit {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][object]$Commit,
-        [string]$ExpectedCommitSha,
-        [string]$ExpectedParentSha
-    )
-
-    $authorLogin = if ($null -ne $Commit.author) { $Commit.author.login } else { $null }
-    $committerLogin = if ($null -ne $Commit.committer) { $Commit.committer.login } else { $null }
-    $verified = [bool]$Commit.commit.verification.verified
-    $parentCount = @($Commit.parents).Count
-    if ($authorLogin -ne 'github-actions[bot]' -or $committerLogin -ne 'web-flow' -or -not $verified -or $parentCount -ne 1) {
-        return $false
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($ExpectedCommitSha) -and $Commit.sha -ne $ExpectedCommitSha) {
-        return $false
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($ExpectedParentSha) -and $Commit.parents[0].sha -ne $ExpectedParentSha) {
-        return $false
-    }
-
-    return $true
-}
-
-function Invoke-ProcessBytes {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$FilePath,
-        [Parameter(Mandatory)][string[]]$Arguments,
-        [int]$TimeoutMilliseconds = 120000
-    )
-
-    if ($TimeoutMilliseconds -le 0) {
-        throw [System.ArgumentException]::new("TimeoutMilliseconds '$TimeoutMilliseconds' must be a positive integer.")
-    }
-
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $FilePath
-    foreach ($argument in $Arguments) {
-        [void]$startInfo.ArgumentList.Add($argument)
-    }
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    if (-not [string]::IsNullOrWhiteSpace($script:RepositoryRootPath)) {
-        $startInfo.WorkingDirectory = $script:RepositoryRootPath
-    }
-
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    $stdoutBuffer = [System.IO.MemoryStream]::new()
-    $processStarted = $false
-
-    try {
-        $null = $process.Start()
-        $processStarted = $true
-
-        $stdoutCopyTask = $process.StandardOutput.BaseStream.CopyToAsync($stdoutBuffer)
-        $stderrReadTask = $process.StandardError.ReadToEndAsync()
-
-        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
-            $ownedProcessId = $process.Id
-            try {
-                if (-not $process.HasExited) {
-                    $process.Kill($true)
-                }
-            } catch [System.InvalidOperationException] {
-            }
-
-            [void]$process.WaitForExit(5000)
-            throw [System.TimeoutException]::new("Process '$FilePath' timed out after $TimeoutMilliseconds ms (PID $ownedProcessId).")
-        }
-
-        $process.WaitForExit()
-        [void]$stdoutCopyTask.GetAwaiter().GetResult()
-        $stderr = $stderrReadTask.GetAwaiter().GetResult().TrimEnd("`r", "`n")
-
-        return [pscustomobject]@{
-            ExitCode = $process.ExitCode
-            Bytes = $stdoutBuffer.ToArray()
-            Stderr = $stderr
-        }
-    } finally {
-        if ($processStarted) {
-            try {
-                if (-not $process.HasExited) {
-                    $process.Kill($true)
-                    [void]$process.WaitForExit(5000)
-                }
-            } catch [System.InvalidOperationException] {
-            }
-        }
-
-        $stdoutBuffer.Dispose()
-        $process.Dispose()
-    }
-}
-
-function Invoke-GitHubApiJson {
-    [CmdletBinding()]
+function Assert-RequiredPath {
     param(
         [Parameter(Mandatory)][string]$Path,
-        [string]$Context
+        [Parameter(Mandatory)][string]$ParameterName
     )
-
-    if ([string]::IsNullOrWhiteSpace($Context)) {
-        $Context = "gh api $Path"
-    }
-
-    $result = Invoke-ProcessBytes -FilePath 'gh' -Arguments @('api', $Path)
-    $stdout = [System.Text.Encoding]::UTF8.GetString($result.Bytes).Trim()
-
-    return (Resolve-GitHubApiJson -Context $Context -ExitCode $result.ExitCode -Stdout $stdout -Stderr $result.Stderr)
-}
-
-function Resolve-GitHubApiJson {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$Context,
-        [Parameter(Mandatory)][int]$ExitCode,
-        [string]$Stdout,
-        [string]$Stderr
-    )
-
-    if ($ExitCode -ne 0) {
-        $messageSuffix = if ([string]::IsNullOrWhiteSpace($Stderr)) { '' } else { " $Stderr" }
-        throw "$Context failed with exit code $ExitCode.$messageSuffix"
-    }
-
-    if ([string]::IsNullOrWhiteSpace($Stdout)) {
-        throw "$Context returned no JSON output."
-    }
-
-    try {
-        return ($Stdout | ConvertFrom-Json -AsHashtable -ErrorAction Stop)
-    } catch {
-        throw "$Context returned invalid JSON output."
-    }
-}
-
-function Resolve-TrustedGitHubRepository {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$Repository,
-        [Parameter(Mandatory)][string]$TrustedRepository
-    )
-
-    $validatedRepository = Test-GitHubRepositoryName -Value $Repository -ParameterName 'Repository'
-    $validatedTrustedRepository = Test-GitHubRepositoryName -Value $TrustedRepository -ParameterName 'TrustedRepository'
-
-    if (-not $validatedRepository.Equals($validatedTrustedRepository, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw [System.ArgumentException]::new("Repository '$validatedRepository' does not match trusted repository '$validatedTrustedRepository'.")
-    }
-
-    return $validatedTrustedRepository
-}
-
-function Assert-RepositoryRoot {
-    $root = [System.IO.Path]::GetFullPath($RepositoryRoot)
-    if (-not (Test-Path -LiteralPath $root)) {
-        throw [System.ArgumentException]::new("RepositoryRoot '$RepositoryRoot' does not exist.")
-    }
-
-    $script:RepositoryRootPath = $root
-    Set-Location -LiteralPath $script:RepositoryRootPath
-
-    $repoRoot = Invoke-GitText -Arguments @('rev-parse', '--show-toplevel')
-    if ([string]::IsNullOrWhiteSpace($repoRoot.Output)) {
-        throw [System.ArgumentException]::new("RepositoryRoot '$script:RepositoryRootPath' is not inside a git repository.")
-    }
-
-    $normalizedGitRoot = [System.IO.Path]::GetFullPath($repoRoot.Output)
-    if ($normalizedGitRoot -ne $script:RepositoryRootPath) {
-        throw [System.ArgumentException]::new("RepositoryRoot '$script:RepositoryRootPath' does not match git root '$normalizedGitRoot'.")
-    }
-}
-
-function Assert-GitCommitExists {
-    param([Parameter(Mandatory)][string]$Revision)
-
-    $result = Invoke-GitText -Arguments @('cat-file', '-e', "$Revision^{commit}") -AllowFailure
-    if ($result.ExitCode -ne 0) {
-        throw [System.ArgumentException]::new("Git commit '$Revision' is not available in this repository.")
-    }
-}
-
-function Resolve-ComparisonBase {
-    param(
-        [Parameter(Mandatory)][string]$BaseRevision,
-        [Parameter(Mandatory)][string]$TargetRevision
-    )
-
-    $result = Invoke-GitText -Arguments @('merge-base', $BaseRevision, $TargetRevision) -AllowFailure
-    if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.Output)) {
-        throw [System.InvalidOperationException]::new("Unable to resolve merge base between $BaseRevision and $TargetRevision.")
-    }
-
-    return $result.Output.Trim()
-}
-
-function Get-ValidationChangedLocalizationPaths {
-    param(
-        [Parameter(Mandatory)][string]$ComparisonBase,
-        [string]$TargetViewRevision,
-        [string]$ReviewedHeadRevision
-    )
-
-    $paths = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
-    foreach ($path in @(Get-ChangedLocalizationPath -ComparisonBase $ComparisonBase -HeadRevision $TargetViewRevision)) {
-        $null = $paths.Add($path)
-    }
-    if (-not [string]::IsNullOrWhiteSpace($ReviewedHeadRevision)) {
-        foreach ($path in @(Get-ChangedLocalizationPath -ComparisonBase $ComparisonBase -HeadRevision $ReviewedHeadRevision)) {
-            $null = $paths.Add($path)
-        }
-    }
-    return @($paths)
-}
-
-function Get-LocalizationFileKind {
-    param([string]$Path)
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
-        return $null
+        throw [System.ArgumentException]::new("$ParameterName is required.")
     }
 
-    if ($Path -match '^src/cascadia/.+/Resources(?:/[^/]+)*/[^/]+\.resw$') {
-        return 'resw'
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw [System.ArgumentException]::new("$ParameterName '$Path' was not found.")
     }
 
-    if ($Path -match '^tools/wta/locales/[^/]+\.yml$') {
-        return 'wta'
-    }
-
-    return $null
+    return [System.IO.Path]::GetFullPath($Path)
 }
 
-function Test-SourceLocalePreserved {
+function Assert-RequiredValue {
     param(
-        [Parameter(Mandatory)]
-        [ValidateSet('resw', 'wta')]
-        [string]$Kind,
-
-        [Parameter(Mandatory)][string]$Path,
-
-        [Parameter(Mandatory)][string]$ReviewedRevision,
-
-        [string]$TargetRevision,
-
-        [Parameter(Mandatory)][string]$ComparisonBase
+        [string]$Value,
+        [string]$ParameterName
     )
 
-    $reviewedBytes = Get-FileBytesFromView -Path $Path -Revision $ReviewedRevision
-    $targetBytes = Get-FileBytesFromView -Path $Path -Revision $TargetRevision
-    $sourceLabel = if ($Kind -eq 'resw') { 'source-language .resw file' } else { 'source-language WTA locale file' }
-
-    if ($null -eq $reviewedBytes) {
-        if ($null -ne $targetBytes) {
-            Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.source-locale-preserved' `
-                -File $Path -Resource $null -Observed 'present' -Expected 'removed' `
-                -Message "The reviewed $sourceLabel was removed in the reviewed head and must stay removed during localization repair." `
-                -SuggestedAction 'Restore the exact reviewed source state before validating translations.' `
-                -ComparisonBase $ComparisonBase | Out-Null
-        }
-        return
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        throw [System.ArgumentException]::new("$ParameterName is required.")
     }
 
-    if ($null -eq $targetBytes) {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.source-locale-preserved' `
-            -File $Path -Resource $null -Observed 'missing' -Expected 'present' `
-            -Message "The reviewed $sourceLabel is missing from the validation target." `
-            -SuggestedAction 'Restore the exact reviewed source file before validating translations.' `
-            -ComparisonBase $ComparisonBase | Out-Null
-        return
-    }
+    return $Value
+}
 
-    $reviewedHasBom = Test-HasUtf8Bom -Bytes $reviewedBytes
-    $targetHasBom = Test-HasUtf8Bom -Bytes $targetBytes
-    if ($reviewedHasBom -ne $targetHasBom) {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.source-locale-preserved' `
-            -File $Path -Resource $null -Observed $(if ($targetHasBom) { 'utf-8-bom' } else { 'utf-8-no-bom' }) `
-            -Expected $(if ($reviewedHasBom) { 'utf-8-bom' } else { 'utf-8-no-bom' }) `
-            -Message "The reviewed $sourceLabel changed after review. Localization repair must preserve the reviewed source encoding." `
-            -SuggestedAction 'Restore the exact reviewed source file before validating translations.' `
-            -ComparisonBase $ComparisonBase | Out-Null
-        return
-    }
+function Get-FileBytes {
+    param([Parameter(Mandatory)][string]$Path)
 
-    try {
-        $reviewedText = (Get-Utf8Text -Bytes $reviewedBytes -Path $Path -Kind $sourceLabel) -replace "`r`n|`r", "`n"
-        $targetText = (Get-Utf8Text -Bytes $targetBytes -Path $Path -Kind $sourceLabel) -replace "`r`n|`r", "`n"
-    } catch {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.source-locale-preserved' `
-            -File $Path -Resource $null -Observed 'invalid source text' -Expected 'reviewed source text' `
-            -Message "The reviewed $sourceLabel became unreadable after review. Localization repair must restore the reviewed source content before validating translations." `
-            -SuggestedAction 'Restore the exact reviewed source file before validating translations.' `
-            -ComparisonBase $ComparisonBase | Out-Null
-        return
-    }
-
-    if ($reviewedText -cne $targetText) {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.source-locale-preserved' `
-            -File $Path -Resource $null -Observed 'changed after reviewed head' -Expected 'reviewed source content' `
-            -Message "The reviewed $sourceLabel changed after review. Localization repair must preserve reviewed source keys, values, comments, and ordering." `
-            -SuggestedAction 'Restore the exact reviewed source file before validating translations.' `
-            -ComparisonBase $ComparisonBase | Out-Null
-    }
+    return [System.IO.File]::ReadAllBytes($Path)
 }
 
 function Test-HasUtf8Bom {
@@ -757,91 +224,15 @@ function Get-Utf8Text {
     }
 }
 
-function Get-FileBytesFromView {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [string]$Revision
-    )
+function Get-LocalizationFileKind {
+    param([Parameter(Mandatory)][string]$Path)
 
-    $key = if ($Revision) { "rev:$Revision::$Path" } else { "worktree::$Path" }
-    if ($script:FileBytesCache.ContainsKey($key)) {
-        return $script:FileBytesCache[$key]
+    $extension = [System.IO.Path]::GetExtension($Path)
+    switch -Regex ($extension) {
+        '^\.resw$' { return 'resw' }
+        '^\.yml$' { return 'wta' }
+        default { return $null }
     }
-
-    $bytes = $null
-    if ($Revision) {
-        $spec = "${Revision}:$Path"
-        $exists = Invoke-GitText -Arguments @('cat-file', '-e', $spec) -AllowFailure
-        if ($exists.ExitCode -eq 0) {
-            $blob = Invoke-ProcessBytes -FilePath 'git' -Arguments @('cat-file', 'blob', $spec)
-            if ($blob.ExitCode -ne 0) {
-                throw "git cat-file blob $spec failed with exit code $($blob.ExitCode). $($blob.Stderr)"
-            }
-            $bytes = $blob.Bytes
-        }
-    } else {
-        $fullPath = Join-Path $script:RepositoryRootPath (ConvertTo-PlatformPath -Path $Path)
-        if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
-            $bytes = [System.IO.File]::ReadAllBytes($fullPath)
-        }
-    }
-
-    $script:FileBytesCache[$key] = $bytes
-    return $bytes
-}
-
-function Get-PathsInView {
-    param(
-        [Parameter(Mandatory)][string]$Prefix,
-        [string]$Revision
-    )
-
-    if ($Revision) {
-        $result = Invoke-GitText -Arguments @('ls-tree', '-r', '--name-only', $Revision, '--', $Prefix)
-        if ([string]::IsNullOrWhiteSpace($result.Output)) {
-            return @()
-        }
-        return @($result.Output -split "`r?`n" | Where-Object { $_ })
-    }
-
-    $fullPrefix = Join-Path $script:RepositoryRootPath (ConvertTo-PlatformPath -Path $Prefix)
-    if (-not (Test-Path -LiteralPath $fullPrefix)) {
-        return @()
-    }
-
-    return @(
-        Get-ChildItem -LiteralPath $fullPrefix -File -Recurse |
-            ForEach-Object { ConvertTo-RepoPath -Path $_.FullName }
-    )
-}
-
-function Get-ChangedLocalizationPath {
-    param(
-        [Parameter(Mandatory)][string]$ComparisonBase,
-        [string]$HeadRevision
-    )
-
-    $arguments = @('diff', '--name-only', $ComparisonBase)
-    if ($HeadRevision) {
-        $arguments += $HeadRevision
-    }
-    $arguments += '--'
-    $arguments += $script:LocalizationPathspecs
-
-    $changed = Invoke-GitText -Arguments $arguments
-    $paths = @()
-    if (-not [string]::IsNullOrWhiteSpace($changed.Output)) {
-        $paths += @($changed.Output -split "`r?`n" | Where-Object { $_ })
-    }
-
-    if (-not $HeadRevision) {
-        $untracked = Invoke-GitText -Arguments @('ls-files', '--others', '--exclude-standard', '--', $script:LocalizationPathspecs)
-        if (-not [string]::IsNullOrWhiteSpace($untracked.Output)) {
-            $paths += @($untracked.Output -split "`r?`n" | Where-Object { $_ })
-        }
-    }
-
-    return @($paths | Sort-Object -Unique)
 }
 
 function Normalize-CommentText {
@@ -856,6 +247,12 @@ function Test-WtaSectionHeaderComment {
     return [regex]::IsMatch($Line, '^\s*#\s*──\s+.+?\s+─{2,}\s*$')
 }
 
+function Test-ContainsLockDirective {
+    param([string]$Comment)
+
+    return -not [string]::IsNullOrWhiteSpace($Comment) -and [regex]::IsMatch($Comment, '\{Locked(?:[^}]*)\}')
+}
+
 function Parse-QuotedTokenList {
     param([string]$Text)
 
@@ -867,135 +264,15 @@ function Parse-QuotedTokenList {
     return @($tokens.ToArray())
 }
 
-function Get-LockedRules {
-    param(
-        [string[]]$Comments,
-        [string]$Locale
-    )
+function Parse-LeadingQuotedTokenList {
+    param([string]$Text)
 
-    $tokenSet = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
-    $fullLock = $false
-
-    foreach ($comment in @($Comments | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-        foreach ($match in [regex]::Matches($comment, '\{Locked(?<body>[^}]*)\}')) {
-            $body = $match.Groups['body'].Value.Trim()
-            if ([string]::IsNullOrWhiteSpace($body)) {
-                $fullLock = $true
-                continue
-            }
-
-            if (-not $body.StartsWith('=')) {
-                continue
-            }
-
-            $payload = $body.Substring(1).Trim()
-            if ($payload.StartsWith('"')) {
-                foreach ($token in Parse-QuotedTokenList -Text $payload) {
-                    $null = $tokenSet.Add($token)
-                }
-                continue
-            }
-
-            if ([string]::IsNullOrWhiteSpace($Locale)) {
-                continue
-            }
-
-            $scopedLocales = @($payload -split '\s*,\s*' | Where-Object { $_ })
-            if ($scopedLocales -notcontains $Locale) {
-                continue
-            }
-
-            $suffix = $comment.Substring($match.Index + $match.Length)
-            $quotedToken = [regex]::Match($suffix, '"((?:[^"\\]|\\.)*)"')
-            if ($quotedToken.Success) {
-                $literal = '"' + $quotedToken.Groups[1].Value + '"'
-                $null = $tokenSet.Add((ConvertFrom-Json -InputObject $literal -ErrorAction Stop))
-            }
-        }
-    }
-
-    return [pscustomobject]@{
-        FullLock = $fullLock
-        Tokens = @($tokenSet)
-    }
-}
-
-function Get-PlaceholderTokens {
-    param([string]$Value)
-
-    $set = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
-    if ($null -eq $Value) {
+    $match = [regex]::Match($Text, '^\s*(?<tokens>(?:"(?:[^"\\]|\\.)*"\s*,?\s*)+)')
+    if (-not $match.Success) {
         return @()
     }
 
-    foreach ($match in [regex]::Matches($Value, '%\{[^}]+\}|\{\d+\}')) {
-        $null = $set.Add($match.Value)
-    }
-
-    return @($set)
-}
-
-function Format-TokenSet {
-    param([string[]]$Tokens)
-
-    if (-not $Tokens -or $Tokens.Count -eq 0) {
-        return ''
-    }
-
-    return ($Tokens -join ', ')
-}
-
-function Read-ReswResources {
-    param(
-        [Parameter(Mandatory)][byte[]]$Bytes,
-        [Parameter(Mandatory)][string]$Path
-    )
-
-    $null = Get-Utf8Text -Bytes $Bytes -Path $Path -Kind '.resw'
-
-    $settings = [System.Xml.XmlReaderSettings]::new()
-    $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
-    $settings.XmlResolver = $null
-
-    $stream = [System.IO.MemoryStream]::new($Bytes, $false)
-    try {
-        $reader = [System.Xml.XmlReader]::Create($stream, $settings)
-        try {
-            $document = [System.Xml.XmlDocument]::new()
-            $document.PreserveWhitespace = $true
-            $document.Load($reader)
-        } finally {
-            $reader.Dispose()
-        }
-    } catch {
-        throw [System.InvalidOperationException]::new("$Path is not well-formed XML. $($_.Exception.Message)")
-    } finally {
-        $stream.Dispose()
-    }
-
-    $resources = @{}
-    foreach ($node in @($document.SelectNodes('/root/data'))) {
-        $name = [string]$node.GetAttribute('name')
-        if ([string]::IsNullOrWhiteSpace($name)) {
-            continue
-        }
-        if ($resources.ContainsKey($name)) {
-            throw [System.InvalidOperationException]::new("$Path contains duplicate resource '$name'.")
-        }
-
-        $valueNode = $node.SelectSingleNode('value')
-        $commentNode = $node.SelectSingleNode('comment')
-        $resources[$name] = [pscustomobject]@{
-            Name = $name
-            Value = if ($null -ne $valueNode) { $valueNode.InnerText } else { '' }
-            Comment = if ($null -ne $commentNode) { $commentNode.InnerText } else { '' }
-        }
-    }
-
-    return [pscustomobject]@{
-        HasBom = Test-HasUtf8Bom -Bytes $Bytes
-        Resources = $resources
-    }
+    return @(Parse-QuotedTokenList -Text $match.Groups['tokens'].Value)
 }
 
 function Split-WtaScalarAndComment {
@@ -1096,8 +373,14 @@ function ConvertFrom-YamlScalar {
         throw [System.InvalidOperationException]::new("${Path}:$LineNumber uses an unsupported YAML structure.")
     }
 
-    if ($Scalar -match '^[\[\{]|[\]\{\}]|^[>|&*!]') {
-        throw [System.InvalidOperationException]::new("${Path}:$LineNumber uses an unsupported YAML structure.")
+    $implicitScalar = '(?i)^(?:null|~|true|false|yes|no|on|off|[-+]?\.(?:inf|nan)|[-+]?0(?:x[0-9a-f_]+|o[0-7_]+|b[01_]+)|[-+]?(?:[0-9][0-9_]*(?:\.[0-9_]*)?|\.[0-9_]+)(?:e[-+]?[0-9]+)?)$'
+    if ($Scalar -match '^[\[\]{},&*!|>"%@`#]' -or
+        $Scalar -match '^[-?:](?:\s|$)' -or
+        $Scalar -match ':\s' -or
+        $Scalar -match $implicitScalar) {
+        throw [System.InvalidOperationException]::new(
+            "${Path}:$LineNumber uses an unsupported or implicitly typed YAML plain scalar. Quote string values that contain YAML indicators or resemble null, Boolean, or numeric values."
+        )
     }
 
     return $Scalar
@@ -1110,7 +393,7 @@ function Parse-WtaEntryLine {
         [Parameter(Mandatory)][int]$LineNumber
     )
 
-    $match = [regex]::Match($Line, '^\s*([A-Za-z0-9_.-]+)\s*:\s*(.*)$')
+    $match = [regex]::Match($Line, '^([A-Za-z0-9_.-]+)\s*:\s*(.*)$')
     if (-not $match.Success) {
         throw [System.InvalidOperationException]::new("${Path}:$LineNumber uses an unsupported YAML structure.")
     }
@@ -1132,11 +415,13 @@ function Read-WtaLocaleEntries {
     $text = Get-Utf8Text -Bytes $Bytes -Path $Path -Kind 'WTA locale file'
     $lines = @($text -split "`r`n|`n|`r", 0)
     $entries = @{}
-    $fileComments = @()
-    $pendingComments = [System.Collections.Generic.List[string]]::new()
-    $sectionComments = @()
-    $collectingSectionComments = $false
+    $fileLockComments = @()
+    $pendingLockComments = [System.Collections.Generic.List[string]]::new()
+    $sectionLockComments = @()
+    $blockLockComments = @()
+    $pendingHasSectionHeader = $false
     $seenEntry = $false
+    $seenEntrySinceBlank = $false
 
     for ($index = 0; $index -lt $lines.Count; $index++) {
         $lineNumber = $index + 1
@@ -1144,37 +429,41 @@ function Read-WtaLocaleEntries {
         $trimmed = $line.Trim()
 
         if ([string]::IsNullOrWhiteSpace($trimmed)) {
-            if (-not $seenEntry -and $pendingComments.Count -gt 0 -and $fileComments.Count -eq 0) {
-                $fileComments = @($pendingComments)
+            if (-not $seenEntry -and $pendingLockComments.Count -gt 0 -and $fileLockComments.Count -eq 0) {
+                $fileLockComments = @($pendingLockComments.ToArray())
             }
-            $pendingComments.Clear()
-            $sectionComments = @()
-            $collectingSectionComments = $false
+            $pendingLockComments.Clear()
+            $sectionLockComments = @()
+            $blockLockComments = @()
+            $pendingHasSectionHeader = $false
+            $seenEntrySinceBlank = $false
             continue
         }
 
         if ($trimmed.StartsWith('#')) {
-            if ($seenEntry -or $fileComments.Count -gt 0) {
-                if (Test-WtaSectionHeaderComment -Line $trimmed) {
-                    $sectionComments = @()
-                    $pendingComments.Clear()
-                    $collectingSectionComments = $true
-                }
+            if (Test-WtaSectionHeaderComment -Line $trimmed) {
+                $pendingHasSectionHeader = $true
             }
-            $pendingComments.Add((Normalize-CommentText -Text $trimmed))
+
+            $commentText = Normalize-CommentText -Text $trimmed
+            if (Test-ContainsLockDirective -Comment $commentText) {
+                $pendingLockComments.Add($commentText)
+            }
             continue
         }
 
-        if (-not $seenEntry -and $fileComments.Count -eq 0 -and $pendingComments.Count -gt 0) {
-            $fileComments = @($pendingComments)
-        }
         $seenEntry = $true
+        $entryLockComments = @()
 
-        $leadingComments = @($pendingComments)
-        if ($collectingSectionComments) {
-            $sectionComments = @($pendingComments)
-            $leadingComments = @()
-            $collectingSectionComments = $false
+        if ($pendingHasSectionHeader) {
+            $sectionLockComments = @($pendingLockComments.ToArray())
+            $blockLockComments = @()
+        } elseif ($pendingLockComments.Count -gt 0) {
+            if ($seenEntrySinceBlank) {
+                $entryLockComments = @($pendingLockComments.ToArray())
+            } else {
+                $blockLockComments = @($pendingLockComments.ToArray())
+            }
         }
 
         $entry = Parse-WtaEntryLine -Line $line -Path $Path -LineNumber $lineNumber
@@ -1182,848 +471,905 @@ function Read-WtaLocaleEntries {
             throw [System.InvalidOperationException]::new("$Path contains duplicate key '$($entry.Key)'.")
         }
 
+        $comments = [System.Collections.Generic.List[string]]::new()
+        foreach ($comment in @($sectionLockComments + $blockLockComments + $entryLockComments)) {
+            if (-not [string]::IsNullOrWhiteSpace($comment)) {
+                $comments.Add($comment)
+            }
+        }
+        if (Test-ContainsLockDirective -Comment $entry.InlineComment) {
+            $comments.Add($entry.InlineComment)
+        }
+
         $entries[$entry.Key] = [pscustomobject]@{
             Key = $entry.Key
-            Value = $entry.Value
-            FileComments = @($fileComments)
-            SectionComments = @($sectionComments)
-            LeadingComments = @($leadingComments)
-            InlineComment = $entry.InlineComment
-            LineNumber = $lineNumber
+            Value = [string]$entry.Value
+            Comments = @($comments.ToArray())
+            InheritedTokenComments = @($fileLockComments)
         }
-        $pendingComments.Clear()
+        $pendingLockComments.Clear()
+        $blockLockComments = @()
+        $pendingHasSectionHeader = $false
+        $seenEntrySinceBlank = $true
     }
 
     return [pscustomobject]@{
+        Kind = 'wta'
+        Path = $Path
+        HasBom = Test-HasUtf8Bom -Bytes $Bytes
         Entries = $entries
     }
 }
 
-function Get-ParsedReswFromView {
+function Read-ReswResources {
     param(
-        [Parameter(Mandatory)][string]$Path,
-        [string]$Revision
+        [Parameter(Mandatory)][byte[]]$Bytes,
+        [Parameter(Mandatory)][string]$Path
     )
 
-    $key = if ($Revision) { "rev:$Revision::$Path" } else { "worktree::$Path" }
-    if ($script:ParsedReswCache.ContainsKey($key)) {
-        return $script:ParsedReswCache[$key]
+    $null = Get-Utf8Text -Bytes $Bytes -Path $Path -Kind '.resw'
+
+    $settings = [System.Xml.XmlReaderSettings]::new()
+    $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+    $settings.XmlResolver = $null
+
+    $stream = [System.IO.MemoryStream]::new($Bytes, $false)
+    try {
+        $reader = [System.Xml.XmlReader]::Create($stream, $settings)
+        try {
+            $document = [System.Xml.XmlDocument]::new()
+            $document.PreserveWhitespace = $true
+            $document.Load($reader)
+        } finally {
+            $reader.Dispose()
+        }
+    } catch {
+        throw [System.InvalidOperationException]::new("$Path is not well-formed XML. $($_.Exception.Message)")
+    } finally {
+        $stream.Dispose()
     }
 
-    $bytes = Get-FileBytesFromView -Path $Path -Revision $Revision
-    if ($null -eq $bytes) {
-        return $null
+    $root = $document.DocumentElement
+    if ($null -eq $root -or $root.LocalName -cne 'root') {
+        throw [System.InvalidOperationException]::new("$Path is not a supported .resw file. Expected a <root> document element.")
     }
 
-    $parsed = Read-ReswResources -Bytes $bytes -Path $Path
-    $script:ParsedReswCache[$key] = $parsed
-    return $parsed
+    $allowedRootChildren = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($name in @('data', 'resheader', 'metadata', 'assembly', 'schema')) {
+        $null = $allowedRootChildren.Add($name)
+    }
+
+    $entries = @{}
+    foreach ($childNode in @($root.ChildNodes)) {
+        if ($childNode.NodeType -ne [System.Xml.XmlNodeType]::Element) {
+            continue
+        }
+
+        $node = [System.Xml.XmlElement]$childNode
+        if (-not $allowedRootChildren.Contains($node.LocalName)) {
+            throw [System.InvalidOperationException]::new("$Path contains unsupported <$($node.LocalName)> content under <root>.")
+        }
+
+        if ($node.LocalName -cne 'data') {
+            continue
+        }
+
+        $name = [string]$node.GetAttribute('name')
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            throw [System.InvalidOperationException]::new("$Path contains a <data> entry without a non-empty name attribute.")
+        }
+        if ($entries.ContainsKey($name)) {
+            throw [System.InvalidOperationException]::new("$Path contains duplicate resource '$name'.")
+        }
+
+        $elementChildren = @($node.ChildNodes | Where-Object { $_.NodeType -eq [System.Xml.XmlNodeType]::Element })
+        foreach ($elementChild in $elementChildren) {
+            if ($elementChild.LocalName -cnotin @('value', 'comment')) {
+                throw [System.InvalidOperationException]::new("$Path resource '$name' uses an unsupported <$($elementChild.LocalName)> child element.")
+            }
+        }
+
+        $valueNodes = @($node.SelectNodes('./value'))
+        if ($valueNodes.Count -ne 1) {
+            throw [System.InvalidOperationException]::new("$Path resource '$name' must contain exactly one <value> element.")
+        }
+
+        $commentNodes = @($node.SelectNodes('./comment'))
+        if ($commentNodes.Count -gt 1) {
+            throw [System.InvalidOperationException]::new("$Path resource '$name' must not contain more than one <comment> element.")
+        }
+
+        $valueNode = $valueNodes[0]
+        $commentNode = if ($commentNodes.Count -eq 1) { $commentNodes[0] } else { $null }
+        $comments = if ($null -ne $commentNode -and -not [string]::IsNullOrWhiteSpace($commentNode.InnerText)) {
+            @([string]$commentNode.InnerText)
+        } else {
+            @()
+        }
+
+        $entries[$name] = [pscustomobject]@{
+            Key = $name
+            Value = if ($null -ne $valueNode) { [string]$valueNode.InnerText } else { '' }
+            Comments = $comments
+            InheritedTokenComments = @()
+        }
+    }
+
+    return [pscustomobject]@{
+        Kind = 'resw'
+        Path = $Path
+        HasBom = Test-HasUtf8Bom -Bytes $Bytes
+        Entries = $entries
+    }
 }
 
-function Get-ParsedWtaFromView {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [string]$Revision
-    )
+function Read-LocalizationFile {
+    param([Parameter(Mandatory)][string]$Path)
 
-    $key = if ($Revision) { "rev:$Revision::$Path" } else { "worktree::$Path" }
-    if ($script:ParsedWtaCache.ContainsKey($key)) {
-        return $script:ParsedWtaCache[$key]
+    $resolvedPath = Assert-RequiredPath -Path $Path -ParameterName 'File'
+    $kind = Get-LocalizationFileKind -Path $resolvedPath
+    if ($null -eq $kind) {
+        throw [System.InvalidOperationException]::new("$resolvedPath uses an unsupported localization format. Supported formats: .resw and WTA-style .yml.")
     }
 
-    $bytes = Get-FileBytesFromView -Path $Path -Revision $Revision
-    if ($null -eq $bytes) {
-        return $null
+    $bytes = Get-FileBytes -Path $resolvedPath
+    switch ($kind) {
+        'resw' { return Read-ReswResources -Bytes $bytes -Path $resolvedPath }
+        'wta' { return Read-WtaLocaleEntries -Bytes $bytes -Path $resolvedPath }
+        default {
+            throw [System.InvalidOperationException]::new("$resolvedPath uses an unsupported localization format.")
+        }
     }
-
-    $parsed = Read-WtaLocaleEntries -Bytes $bytes -Path $Path
-    $script:ParsedWtaCache[$key] = $parsed
-    return $parsed
 }
 
-function Get-SortedUnion {
+function Read-LocalizationPair {
     param(
-        [string[]]$Left,
-        [string[]]$Right
+        [Parameter(Mandatory)][string]$SourceFile,
+        [Parameter(Mandatory)][string]$TargetFile
     )
+
+    $source = Read-LocalizationFile -Path (Assert-RequiredPath -Path $SourceFile -ParameterName 'SourceFile')
+    $target = Read-LocalizationFile -Path (Assert-RequiredPath -Path $TargetFile -ParameterName 'TargetFile')
+
+    if ($source.Kind -ne $target.Kind) {
+        throw [System.InvalidOperationException]::new('SourceFile and TargetFile must use the same supported localization format.')
+    }
+
+    return [pscustomobject]@{
+        Source = $source
+        Target = $target
+    }
+}
+
+function Get-ScopeKeys {
+    param(
+        [Parameter(Mandatory)]$SourceEntries,
+        [Parameter(Mandatory)]$TargetEntries,
+        [string[]]$Keys,
+        [switch]$IntersectionWhenUnscoped
+    )
+
+    if ($null -ne $Keys -and $Keys.Count -gt 0) {
+        $set = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
+        foreach ($key in $Keys) {
+            if (-not [string]::IsNullOrWhiteSpace($key)) {
+                $null = $set.Add($key)
+            }
+        }
+        return @($set)
+    }
 
     $set = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
-    foreach ($value in @($Left + $Right)) {
-        if (-not [string]::IsNullOrWhiteSpace($value)) {
-            $null = $set.Add($value)
+    foreach ($key in $SourceEntries.Keys) {
+        if (-not $IntersectionWhenUnscoped) {
+            $null = $set.Add($key)
+        } elseif ($TargetEntries.ContainsKey($key)) {
+            $null = $set.Add($key)
+        }
+    }
+    if (-not $IntersectionWhenUnscoped) {
+        foreach ($key in $TargetEntries.Keys) {
+            $null = $set.Add($key)
         }
     }
     return @($set)
 }
 
-function Get-ChangedReswResources {
-    param($Before, $After)
-
-    $names = Get-SortedUnion -Left $(if ($Before) { $Before.Resources.Keys } else { @() }) -Right $(if ($After) { $After.Resources.Keys } else { @() })
-    $changed = [System.Collections.Generic.List[string]]::new()
-    foreach ($name in $names) {
-        $beforeValue = if ($Before -and $Before.Resources.ContainsKey($name)) { [string]$Before.Resources[$name].Value } else { $null }
-        $afterValue = if ($After -and $After.Resources.ContainsKey($name)) { [string]$After.Resources[$name].Value } else { $null }
-        if ($beforeValue -cne $afterValue) {
-            $changed.Add($name)
-        }
-    }
-    return @($changed.ToArray())
-}
-
-function Get-ChangedWtaKeys {
-    param($Before, $After)
-
-    $names = Get-SortedUnion -Left $(if ($Before) { $Before.Entries.Keys } else { @() }) -Right $(if ($After) { $After.Entries.Keys } else { @() })
-    $changed = [System.Collections.Generic.List[string]]::new()
-    foreach ($name in $names) {
-        $beforeValue = if ($Before -and $Before.Entries.ContainsKey($name)) { [string]$Before.Entries[$name].Value } else { $null }
-        $afterValue = if ($After -and $After.Entries.ContainsKey($name)) { [string]$After.Entries[$name].Value } else { $null }
-        if ($beforeValue -cne $afterValue) {
-            $changed.Add($name)
-        }
-    }
-    return @($changed.ToArray())
-}
-
-function Test-ReswSemanticChange {
-    param($Before, $After)
-
-    return (@(Get-ChangedReswResources -Before $Before -After $After)).Count -gt 0
-}
-
-function Test-WtaSemanticChange {
-    param($Before, $After)
-
-    return (@(Get-ChangedWtaKeys -Before $Before -After $After)).Count -gt 0
-}
-
-function Get-ReswSourcePath {
-    param([Parameter(Mandatory)][string]$Path)
-
-    $localeMatch = [regex]::Match($Path, '^(?<prefix>.+/Resources)/(?<locale>[^/]+)/(?<fileName>[^/]+\.resw)$')
-    if ($localeMatch.Success) {
-        return "$($localeMatch.Groups['prefix'].Value)/en-US/$($localeMatch.Groups['fileName'].Value)"
-    }
-
-    $rootMatch = [regex]::Match($Path, '^(?<prefix>.+/Resources)/(?<fileName>[^/]+\.resw)$')
-    if ($rootMatch.Success) {
-        return $Path
-    }
-
-    throw [System.InvalidOperationException]::new("Unrecognized .resw path '$Path'.")
-}
-
-function Get-ReswLocaleCode {
-    param([Parameter(Mandatory)][string]$Path)
-
-    $match = [regex]::Match($Path, '^(?<prefix>.+/Resources)/(?<locale>[^/]+)/(?<fileName>[^/]+\.resw)$')
-    if ($match.Success) {
-        return $match.Groups['locale'].Value
-    }
-
-    return ''
-}
-
-function Get-ReswLocalePaths {
+function Resolve-LockPolicy {
     param(
-        [Parameter(Mandatory)][string]$SourcePath,
-        [string]$Revision
+        [string[]]$Comments,
+        [string[]]$InheritedTokenComments,
+        [string]$Locale
     )
 
-    $localeMatch = [regex]::Match($SourcePath, '^(?<prefix>.+/Resources)/en-US/(?<fileName>[^/]+\.resw)$')
-    if ($localeMatch.Success) {
-        $prefix = $localeMatch.Groups['prefix'].Value
-        $fileName = $localeMatch.Groups['fileName'].Value
-        $pattern = '^{0}/[^/]+/{1}$' -f [regex]::Escape($prefix), [regex]::Escape($fileName)
-        return @(
-            Get-PathsInView -Prefix $prefix -Revision $Revision |
-                Where-Object { $_ -match $pattern } |
-                Sort-Object -Unique
-        )
-    }
+    $tokens = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
+    $fullLock = $false
+    $needsLocale = $false
+    $blockedReason = $null
 
-    $rootMatch = [regex]::Match($SourcePath, '^(?<prefix>.+/Resources)/(?<fileName>[^/]+\.resw)$')
-    if ($rootMatch.Success) {
-        $prefix = $rootMatch.Groups['prefix'].Value
-        $fileName = $rootMatch.Groups['fileName'].Value
-        $pattern = '^{0}/[^/]+/{1}$' -f [regex]::Escape($prefix), [regex]::Escape($fileName)
-        return @(
-            Get-PathsInView -Prefix $prefix -Revision $Revision |
-                Where-Object { $_ -match $pattern } |
-                Sort-Object -Unique
-        )
-    }
+    foreach ($commentSet in @(
+        [pscustomobject]@{ Items = @($Comments); AllowFullLock = $true },
+        [pscustomobject]@{ Items = @($InheritedTokenComments); AllowFullLock = $false }
+    )) {
+        foreach ($comment in @($commentSet.Items | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+            foreach ($match in [regex]::Matches($comment, '\{Locked(?<body>[^}]*)\}')) {
+                $body = $match.Groups['body'].Value.Trim()
+                if ([string]::IsNullOrWhiteSpace($body)) {
+                    if ($commentSet.AllowFullLock) {
+                        $fullLock = $true
+                    } elseif (-not $blockedReason) {
+                        $blockedReason = 'File-level lock directives must quote the specific token(s) they preserve.'
+                    }
+                    continue
+                }
 
-    return @()
-}
+                if (-not $body.StartsWith('=')) {
+                    continue
+                }
 
-function Get-WtaLocalePaths {
-    param([string]$Revision)
+                $payload = $body.Substring(1).Trim()
+                if ($payload.StartsWith('"')) {
+                    foreach ($token in Parse-QuotedTokenList -Text $payload) {
+                        $null = $tokens.Add($token)
+                    }
+                    continue
+                }
 
-    return @(
-        Get-PathsInView -Prefix 'tools/wta/locales' -Revision $Revision |
-            Where-Object { $_ -match '^tools/wta/locales/[^/]+\.yml$' } |
-            Sort-Object -Unique
-    )
-}
+                $needsLocale = $true
+                if ([string]::IsNullOrWhiteSpace($Locale)) {
+                    continue
+                }
 
-function Get-WtaLocaleCode {
-    param([Parameter(Mandatory)][string]$Path)
+                $scopedLocales = @($payload -split '\s*,\s*' | Where-Object { $_ })
+                if ($scopedLocales -notcontains $Locale) {
+                    continue
+                }
 
-    return [System.IO.Path]::GetFileNameWithoutExtension($Path)
-}
+                $suffix = $comment.Substring($match.Index + $match.Length)
+                $scopedTokens = @(Parse-LeadingQuotedTokenList -Text $suffix)
+                if ($scopedTokens.Count -eq 0) {
+                    if ($commentSet.AllowFullLock) {
+                        $fullLock = $true
+                    } elseif (-not $blockedReason) {
+                        $blockedReason = "File-level locale-scoped locks must quote the specific token(s) they preserve for '$Locale'."
+                    }
+                    continue
+                }
 
-function Get-TerminalAppLocaleCodes {
-    param([string]$Revision)
-
-    $set = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
-    foreach ($path in Get-PathsInView -Prefix 'src/cascadia/TerminalApp/Resources' -Revision $Revision) {
-        $match = [regex]::Match($path, '^src/cascadia/TerminalApp/Resources/(?<locale>[^/]+)/Resources\.resw$')
-        if ($match.Success) {
-            $null = $set.Add($match.Groups['locale'].Value)
+                foreach ($token in $scopedTokens) {
+                    $null = $tokens.Add($token)
+                }
+            }
         }
     }
-    return @($set)
+
+    return [pscustomobject]@{
+        FullLock = $fullLock
+        Tokens = @($tokens)
+        NeedsLocale = $needsLocale
+        BlockedReason = $blockedReason
+    }
 }
 
-function Get-WtaEntryComments {
-    param($Entry)
+function Get-PlaceholderTokens {
+    param([string]$Value)
 
-    $comments = [System.Collections.Generic.List[string]]::new()
-    foreach ($comment in @($Entry.FileComments + $Entry.SectionComments + $Entry.LeadingComments)) {
-        if (-not [string]::IsNullOrWhiteSpace($comment)) {
-            $comments.Add($comment)
-        }
+    if ($null -eq $Value) {
+        return @()
     }
-    if (-not [string]::IsNullOrWhiteSpace($Entry.InlineComment)) {
-        $comments.Add($Entry.InlineComment)
-    }
-    return @($comments)
+
+    $sanitized = $Value.Replace('{{', '  ').Replace('}}', '  ')
+    return @([regex]::Matches($sanitized, '%\{[^}]+\}|\{\d+(?:\s*,\s*-?\d+)?(?:\s*:[^}]*)?\}') | ForEach-Object { $_.Value })
 }
 
-function Test-ReswBomPreserved {
+function Format-TokenMultiset {
+    param([string[]]$Tokens)
+
+    if ($null -eq $Tokens -or $Tokens.Count -eq 0) {
+        return '<none>'
+    }
+
+    return (
+        $Tokens |
+            Group-Object |
+            Sort-Object Name |
+            ForEach-Object {
+                if ($_.Count -gt 1) { '{0} × {1}' -f $_.Name, $_.Count } else { $_.Name }
+            }
+    ) -join ', '
+}
+
+function Remove-InvariantSegments {
     param(
-        [Parameter(Mandatory)][string]$Path,
-        [byte[]]$BaseBytes,
-        [Parameter(Mandatory)][byte[]]$TargetBytes,
-        [Parameter(Mandatory)][string]$ComparisonBase
+        [string]$Value,
+        [string[]]$LockedTokens
     )
 
-    $expectedBom = if ($null -eq $BaseBytes) { $true } else { Test-HasUtf8Bom -Bytes $BaseBytes }
-    $actualBom = Test-HasUtf8Bom -Bytes $TargetBytes
-    if ($expectedBom -ne $actualBom) {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.resw.bom-preserved' `
-            -File $Path -Resource $null -Observed $(if ($actualBom) { 'utf-8-bom' } else { 'utf-8-no-bom' }) `
-            -Expected $(if ($expectedBom) { 'utf-8-bom' } else { 'utf-8-no-bom' }) `
-            -Message 'The .resw BOM changed unexpectedly.' -SuggestedAction 'Restore the expected UTF-8 BOM encoding.' `
-            -ComparisonBase $ComparisonBase | Out-Null
+    $result = if ($null -eq $Value) { '' } else { [string]$Value }
+    foreach ($token in @($LockedTokens + (Get-PlaceholderTokens -Value $Value)) | Sort-Object Length -Descending -Unique) {
+        if (-not [string]::IsNullOrEmpty($token)) {
+            $result = $result.Replace($token, ' ')
+        }
     }
+
+    return [regex]::Replace($result, '[\p{P}\p{S}\s]+', '')
+}
+
+function Remove-ExpectedPseudoWrapper {
+    param(
+        [Parameter(Mandatory)][string]$Locale,
+        [string]$Value
+    )
+
+    $text = if ($null -eq $Value) { '' } else { [string]$Value }
+    switch ($Locale) {
+        'qps-ploc' {
+            if ($text.Length -ge 2 -and $text.StartsWith('[') -and $text.EndsWith(']')) {
+                return $text.Substring(1, $text.Length - 2)
+            }
+        }
+        'qps-ploca' {
+            if ($text.Length -ge 8 -and $text.StartsWith('[!!_') -and $text.EndsWith('_!!]')) {
+                return $text.Substring(4, $text.Length - 8)
+            }
+        }
+        'qps-plocm' {
+            if ($text.Length -ge 8 -and $text.StartsWith('[!! ') -and $text.EndsWith(' !!]')) {
+                return $text.Substring(4, $text.Length - 8)
+            }
+        }
+    }
+
+    return $text
+}
+
+function Get-PseudoLetterSignal {
+    param(
+        [string]$Value,
+        [string[]]$LockedTokens,
+        [Parameter(Mandatory)][string]$Locale
+    )
+
+    $text = if ($null -eq $Value) { '' } else { [string]$Value }
+    foreach ($token in @($LockedTokens + (Get-PlaceholderTokens -Value $Value)) | Sort-Object Length -Descending -Unique) {
+        if (-not [string]::IsNullOrEmpty($token)) {
+            $text = $text.Replace($token, ' ')
+        }
+    }
+
+    $text = Remove-ExpectedPseudoWrapper -Locale $Locale -Value $text
+    $letters = [System.Text.StringBuilder]::new()
+    foreach ($match in [regex]::Matches($text, '\p{L}+')) {
+        [void]$letters.Append($match.Value)
+    }
+
+    return $letters.ToString().ToUpperInvariant()
+}
+
+function Test-ContainsDirectionalPseudoSignal {
+    param(
+        [string]$Value,
+        [string[]]$LockedTokens,
+        [Parameter(Mandatory)][string]$Locale
+    )
+
+    $text = if ($null -eq $Value) { '' } else { [string]$Value }
+    foreach ($token in @($LockedTokens + (Get-PlaceholderTokens -Value $Value)) | Sort-Object Length -Descending -Unique) {
+        if (-not [string]::IsNullOrEmpty($token)) {
+            $text = $text.Replace($token, ' ')
+        }
+    }
+
+    $text = Remove-ExpectedPseudoWrapper -Locale $Locale -Value $text
+    foreach ($codePoint in @(0x061C, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069)) {
+        if ($text.Contains([string][char]$codePoint, [System.StringComparison]::Ordinal)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Test-ExpectedPseudoWrapper {
+    param(
+        [Parameter(Mandatory)][string]$Locale,
+        [Parameter(Mandatory)][string]$Value
+    )
+
+    switch ($Locale) {
+        'qps-ploc' { return $Value.StartsWith('[') -and $Value.EndsWith(']') }
+        'qps-ploca' { return $Value.StartsWith('[!!_') -and $Value.EndsWith('_!!]') }
+        'qps-plocm' { return $Value.StartsWith('[!! ') -and $Value.EndsWith(' !!]') }
+        default { return $false }
+    }
+}
+
+function Test-ResourceSyntax {
+    [CmdletBinding()]
+    param([string]$File)
+
+    $checkName = 'Test-ResourceSyntax'
+    $resolvedFile = Assert-RequiredPath -Path $File -ParameterName 'File'
+    try {
+        $parsed = Read-LocalizationFile -Path $resolvedFile
+        return Complete-CheckBundle -CheckName $checkName -Results @() `
+            -PassMessage 'The localization file uses a supported structure and valid UTF-8 text.' -PassFile $parsed.Path
+    } catch {
+        return New-BlockedBundle -CheckName $checkName -File $resolvedFile -Resource $null `
+            -Message $_.Exception.Message `
+            -SuggestedAction 'Use a well-formed .resw file or a flat WTA-style .yml file with scalar values only.'
+    }
+}
+
+function Test-RequiredKeys {
+    [CmdletBinding()]
+    param(
+        [string]$SourceFile,
+        [string]$TargetFile,
+        [string[]]$Keys
+    )
+
+    $checkName = 'Test-RequiredKeys'
+    $sourcePath = Assert-RequiredPath -Path $SourceFile -ParameterName 'SourceFile'
+    $targetPath = Assert-RequiredPath -Path $TargetFile -ParameterName 'TargetFile'
+
+    try {
+        $pair = Read-LocalizationPair -SourceFile $sourcePath -TargetFile $targetPath
+    } catch {
+        return New-BlockedBundle -CheckName $checkName -File $targetPath -Resource $null `
+            -Message $_.Exception.Message `
+            -SuggestedAction 'Provide comparable supported localization files before checking required keys.'
+    }
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys)
+
+    foreach ($key in $scope) {
+        $sourceHas = $pair.Source.Entries.ContainsKey($key)
+        $targetHas = $pair.Target.Entries.ContainsKey($key)
+
+        if ($Keys -and -not $sourceHas) {
+            $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $sourcePath -Resource $key `
+                -Expected 'key present in source scope' -Observed 'key missing from source' `
+                -Message 'The requested scoped key does not exist in the source file.' `
+                -SuggestedAction 'Adjust the supplied -Keys scope to match source entries.'))
+            continue
+        }
+
+        if ($sourceHas -and -not $targetHas) {
+            $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected 'key present' -Observed 'key missing from target' `
+                -Message 'The target file is missing a required entry from the selected scope.' `
+                -SuggestedAction 'Add the missing localized entry to the target file.'))
+            continue
+        }
+
+        if ($targetHas -and -not $sourceHas) {
+            $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected 'key removed' -Observed 'extra key present in target' `
+                -Message 'The target file still contains an entry that is outside the selected source scope.' `
+                -SuggestedAction 'Remove the stale entry from the target file or widen the caller-supplied scope intentionally.'))
+        }
+    }
+
+    $passMessage = if ($Keys -and $Keys.Count -gt 0) {
+        'All caller-scoped keys are present exactly where expected.'
+    } else {
+        'The target key set matches the source key set for the whole file.'
+    }
+
+    return Complete-CheckBundle -CheckName $checkName -Results @($results.ToArray()) -PassMessage $passMessage -PassFile $targetPath
 }
 
 function Test-PlaceholderParity {
+    [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$CheckId,
-        [Parameter(Mandatory)][string]$File,
-        [Parameter(Mandatory)][string]$Resource,
-        [Parameter(Mandatory)][string]$SourceValue,
-        [Parameter(Mandatory)][string]$TargetValue,
-        [Parameter(Mandatory)][string]$ComparisonBase
+        [string]$SourceFile,
+        [string]$TargetFile,
+        [string[]]$Keys
     )
 
-    $sourceTokens = Get-PlaceholderTokens -Value $SourceValue
-    $targetTokens = Get-PlaceholderTokens -Value $TargetValue
-    $sourceJoined = Format-TokenSet -Tokens $sourceTokens
-    $targetJoined = Format-TokenSet -Tokens $targetTokens
+    $checkName = 'Test-PlaceholderParity'
+    $sourcePath = Assert-RequiredPath -Path $SourceFile -ParameterName 'SourceFile'
+    $targetPath = Assert-RequiredPath -Path $TargetFile -ParameterName 'TargetFile'
 
-    if ($sourceJoined -cne $targetJoined) {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId $CheckId `
-            -File $File -Resource $Resource -Observed $targetJoined -Expected $sourceJoined `
-            -Message 'Placeholder tokens do not match the source string.' `
-            -SuggestedAction 'Preserve the exact source placeholder set in this localized value.' `
-            -ComparisonBase $ComparisonBase | Out-Null
-    }
-}
-
-function Test-LockedToken {
-    param(
-        [Parameter(Mandatory)][string]$CheckId,
-        [Parameter(Mandatory)][string]$File,
-        [Parameter(Mandatory)][string]$Resource,
-        [Parameter(Mandatory)][string]$Locale,
-        [Parameter(Mandatory)][string]$SourceValue,
-        [Parameter(Mandatory)][string]$TargetValue,
-        [Parameter(Mandatory)]$Rules,
-        [Parameter(Mandatory)][string]$ComparisonBase
-    )
-
-    if ($Rules.FullLock -and $SourceValue -cne $TargetValue) {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId $CheckId `
-            -File $File -Resource $Resource -Observed $TargetValue -Expected $SourceValue `
-            -Message 'This value is fully locked and must remain identical to the source.' `
-            -SuggestedAction 'Restore the exact source value for this locale.' `
-            -ComparisonBase $ComparisonBase | Out-Null
-        return
+    try {
+        $pair = Read-LocalizationPair -SourceFile $sourcePath -TargetFile $targetPath
+    } catch {
+        return New-BlockedBundle -CheckName $checkName -File $targetPath -Resource $null `
+            -Message $_.Exception.Message `
+            -SuggestedAction 'Provide comparable supported localization files before checking placeholder parity.'
     }
 
-    foreach ($token in @($Rules.Tokens)) {
-        if (-not $SourceValue.Contains($token, [System.StringComparison]::Ordinal)) {
+    $results = [System.Collections.Generic.List[object]]::new()
+    $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys -IntersectionWhenUnscoped)
+
+    foreach ($key in $scope) {
+        if (-not $pair.Source.Entries.ContainsKey($key) -or -not $pair.Target.Entries.ContainsKey($key)) {
+            if ($Keys -and $Keys.Count -gt 0) {
+                $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $targetPath -Resource $key `
+                    -Expected 'matching source and target entries' -Observed 'entry missing from selected scope' `
+                    -Message 'Placeholder parity cannot be evaluated because the selected key is missing from one side.' `
+                    -SuggestedAction 'Run Test-RequiredKeys first or adjust the supplied -Keys scope.'))
+            }
             continue
         }
 
-        if (-not $TargetValue.Contains($token, [System.StringComparison]::Ordinal)) {
-            Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId $CheckId `
-                -File $File -Resource $Resource -Observed $TargetValue -Expected $token `
-                -Message "Locked token '$token' is missing from the localized value for locale '$Locale'." `
-                -SuggestedAction 'Reinsert the locked token verbatim.' `
-                -ComparisonBase $ComparisonBase | Out-Null
+        $sourceTokens = @(Get-PlaceholderTokens -Value $pair.Source.Entries[$key].Value)
+        $targetTokens = @(Get-PlaceholderTokens -Value $pair.Target.Entries[$key].Value)
+        $sourceView = Format-TokenMultiset -Tokens $sourceTokens
+        $targetView = Format-TokenMultiset -Tokens $targetTokens
+
+        if ($sourceView -cne $targetView) {
+            $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected $sourceView -Observed $targetView `
+                -Message 'Placeholder counts or identities do not match the source value.' `
+                -SuggestedAction 'Preserve the exact placeholder set, including duplicate occurrences and format specifiers.'))
         }
     }
+
+    return Complete-CheckBundle -CheckName $checkName -Results @($results.ToArray()) `
+        -PassMessage 'All comparable entries preserve placeholder identity and count.' -PassFile $targetPath
 }
 
-function Test-WtaPseudoLocale {
+function Test-LockedContent {
+    [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$File,
-        [Parameter(Mandatory)][string]$Resource,
-        [Parameter(Mandatory)][string]$Locale,
-        [Parameter(Mandatory)][string]$SourceValue,
-        [Parameter(Mandatory)][string]$TargetValue,
-        [Parameter(Mandatory)]$Rules,
-        [Parameter(Mandatory)][string]$ComparisonBase
+        [string]$SourceFile,
+        [string]$TargetFile,
+        [string[]]$Keys,
+        [string]$Locale
     )
 
-    if ($Rules.FullLock -or [string]::IsNullOrEmpty($SourceValue)) {
-        return
+    $checkName = 'Test-LockedContent'
+    $sourcePath = Assert-RequiredPath -Path $SourceFile -ParameterName 'SourceFile'
+    $targetPath = Assert-RequiredPath -Path $TargetFile -ParameterName 'TargetFile'
+
+    try {
+        $pair = Read-LocalizationPair -SourceFile $sourcePath -TargetFile $targetPath
+    } catch {
+        return New-BlockedBundle -CheckName $checkName -File $targetPath -Resource $null `
+            -Message $_.Exception.Message `
+            -SuggestedAction 'Provide comparable supported localization files before checking locked content.'
     }
 
-    if ($TargetValue -ceq $SourceValue) {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.wta.pseudo-locale' `
-            -File $File -Resource $Resource -Observed $TargetValue -Expected 'pseudo-localized variant' `
-            -Message "Pseudo-locale '$Locale' must not keep an unchanged translatable source value." `
-            -SuggestedAction 'Apply the established pseudo-locale transformation for this locale.' `
-            -ComparisonBase $ComparisonBase | Out-Null
-        return
+    $results = [System.Collections.Generic.List[object]]::new()
+    $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys -IntersectionWhenUnscoped)
+
+    foreach ($key in $scope) {
+        if (-not $pair.Source.Entries.ContainsKey($key) -or -not $pair.Target.Entries.ContainsKey($key)) {
+            if ($Keys -and $Keys.Count -gt 0) {
+                $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $targetPath -Resource $key `
+                    -Expected 'matching source and target entries' -Observed 'entry missing from selected scope' `
+                    -Message 'Locked-content validation cannot be evaluated because the selected key is missing from one side.' `
+                    -SuggestedAction 'Run Test-RequiredKeys first or adjust the supplied -Keys scope.'))
+            }
+            continue
+        }
+
+        $sourceEntry = $pair.Source.Entries[$key]
+        $targetEntry = $pair.Target.Entries[$key]
+        $policy = Resolve-LockPolicy -Comments $sourceEntry.Comments -InheritedTokenComments $sourceEntry.InheritedTokenComments -Locale $Locale
+
+        if ($policy.NeedsLocale -and [string]::IsNullOrWhiteSpace($Locale)) {
+            $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected 'locale supplied' -Observed 'locale omitted' `
+                -Message 'The source annotations include locale-scoped locks, so this check needs -Locale.' `
+                -SuggestedAction 'Rerun the check with the target locale code.'))
+            continue
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($policy.BlockedReason)) {
+            $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected 'supported lock scope' -Observed $policy.BlockedReason `
+                -Message 'The source annotations use an unsupported file-level lock scope for this check.' `
+                -SuggestedAction 'Move the full-lock directive onto the affected entry or quote the specific file-level token(s) to preserve.'))
+            continue
+        }
+
+        if ($policy.FullLock -and $sourceEntry.Value -cne $targetEntry.Value) {
+            $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected $sourceEntry.Value -Observed $targetEntry.Value `
+                -Message 'This entry is locked and must remain identical to the source for the selected locale.' `
+                -SuggestedAction 'Restore the exact source value for this entry.'))
+            continue
+        }
+
+        foreach ($token in $policy.Tokens) {
+            if (-not $sourceEntry.Value.Contains($token, [System.StringComparison]::Ordinal)) {
+                continue
+            }
+            if (-not $targetEntry.Value.Contains($token, [System.StringComparison]::Ordinal)) {
+                $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $targetPath -Resource $key `
+                    -Expected $token -Observed $targetEntry.Value `
+                    -Message "The locked token '$token' is missing from the target value." `
+                    -SuggestedAction 'Reinsert the locked token verbatim.'))
+            }
+        }
     }
 
-    $validShape = switch ($Locale) {
-        'qps-ploc' { $TargetValue.StartsWith('[') -and $TargetValue.EndsWith(']') }
-        'qps-ploca' { $TargetValue.StartsWith('[!!_') -and $TargetValue.EndsWith('_!!]') }
-        'qps-plocm' { $TargetValue.StartsWith('[!! ') -and $TargetValue.EndsWith(' !!]') }
-        default { $true }
-    }
-
-    if (-not $validShape) {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.wta.pseudo-locale' `
-            -File $File -Resource $Resource -Observed $TargetValue -Expected $Locale `
-            -Message "Pseudo-locale '$Locale' does not match its expected wrapper style." `
-            -SuggestedAction 'Regenerate the pseudo-locale value using the established style for this locale.' `
-            -ComparisonBase $ComparisonBase | Out-Null
-    }
+    return Complete-CheckBundle -CheckName $checkName -Results @($results.ToArray()) `
+        -PassMessage 'All checked entries preserve source-defined locked content.' -PassFile $targetPath
 }
 
-function Test-WtaLocaleSetParity {
+function Test-ResourceEncoding {
+    [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$ComparisonBase,
-        [string]$Revision
-    )
-
-    $terminalLocales = @(Get-TerminalAppLocaleCodes -Revision $Revision)
-    $wtaLocales = @(
-        Get-WtaLocalePaths -Revision $Revision |
-            ForEach-Object { Get-WtaLocaleCode -Path $_ }
-    )
-
-    foreach ($locale in @($terminalLocales | Where-Object { $wtaLocales -notcontains $_ })) {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.wta.locale-set-parity' `
-            -File ("tools/wta/locales/{0}.yml" -f $locale) -Resource $locale -Observed 'missing' -Expected 'present' `
-            -Message 'WTA locale coverage is missing a locale shipped by TerminalApp Resources.' `
-            -SuggestedAction 'Add the matching WTA locale file or remove the unmatched TerminalApp locale addition.' `
-            -ComparisonBase $ComparisonBase | Out-Null
-    }
-
-    foreach ($locale in @($wtaLocales | Where-Object { $terminalLocales -notcontains $_ })) {
-        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.wta.locale-set-parity' `
-            -File ("tools/wta/locales/{0}.yml" -f $locale) -Resource $locale -Observed 'present' -Expected 'removed' `
-            -Message 'WTA locale coverage includes a locale missing from TerminalApp Resources.' `
-            -SuggestedAction 'Remove the extra WTA locale file or add the matching TerminalApp locale resources.' `
-            -ComparisonBase $ComparisonBase | Out-Null
-    }
-}
-
-function Report-BlockedCheck {
-    param(
-        [Parameter(Mandatory)][string]$CheckId,
         [string]$File,
-        [string]$Resource,
-        [Parameter(Mandatory)][string]$Message,
-        [Parameter(Mandatory)][string]$SuggestedAction,
-        [string]$ComparisonBase
+        [string]$OriginalFile
     )
 
-    Write-LocalizationResult -Kind 'check' -Status 'BLOCKED' -Action 'ESCALATE' -CheckId $CheckId `
-        -File $File -Resource $Resource -Observed $null -Expected $null -Message $Message `
-        -SuggestedAction $SuggestedAction -ComparisonBase $ComparisonBase | Out-Null
-}
+    $checkName = 'Test-ResourceEncoding'
+    $resolvedFile = Assert-RequiredPath -Path $File -ParameterName 'File'
 
-function Invoke-Gate {
-    Test-PullRequestNumber -Value $PullRequestNumber | Out-Null
-    $baseRevision = Test-GitObjectId -Value $BaseRevision -ParameterName 'BaseRevision'
-    $headRevision = Test-GitObjectId -Value $HeadRevision -ParameterName 'HeadRevision'
-    Assert-GitCommitExists -Revision $baseRevision
-    Assert-GitCommitExists -Revision $headRevision
+    $kind = Get-LocalizationFileKind -Path $resolvedFile
+    if ($null -eq $kind) {
+        return New-BlockedBundle -CheckName $checkName -File $resolvedFile -Resource $null `
+            -Message "$resolvedFile uses an unsupported localization format. Supported formats: .resw and WTA-style .yml." `
+            -SuggestedAction 'Provide a .resw or flat WTA-style .yml file.'
+    }
 
-    $comparisonBase = $null
+    $fileBytes = Get-FileBytes -Path $resolvedFile
     try {
-        $comparisonBase = Resolve-ComparisonBase -BaseRevision $baseRevision -TargetRevision $headRevision
+        $null = Get-Utf8Text -Bytes $fileBytes -Path $resolvedFile -Kind $kind
     } catch {
-        Report-BlockedCheck -CheckId 'gate.git.merge-base' -File $null -Resource $null `
-            -Message $_.Exception.Message -SuggestedAction 'Review the pull request manually; merge-base resolution failed.' `
-            -ComparisonBase $null
-        return Complete-LocalizationRun -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true `
-            -Message 'Gate could not resolve the comparison base safely.' -ComparisonBase $null
+        return New-BlockedBundle -CheckName $checkName -File $resolvedFile -Resource $null `
+            -Message $_.Exception.Message `
+            -SuggestedAction 'Rewrite the file as valid UTF-8 text before validation.'
     }
 
-    $changedPaths = @(Get-ChangedLocalizationPath -ComparisonBase $comparisonBase -HeadRevision $headRevision)
-    if ($changedPaths.Count -eq 0) {
-        return Complete-LocalizationRun -Status 'PASS' -Action 'NONE' -ShouldRun $false `
-            -Message 'No localization files changed in scope.' -ComparisonBase $comparisonBase
-    }
+    $results = [System.Collections.Generic.List[object]]::new()
+    if ([string]::IsNullOrWhiteSpace($OriginalFile)) {
+        if ($kind -eq 'resw' -and -not (Test-HasUtf8Bom -Bytes $fileBytes)) {
+            $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $resolvedFile -Resource $null `
+                -Expected 'utf-8-bom' `
+                -Observed 'utf-8-no-bom' `
+                -Message 'New .resw files default to UTF-8 with BOM when no original snapshot is supplied.' `
+                -SuggestedAction 'Rewrite the .resw file as UTF-8 with BOM.'))
+        }
+    } else {
+        $originalPath = Assert-RequiredPath -Path $OriginalFile -ParameterName 'OriginalFile'
+        $originalKind = Get-LocalizationFileKind -Path $originalPath
+        if ($originalKind -ne $kind) {
+            return New-BlockedBundle -CheckName $checkName -File $resolvedFile -Resource $null `
+                -Message 'OriginalFile and File must use the same supported localization format.' `
+                -SuggestedAction 'Compare like-for-like files when checking BOM preservation.'
+        }
 
-    $reviewRequired = $false
-    foreach ($path in $changedPaths) {
+        $originalBytes = Get-FileBytes -Path $originalPath
         try {
-            if ($path.EndsWith('.resw', [System.StringComparison]::OrdinalIgnoreCase)) {
-                $before = Get-ParsedReswFromView -Path $path -Revision $comparisonBase
-                $after = Get-ParsedReswFromView -Path $path -Revision $headRevision
-                if (Test-ReswSemanticChange -Before $before -After $after) {
-                    foreach ($resource in Get-ChangedReswResources -Before $before -After $after) {
-                        $reviewRequired = $true
-                        $beforeValue = if ($before -and $before.Resources.ContainsKey($resource)) { $before.Resources[$resource].Value } else { $null }
-                        $afterValue = if ($after -and $after.Resources.ContainsKey($resource)) { $after.Resources[$resource].Value } else { $null }
-                        Write-LocalizationResult -Kind 'check' -Status 'PASS' -Action 'REVIEW' -CheckId 'gate.resw.semantic-change' `
-                            -File $path -Resource $resource -Observed $afterValue -Expected $beforeValue `
-                            -Message 'Customer-facing .resw value changed.' `
-                            -SuggestedAction 'Review locale coverage and translation quality for this resource.' `
-                            -ComparisonBase $comparisonBase | Out-Null
-                    }
-                }
-            } else {
-                $before = Get-ParsedWtaFromView -Path $path -Revision $comparisonBase
-                $after = Get-ParsedWtaFromView -Path $path -Revision $headRevision
-                if (Test-WtaSemanticChange -Before $before -After $after) {
-                    foreach ($resource in Get-ChangedWtaKeys -Before $before -After $after) {
-                        $reviewRequired = $true
-                        $beforeValue = if ($before -and $before.Entries.ContainsKey($resource)) { $before.Entries[$resource].Value } else { $null }
-                        $afterValue = if ($after -and $after.Entries.ContainsKey($resource)) { $after.Entries[$resource].Value } else { $null }
-                        Write-LocalizationResult -Kind 'check' -Status 'PASS' -Action 'REVIEW' -CheckId 'gate.wta.semantic-change' `
-                            -File $path -Resource $resource -Observed $afterValue -Expected $beforeValue `
-                            -Message 'Customer-facing WTA locale value changed.' `
-                            -SuggestedAction 'Review locale coverage and translation quality for this key.' `
-                            -ComparisonBase $comparisonBase | Out-Null
-                    }
-                }
-            }
+            $null = Get-Utf8Text -Bytes $originalBytes -Path $originalPath -Kind $originalKind
         } catch {
-            Report-BlockedCheck -CheckId 'gate.parse' -File $path -Resource $null -Message $_.Exception.Message `
-                -SuggestedAction 'Review this file manually; Gate failed open.' -ComparisonBase $comparisonBase
+            return New-BlockedBundle -CheckName $checkName -File $originalPath -Resource $null `
+                -Message $_.Exception.Message `
+                -SuggestedAction 'Provide a valid UTF-8 snapshot file for BOM preservation checks.'
+        }
+
+        $expectedBom = Test-HasUtf8Bom -Bytes $originalBytes
+        $actualBom = Test-HasUtf8Bom -Bytes $fileBytes
+        if ($expectedBom -ne $actualBom) {
+            $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $resolvedFile -Resource $null `
+                -Expected $(if ($expectedBom) { 'utf-8-bom' } else { 'utf-8-no-bom' }) `
+                -Observed $(if ($actualBom) { 'utf-8-bom' } else { 'utf-8-no-bom' }) `
+                -Message 'The file changed its BOM state relative to the supplied snapshot.' `
+                -SuggestedAction 'Restore the snapshot BOM style for this file.'))
         }
     }
 
-    if (@($script:ResultRecords | Where-Object { $_.status -eq 'BLOCKED' }).Count -gt 0) {
-        return Complete-LocalizationRun -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true `
-            -Message 'Gate could not classify every localization file safely.' -ComparisonBase $comparisonBase
-    }
-
-    if ($reviewRequired) {
-        return Complete-LocalizationRun -Status 'PASS' -Action 'REVIEW' -ShouldRun $true `
-            -Message 'Semantic localization changes require review.' -ComparisonBase $comparisonBase
-    }
-
-    return Complete-LocalizationRun -Status 'PASS' -Action 'NONE' -ShouldRun $false `
-        -Message 'Only formatting or comment-only localization changes were detected.' -ComparisonBase $comparisonBase
+    return Complete-CheckBundle -CheckName $checkName -Results @($results.ToArray()) `
+        -PassMessage 'The file uses valid UTF-8 and preserves the requested BOM behavior.' -PassFile $resolvedFile
 }
 
-function Invoke-Validation {
-    Test-PullRequestNumber -Value $script:PullRequestNumber | Out-Null
-    $baseRevision = Test-GitObjectId -Value $script:BaseRevision -ParameterName 'BaseRevision'
-    Assert-GitCommitExists -Revision $baseRevision
+function Test-PseudoLocale {
+    [CmdletBinding()]
+    param(
+        [string]$SourceFile,
+        [string]$TargetFile,
+        [string]$Locale,
+        [string[]]$Keys
+    )
 
-    $targetRevision = $null
-    $targetViewRevision = $null
-    if ($script:HeadRevision) {
-        $targetRevision = Test-GitObjectId -Value $script:HeadRevision -ParameterName 'HeadRevision'
-        Assert-GitCommitExists -Revision $targetRevision
-        $targetViewRevision = $targetRevision
-    } else {
-        $targetRevision = (Invoke-GitText -Arguments @('rev-parse', 'HEAD')).Output.Trim()
+    $checkName = 'Test-PseudoLocale'
+    $sourcePath = Assert-RequiredPath -Path $SourceFile -ParameterName 'SourceFile'
+    $targetPath = Assert-RequiredPath -Path $TargetFile -ParameterName 'TargetFile'
+    $localeCode = Assert-RequiredValue -Value $Locale -ParameterName 'Locale'
+
+    if ($script:SupportedPseudoLocales -notcontains $localeCode) {
+        return New-BlockedBundle -CheckName $checkName -File $targetPath -Resource $null `
+            -Message "Pseudo-locale '$localeCode' is unsupported. Supported pseudo-locales: $($script:SupportedPseudoLocales -join ', ')." `
+            -SuggestedAction 'Use a supported pseudo-locale code for this focused check.'
     }
 
-    $reviewedHeadRevision = $null
-    if ($script:ReviewedHeadRevision) {
-        $reviewedHeadRevision = Test-GitObjectId -Value $script:ReviewedHeadRevision -ParameterName 'ReviewedHeadRevision'
-        Assert-GitCommitExists -Revision $reviewedHeadRevision
-    }
-
-    $comparisonTargetRevision = if ($reviewedHeadRevision) { $reviewedHeadRevision } else { $targetRevision }
-    $sourceAuthorityRevision = if ($reviewedHeadRevision) { $reviewedHeadRevision } elseif ($targetViewRevision) { $targetViewRevision } else { $null }
-
-    $comparisonBase = $null
     try {
-        $comparisonBase = Resolve-ComparisonBase -BaseRevision $baseRevision -TargetRevision $comparisonTargetRevision
+        $pair = Read-LocalizationPair -SourceFile $sourcePath -TargetFile $targetPath
     } catch {
-        Report-BlockedCheck -CheckId 'validate.git.merge-base' -File $null -Resource $null `
-            -Message $_.Exception.Message -SuggestedAction 'Review the pull request manually; merge-base resolution failed.' `
-            -ComparisonBase $null
-        return Complete-LocalizationRun -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true `
-            -Message 'Validation could not resolve the comparison base safely.' -ComparisonBase $null
+        return New-BlockedBundle -CheckName $checkName -File $targetPath -Resource $null `
+            -Message $_.Exception.Message `
+            -SuggestedAction 'Provide comparable supported localization files before checking pseudo-locale quality.'
     }
 
-    $changedPaths = @(Get-ValidationChangedLocalizationPaths -ComparisonBase $comparisonBase -TargetViewRevision $targetViewRevision -ReviewedHeadRevision $reviewedHeadRevision)
-    if ($changedPaths.Count -eq 0) {
-        return Complete-LocalizationRun -Status 'PASS' -Action 'NONE' -ShouldRun $false `
-            -Message 'No localization changes detected in scope.' -ComparisonBase $comparisonBase
-    }
+    $results = [System.Collections.Generic.List[object]]::new()
+    $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys -IntersectionWhenUnscoped)
 
-    $reswChanged = @($changedPaths | Where-Object { $_.EndsWith('.resw', [System.StringComparison]::OrdinalIgnoreCase) })
-    $wtaChanged = @($changedPaths | Where-Object { $_.EndsWith('.yml', [System.StringComparison]::OrdinalIgnoreCase) })
-    $terminalAppLocaleChanged = @(
-        $changedPaths | Where-Object { $_ -match '^src/cascadia/TerminalApp/Resources/[^/]+/[^/]+\.resw$' }
-    ).Count -gt 0
-
-    if ($wtaChanged.Count -gt 0 -or $terminalAppLocaleChanged) {
-        Test-WtaLocaleSetParity -ComparisonBase $comparisonBase -Revision $targetViewRevision
-    }
-
-    $reswGroups = @{}
-    foreach ($path in $reswChanged) {
-        $baseBytes = Get-FileBytesFromView -Path $path -Revision $comparisonBase
-        $targetBytes = Get-FileBytesFromView -Path $path -Revision $targetViewRevision
-        if ($null -eq $targetBytes) {
-            Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.file.exists' `
-                -File $path -Resource $null -Observed 'missing from target view' -Expected 'file present' `
-                -Message 'Changed localization file is missing from the target view.' `
-                -SuggestedAction 'Restore the file or adjust the change set intentionally.' `
-                -ComparisonBase $comparisonBase | Out-Null
+    foreach ($key in $scope) {
+        if (-not $pair.Source.Entries.ContainsKey($key) -or -not $pair.Target.Entries.ContainsKey($key)) {
+            if ($Keys -and $Keys.Count -gt 0) {
+                $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $targetPath -Resource $key `
+                    -Expected 'matching source and target entries' -Observed 'entry missing from selected scope' `
+                    -Message 'Pseudo-locale validation cannot be evaluated because the selected key is missing from one side.' `
+                    -SuggestedAction 'Run Test-RequiredKeys first or adjust the supplied -Keys scope.'))
+            }
             continue
         }
 
-        $before = $null
-        if ($null -ne $baseBytes) {
-            try {
-                $before = Get-ParsedReswFromView -Path $path -Revision $comparisonBase
-            } catch {
-                Report-BlockedCheck -CheckId 'validate.resw.xml-well-formed' -File $path -Resource $null `
-                    -Message $_.Exception.Message -SuggestedAction 'Fix the base/reference XML before relying on deterministic validation.' `
-                    -ComparisonBase $comparisonBase
-                continue
-            }
-        }
+        $sourceEntry = $pair.Source.Entries[$key]
+        $targetEntry = $pair.Target.Entries[$key]
+        $policy = Resolve-LockPolicy -Comments $sourceEntry.Comments -InheritedTokenComments $sourceEntry.InheritedTokenComments -Locale $localeCode
 
-        $after = $null
-        try {
-            $after = Get-ParsedReswFromView -Path $path -Revision $targetViewRevision
-        } catch {
-            Report-BlockedCheck -CheckId 'validate.resw.xml-well-formed' -File $path -Resource $null `
-                -Message $_.Exception.Message -SuggestedAction 'Fix the XML and rerun validation.' `
-                -ComparisonBase $comparisonBase
+        if (-not [string]::IsNullOrWhiteSpace($policy.BlockedReason)) {
+            $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected 'supported lock scope' -Observed $policy.BlockedReason `
+                -Message 'The source annotations use an unsupported file-level lock scope for pseudo-locale validation.' `
+                -SuggestedAction 'Move the full-lock directive onto the affected entry or quote the specific file-level token(s) to preserve.'))
             continue
         }
 
-        Test-ReswBomPreserved -Path $path -BaseBytes $baseBytes -TargetBytes $targetBytes -ComparisonBase $comparisonBase
-
-        $reviewed = $after
-        if ($reviewedHeadRevision) {
-            try {
-                $reviewed = Get-ParsedReswFromView -Path $path -Revision $reviewedHeadRevision
-            } catch {
-                Report-BlockedCheck -CheckId 'validate.resw.xml-well-formed' -File $path -Resource $null `
-                    -Message $_.Exception.Message -SuggestedAction 'Fix the reviewed source XML before validating parity.' `
-                    -ComparisonBase $comparisonBase
-                continue
-            }
-        }
-
-        $sourcePath = Get-ReswSourcePath -Path $path
-        if (-not $reswGroups.ContainsKey($sourcePath)) {
-            $reswGroups[$sourcePath] = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
-        }
-        $changedResources = Get-SortedUnion -Left @(Get-ChangedReswResources -Before $before -After $after) -Right @(Get-ChangedReswResources -Before $before -After $reviewed)
-        foreach ($resource in $changedResources) {
-            $null = $reswGroups[$sourcePath].Add($resource)
-        }
-    }
-
-    foreach ($sourcePath in @($reswGroups.Keys | Sort-Object)) {
-        if ($reviewedHeadRevision) {
-            Test-SourceLocalePreserved -Kind 'resw' -Path $sourcePath -ReviewedRevision $reviewedHeadRevision `
-                -TargetRevision $targetViewRevision -ComparisonBase $comparisonBase
-        }
-
-        $source = $null
-        try {
-            $source = Get-ParsedReswFromView -Path $sourcePath -Revision $sourceAuthorityRevision
-            if ($null -eq $source -and -not $reviewedHeadRevision) {
-                Report-BlockedCheck -CheckId 'validate.resw.source-file' -File $sourcePath -Resource $null `
-                    -Message 'The source-language .resw file is not present in the target view.' `
-                    -SuggestedAction 'Restore the source-language file before validating locale parity.' `
-                    -ComparisonBase $comparisonBase
-                continue
-            }
-        } catch {
-            Report-BlockedCheck -CheckId 'validate.resw.xml-well-formed' -File $sourcePath -Resource $null `
-                -Message $_.Exception.Message -SuggestedAction 'Fix the source-language XML before validating locale parity.' `
-                -ComparisonBase $comparisonBase
+        if ($policy.FullLock) {
             continue
         }
 
-        $localePaths = Get-ReswLocalePaths -SourcePath $sourcePath -Revision $targetViewRevision
-        foreach ($localePath in $localePaths) {
-            if ($localePath -eq $sourcePath) {
-                continue
-            }
+        if ($sourceEntry.Value -ceq $targetEntry.Value) {
+            $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected 'pseudo-localized variant' -Observed $targetEntry.Value `
+                -Message 'The pseudo-locale value still matches plain English source text.' `
+                -SuggestedAction 'Replace the plain-English fallback with the expected pseudo-localized form.'))
+            continue
+        }
 
-            $localeCode = Get-ReswLocaleCode -Path $localePath
-            $locale = $null
-            try {
-                    $locale = Get-ParsedReswFromView -Path $localePath -Revision $targetViewRevision
-            } catch {
-                Report-BlockedCheck -CheckId 'validate.resw.xml-well-formed' -File $localePath -Resource $null `
-                    -Message $_.Exception.Message -SuggestedAction 'Fix the locale XML before validating parity.' `
-                    -ComparisonBase $comparisonBase
-                continue
-            }
+        $sourceSignal = Get-PseudoLetterSignal -Value $sourceEntry.Value -LockedTokens $policy.Tokens -Locale $localeCode
+        if ([string]::IsNullOrWhiteSpace($sourceSignal)) {
+            continue
+        }
 
-            foreach ($resource in @($reswGroups[$sourcePath])) {
-                $sourceEntry = if ($source -and $source.Resources.ContainsKey($resource)) { $source.Resources[$resource] } else { $null }
-                $localeEntry = if ($locale -and $locale.Resources.ContainsKey($resource)) { $locale.Resources[$resource] } else { $null }
+        $targetSignal = Get-PseudoLetterSignal -Value $targetEntry.Value -LockedTokens $policy.Tokens -Locale $localeCode
+        if ([string]::IsNullOrWhiteSpace($targetSignal)) {
+            $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected 'transformed pseudo-locale letters' -Observed $targetEntry.Value `
+                -Message 'After removing wrappers, placeholders, and locked tokens, the pseudo-locale value has no translatable letter signal left.' `
+                -SuggestedAction 'Regenerate this value so its translatable letters still appear in pseudo-localized form.'))
+            continue
+        }
 
-                if ($null -eq $sourceEntry) {
-                    if ($null -ne $localeEntry) {
-                        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.resw.key-parity' `
-                            -File $localePath -Resource $resource -Observed 'present' -Expected 'removed' `
-                            -Message 'The localized .resw file still contains a resource removed from the source file.' `
-                            -SuggestedAction 'Remove the stale localized resource.' `
-                            -ComparisonBase $comparisonBase | Out-Null
-                    }
-                    continue
-                }
+        $hasDirectionalPseudoSignal = $localeCode -eq 'qps-plocm' -and (Test-ContainsDirectionalPseudoSignal -Value $targetEntry.Value -LockedTokens $policy.Tokens -Locale $localeCode)
+        if ($sourceSignal -ceq $targetSignal -and -not $hasDirectionalPseudoSignal) {
+            $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected 'transformed pseudo-locale letters' -Observed $targetEntry.Value `
+                -Message 'After removing wrappers, placeholders, and locked tokens, the pseudo-locale value still carries the same plain-English letter signal as the source.' `
+                -SuggestedAction 'Change the translatable letters instead of only wrapping, re-casing, or punctuating the English source text.'))
+            continue
+        }
 
-                if ($null -eq $localeEntry) {
-                    Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.resw.key-parity' `
-                        -File $localePath -Resource $resource -Observed 'missing' -Expected 'present' `
-                        -Message 'The localized .resw file is missing a resource present in the source file.' `
-                        -SuggestedAction 'Add the missing localized resource entry.' `
-                        -ComparisonBase $comparisonBase | Out-Null
-                    continue
-                }
-
-                Test-PlaceholderParity -CheckId 'validate.resw.placeholder-parity' -File $localePath -Resource $resource `
-                    -SourceValue $sourceEntry.Value -TargetValue $localeEntry.Value -ComparisonBase $comparisonBase
-
-                $rules = Get-LockedRules -Comments @($sourceEntry.Comment) -Locale $localeCode
-                Test-LockedToken -CheckId 'validate.resw.locked-token' -File $localePath -Resource $resource `
-                    -Locale $localeCode -SourceValue $sourceEntry.Value -TargetValue $localeEntry.Value -Rules $rules `
-                    -ComparisonBase $comparisonBase
-            }
+        if ($pair.Target.Kind -eq 'wta' -and -not (Test-ExpectedPseudoWrapper -Locale $localeCode -Value $targetEntry.Value)) {
+            $results.Add((New-CheckRecord -Status 'FIXABLE' -CheckName $checkName -File $targetPath -Resource $key `
+                -Expected $localeCode -Observed $targetEntry.Value `
+                -Message 'The WTA pseudo-locale value does not use the expected wrapper style.' `
+                -SuggestedAction 'Regenerate the pseudo-locale value using the established wrapper style for this locale.'))
         }
     }
 
-    if ($wtaChanged.Count -gt 0) {
-        $affectedWtaKeys = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
-        foreach ($path in $wtaChanged) {
-            $baseBytes = Get-FileBytesFromView -Path $path -Revision $comparisonBase
-            $targetBytes = Get-FileBytesFromView -Path $path -Revision $targetViewRevision
-            if ($null -eq $targetBytes) {
-                Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.file.exists' `
-                    -File $path -Resource $null -Observed 'missing from target view' -Expected 'file present' `
-                    -Message 'Changed WTA locale file is missing from the target view.' `
-                    -SuggestedAction 'Restore the file or adjust the change set intentionally.' `
-                    -ComparisonBase $comparisonBase | Out-Null
-                continue
-            }
-
-            $before = $null
-            if ($null -ne $baseBytes) {
-                try {
-                    $before = Get-ParsedWtaFromView -Path $path -Revision $comparisonBase
-                } catch {
-                    Report-BlockedCheck -CheckId 'validate.wta.parse' -File $path -Resource $null `
-                        -Message $_.Exception.Message -SuggestedAction 'Fix the base/reference YAML before relying on deterministic validation.' `
-                        -ComparisonBase $comparisonBase
-                    continue
-                }
-            }
-
-            $after = $null
-            try {
-                $after = Get-ParsedWtaFromView -Path $path -Revision $targetViewRevision
-            } catch {
-                Report-BlockedCheck -CheckId 'validate.wta.parse' -File $path -Resource $null `
-                    -Message $_.Exception.Message -SuggestedAction 'Fix the YAML and rerun validation.' `
-                    -ComparisonBase $comparisonBase
-                continue
-            }
-
-            $reviewed = $after
-            if ($reviewedHeadRevision) {
-                try {
-                    $reviewed = Get-ParsedWtaFromView -Path $path -Revision $reviewedHeadRevision
-                } catch {
-                    Report-BlockedCheck -CheckId 'validate.wta.parse' -File $path -Resource $null `
-                        -Message $_.Exception.Message -SuggestedAction 'Fix the reviewed source YAML before validating parity.' `
-                        -ComparisonBase $comparisonBase
-                    continue
-                }
-            }
-
-            $changedKeys = Get-SortedUnion -Left @(Get-ChangedWtaKeys -Before $before -After $after) -Right @(Get-ChangedWtaKeys -Before $before -After $reviewed)
-            foreach ($resource in $changedKeys) {
-                $null = $affectedWtaKeys.Add($resource)
-            }
-        }
-
-        $sourceLocale = $null
-        if ($reviewedHeadRevision) {
-            Test-SourceLocalePreserved -Kind 'wta' -Path 'tools/wta/locales/en-US.yml' -ReviewedRevision $reviewedHeadRevision `
-                -TargetRevision $targetViewRevision -ComparisonBase $comparisonBase
-        }
-        try {
-            $sourceLocale = Get-ParsedWtaFromView -Path 'tools/wta/locales/en-US.yml' -Revision $sourceAuthorityRevision
-        } catch {
-            Report-BlockedCheck -CheckId 'validate.wta.parse' -File 'tools/wta/locales/en-US.yml' -Resource $null `
-                -Message $_.Exception.Message -SuggestedAction 'Fix en-US.yml before validating other locales.' `
-                -ComparisonBase $comparisonBase
-            $sourceLocale = $null
-        }
-
-        if ($null -ne $sourceLocale) {
-            foreach ($localePath in Get-WtaLocalePaths -Revision $targetViewRevision) {
-                $localeCode = Get-WtaLocaleCode -Path $localePath
-                if ($localeCode -eq 'en-US') {
-                    continue
-                }
-
-                $locale = $null
-                try {
-                    $locale = Get-ParsedWtaFromView -Path $localePath -Revision $targetViewRevision
-                } catch {
-                    Report-BlockedCheck -CheckId 'validate.wta.parse' -File $localePath -Resource $null `
-                        -Message $_.Exception.Message -SuggestedAction 'Fix this locale file before validating parity.' `
-                        -ComparisonBase $comparisonBase
-                    continue
-                }
-
-                foreach ($resource in @($affectedWtaKeys)) {
-                    $sourceEntry = if ($sourceLocale.Entries.ContainsKey($resource)) { $sourceLocale.Entries[$resource] } else { $null }
-                    $localeEntry = if ($locale.Entries.ContainsKey($resource)) { $locale.Entries[$resource] } else { $null }
-
-                    if ($null -eq $sourceEntry) {
-                        if ($null -ne $localeEntry) {
-                            Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.wta.key-parity' `
-                                -File $localePath -Resource $resource -Observed 'present' -Expected 'removed' `
-                                -Message 'The locale file still contains a key removed from en-US.yml.' `
-                                -SuggestedAction 'Remove the stale localized key.' `
-                                -ComparisonBase $comparisonBase | Out-Null
-                        }
-                        continue
-                    }
-
-                    if ($null -eq $localeEntry) {
-                        Write-LocalizationResult -Kind 'check' -Status 'FIXABLE' -Action 'FIX' -CheckId 'validate.wta.key-parity' `
-                            -File $localePath -Resource $resource -Observed 'missing' -Expected 'present' `
-                            -Message 'The locale file is missing a key present in en-US.yml.' `
-                            -SuggestedAction 'Add the missing localized key.' `
-                            -ComparisonBase $comparisonBase | Out-Null
-                        continue
-                    }
-
-                    Test-PlaceholderParity -CheckId 'validate.wta.placeholder-parity' -File $localePath -Resource $resource `
-                        -SourceValue $sourceEntry.Value -TargetValue $localeEntry.Value -ComparisonBase $comparisonBase
-
-                    $rules = Get-LockedRules -Comments (Get-WtaEntryComments -Entry $sourceEntry) -Locale $localeCode
-                    Test-LockedToken -CheckId 'validate.wta.locked-token' -File $localePath -Resource $resource `
-                        -Locale $localeCode -SourceValue $sourceEntry.Value -TargetValue $localeEntry.Value -Rules $rules `
-                        -ComparisonBase $comparisonBase
-
-                    if ($localeCode -in @('qps-ploc', 'qps-ploca', 'qps-plocm')) {
-                        Test-WtaPseudoLocale -File $localePath -Resource $resource -Locale $localeCode `
-                            -SourceValue $sourceEntry.Value -TargetValue $localeEntry.Value -Rules $rules `
-                            -ComparisonBase $comparisonBase
-                    }
-                }
-            }
-        }
-    }
-
-    if (@($script:ResultRecords | Where-Object { $_.status -eq 'BLOCKED' }).Count -gt 0) {
-        return Complete-LocalizationRun -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true `
-            -Message 'Deterministic validation was blocked by parse or repository uncertainty.' -ComparisonBase $comparisonBase
-    }
-
-    if (@($script:ResultRecords | Where-Object { $_.status -eq 'FIXABLE' }).Count -gt 0) {
-        return Complete-LocalizationRun -Status 'FIXABLE' -Action 'FIX' -ShouldRun $true `
-            -Message 'Deterministic localization issues were found.' -ComparisonBase $comparisonBase
-    }
-
-    return Complete-LocalizationRun -Status 'PASS' -Action 'NONE' -ShouldRun $false `
-        -Message 'Deterministic localization validation passed.' -ComparisonBase $comparisonBase
+    return Complete-CheckBundle -CheckName $checkName -Results @($results.ToArray()) `
+        -PassMessage 'Checked pseudo-locale entries avoid plain-English fallback and match applicable style rules.' -PassFile $targetPath
 }
 
-function Initialize-LocalizationInvocation {
-    $script:Mode = Test-LocalizationMode -Value $Mode
-    $script:PullRequestNumber = Test-PullRequestNumber -Value $PullRequestNumber
-    $script:BaseRevision = Test-GitObjectId -Value $BaseRevision -ParameterName 'BaseRevision'
 
-    if ($script:Mode -eq 'Gate') {
-        $script:HeadRevision = Test-GitObjectId -Value $HeadRevision -ParameterName 'HeadRevision'
-        if (-not [string]::IsNullOrWhiteSpace($ReviewedHeadRevision)) {
-            throw [System.ArgumentException]::new('ReviewedHeadRevision is only supported in Validate mode.')
-        }
-        $script:ReviewedHeadRevision = $null
-    } elseif ([string]::IsNullOrWhiteSpace($HeadRevision)) {
-        $script:HeadRevision = $null
-    } else {
-        $script:HeadRevision = Test-GitObjectId -Value $HeadRevision -ParameterName 'HeadRevision'
+function Resolve-TopLevelKeys {
+    param(
+        [string]$KeysJson,
+        [bool]$KeysJsonWasSupplied,
+        [string[]]$UnexpectedArguments
+    )
+
+    if ($null -ne $UnexpectedArguments -and $UnexpectedArguments.Count -gt 0) {
+        $formatted = @($UnexpectedArguments | ForEach-Object { "'$_'" }) -join ', '
+        throw [System.ArgumentException]::new("Unexpected positional argument(s): $formatted. Omit KeysJson to scope the whole file.")
     }
 
-    if ($script:Mode -eq 'Validate') {
-        if ([string]::IsNullOrWhiteSpace($ReviewedHeadRevision)) {
-            $script:ReviewedHeadRevision = $null
-        } else {
-            $script:ReviewedHeadRevision = Test-GitObjectId -Value $ReviewedHeadRevision -ParameterName 'ReviewedHeadRevision'
+    if (-not $KeysJsonWasSupplied) {
+        return $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($KeysJson)) {
+        throw [System.ArgumentException]::new('KeysJson must be a non-empty JSON array of strings when supplied. Omit KeysJson to scope the whole file.')
+    }
+
+    try {
+        $parsed = ConvertFrom-Json -InputObject $KeysJson -NoEnumerate -ErrorAction Stop
+    } catch {
+        throw [System.ArgumentException]::new('KeysJson must be a valid JSON array of strings. Omit KeysJson to scope the whole file.')
+    }
+
+    if ($parsed -isnot [System.Array]) {
+        throw [System.ArgumentException]::new('KeysJson must decode to a JSON array of strings. Omit KeysJson to scope the whole file.')
+    }
+
+    $keys = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @($parsed)) {
+        if ($item -isnot [string]) {
+            throw [System.ArgumentException]::new('KeysJson must contain only string elements.')
+        }
+        if ([string]::IsNullOrWhiteSpace($item)) {
+            throw [System.ArgumentException]::new('KeysJson must not contain empty strings. Omit KeysJson to scope the whole file.')
+        }
+        $keys.Add($item)
+    }
+
+    if ($keys.Count -eq 0) {
+        throw [System.ArgumentException]::new('KeysJson must contain at least one key when supplied. Omit KeysJson to scope the whole file.')
+    }
+
+    return @($keys.ToArray())
+}
+
+function Invoke-LocalizationCheck {
+    [CmdletBinding()]
+    param(
+        [string]$Check,
+        [string]$File,
+        [string]$SourceFile,
+        [string]$TargetFile,
+        [string]$OriginalFile,
+        [string]$Locale,
+        [string[]]$Keys
+    )
+
+    $checkName = Assert-RequiredValue -Value $Check -ParameterName 'Check'
+    if ($script:SupportedChecks -notcontains $checkName) {
+        throw [System.ArgumentException]::new("Unsupported Check '$checkName'. Supported checks: $($script:SupportedChecks -join ', ').")
+    }
+
+    switch ($checkName) {
+        'Test-ResourceSyntax' {
+            return Test-ResourceSyntax -File $File
+        }
+        'Test-RequiredKeys' {
+            return Test-RequiredKeys -SourceFile $SourceFile -TargetFile $TargetFile -Keys $Keys
+        }
+        'Test-PlaceholderParity' {
+            return Test-PlaceholderParity -SourceFile $SourceFile -TargetFile $TargetFile -Keys $Keys
+        }
+        'Test-LockedContent' {
+            return Test-LockedContent -SourceFile $SourceFile -TargetFile $TargetFile -Keys $Keys -Locale $Locale
+        }
+        'Test-ResourceEncoding' {
+            return Test-ResourceEncoding -File $File -OriginalFile $OriginalFile
+        }
+        'Test-PseudoLocale' {
+            return Test-PseudoLocale -SourceFile $SourceFile -TargetFile $TargetFile -Locale $Locale -Keys $Keys
         }
     }
+}
+
+function Write-JsonBundleAndExit {
+    param([Parameter(Mandatory)]$Bundle)
+
+    [Console]::Out.WriteLine(($Bundle | ConvertTo-Json -Compress -Depth 8))
+    exit $Bundle.exitCode
 }
 
 function Invoke-LocalizationMain {
-    Set-StrictMode -Version Latest
-    $ErrorActionPreference = 'Stop'
-
     try {
-        Initialize-LocalizationInvocation
-        Assert-RepositoryRoot
-        $result = if ($Mode -eq 'Gate') { Invoke-Gate } else { Invoke-Validation }
-        exit $result.ExitCode
+        $cliKeys = Resolve-TopLevelKeys -KeysJson $KeysJson -KeysJsonWasSupplied $script:TopLevelBoundParameters.ContainsKey('KeysJson') -UnexpectedArguments $UnexpectedArguments
+        $bundle = Invoke-LocalizationCheck -Check $Check -File $File -SourceFile $SourceFile -TargetFile $TargetFile `
+            -OriginalFile $OriginalFile -Locale $Locale -Keys $cliKeys
+        Write-JsonBundleAndExit -Bundle $bundle
     } catch [System.ArgumentException] {
-        Write-LocalizationResult -Kind 'summary' -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true `
-            -CheckId 'input.validation' -File $null -Resource $null -Observed $null -Expected $null `
-            -Message $_.Exception.Message -SuggestedAction 'Fix the invocation arguments and rerun the workflow.' `
-            -ComparisonBase $null -TotalCount 0 -PassCount 0 -FixableCount 0 -BlockedCount 1 | Out-Null
-        exit $script:ExitCodes.InvalidInput
+        Write-JsonBundleAndExit -Bundle (New-InvalidInputBundle -CheckName $Check -Message $_.Exception.Message)
     } catch {
-        Write-LocalizationResult -Kind 'summary' -Status 'BLOCKED' -Action 'ESCALATE' -ShouldRun $true `
-            -CheckId 'runtime.failure' -File $null -Resource $null -Observed $null -Expected $null `
-            -Message $_.Exception.Message -SuggestedAction 'Escalate for manual review; deterministic validation failed unexpectedly.' `
-            -ComparisonBase $null -TotalCount $script:ResultRecords.Count `
-            -PassCount @($script:ResultRecords | Where-Object { $_.status -eq 'PASS' }).Count `
-            -FixableCount @($script:ResultRecords | Where-Object { $_.status -eq 'FIXABLE' }).Count `
-            -BlockedCount (@($script:ResultRecords | Where-Object { $_.status -eq 'BLOCKED' }).Count + 1) | Out-Null
-        exit $script:ExitCodes.Blocked
+        Write-JsonBundleAndExit -Bundle (New-BlockedBundle -CheckName $(if ($Check) { $Check } else { 'unknown' }) -File $null -Resource $null `
+            -Message $_.Exception.Message -SuggestedAction 'Inspect the inputs and rerun the focused file-based check.')
     }
 }
 
-if ($MyInvocation.InvocationName -eq '.') {
-    return
+if ($MyInvocation.InvocationName -ne '.') {
+    Invoke-LocalizationMain
 }
-
-Invoke-LocalizationMain
