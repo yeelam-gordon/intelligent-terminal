@@ -378,12 +378,14 @@ Verify `git rev-parse HEAD` equals
 Repair only localized targets. Keep source authority read-only and finish with
 the required independent review. Invoke the registered
 `localization-review-gate` agent after the final checks and require its explicit
-`PASS` before requesting any branch write.
+`PASS` before requesting any branch write. The root repair agent owns all git
+inspection, scope discovery, edits, the final checker rerun, and writing
+`/tmp/gh-aw/localization-final-checks.json`; do not delegate those steps.
 
 ## Output contract
 
 Remove `/tmp/gh-aw/localization-final-checks.json` at startup. After repair and
-review, write only actual final checker CLI bundles to that fixed path:
+review, write only actual final checker bundles to that fixed path:
 
 ```json
 {"version":1,"mode":"repair","bundles":[/* actual final checker JSON bundles */]}
@@ -391,6 +393,14 @@ review, write only actual final checker CLI bundles to that fixed path:
 
 Never hand-author bundle fields or include initial attempts. The native gate
 requires final `PASS` bundles and exactly one successful outcome:
+
+- Use the SKILL.md batching example for the final rerun: dot-source
+  `.github/skills/ensure-localization/scripts/localization_checks.ps1` once in
+  one `pwsh` process, collect the actual function-return bundles, and write the
+  envelope with PowerShell file operations before any safe output.
+- The independent reviewer is read-only and separate. It returns only its
+  review verdict and findings; it never owns the final report path or the safe
+  output call.
 
 - No edit: one visible `PASS` / no-change `add-comment` naming checked files.
 - Edited: one focused commit whose subject

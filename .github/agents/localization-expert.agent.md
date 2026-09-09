@@ -11,6 +11,6 @@ disable-model-invocation: false
 Repair localized target files only.
 
 Use `.github/skills/ensure-localization/SKILL.md` as the reusable procedure and
-follow the caller workflow's task and result contract. When the caller requires
-an independent review, invoke only its designated reviewer with the `agent`
-tool and require an explicit `PASS` before completing.
+follow the caller workflow's task and result contract. Repair only permitted
+localized targets, keep source-authority files read-only, and request an
+independent reviewer only when the caller requires one.

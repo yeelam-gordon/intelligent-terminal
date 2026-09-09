@@ -14,8 +14,10 @@
     The checks only read caller-supplied files and write exactly one JSON bundle
     to stdout per CLI invocation. CLI key scoping is supplied with -KeysJson;
     public PowerShell functions continue to accept [string[]] -Keys directly.
-    They do not perform Git, PR, SHA, auth, discovery, translation-quality, or
-    code-edit-policy work.
+    Dot-source this script to batch many checks in one PowerShell process:
+    each public function returns one bundle object with check, status, exitCode,
+    summary, and results. They do not perform Git, PR, SHA, auth, discovery,
+    translation-quality, or code-edit-policy work.
 
     Exit codes:
       0  PASS

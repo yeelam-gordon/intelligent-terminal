@@ -365,11 +365,13 @@ removed; use local `git show` and `git diff` to inspect them, then follow
 - observed base metadata `${{ github.event.inputs.expected_base_sha }}`
 
 Materialize trusted file bytes in the workspace only as needed.
+You own the git inspection, scope discovery, final checker rerun, final report
+write, and the one allowed safe output for this read-only workflow.
 
 ## Output contract
 
 Remove `/tmp/gh-aw/localization-final-checks.json` at startup. After review,
-write only actual final checker CLI bundles to that fixed path:
+write only actual final checker bundles to that fixed path:
 
 ```json
 {"version":1,"mode":"guide","bundles":[/* actual final checker JSON bundles */]}
@@ -378,6 +380,12 @@ write only actual final checker CLI bundles to that fixed path:
 Never hand-author bundle fields or include initial attempts. All `PASS` means no
 visible output; any `FIXABLE` means exactly one concise `add-comment`. `BLOCKED`
 or `INVALID_INPUT` is not a successful guide outcome.
+
+Use the SKILL.md batching example for the final rerun: dot-source
+`.github/skills/ensure-localization/scripts/localization_checks.ps1` once in
+one `pwsh` process, collect the actual function-return bundles, and write the
+envelope with PowerShell file operations before emitting either `add-comment` or
+`noop`.
 
 The comment must:
 

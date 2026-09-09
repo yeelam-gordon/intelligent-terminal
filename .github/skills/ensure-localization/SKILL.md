@@ -85,11 +85,84 @@ mapping:
 ## Native final-report handoff
 
 When a caller specifies a final checker report path, collect bundles from actual
-CLI invocations of `localization_checks.ps1`; never fabricate bundle fields or
-convert human conclusions into checker JSON. Keep initial failing attempts out of
-the final report. After repairs and any required independent review, write only
-the final rerun bundles using the caller's exact envelope and path. The caller's
-native post-step owns structural validation and write gating.
+checker execution; never fabricate bundle fields or convert human conclusions
+into checker JSON. Keep initial failing attempts out of the final report. The
+root agent owns repository discovery, the final rerun, and writing the report.
+After repairs and any required independent review, write only the final rerun
+bundles using the caller's exact envelope and path. The caller's native
+post-step owns structural validation and write gating.
+
+For initial checks and the final rerun, use one `pwsh` process per batch that dot-sources
+`localization_checks.ps1` once and calls the public functions directly. Each
+function returns one bundle object with `check`, `status`, `exitCode`,
+`summary`, and `results`. Collect those actual bundle objects and write the
+caller-selected JSON envelope with PowerShell file operations only. Do not
+delegate report ownership to a reviewer and do not rely on `rm`, `touch`,
+`jq`, or hand-authored bundle JSON.
+
+Example final rerun in one PowerShell process. Assume the caller already
+resolved the report path, mode, and the source/target/locale rows to inspect:
+
+```powershell
+. (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1')
+
+$reportPath = $CallerSuppliedReportPath
+$mode = $CallerSuppliedMode
+$scopedKeys = @('sample.command.title')
+$targets = @(
+    @{
+        SourcePath = 'path\to\Resources\en-US\Resources.resw'
+        SourceOriginalPath = 'path\to\snapshots\Resources.en-US.before.resw'
+        TargetPath = 'path\to\Resources\fr-FR\Resources.resw'
+        TargetOriginalPath = 'path\to\snapshots\Resources.fr-FR.before.resw'
+        Locale = 'fr-FR'
+        Keys = $scopedKeys
+    },
+    @{
+        SourcePath = 'tools\wta\locales\en-US.yml'
+        TargetPath = 'tools\wta\locales\qps-ploc.yml'
+        TargetOriginalPath = 'artifacts\qps-ploc.before.yml'
+        Locale = 'qps-ploc'
+        Keys = $scopedKeys
+    }
+)
+$bundles = [System.Collections.Generic.List[object]]::new()
+
+foreach ($target in $targets) {
+    $sourceEncodingArgs = @{ File = $target.SourcePath }
+    if (-not [string]::IsNullOrWhiteSpace($target['SourceOriginalPath'])) {
+        $sourceEncodingArgs['OriginalFile'] = $target['SourceOriginalPath']
+    }
+
+    $targetEncodingArgs = @{ File = $target.TargetPath }
+    if (-not [string]::IsNullOrWhiteSpace($target['TargetOriginalPath'])) {
+        $targetEncodingArgs['OriginalFile'] = $target['TargetOriginalPath']
+    }
+
+    $bundles.Add((Test-ResourceSyntax -File $target.SourcePath))
+    $bundles.Add((Test-ResourceEncoding @sourceEncodingArgs))
+    $bundles.Add((Test-ResourceSyntax -File $target.TargetPath))
+    $bundles.Add((Test-ResourceEncoding @targetEncodingArgs))
+    $bundles.Add((Test-RequiredKeys -SourceFile $target.SourcePath -TargetFile $target.TargetPath -Keys $target.Keys))
+    $bundles.Add((Test-PlaceholderParity -SourceFile $target.SourcePath -TargetFile $target.TargetPath -Keys $target.Keys))
+    $bundles.Add((Test-LockedContent -SourceFile $target.SourcePath -TargetFile $target.TargetPath -Keys $target.Keys -Locale $target.Locale))
+    if ($target.Locale -in @('qps-ploc', 'qps-ploca', 'qps-plocm')) {
+        $bundles.Add((Test-PseudoLocale -SourceFile $target.SourcePath -TargetFile $target.TargetPath -Locale $target.Locale -Keys $target.Keys))
+    }
+}
+
+$report = [ordered]@{
+    version = 1
+    mode = $mode
+    bundles = @($bundles.ToArray())
+}
+
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText(
+    $reportPath,
+    ($report | ConvertTo-Json -Compress -Depth 8),
+    $utf8NoBom)
+```
 
 ## Reusable procedure
 
@@ -144,6 +217,12 @@ native post-step owns structural validation and write gating.
 - `Test-ResourceEncoding` is the only check that reasons about BOM
   preservation. Keep source-preservation and safe-write policy in the caller,
   and supply `-OriginalFile` whenever a comparison snapshot exists.
+- When batching in one process, carry forward genuine pre-edit snapshot paths
+  for existing files. If a file has no snapshot, omit `OriginalFile` rather
+  than pointing it at the rewritten file.
+- For in-process batching, use the dot-sourced public functions with a real
+  PowerShell key array such as `@('key1', 'key2')`. `-KeysJson` is only for
+  `pwsh -File` CLI calls.
 - When you invoke `localization_checks.ps1` from `pwsh -File`, use `-KeysJson`
   for scoped keys. `-Keys key1,key2` is ambiguous at the CLI layer and is not
   the supported script interface.
