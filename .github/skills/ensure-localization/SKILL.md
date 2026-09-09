@@ -1,19 +1,18 @@
 ---
 name: ensure-localization
-description: 'Reusable file-based localization procedure for Intelligent Terminal. Use when a caller already supplies PR or workflow context and you need to inspect or repair customer-facing `.resw` resources or WTA locale `.yml` files with the six public file checks.'
+description: 'Inspect, author, repair, and review customer-facing RESW and localization YAML resources. Use shared product terminology, translator context, lock annotations, and six file-based checks; the caller supplies the goal and scope.'
 ---
 
 # Ensure Localization
 
-Use this skill when the caller already defines the runtime situation — same-repo
-repair, read-only review, or fork guidance — and you need the shared
-file-based localization procedure.
+Use this shared procedure for customer-facing localization. The caller supplies
+the goal, scope, and permitted edits; PR or workflow context is not required.
 
-## Agent persona
+## Product consistency
 
-- Act as a localization specialist for customer-facing strings.
-- Prefer existing same-locale product wording over invention.
-- Use normal git, diff, and file inspection tools; no custom PR helper library.
+Keep terminology consistent within each locale and across RESW and localization
+YAML for the same product. Grammar may vary with context, but established product
+keywords should not alternate between unrelated translations.
 
 ## Caller context
 
@@ -24,29 +23,34 @@ file-based localization procedure.
 ## Resources
 
 - File checker: [`./scripts/localization_checks.ps1`](./scripts/localization_checks.ps1)
-- `.resw` scope wrapper: `.github/instructions/localization.instructions.md`
-- WTA locale YAML wrapper: `.github/instructions/rust-localization.instructions.md`
 
 ## Supported files
 
-Automation in this repository currently allowlists only:
+The skill applies to localization resources regardless of their location. The
+checker supports `.resw` and flat locale `.yml` files; other YAML structures need
+an appropriate parser, not conversion merely to satisfy this checker.
 
-- `src/cascadia/**/Resources/*.resw`
-- `src/cascadia/**/Resources/**/*.resw`
-- `tools/wta/locales/*.yml`
-
-The checker itself is file-only and can be run on any supported `.resw` or flat
-locale `.yml` path, including files outside this repository.
-
-Source authority in this repository:
-
-- `.resw`: `.../Resources/en-US/*.resw` plus direct `.../Resources/*.resw`
-- WTA locale YAML: `tools/wta/locales/en-US.yml`
-
-These locations are repository conventions, not checker inputs. Discovery still
-belongs to the caller or agent procedure.
+Discover source and target files using the caller's context and existing layout.
+In this repository, `en-US` files and direct resource files are common source
+authorities; these are conventions, not mandatory checker paths.
 
 Do not edit source-authority files just to make translations pass.
+
+## Source-authoring guidance
+
+- Add translator context when wording is ambiguous or depends on UI usage, such
+  as a noun versus a command. Explain the meaning and placeholder roles; avoid
+  boilerplate comments for obvious strings.
+- Use `{Locked}` when the whole value must remain literal, and
+  `{Locked="token"}` for invariant parts such as product names, protocol names,
+  commands, or paths. Use locale-scoped locks only when the exception genuinely
+  applies to those locales; do not exempt entire pseudo-locales by default.
+- Put guidance in the resource's `<comment>` for RESW or its associated YAML
+  comment. Preserve annotations in target files where the format requires them.
+- When source edits are not permitted, report missing or contradictory source
+  guidance instead of silently changing source files or inventing meaning.
+  Mechanical checks preserve declared locks; they cannot decide which
+  annotations a new string needs.
 
 ## Six checks
 
@@ -71,7 +75,7 @@ pwsh .github/skills/ensure-localization/scripts/localization_checks.ps1 -Check T
 ```
 
 The script writes one JSON bundle to stdout and exits with the actual status
-mapping used by the prototype:
+mapping:
 
 - `0` → `PASS`
 - `20` → `FIXABLE`
