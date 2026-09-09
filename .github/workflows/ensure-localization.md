@@ -222,6 +222,33 @@ safe-outputs:
 
 
 post-steps:
+  - name: Reject stale worker output before publication
+    shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
+      PR_NUMBER: ${{ github.event.inputs.pr_number }}
+      REPOSITORY: ${{ github.event.inputs.repo }}
+    run: |
+      $ErrorActionPreference = 'Stop'
+      if ($env:PR_NUMBER -notmatch '^[1-9][0-9]*$') {
+        throw 'Freshness check received an invalid pull request number.'
+      }
+      if (($env:EXPECTED_HEAD_SHA ?? '') -notmatch '^[0-9a-f]{40}$') {
+        throw 'Freshness check received an invalid expected head SHA.'
+      }
+      $currentHeadOutput = & gh api "/repos/$env:REPOSITORY/pulls/$env:PR_NUMBER" --header 'Accept: application/vnd.github+json' --jq '.head.sha'
+      if ($LASTEXITCODE -ne 0) {
+        throw "Failed to read the current head SHA for PR #$env:PR_NUMBER."
+      }
+      $currentHead = ($currentHeadOutput | Out-String).Trim()
+      if (($currentHead ?? '') -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "Freshness check returned an invalid current head SHA: '$currentHead'."
+      }
+      if ($currentHead.ToLowerInvariant() -cne $env:EXPECTED_HEAD_SHA.ToLowerInvariant()) {
+        throw "Stale localization output rejected: PR #$env:PR_NUMBER head changed from $env:EXPECTED_HEAD_SHA to $currentHead before publication."
+      }
+
   - name: Validate final localization checker report
     shell: bash
     env:
@@ -356,7 +383,7 @@ concurrency:
 
   job-discriminator: ${{ github.run_id }}
 
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 run-name: 'Ensure Localization ${{ github.event.inputs.dispatch_id }}'
 
@@ -409,6 +436,13 @@ requires final `PASS` bundles and exactly one successful outcome:
 - The native gate validates report shape and output mechanics only; it does not
   prove that you preserved the original patch scope. Your own git evidence and
   independent review must establish that.
+- Before any safe output becomes eligible, the native post-step re-reads the
+  live PR head and rejects stale output when it no longer matches
+  `${{ github.event.inputs.expected_head_sha }}`. That last-moment check helps,
+  but it is not a blanket guarantee: the pinned gh-aw docs for
+  `push-to-pull-request-branch` document no additional expected-head
+  compare-and-swap option beyond workflow concurrency and the final head check,
+  and GitHub cancellation/publication remain asynchronous.
 - Follow the scoped-key rules in the shared SKILL: keep `RequiredKeys` limited
   to source-present additions or updates, handle source removals with the
   skill's step-1 explicit review/cleanup path, and recompute each row's
