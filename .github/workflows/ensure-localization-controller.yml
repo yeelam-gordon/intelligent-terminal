@@ -196,10 +196,14 @@ jobs:
               } else {
                 Test-ResourceEncoding -File $headPath
               }
-              if ($encoding.status -ne 'PASS') {
+              if ($encoding.status -notin @('PASS', 'FIXABLE')) {
                 $blockingBundles.Add($encoding)
               }
-              if ($syntax.status -ne 'PASS' -or $encoding.status -ne 'PASS') {
+              if ($syntax.status -ne 'PASS' -or $encoding.status -notin @('PASS', 'FIXABLE')) {
+                continue
+              }
+              if ($encoding.status -eq 'FIXABLE') {
+                $semanticPaths.Add($path)
                 continue
               }
             }
