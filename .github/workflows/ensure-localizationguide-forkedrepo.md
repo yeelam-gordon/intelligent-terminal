@@ -176,9 +176,24 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.inputs.pr_number }}
           HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
+          COMPARISON_BASE_SHA: ${{ github.event.inputs.comparison_base_sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:PR_NUMBER -notmatch '^[1-9][0-9]*$') {
+            throw 'pr_number must be a positive decimal pull request number.'
+          }
+          $shaPattern = '^[0-9a-fA-F]{40}$'
+          foreach ($candidate in @(
+            @{ Name = 'expected_head_sha'; Value = $env:HEAD_SHA }
+            @{ Name = 'expected_base_sha'; Value = $env:EXPECTED_BASE_SHA }
+            @{ Name = 'comparison_base_sha'; Value = $env:COMPARISON_BASE_SHA }
+          )) {
+            if (($candidate.Value ?? '') -notmatch $shaPattern) {
+              throw "$($candidate.Name) must be an exact 40-character hexadecimal SHA."
+            }
+          }
           $remoteRef = "refs/remotes/origin/localization-pr-$env:PR_NUMBER"
           git fetch --no-tags --depth=1 origin "refs/pull/$env:PR_NUMBER/head:$remoteRef"
           $currentHead = (git rev-parse $remoteRef).Trim().ToLowerInvariant()
@@ -337,7 +352,7 @@ run-name: 'Ensure Localization Guide Forked Repo ${{ github.event.inputs.dispatc
 Imported runtime role: `localization-reviewer`.
 
 Fork localization guidance for PR #${{ github.event.inputs.pr_number }} in
-`${{ github.event.inputs.repo }}`.
+`${{ github.repository }}`.
 
 ## Goal
 

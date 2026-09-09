@@ -12,7 +12,7 @@ file-based localization procedure.
 ## Agent persona
 
 - Act as a localization specialist for customer-facing strings.
-- Prefer existing repository wording over invention.
+- Prefer existing same-locale product wording over invention.
 - Use normal git, diff, and file inspection tools; no custom PR helper library.
 
 ## Caller context
@@ -103,20 +103,26 @@ native post-step owns structural validation and write gating.
    `.resw` targets map to `.../Resources/en-US/*.resw` or direct
    `.../Resources/*.resw`, and WTA locale targets map to
    `tools/wta/locales/en-US.yml`.
-3. Use `-Keys` only for native PowerShell function calls, or `-KeysJson` when
+3. Before translating changed terms, inspect existing translations in the same
+   locale across both `.resw` files and `tools/wta/locales/*.yml`. Reuse
+   established product terminology when the meaning and UI context match. If no
+   repository precedent exists, prefer Microsoft localized terms and flag
+   conflicting existing translations instead of inventing synonyms or rewriting
+   unrelated strings.
+4. Use `-Keys` only for native PowerShell function calls, or `-KeysJson` when
    invoking the checker script from the CLI. Optional key scoping exists to
    avoid fixing unrelated old debt, not to hide source additions that the
    procedure already put in scope. Omit the scope parameter entirely for a
    whole-file check.
-4. Run `Test-ResourceSyntax` and `Test-ResourceEncoding` on every file you
+5. Run `Test-ResourceSyntax` and `Test-ResourceEncoding` on every file you
    actually inspect.
-5. For each localized target, run `Test-RequiredKeys`,
+6. For each localized target, run `Test-RequiredKeys`,
    `Test-PlaceholderParity`, `Test-LockedContent`, and, for pseudo-locales,
    `Test-PseudoLocale` against the matching source-authority file.
-6. Same-repo repair: run the checks before editing, repair only localized
+7. Same-repo repair: run the checks before editing, repair only localized
    targets, rerun the same relevant checks, then finish with one independent
    read-only review before requesting any branch write.
-7. Read-only review or fork guidance: stay read-only; report only the actual
+8. Read-only review or fork guidance: stay read-only; report only the actual
    `PASS`, `FIXABLE`, `BLOCKED`, or `INVALID_INPUT` outcomes plus concise human
    review.
 

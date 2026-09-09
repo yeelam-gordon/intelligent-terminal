@@ -146,6 +146,40 @@ tools:
 
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      trusted_code_revision: ${{ steps.validate-inputs.outputs.trusted_code_revision }}
+    steps:
+      - name: Validate dispatch inputs
+        id: validate-inputs
+        shell: pwsh
+        env:
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
+          COMPARISON_BASE_SHA: ${{ github.event.inputs.comparison_base_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:PR_NUMBER -notmatch '^[1-9][0-9]*$') {
+            throw 'pr_number must be a positive decimal pull request number.'
+          }
+          $shaPattern = '^[0-9a-fA-F]{40}$'
+          foreach ($candidate in @(
+            @{ Name = 'expected_head_sha'; Value = $env:HEAD_SHA }
+            @{ Name = 'expected_base_sha'; Value = $env:EXPECTED_BASE_SHA }
+            @{ Name = 'comparison_base_sha'; Value = $env:COMPARISON_BASE_SHA }
+          )) {
+            if (($candidate.Value ?? '') -notmatch $shaPattern) {
+              throw "$($candidate.Name) must be an exact 40-character hexadecimal SHA."
+            }
+          }
+          "trusted_code_revision=$env:HEAD_SHA" >> $env:GITHUB_OUTPUT
+
+  agent:
+    needs: [prepare]
+
   safe_outputs:
     if: needs.agent.result == 'success'
 
@@ -327,7 +361,7 @@ run-name: 'Ensure Localization ${{ github.event.inputs.dispatch_id }}'
 ---
 
 Same-repo localization repair for PR #${{ github.event.inputs.pr_number }} in
-`${{ github.event.inputs.repo }}`.
+`${{ github.repository }}`.
 
 Imported runtime role: `localization-expert`.
 
