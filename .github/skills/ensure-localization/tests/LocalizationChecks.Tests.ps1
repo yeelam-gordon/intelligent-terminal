@@ -306,6 +306,8 @@ Describe 'File-based localization checks' -Tag 'Unit' {
     It 'enforces full and token locks from source annotations without inventing absent tokens' {
         $sourcePath = Join-Path $TestDrive 'locks\source.yml'
         $targetPath = Join-Path $TestDrive 'locks\target.yml'
+        $literalSourcePath = Join-Path $TestDrive 'locks\literal-source.resw'
+        $literalTargetPath = Join-Path $TestDrive 'locks\literal-target.resw'
         $fileSourcePath = Join-Path $TestDrive 'locks\file-level-source.yml'
         $fileTargetPath = Join-Path $TestDrive 'locks\file-level-target.yml'
         $leadingScopedSourcePath = Join-Path $TestDrive 'locks\leading-scoped-source.yml'
@@ -327,6 +329,32 @@ Describe 'File-based localization checks' -Tag 'Unit' {
         $result = Test-LockedContent -SourceFile $sourcePath -TargetFile $targetPath -Locale 'qps-ploc' -Keys @('title', 'action', 'note')
         $result.status | Should -Be 'FIXABLE'
         @($result.results.resource | Sort-Object) | Should -Be @('action', 'title')
+
+        $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..\..\..')
+        $repoSourcePath = Join-Path $repoRoot 'src\cascadia\TerminalSettingsEditor\Resources\en-US\Resources.resw'
+        $repoSource = Read-LocalizationFile -Path $repoSourcePath
+        $repoEntry = $repoSource.Entries['Profile_PathTranslationStyleWsl.Content']
+        $repoPolicy = Resolve-LockPolicy -Comments $repoEntry.Comments -InheritedTokenComments $repoEntry.InheritedTokenComments
+        @($repoPolicy.Tokens) | Should -Be @('/mnt/c', 'C:\', 'WSL')
+
+        Write-ReswFixtureFile -Path $literalSourcePath -Resources @(
+            @{
+                Name = 'path'
+                Value = 'WSL uses C:\, \\server\share, %{items}, and an "inner quoted token".'
+                Comment = '{Locked="C:\","\\server\share","%{items}","an "inner quoted token""}'
+            }
+        )
+        Write-ReswFixtureFile -Path $literalTargetPath -Resources @(
+            @{
+                Name = 'path'
+                Value = 'WSL utilise \\server\share, %{items} et an "inner quoted token".'
+            }
+        )
+
+        $literal = Test-LockedContent -SourceFile $literalSourcePath -TargetFile $literalTargetPath
+        $literal.status | Should -Be 'FIXABLE'
+        @($literal.results.resource) | Should -Be @('path')
+        $literal.results[0].expected | Should -Be 'C:\'
 
         Write-Utf8TextFile -Path $fileSourcePath -Content @'
 # {Locked="Intelligent Terminal"}

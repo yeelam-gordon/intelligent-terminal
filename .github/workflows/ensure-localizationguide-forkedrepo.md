@@ -114,11 +114,11 @@ imports:
 
 checkout:
 
-  repository: ${{ github.repository }}
-
   ref: ${{ github.workflow_sha }}
 
   fetch-depth: 0
+
+  fetch: refs/pulls/open/*
 
 
 
@@ -129,8 +129,6 @@ tools:
   bash:
 
     - 'git diff:*'
-
-    - 'git fetch:*'
 
     - 'git rev-parse:*'
 
@@ -174,6 +172,7 @@ jobs:
         id: verify-head
         shell: pwsh
         env:
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.inputs.pr_number }}
           HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
           EXPECTED_BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
@@ -195,7 +194,7 @@ jobs:
             }
           }
           $remoteRef = "refs/remotes/origin/localization-pr-$env:PR_NUMBER"
-          git fetch --no-tags --depth=1 origin "refs/pull/$env:PR_NUMBER/head:$remoteRef"
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch --no-tags origin "refs/pull/$env:PR_NUMBER/head:$remoteRef"
           $currentHead = (git rev-parse $remoteRef).Trim().ToLowerInvariant()
           if ($currentHead -ne $env:HEAD_SHA.ToLowerInvariant()) {
             throw "Fork PR head changed after controller dispatch. Expected $env:HEAD_SHA, found $currentHead."
@@ -357,8 +356,8 @@ Fork localization guidance for PR #${{ github.event.inputs.pr_number }} in
 ## Goal
 
 Stay read-only on the trusted workflow checkout; never check out or execute fork
-code. Refetch `refs/pull/${{ github.event.inputs.pr_number }}/head`, verify it
-equals `${{ github.event.inputs.expected_head_sha }}`, then follow
+code. The immutable fork PR objects were fetched before agent credentials were
+removed; use local `git show` and `git diff` to inspect them, then follow
 `.github/skills/ensure-localization/SKILL.md` using:
 
 - comparison base `${{ github.event.inputs.comparison_base_sha }}`

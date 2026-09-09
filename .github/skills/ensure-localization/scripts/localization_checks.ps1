@@ -250,16 +250,68 @@ function Test-WtaSectionHeaderComment {
 function Test-ContainsLockDirective {
     param([string]$Comment)
 
-    return -not [string]::IsNullOrWhiteSpace($Comment) -and [regex]::IsMatch($Comment, '\{Locked(?:[^}]*)\}')
+    return -not [string]::IsNullOrWhiteSpace($Comment) -and
+        [regex]::IsMatch($Comment, '\{Locked(?:(?:"[^"]*")|[^}])*\}')
 }
 
 function Parse-QuotedTokenList {
-    param([string]$Text)
+    param(
+        [string]$Text,
+        [switch]$AllowTrailingText
+    )
 
     $tokens = [System.Collections.Generic.List[string]]::new()
-    foreach ($match in [regex]::Matches($Text, '"((?:[^"\\]|\\.)*)"')) {
-        $literal = '"' + $match.Groups[1].Value + '"'
-        $tokens.Add((ConvertFrom-Json -InputObject $literal -ErrorAction Stop))
+    $index = 0
+    while ($index -lt $Text.Length) {
+        while ($index -lt $Text.Length -and [char]::IsWhiteSpace($Text[$index])) {
+            $index++
+        }
+        if ($index -ge $Text.Length) {
+            break
+        }
+        if ($Text[$index] -ne '"') {
+            if ($AllowTrailingText) {
+                break
+            }
+            throw [System.InvalidOperationException]::new('Locked token lists must contain comma-delimited quoted literals.')
+        }
+
+        $tokenStart = ++$index
+        $tokenEnd = -1
+        $nextIndex = -1
+        while ($index -lt $Text.Length) {
+            if ($Text[$index] -eq '"') {
+                $afterQuote = $index + 1
+                while ($afterQuote -lt $Text.Length -and [char]::IsWhiteSpace($Text[$afterQuote])) {
+                    $afterQuote++
+                }
+                if ($afterQuote -ge $Text.Length -or $Text[$afterQuote] -eq ',' -or
+                    ($AllowTrailingText -and $afterQuote -gt $index + 1)) {
+                    $tokenEnd = $index
+                    $nextIndex = $afterQuote
+                    break
+                }
+            }
+            $index++
+        }
+
+        if ($tokenEnd -lt 0) {
+            throw [System.InvalidOperationException]::new('Locked token lists contain an unterminated quoted literal.')
+        }
+
+        $tokens.Add($Text.Substring($tokenStart, $tokenEnd - $tokenStart))
+        $index = $nextIndex
+        if ($index -ge $Text.Length) {
+            break
+        }
+        if ($Text[$index] -eq ',') {
+            $index++
+            continue
+        }
+        if ($AllowTrailingText) {
+            break
+        }
+        throw [System.InvalidOperationException]::new('Locked token lists must separate quoted literals with commas.')
     }
     return @($tokens.ToArray())
 }
@@ -267,12 +319,11 @@ function Parse-QuotedTokenList {
 function Parse-LeadingQuotedTokenList {
     param([string]$Text)
 
-    $match = [regex]::Match($Text, '^\s*(?<tokens>(?:"(?:[^"\\]|\\.)*"\s*,?\s*)+)')
-    if (-not $match.Success) {
+    if ($Text -notmatch '^\s*"') {
         return @()
     }
 
-    return @(Parse-QuotedTokenList -Text $match.Groups['tokens'].Value)
+    return @(Parse-QuotedTokenList -Text $Text -AllowTrailingText)
 }
 
 function Split-WtaScalarAndComment {
@@ -692,7 +743,7 @@ function Resolve-LockPolicy {
         [pscustomobject]@{ Items = @($InheritedTokenComments); AllowFullLock = $false }
     )) {
         foreach ($comment in @($commentSet.Items | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-            foreach ($match in [regex]::Matches($comment, '\{Locked(?<body>[^}]*)\}')) {
+            foreach ($match in [regex]::Matches($comment, '\{Locked(?<body>(?:(?:"[^"]*")|[^}])*)\}')) {
                 $body = $match.Groups['body'].Value.Trim()
                 if ([string]::IsNullOrWhiteSpace($body)) {
                     if ($commentSet.AllowFullLock) {

@@ -376,7 +376,9 @@ Verify `git rev-parse HEAD` equals
 - observed base metadata `${{ github.event.inputs.expected_base_sha }}`
 
 Repair only localized targets. Keep source authority read-only and finish with
-the required independent review.
+the required independent review. Invoke the registered
+`localization-review-gate` agent after the final checks and require its explicit
+`PASS` before requesting any branch write.
 
 ## Output contract
 
@@ -397,9 +399,6 @@ requires final `PASS` bundles and exactly one successful outcome:
 Do not claim success for source-only, blocked, invalid, or excluded changes. No
 `noop`, extra output, extra commit, or source-authority edit.
 
-## agent: localization-review-gate
-
-Independently review the completed localization scope with
-`.github/skills/ensure-localization/SKILL.md`. Stay read-only; do not delegate.
-
-## end agent: localization-review-gate
+## agent: `localization-review-gate`
+{{#runtime-import .github/agents/localization-reviewer.agent.md}}
+## end agent: `localization-review-gate`
