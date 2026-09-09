@@ -268,6 +268,10 @@ Describe 'File-based localization checks' -Tag 'Unit' {
     It 'reports missing and stale keys, but scoped keys avoid unrelated debt' {
         $sourcePath = Join-Path $TestDrive 'keys\source.resw'
         $targetPath = Join-Path $TestDrive 'keys\target.resw'
+        $caseSourcePath = Join-Path $TestDrive 'keys\case-source.yml'
+        $caseTargetPath = Join-Path $TestDrive 'keys\case-target.yml'
+        $distinctReswPath = Join-Path $TestDrive 'keys\distinct.resw'
+        $distinctWtaPath = Join-Path $TestDrive 'keys\distinct.yml'
 
         Write-ReswFixtureFile -Path $sourcePath -Resources @(
             @{ Name = 'alpha'; Value = 'Alpha' }
@@ -284,23 +288,75 @@ Describe 'File-based localization checks' -Tag 'Unit' {
 
         $scoped = Test-RequiredKeys -SourceFile $sourcePath -TargetFile $targetPath -Keys 'alpha'
         $scoped.status | Should -Be 'PASS'
+
+        Write-WtaFixtureFile -Path $caseSourcePath -Entries @(
+            @{ Name = 'Title'; Value = 'Title'; Comments = @() }
+        )
+        Write-WtaFixtureFile -Path $caseTargetPath -Entries @(
+            @{ Name = 'title'; Value = 'Translated title' }
+        )
+
+        $caseMismatch = Test-RequiredKeys -SourceFile $caseSourcePath -TargetFile $caseTargetPath
+        $caseMismatch.status | Should -Be 'FIXABLE'
+        @($caseMismatch.results).Count | Should -Be 2
+        @($caseMismatch.results | Where-Object { $_.resource -ceq 'Title' }).Count | Should -Be 1
+        @($caseMismatch.results | Where-Object { $_.resource -ceq 'title' }).Count | Should -Be 1
+
+        $scopedCaseMismatch = Invoke-CheckerCli -Arguments @(
+            '-Check', 'Test-RequiredKeys',
+            '-SourceFile', $caseSourcePath,
+            '-TargetFile', $caseTargetPath,
+            '-KeysJson', '["Title"]'
+        )
+        $scopedCaseMismatch.ExitCode | Should -Be 20
+        $scopedCaseBundle = $scopedCaseMismatch.StdOut | ConvertFrom-Json
+        @($scopedCaseBundle.results.resource) | Should -Be @('Title')
+
+        Write-ReswFixtureFile -Path $distinctReswPath -Resources @(
+            @{ Name = 'Title'; Value = 'Upper' }
+            @{ Name = 'title'; Value = 'Lower' }
+        )
+        Write-WtaFixtureFile -Path $distinctWtaPath -Entries @(
+            @{ Name = 'Title'; Value = 'Upper'; Comments = @() }
+            @{ Name = 'title'; Value = 'Lower'; Comments = @() }
+        )
+
+        (Test-ResourceSyntax -File $distinctReswPath).status | Should -Be 'PASS'
+        (Test-ResourceSyntax -File $distinctWtaPath).status | Should -Be 'PASS'
+        (Test-RequiredKeys -SourceFile $distinctReswPath -TargetFile $distinctReswPath).status | Should -Be 'PASS'
+        (Test-RequiredKeys -SourceFile $distinctWtaPath -TargetFile $distinctWtaPath).status | Should -Be 'PASS'
     }
 
     It 'tracks placeholder counts and ignores escaped literal braces' {
         $sourcePath = Join-Path $TestDrive 'placeholders\source.resw'
         $targetPath = Join-Path $TestDrive 'placeholders\target.resw'
+        $caseMismatchTargetPath = Join-Path $TestDrive 'placeholders\case-mismatch-target.resw'
+        $reorderedTargetPath = Join-Path $TestDrive 'placeholders\reordered-target.resw'
 
         Write-ReswFixtureFile -Path $sourcePath -Resources @(
-            @{ Name = 'message'; Value = 'Hello {{user}} {0} {0} %{name}' }
+            @{ Name = 'message'; Value = 'Hello {{user}} {0} {0} %{Name} %{name}' }
         )
         Write-ReswFixtureFile -Path $targetPath -Resources @(
-            @{ Name = 'message'; Value = 'Bonjour {{user}} {0} %{name}' }
+            @{ Name = 'message'; Value = 'Bonjour {{user}} {0} %{Name} %{name}' }
+        )
+        Write-ReswFixtureFile -Path $caseMismatchTargetPath -Resources @(
+            @{ Name = 'message'; Value = 'Bonjour {{user}} {0} {0} %{Name} %{Name}' }
+        )
+        Write-ReswFixtureFile -Path $reorderedTargetPath -Resources @(
+            @{ Name = 'message'; Value = 'Bonjour %{name} {0} %{Name} {0} {{user}}' }
         )
 
         $result = Test-PlaceholderParity -SourceFile $sourcePath -TargetFile $targetPath
         $result.status | Should -Be 'FIXABLE'
-        $result.results[0].expected | Should -Be '{0} × 2, %{name}'
-        $result.results[0].observed | Should -Be '{0}, %{name}'
+        $result.results[0].expected | Should -Be '%{Name}, %{name}, {0} × 2'
+        $result.results[0].observed | Should -Be '%{Name}, %{name}, {0}'
+
+        $caseMismatch = Test-PlaceholderParity -SourceFile $sourcePath -TargetFile $caseMismatchTargetPath
+        $caseMismatch.status | Should -Be 'FIXABLE'
+        $caseMismatch.results[0].expected | Should -Be '%{Name}, %{name}, {0} × 2'
+        $caseMismatch.results[0].observed | Should -Be '%{Name} × 2, {0} × 2'
+
+        (Test-PlaceholderParity -SourceFile $sourcePath -TargetFile $reorderedTargetPath).status | Should -Be 'PASS'
     }
 
     It 'enforces full and token locks from source annotations without inventing absent tokens' {

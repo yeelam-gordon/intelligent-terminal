@@ -465,7 +465,7 @@ function Read-WtaLocaleEntries {
 
     $text = Get-Utf8Text -Bytes $Bytes -Path $Path -Kind 'WTA locale file'
     $lines = @($text -split "`r`n|`n|`r", 0)
-    $entries = @{}
+    $entries = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
     $fileLockComments = @()
     $pendingLockComments = [System.Collections.Generic.List[string]]::new()
     $sectionLockComments = @()
@@ -590,7 +590,7 @@ function Read-ReswResources {
         $null = $allowedRootChildren.Add($name)
     }
 
-    $entries = @{}
+    $entries = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
     foreach ($childNode in @($root.ChildNodes)) {
         if ($childNode.NodeType -ne [System.Xml.XmlNodeType]::Element) {
             continue
@@ -820,13 +820,19 @@ function Format-TokenMultiset {
         return '<none>'
     }
 
-    return (
-        $Tokens |
-            Group-Object |
-            Sort-Object Name |
-            ForEach-Object {
-                if ($_.Count -gt 1) { '{0} × {1}' -f $_.Name, $_.Count } else { $_.Name }
-            }
+    $counts = [System.Collections.Generic.SortedDictionary[string, int]]::new([System.StringComparer]::Ordinal)
+    foreach ($token in $Tokens) {
+        if ($counts.ContainsKey($token)) {
+            $counts[$token] = $counts[$token] + 1
+        } else {
+            $counts[$token] = 1
+        }
+    }
+
+    return @(
+        $counts.GetEnumerator() | ForEach-Object {
+            if ($_.Value -gt 1) { '{0} × {1}' -f $_.Key, $_.Value } else { $_.Key }
+        }
     ) -join ', '
 }
 
