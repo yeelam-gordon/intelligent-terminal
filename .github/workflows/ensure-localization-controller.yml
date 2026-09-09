@@ -211,10 +211,33 @@ jobs:
               });
               run = current.data;
               if (run.status === "completed") {
+                let inferenceSkipped = false;
+                if ((run.conclusion || "failure") === "success") {
+                  const jobs = await github.paginate(
+                    github.rest.actions.listJobsForWorkflowRun,
+                    {
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      run_id: runId,
+                      per_page: 100
+                    }
+                  );
+                  const agentJob = jobs.find(job => job.name === "agent");
+                  const detectionJob = jobs.find(job => job.name === "detection");
+                  inferenceSkipped = Boolean(
+                    agentJob &&
+                    detectionJob &&
+                    agentJob.status === "completed" &&
+                    agentJob.conclusion === "skipped" &&
+                    detectionJob.status === "completed" &&
+                    detectionJob.conclusion === "skipped"
+                  );
+                }
                 core.setOutput("run_id", String(runId));
                 core.setOutput("run_url", run.html_url);
                 core.setOutput("conclusion", run.conclusion || "failure");
                 core.setOutput("worker", worker);
+                core.setOutput("inference_skipped", inferenceSkipped ? "true" : "false");
                 return;
               }
               await new Promise(resolve => setTimeout(resolve, 15000));
@@ -230,69 +253,84 @@ jobs:
           RUN_ID: ${{ steps.worker.outputs.run_id }}
           RUN_URL: ${{ steps.worker.outputs.run_url }}
           WORKER_CONCLUSION: ${{ steps.worker.outputs.conclusion }}
+          INFERENCE_SKIPPED: ${{ steps.worker.outputs.inference_skipped }}
           SAME_REPO: ${{ github.event.pull_request.head.repo.id == github.repository_id }}
         run: |
           set -euo pipefail
-          usage_dir="$RUNNER_TEMP/localization-usage"
-          rm -rf "$usage_dir"
-          mkdir -p "$usage_dir/aic" "$usage_dir/detail"
+          if [ "${INFERENCE_SKIPPED:-false}" = "true" ]; then
+            total_aic="0"
+            agent_aic="0"
+            detection_aic="0"
+            agent_input="0"
+            agent_output="0"
+            agent_cache_read="0"
+            detection_input="0"
+            detection_output="0"
+            detection_cache_read="0"
+            agent_model="not invoked"
+            detection_model="not invoked"
+          else
+            usage_dir="$RUNNER_TEMP/localization-usage"
+            rm -rf "$usage_dir"
+            mkdir -p "$usage_dir/aic" "$usage_dir/detail"
 
-          download_artifact() {
-            local name="$1"
-            local destination="$2"
-            for attempt in 1 2 3 4 5; do
-              if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$destination"; then
-                return 0
-              fi
-              sleep 5
-            done
-            return 1
-          }
+            download_artifact() {
+              local name="$1"
+              local destination="$2"
+              for attempt in 1 2 3 4 5; do
+                if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$destination"; then
+                  return 0
+                fi
+                sleep 5
+              done
+              return 1
+            }
 
-          aic_available=false
-          detail_available=false
-          if download_artifact aic-usage-cache "$usage_dir/aic"; then
-            aic_available=true
-          fi
-          if download_artifact usage "$usage_dir/detail"; then
-            detail_available=true
-          fi
-
-          total_aic="unavailable"
-          agent_aic="unavailable"
-          detection_aic="unavailable"
-          agent_input="unavailable"
-          agent_output="unavailable"
-          agent_cache_read="unavailable"
-          detection_input="unavailable"
-          detection_output="unavailable"
-          detection_cache_read="unavailable"
-          agent_model="unavailable"
-          detection_model="unavailable"
-
-          if [ "$aic_available" = "true" ]; then
-            total_aic="$(jq -r --argjson run "$RUN_ID" 'select(.run_id == $run) | .aic' "$usage_dir/aic/agentic-workflow-usage-cache.jsonl" | tail -n 1)"
-            if [ -z "$total_aic" ] || [ "$total_aic" = "null" ]; then
-              total_aic="unavailable"
+            aic_available=false
+            detail_available=false
+            if download_artifact aic-usage-cache "$usage_dir/aic"; then
+              aic_available=true
             fi
-          fi
+            if download_artifact usage "$usage_dir/detail"; then
+              detail_available=true
+            fi
 
-          agent_usage="$usage_dir/detail/agent_usage.json"
-          if [ "$detail_available" = "true" ] && [ -f "$agent_usage" ]; then
-            agent_aic="$(jq -r '.ai_credits' "$agent_usage")"
-            agent_input="$(jq -r '.input_tokens' "$agent_usage")"
-            agent_output="$(jq -r '.output_tokens' "$agent_usage")"
-            agent_cache_read="$(jq -r '.cache_read_tokens' "$agent_usage")"
-            agent_model="$(jq -r '.primary_model' "$agent_usage")"
-          fi
+            total_aic="unavailable"
+            agent_aic="unavailable"
+            detection_aic="unavailable"
+            agent_input="unavailable"
+            agent_output="unavailable"
+            agent_cache_read="unavailable"
+            detection_input="unavailable"
+            detection_output="unavailable"
+            detection_cache_read="unavailable"
+            agent_model="unavailable"
+            detection_model="unavailable"
 
-          detection_usage="$usage_dir/detail/detection/token_usage.jsonl"
-          if [ "$detail_available" = "true" ] && [ -s "$detection_usage" ]; then
-            detection_aic="$(jq -sr 'map(.ai_credits_total) | last' "$detection_usage")"
-            detection_input="$(jq -sr 'map(.input_tokens) | add' "$detection_usage")"
-            detection_output="$(jq -sr 'map(.output_tokens) | add' "$detection_usage")"
-            detection_cache_read="$(jq -sr 'map(.cache_read_tokens) | add' "$detection_usage")"
-            detection_model="$(jq -sr 'map(.model) | unique | join(", ")' "$detection_usage")"
+            if [ "$aic_available" = "true" ]; then
+              total_aic="$(jq -r --argjson run "$RUN_ID" 'select(.run_id == $run) | .aic' "$usage_dir/aic/agentic-workflow-usage-cache.jsonl" | tail -n 1)"
+              if [ -z "$total_aic" ] || [ "$total_aic" = "null" ]; then
+                total_aic="unavailable"
+              fi
+            fi
+
+            agent_usage="$usage_dir/detail/agent_usage.json"
+            if [ "$detail_available" = "true" ] && [ -f "$agent_usage" ]; then
+              agent_aic="$(jq -r '.ai_credits' "$agent_usage")"
+              agent_input="$(jq -r '.input_tokens' "$agent_usage")"
+              agent_output="$(jq -r '.output_tokens' "$agent_usage")"
+              agent_cache_read="$(jq -r '.cache_read_tokens' "$agent_usage")"
+              agent_model="$(jq -r '.primary_model' "$agent_usage")"
+            fi
+
+            detection_usage="$usage_dir/detail/detection/token_usage.jsonl"
+            if [ "$detail_available" = "true" ] && [ -s "$detection_usage" ]; then
+              detection_aic="$(jq -sr 'map(.ai_credits_total) | last' "$detection_usage")"
+              detection_input="$(jq -sr 'map(.input_tokens) | add' "$detection_usage")"
+              detection_output="$(jq -sr 'map(.output_tokens) | add' "$detection_usage")"
+              detection_cache_read="$(jq -sr 'map(.cache_read_tokens) | add' "$detection_usage")"
+              detection_model="$(jq -sr 'map(.model) | unique | join(", ")' "$detection_usage")"
+            fi
           fi
 
           {
