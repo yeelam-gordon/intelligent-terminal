@@ -94,41 +94,56 @@ post-step owns structural validation and write gating.
 
 For initial checks and the final rerun, use one `pwsh` process per batch that dot-sources
 `localization_checks.ps1` once and calls the public functions directly. Each
-function returns one bundle object with `check`, `status`, `exitCode`,
-`summary`, and `results`. Collect those actual bundle objects and write the
+completed check returns one bundle object with `check`, `status`, `exitCode`,
+`summary`, and `results`. Invalid required arguments can throw; let the batch
+fail rather than write a partial report. Collect those actual bundle objects and write the
 caller-selected JSON envelope with PowerShell file operations only. Do not
 delegate report ownership to a reviewer and do not rely on `rm`, `touch`,
 `jq`, or hand-authored bundle JSON.
 
-Example final rerun in one PowerShell process. Assume the caller already
-resolved the report path, mode, and the source/target/locale rows to inspect:
+Example final rerun in one PowerShell process. This example intentionally shows
+scoped batch rows only: each row must be a PowerShell hashtable with an explicit non-empty
+`RequiredKeys` array and an explicit `ComparableKeys` array, which may be
+empty until the key exists on both sides. For whole-file checks outside this
+scoped batch pattern, omit `-Keys` when calling the public checker functions as
+shown in the API table above. Assume the caller already resolved the report
+path, mode, and scoped source/target/locale rows to inspect.
+Use scoped `RequiredKeys` only for source-present additions or updates. Handle
+source removals and target stale-entry cleanup with the explicit git/file
+review from reusable procedure step 1 instead of forcing source-absent names
+through scoped `-Keys`. Pass only already-comparable keys to
+`Test-PlaceholderParity`, `Test-LockedContent`, and `Test-PseudoLocale`;
+those dependent checks intentionally return `BLOCKED` when the scoped key is
+missing from either side:
 
 ```powershell
 . (Join-Path $PWD '.github/skills/ensure-localization/scripts/localization_checks.ps1')
 
 $reportPath = $CallerSuppliedReportPath
 $mode = $CallerSuppliedMode
-$scopedKeys = @('sample.command.title')
-$targets = @(
-    @{
-        SourcePath = 'path\to\Resources\en-US\Resources.resw'
-        SourceOriginalPath = 'path\to\snapshots\Resources.en-US.before.resw'
-        TargetPath = 'path\to\Resources\fr-FR\Resources.resw'
-        TargetOriginalPath = 'path\to\snapshots\Resources.fr-FR.before.resw'
-        Locale = 'fr-FR'
-        Keys = $scopedKeys
-    },
-    @{
-        SourcePath = 'tools\wta\locales\en-US.yml'
-        TargetPath = 'tools\wta\locales\qps-ploc.yml'
-        TargetOriginalPath = 'artifacts\qps-ploc.before.yml'
-        Locale = 'qps-ploc'
-        Keys = $scopedKeys
-    }
-)
+$targets = $CallerSuppliedTargets
 $bundles = [System.Collections.Generic.List[object]]::new()
 
 foreach ($target in $targets) {
+    if ($target -isnot [hashtable]) {
+        throw 'Batch rows must be hashtables; use ConvertFrom-Json -AsHashtable for JSON input.'
+    }
+    if ($null -eq $target.RequiredKeys -or @($target.RequiredKeys).Count -eq 0) {
+        throw 'Each scoped batch row must define a non-empty RequiredKeys array.'
+    }
+    if ($null -eq $target.ComparableKeys) {
+        throw 'Each scoped batch row must define a ComparableKeys array, even when it is empty.'
+    }
+
+    $requiredKeys = @($target.RequiredKeys)
+    $comparableKeys = @($target.ComparableKeys)
+    if (@($requiredKeys | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+        throw 'RequiredKeys must contain only non-blank key names.'
+    }
+    if (@($comparableKeys | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+        throw 'ComparableKeys must contain only non-blank key names.'
+    }
+
     $sourceEncodingArgs = @{ File = $target.SourcePath }
     if (-not [string]::IsNullOrWhiteSpace($target['SourceOriginalPath'])) {
         $sourceEncodingArgs['OriginalFile'] = $target['SourceOriginalPath']
@@ -139,15 +154,31 @@ foreach ($target in $targets) {
         $targetEncodingArgs['OriginalFile'] = $target['TargetOriginalPath']
     }
 
+    $requiredKeysArgs = @{
+        SourceFile = $target.SourcePath
+        TargetFile = $target.TargetPath
+        Keys = $requiredKeys
+    }
+
+    $dependentArgs = @{
+        SourceFile = $target.SourcePath
+        TargetFile = $target.TargetPath
+    }
+    if ($comparableKeys.Count -gt 0) {
+        $dependentArgs['Keys'] = $comparableKeys
+    }
+
     $bundles.Add((Test-ResourceSyntax -File $target.SourcePath))
     $bundles.Add((Test-ResourceEncoding @sourceEncodingArgs))
     $bundles.Add((Test-ResourceSyntax -File $target.TargetPath))
     $bundles.Add((Test-ResourceEncoding @targetEncodingArgs))
-    $bundles.Add((Test-RequiredKeys -SourceFile $target.SourcePath -TargetFile $target.TargetPath -Keys $target.Keys))
-    $bundles.Add((Test-PlaceholderParity -SourceFile $target.SourcePath -TargetFile $target.TargetPath -Keys $target.Keys))
-    $bundles.Add((Test-LockedContent -SourceFile $target.SourcePath -TargetFile $target.TargetPath -Keys $target.Keys -Locale $target.Locale))
-    if ($target.Locale -in @('qps-ploc', 'qps-ploca', 'qps-plocm')) {
-        $bundles.Add((Test-PseudoLocale -SourceFile $target.SourcePath -TargetFile $target.TargetPath -Locale $target.Locale -Keys $target.Keys))
+    $bundles.Add((Test-RequiredKeys @requiredKeysArgs))
+    if ($comparableKeys.Count -gt 0) {
+        $bundles.Add((Test-PlaceholderParity @dependentArgs))
+        $bundles.Add((Test-LockedContent @dependentArgs -Locale $target.Locale))
+        if ($target.Locale -in @('qps-ploc', 'qps-ploca', 'qps-plocm')) {
+            $bundles.Add((Test-PseudoLocale @dependentArgs -Locale $target.Locale))
+        }
     }
 }
 
@@ -193,12 +224,23 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
    whole-file check.
 5. Run `Test-ResourceSyntax` and `Test-ResourceEncoding` on every file you
    actually inspect.
-6. For each localized target, run `Test-RequiredKeys`,
-   `Test-PlaceholderParity`, `Test-LockedContent`, and, for pseudo-locales,
-   `Test-PseudoLocale` against the matching source-authority file.
+6. For each localized target, run `Test-RequiredKeys` against the full scoped
+   source-present change list, then run `Test-PlaceholderParity`,
+   `Test-LockedContent`, and, for pseudo-locales, `Test-PseudoLocale` only for
+   keys that are present in both the source-authority file and that target.
+   If a scoped key is missing on either side, keep the `Test-RequiredKeys`
+   finding and do not force the dependent checks across that absent entry. If
+   the source key or file was removed, handle that cleanup with step 1's
+   explicit review instead of treating the deleted source name as a scoped
+   `-Keys` item. If no comparable keys remain for a scoped target pair, skip
+   those dependent checks for that pair.
 7. Same-repo repair: run the checks before editing, repair only localized
-   targets, rerun the same relevant checks, then finish with one independent
-   read-only review before requesting any branch write.
+   targets, recompute each row's `ComparableKeys` from the final on-disk
+   source/target files after every edit, include any newly translated
+   source-added keys in that rebuilt comparable set, rerun the same relevant
+   checks, then finish with one independent read-only review before requesting
+   any branch write. Do not reuse a stale pre-edit comparable subset after a
+   missing key has been added.
 8. Read-only review or fork guidance: stay read-only; report only the actual
    `PASS`, `FIXABLE`, `BLOCKED`, or `INVALID_INPUT` outcomes plus concise human
    review.
@@ -220,6 +262,20 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 - When batching in one process, carry forward genuine pre-edit snapshot paths
   for existing files. If a file has no snapshot, omit `OriginalFile` rather
   than pointing it at the rewritten file.
+- When the caller scopes keys, do not automatically reuse that same list for
+  `Test-PlaceholderParity`, `Test-LockedContent`, or `Test-PseudoLocale`.
+  Those APIs deliberately return `BLOCKED` when a scoped key is absent from the
+  source or target file. Use the full scoped list for `Test-RequiredKeys`, then
+  derive a comparable-only subset for the dependent checks.
+- Do not put source-removed names into scoped `-Keys` just to chase stale
+  target entries. That is explicit review-and-cleanup work from step 1. A
+  source-absent scoped key is a genuine `BLOCKED` input, not a fixable stale
+  entry.
+- After repairing a previously missing scoped key, recompute that
+  comparable-only subset from the final on-disk files before the final rerun.
+  A stale pre-edit empty `ComparableKeys` array can incorrectly skip
+  placeholder, lock, or pseudo-locale validation for the new translated
+  source-added entry.
 - For in-process batching, use the dot-sourced public functions with a real
   PowerShell key array such as `@('key1', 'key2')`. `-KeysJson` is only for
   `pwsh -File` CLI calls.

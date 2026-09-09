@@ -15,8 +15,9 @@
     to stdout per CLI invocation. CLI key scoping is supplied with -KeysJson;
     public PowerShell functions continue to accept [string[]] -Keys directly.
     Dot-source this script to batch many checks in one PowerShell process:
-    each public function returns one bundle object with check, status, exitCode,
-    summary, and results. They do not perform Git, PR, SHA, auth, discovery,
+    each completed check returns one bundle object with check, status, exitCode,
+    summary, and results. Invalid required arguments can throw; let the batch fail.
+    They do not perform Git, PR, SHA, auth, discovery,
     translation-quality, or code-edit-policy work.
 
     Exit codes:
@@ -699,16 +700,24 @@ function Get-ScopeKeys {
         [Parameter(Mandatory)]$SourceEntries,
         [Parameter(Mandatory)]$TargetEntries,
         [string[]]$Keys,
+        [bool]$KeysWereSupplied = $false,
         [switch]$IntersectionWhenUnscoped
     )
 
-    if ($null -ne $Keys -and $Keys.Count -gt 0) {
+    if ($KeysWereSupplied) {
+        if ($null -eq $Keys -or $Keys.Count -eq 0) {
+            throw [System.ArgumentException]::new('Keys must be a non-empty array of non-blank strings when supplied. Omit -Keys to scope the whole file.')
+        }
+
         $set = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
         foreach ($key in $Keys) {
-            if (-not [string]::IsNullOrWhiteSpace($key)) {
-                $null = $set.Add($key)
+            if ([string]::IsNullOrWhiteSpace($key)) {
+                throw [System.ArgumentException]::new('Keys must be a non-empty array of non-blank strings when supplied. Omit -Keys to scope the whole file.')
             }
+
+            $null = $set.Add($key)
         }
+
         return @($set)
     }
 
@@ -971,9 +980,13 @@ function Test-RequiredKeys {
     $checkName = 'Test-RequiredKeys'
     $sourcePath = Assert-RequiredPath -Path $SourceFile -ParameterName 'SourceFile'
     $targetPath = Assert-RequiredPath -Path $TargetFile -ParameterName 'TargetFile'
+    $keysWereSupplied = $PSBoundParameters.ContainsKey('Keys')
 
     try {
         $pair = Read-LocalizationPair -SourceFile $sourcePath -TargetFile $targetPath
+        $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys -KeysWereSupplied $keysWereSupplied)
+    } catch [System.ArgumentException] {
+        return New-InvalidInputBundle -CheckName $checkName -Message $_.Exception.Message
     } catch {
         return New-BlockedBundle -CheckName $checkName -File $targetPath -Resource $null `
             -Message $_.Exception.Message `
@@ -981,13 +994,12 @@ function Test-RequiredKeys {
     }
 
     $results = [System.Collections.Generic.List[object]]::new()
-    $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys)
 
     foreach ($key in $scope) {
         $sourceHas = $pair.Source.Entries.ContainsKey($key)
         $targetHas = $pair.Target.Entries.ContainsKey($key)
 
-        if ($Keys -and -not $sourceHas) {
+        if ($keysWereSupplied -and -not $sourceHas) {
             $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $sourcePath -Resource $key `
                 -Expected 'key present in source scope' -Observed 'key missing from source' `
                 -Message 'The requested scoped key does not exist in the source file.' `
@@ -1011,7 +1023,7 @@ function Test-RequiredKeys {
         }
     }
 
-    $passMessage = if ($Keys -and $Keys.Count -gt 0) {
+    $passMessage = if ($keysWereSupplied) {
         'All caller-scoped keys are present exactly where expected.'
     } else {
         'The target key set matches the source key set for the whole file.'
@@ -1031,9 +1043,13 @@ function Test-PlaceholderParity {
     $checkName = 'Test-PlaceholderParity'
     $sourcePath = Assert-RequiredPath -Path $SourceFile -ParameterName 'SourceFile'
     $targetPath = Assert-RequiredPath -Path $TargetFile -ParameterName 'TargetFile'
+    $keysWereSupplied = $PSBoundParameters.ContainsKey('Keys')
 
     try {
         $pair = Read-LocalizationPair -SourceFile $sourcePath -TargetFile $targetPath
+        $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys -KeysWereSupplied $keysWereSupplied -IntersectionWhenUnscoped)
+    } catch [System.ArgumentException] {
+        return New-InvalidInputBundle -CheckName $checkName -Message $_.Exception.Message
     } catch {
         return New-BlockedBundle -CheckName $checkName -File $targetPath -Resource $null `
             -Message $_.Exception.Message `
@@ -1041,11 +1057,10 @@ function Test-PlaceholderParity {
     }
 
     $results = [System.Collections.Generic.List[object]]::new()
-    $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys -IntersectionWhenUnscoped)
 
     foreach ($key in $scope) {
         if (-not $pair.Source.Entries.ContainsKey($key) -or -not $pair.Target.Entries.ContainsKey($key)) {
-            if ($Keys -and $Keys.Count -gt 0) {
+            if ($keysWereSupplied) {
                 $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $targetPath -Resource $key `
                     -Expected 'matching source and target entries' -Observed 'entry missing from selected scope' `
                     -Message 'Placeholder parity cannot be evaluated because the selected key is missing from one side.' `
@@ -1083,9 +1098,13 @@ function Test-LockedContent {
     $checkName = 'Test-LockedContent'
     $sourcePath = Assert-RequiredPath -Path $SourceFile -ParameterName 'SourceFile'
     $targetPath = Assert-RequiredPath -Path $TargetFile -ParameterName 'TargetFile'
+    $keysWereSupplied = $PSBoundParameters.ContainsKey('Keys')
 
     try {
         $pair = Read-LocalizationPair -SourceFile $sourcePath -TargetFile $targetPath
+        $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys -KeysWereSupplied $keysWereSupplied -IntersectionWhenUnscoped)
+    } catch [System.ArgumentException] {
+        return New-InvalidInputBundle -CheckName $checkName -Message $_.Exception.Message
     } catch {
         return New-BlockedBundle -CheckName $checkName -File $targetPath -Resource $null `
             -Message $_.Exception.Message `
@@ -1093,11 +1112,10 @@ function Test-LockedContent {
     }
 
     $results = [System.Collections.Generic.List[object]]::new()
-    $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys -IntersectionWhenUnscoped)
 
     foreach ($key in $scope) {
         if (-not $pair.Source.Entries.ContainsKey($key) -or -not $pair.Target.Entries.ContainsKey($key)) {
-            if ($Keys -and $Keys.Count -gt 0) {
+            if ($keysWereSupplied) {
                 $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $targetPath -Resource $key `
                     -Expected 'matching source and target entries' -Observed 'entry missing from selected scope' `
                     -Message 'Locked-content validation cannot be evaluated because the selected key is missing from one side.' `
@@ -1232,6 +1250,7 @@ function Test-PseudoLocale {
     $sourcePath = Assert-RequiredPath -Path $SourceFile -ParameterName 'SourceFile'
     $targetPath = Assert-RequiredPath -Path $TargetFile -ParameterName 'TargetFile'
     $localeCode = Assert-RequiredValue -Value $Locale -ParameterName 'Locale'
+    $keysWereSupplied = $PSBoundParameters.ContainsKey('Keys')
 
     if ($script:SupportedPseudoLocales -notcontains $localeCode) {
         return New-BlockedBundle -CheckName $checkName -File $targetPath -Resource $null `
@@ -1241,6 +1260,9 @@ function Test-PseudoLocale {
 
     try {
         $pair = Read-LocalizationPair -SourceFile $sourcePath -TargetFile $targetPath
+        $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys -KeysWereSupplied $keysWereSupplied -IntersectionWhenUnscoped)
+    } catch [System.ArgumentException] {
+        return New-InvalidInputBundle -CheckName $checkName -Message $_.Exception.Message
     } catch {
         return New-BlockedBundle -CheckName $checkName -File $targetPath -Resource $null `
             -Message $_.Exception.Message `
@@ -1248,11 +1270,10 @@ function Test-PseudoLocale {
     }
 
     $results = [System.Collections.Generic.List[object]]::new()
-    $scope = @(Get-ScopeKeys -SourceEntries $pair.Source.Entries -TargetEntries $pair.Target.Entries -Keys $Keys -IntersectionWhenUnscoped)
 
     foreach ($key in $scope) {
         if (-not $pair.Source.Entries.ContainsKey($key) -or -not $pair.Target.Entries.ContainsKey($key)) {
-            if ($Keys -and $Keys.Count -gt 0) {
+            if ($keysWereSupplied) {
                 $results.Add((New-CheckRecord -Status 'BLOCKED' -CheckName $checkName -File $targetPath -Resource $key `
                     -Expected 'matching source and target entries' -Observed 'entry missing from selected scope' `
                     -Message 'Pseudo-locale validation cannot be evaluated because the selected key is missing from one side.' `
@@ -1386,24 +1407,32 @@ function Invoke-LocalizationCheck {
         throw [System.ArgumentException]::new("Unsupported Check '$checkName'. Supported checks: $($script:SupportedChecks -join ', ').")
     }
 
+    $pairArgs = @{
+        SourceFile = $SourceFile
+        TargetFile = $TargetFile
+    }
+    if ($PSBoundParameters.ContainsKey('Keys')) {
+        $pairArgs['Keys'] = $Keys
+    }
+
     switch ($checkName) {
         'Test-ResourceSyntax' {
             return Test-ResourceSyntax -File $File
         }
         'Test-RequiredKeys' {
-            return Test-RequiredKeys -SourceFile $SourceFile -TargetFile $TargetFile -Keys $Keys
+            return Test-RequiredKeys @pairArgs
         }
         'Test-PlaceholderParity' {
-            return Test-PlaceholderParity -SourceFile $SourceFile -TargetFile $TargetFile -Keys $Keys
+            return Test-PlaceholderParity @pairArgs
         }
         'Test-LockedContent' {
-            return Test-LockedContent -SourceFile $SourceFile -TargetFile $TargetFile -Keys $Keys -Locale $Locale
+            return Test-LockedContent @pairArgs -Locale $Locale
         }
         'Test-ResourceEncoding' {
             return Test-ResourceEncoding -File $File -OriginalFile $OriginalFile
         }
         'Test-PseudoLocale' {
-            return Test-PseudoLocale -SourceFile $SourceFile -TargetFile $TargetFile -Locale $Locale -Keys $Keys
+            return Test-PseudoLocale @pairArgs -Locale $Locale
         }
     }
 }
@@ -1418,8 +1447,19 @@ function Write-JsonBundleAndExit {
 function Invoke-LocalizationMain {
     try {
         $cliKeys = Resolve-TopLevelKeys -KeysJson $KeysJson -KeysJsonWasSupplied $script:TopLevelBoundParameters.ContainsKey('KeysJson') -UnexpectedArguments $UnexpectedArguments
-        $bundle = Invoke-LocalizationCheck -Check $Check -File $File -SourceFile $SourceFile -TargetFile $TargetFile `
-            -OriginalFile $OriginalFile -Locale $Locale -Keys $cliKeys
+        $invokeArgs = @{
+            Check = $Check
+            File = $File
+            SourceFile = $SourceFile
+            TargetFile = $TargetFile
+            OriginalFile = $OriginalFile
+            Locale = $Locale
+        }
+        if ($script:TopLevelBoundParameters.ContainsKey('KeysJson')) {
+            $invokeArgs['Keys'] = $cliKeys
+        }
+
+        $bundle = Invoke-LocalizationCheck @invokeArgs
         Write-JsonBundleAndExit -Bundle $bundle
     } catch [System.ArgumentException] {
         Write-JsonBundleAndExit -Bundle (New-InvalidInputBundle -CheckName $Check -Message $_.Exception.Message)

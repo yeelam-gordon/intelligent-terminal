@@ -224,6 +224,38 @@ Describe 'File-based localization checks' -Tag 'Unit' {
         ($extraArg.StdOut | ConvertFrom-Json).message | Should -Match 'Unexpected positional argument'
     }
 
+    It 'rejects invalid PowerShell -Keys arrays instead of fabricating scoped PASS results' {
+        $sourcePath = Join-Path $TestDrive 'powershell-scope\source.resw'
+        $targetPath = Join-Path $TestDrive 'powershell-scope\target.resw'
+
+        Write-ReswFixtureFile -Path $sourcePath -Resources @(
+            @{ Name = 'alpha'; Value = 'Alpha' }
+        )
+        Write-ReswFixtureFile -Path $targetPath -Resources @(
+            @{ Name = 'alpha'; Value = 'Alpha translated' }
+        )
+
+        foreach ($badKeys in @(
+            [string[]]@(),
+            [string[]]@($null),
+            [string[]]@(''),
+            [string[]]@('   '),
+            [string[]]@('alpha', $null)
+        )) {
+            foreach ($check in @(
+                { param($keys) Test-RequiredKeys -SourceFile $sourcePath -TargetFile $targetPath -Keys $keys },
+                { param($keys) Test-PlaceholderParity -SourceFile $sourcePath -TargetFile $targetPath -Keys $keys },
+                { param($keys) Test-LockedContent -SourceFile $sourcePath -TargetFile $targetPath -Locale 'fr-FR' -Keys $keys },
+                { param($keys) Test-PseudoLocale -SourceFile $sourcePath -TargetFile $targetPath -Locale 'qps-ploc' -Keys $keys }
+            )) {
+                $bundle = & $check $badKeys
+                $bundle.status | Should -Be 'INVALID_INPUT'
+                $bundle.exitCode | Should -Be 64
+                $bundle.message | Should -Match 'non-empty array of non-blank strings'
+            }
+        }
+    }
+
     It 'blocks malformed or non-resource XML and unsupported YAML structures' {
         $badXml = Join-Path $TestDrive 'syntax\bad.resw'
         $wrongRootXml = Join-Path $TestDrive 'syntax\wrong-root.resw'
@@ -610,4 +642,5 @@ auth.prompt: "Welcome back"
         (Test-RequiredKeys -SourceFile $sourcePath -TargetFile $frTargetPath).status | Should -Be 'PASS'
         (Test-RequiredKeys -SourceFile $sourcePath -TargetFile $deTargetPath).status | Should -Be 'PASS'
     }
+
 }

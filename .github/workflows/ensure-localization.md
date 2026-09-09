@@ -213,7 +213,7 @@ safe-outputs:
 
   add-comment:
 
-    target: triggering
+    target: '${{ github.event.inputs.pr_number }}'
 
     max: 1
 
@@ -398,9 +398,20 @@ requires final `PASS` bundles and exactly one successful outcome:
   `.github/skills/ensure-localization/scripts/localization_checks.ps1` once in
   one `pwsh` process, collect the actual function-return bundles, and write the
   envelope with PowerShell file operations before any safe output.
+- Follow the scoped-key rules in the shared SKILL: keep `RequiredKeys` limited
+  to source-present additions or updates, handle source removals with the
+  skill's step-1 explicit review/cleanup path, and recompute each row's
+  `ComparableKeys` from the final on-disk source/target files after every edit
+  so newly translated source-added keys are included before dependent reruns.
 - The independent reviewer is read-only and separate. It returns only its
   review verdict and findings; it never owns the final report path or the safe
   output call.
+- Before emitting any comment, inspect the actual native `add_comment` schema
+  or help that the runtime exposes. Then call that native tool directly with
+  inline arguments only: explicit `pr_number`
+  `${{ github.event.inputs.pr_number }}` plus the final `body`. Do not stage a
+  temp file, heredoc, shell-composed script, `target=triggering`, or `noop`
+  substitute for a required visible comment.
 
 - No edit: one visible `PASS` / no-change `add-comment` naming checked files.
 - Edited: one focused commit whose subject

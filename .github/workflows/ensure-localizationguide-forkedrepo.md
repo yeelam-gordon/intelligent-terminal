@@ -387,6 +387,14 @@ one `pwsh` process, collect the actual function-return bundles, and write the
 envelope with PowerShell file operations before emitting either `add-comment` or
 `noop`.
 
+Follow the shared SKILL's scoped-key rules: keep `RequiredKeys` limited to
+source-present additions or updates, handle source removals with the skill's
+step-1 explicit review/cleanup path, and pass only source/target-comparable
+keys to `Test-PlaceholderParity`, `Test-LockedContent`, and
+`Test-PseudoLocale`. Missing comparable entries stay with
+`Test-RequiredKeys`; dependent checks across absent entries are genuine
+`BLOCKED` outcomes and must not be manufactured into the final guide report.
+
 The comment must:
 
 - say trusted-base file checks found actionable localization issues;
@@ -401,6 +409,12 @@ The comment must:
   the matching skill checks, and finish with an independent read-only review;
 - state that the workflow neither edited the fork branch nor performed full
   language-quality validation.
+- before emitting it, inspect the actual native `add_comment` schema or help
+  that the runtime exposes, then call that native tool directly with inline
+  arguments only: explicit `pr_number`
+  `${{ github.event.inputs.pr_number }}` plus the final `body`. Do not stage a
+  temp file, heredoc, shell-composed script, or `noop` substitute for the
+  required guidance comment.
 
 No branch writes or extra PR comments. A `noop` log acknowledgement is allowed,
 but it never replaces a required guidance comment.
