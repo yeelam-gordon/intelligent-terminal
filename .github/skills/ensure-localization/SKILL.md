@@ -197,8 +197,19 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 ## Reusable procedure
 
-1. Use normal git inspection against the caller-supplied comparison base and
-   head to determine the actual PR review scope.
+1. Read the exact original localization patch content against the
+   caller-supplied immutable endpoints before choosing keys or counterpart
+   files. Use:
+   `git diff --no-ext-diff --unified=3 <comparison-base> <immutable-head> -- <resource paths>`.
+   Supporting summaries such as `git diff --stat`, `--name-only`,
+   `--name-status`, `--numstat`, `git status`, or a worktree-only
+   `git diff -- <file>` are useful for discovery but are not sufficient to
+   derive scoped keys, values, or review coverage. If the diff output is
+   truncated, continue fetching the remaining hunks until you have read the
+   full patch for every relevant resource file. Derive the precise added or
+   updated source keys, values, and surrounding context from that exact patch;
+   do not infer scope from file prefixes, neighboring samples, unchanged source
+   lines, or PR summaries.
    - Source-authority add or update: expand to every shipped localized
      counterpart that should carry the affected file or keys, even when those
      target files are unchanged in the git diff.
@@ -235,12 +246,13 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
    `-Keys` item. If no comparable keys remain for a scoped target pair, skip
    those dependent checks for that pair.
 7. Same-repo repair: run the checks before editing, repair only localized
-   targets, recompute each row's `ComparableKeys` from the final on-disk
-   source/target files after every edit, include any newly translated
-   source-added keys in that rebuilt comparable set, rerun the same relevant
-   checks, then finish with one independent read-only review before requesting
-   any branch write. Do not reuse a stale pre-edit comparable subset after a
-   missing key has been added.
+   targets, preserve the original patch-derived scope through the final rerun,
+   recompute each row's `ComparableKeys` from the final on-disk source/target
+   files after every edit, include any newly translated source-added keys in
+   that rebuilt comparable set, rerun the same relevant checks, then finish
+   with one independent read-only review before requesting any branch write.
+   Do not swap in a different guessed key set or reuse a stale pre-edit
+   comparable subset after a missing key has been added.
 8. Read-only review or fork guidance: stay read-only; report only the actual
    `PASS`, `FIXABLE`, `BLOCKED`, or `INVALID_INPUT` outcomes plus concise human
    review.
@@ -253,6 +265,9 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
   source/target file pair, but it does not discover which untouched locale
   files or deleted source-file counterparts must be inspected. The caller or
   agent must do that repository discovery.
+- A clean working tree or a bare `git diff -- <file>` can hide the authored
+  base-to-head change set you are supposed to review. Always inspect the full
+  `<comparison-base> <immutable-head>` patch when deriving scope.
 - `Test-SourceUnchanged`, `Gate`, and `Validate` are intentionally gone. Skip
   decisions such as “formatting-only, do not spend AI” belong to the
   caller/workflow.
@@ -276,6 +291,9 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
   A stale pre-edit empty `ComparableKeys` array can incorrectly skip
   placeholder, lock, or pseudo-locale validation for the new translated
   source-added entry.
+- If your tool output truncates the original patch, keep reading until every
+  localization hunk has been seen. Never guess key scope from file names,
+  prefixes, or partial excerpts.
 - For in-process batching, use the dot-sourced public functions with a real
   PowerShell key array such as `@('key1', 'key2')`. `-KeysJson` is only for
   `pwsh -File` CLI calls.

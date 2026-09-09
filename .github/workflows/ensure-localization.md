@@ -374,6 +374,8 @@ Verify `git rev-parse HEAD` equals
 - comparison base `${{ github.event.inputs.comparison_base_sha }}`
 - immutable head `${{ github.event.inputs.expected_head_sha }}`
 - observed base metadata `${{ github.event.inputs.expected_base_sha }}`
+- exact original patch inspection with
+  `git diff --no-ext-diff --unified=3 ${{ github.event.inputs.comparison_base_sha }} ${{ github.event.inputs.expected_head_sha }} -- <resource paths>` before choosing scoped keys or targets; treat `--stat`, `--name-only`, `--name-status`, `--numstat`, `git status`, and worktree-only diffs as supporting signals only, and keep reading if the patch output truncates until every relevant hunk is covered
 
 Repair only localized targets. Keep source authority read-only and finish with
 the required independent review. Invoke the registered
@@ -381,6 +383,10 @@ the required independent review. Invoke the registered
 `PASS` before requesting any branch write. The root repair agent owns all git
 inspection, scope discovery, edits, the final checker rerun, and writing
 `/tmp/gh-aw/localization-final-checks.json`; do not delegate those steps.
+Derive the precise source-added or updated keys, values, and surrounding
+context from that original patch, preserve that scope through the final rerun,
+and do not replace it with guessed keys from unchanged source lines, file
+prefixes, samples, or PR summaries.
 
 ## Output contract
 
@@ -398,6 +404,9 @@ requires final `PASS` bundles and exactly one successful outcome:
   `.github/skills/ensure-localization/scripts/localization_checks.ps1` once in
   one `pwsh` process, collect the actual function-return bundles, and write the
   envelope with PowerShell file operations before any safe output.
+- The native gate validates report shape and output mechanics only; it does not
+  prove that you preserved the original patch scope. Your own git evidence and
+  independent review must establish that.
 - Follow the scoped-key rules in the shared SKILL: keep `RequiredKeys` limited
   to source-present additions or updates, handle source removals with the
   skill's step-1 explicit review/cleanup path, and recompute each row's
@@ -405,7 +414,9 @@ requires final `PASS` bundles and exactly one successful outcome:
   so newly translated source-added keys are included before dependent reruns.
 - The independent reviewer is read-only and separate. It returns only its
   review verdict and findings; it never owns the final report path or the safe
-  output call.
+  output call. Give that reviewer the comparison base, immutable head, exact
+  repaired file list, and an explicit requirement to independently re-derive
+  expected keys from the original patch instead of from your selected-key list.
 - Before emitting any comment, inspect the actual native `add_comment` schema
   or help that the runtime exposes. Then call that native tool directly with
   inline arguments only: explicit `pr_number`
@@ -422,4 +433,12 @@ Do not claim success for source-only, blocked, invalid, or excluded changes. No
 
 ## agent: `localization-review-gate`
 {{#runtime-import .github/agents/localization-reviewer.agent.md}}
+
+Caller contract for this reviewer: pass the comparison base, immutable head,
+the exact repaired or reviewed resource paths, and the current repair summary.
+Require the reviewer to inspect the original
+`git diff --no-ext-diff --unified=3 <comparison-base> <immutable-head> -- <resource paths>`
+content independently, audit all shipped localized counterparts implicated by
+that patch scope, and fail `PASS` when any expected key block is mismatched or
+omitted.
 ## end agent: `localization-review-gate`
