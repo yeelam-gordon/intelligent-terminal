@@ -320,9 +320,11 @@ post-steps:
       if (addCommentCount === 1) {
         const head = process.env.EXPECTED_HEAD_SHA;
         if (!/^[0-9a-f]{40}$/.test(head || '')) fail('repairs not published check received an invalid expected head SHA');
-        const paths = [':(glob)src/cascadia/**/Resources/**/*.resw', ':(exclude,glob)src/cascadia/**/Resources/*.resw',
-          ':(exclude,glob)src/cascadia/**/Resources/en-US/*.resw',
-          ':(glob)tools/wta/locales/*.yml', ':(exclude,glob)tools/wta/locales/en-US.yml'];
+        const paths = [
+          ':(glob)src/cascadia/**/Resources/*.resw',
+          ':(glob)src/cascadia/**/Resources/**/*.resw',
+          ':(glob)tools/wta/locales/*.yml'
+        ];
         let dirty;
         try {
           dirty = Buffer.concat([

@@ -366,27 +366,27 @@ Describe 'File-based localization checks' -Tag 'Unit' {
         $reorderedTargetPath = Join-Path $TestDrive 'placeholders\reordered-target.resw'
 
         Write-ReswFixtureFile -Path $sourcePath -Resources @(
-            @{ Name = 'message'; Value = 'Hello {{user}} {0} {0} %{Name} %{name}' }
+            @{ Name = 'message'; Value = 'Hello {{user}} {0} {0} {} %{Name} %{name} %s %%s %%%s' }
         )
         Write-ReswFixtureFile -Path $targetPath -Resources @(
-            @{ Name = 'message'; Value = 'Bonjour {{user}} {0} %{Name} %{name}' }
+            @{ Name = 'message'; Value = 'Bonjour {{user}} {0} {} %{Name} %{name} %%s' }
         )
         Write-ReswFixtureFile -Path $caseMismatchTargetPath -Resources @(
-            @{ Name = 'message'; Value = 'Bonjour {{user}} {0} {0} %{Name} %{Name}' }
+            @{ Name = 'message'; Value = 'Bonjour {{user}} {0} {0} {} %{Name} %{Name} %s %%s' }
         )
         Write-ReswFixtureFile -Path $reorderedTargetPath -Resources @(
-            @{ Name = 'message'; Value = 'Bonjour %{name} {0} %{Name} {0} {{user}}' }
+            @{ Name = 'message'; Value = 'Bonjour {} %{name} {0} %s %{Name} {0} {{user}} %%%s %%s' }
         )
 
         $result = Test-PlaceholderParity -SourceFile $sourcePath -TargetFile $targetPath
         $result.status | Should -Be 'FIXABLE'
-        $result.results[0].expected | Should -Be '%{Name}, %{name}, {0} × 2'
-        $result.results[0].observed | Should -Be '%{Name}, %{name}, {0}'
+        $result.results[0].expected | Should -Be '%s × 2, %{Name}, %{name}, {0} × 2, {}'
+        $result.results[0].observed | Should -Be '%{Name}, %{name}, {0}, {}'
 
         $caseMismatch = Test-PlaceholderParity -SourceFile $sourcePath -TargetFile $caseMismatchTargetPath
         $caseMismatch.status | Should -Be 'FIXABLE'
-        $caseMismatch.results[0].expected | Should -Be '%{Name}, %{name}, {0} × 2'
-        $caseMismatch.results[0].observed | Should -Be '%{Name} × 2, {0} × 2'
+        $caseMismatch.results[0].expected | Should -Be '%s × 2, %{Name}, %{name}, {0} × 2, {}'
+        $caseMismatch.results[0].observed | Should -Be '%s, %{Name} × 2, {0} × 2, {}'
 
         (Test-PlaceholderParity -SourceFile $sourcePath -TargetFile $reorderedTargetPath).status | Should -Be 'PASS'
     }

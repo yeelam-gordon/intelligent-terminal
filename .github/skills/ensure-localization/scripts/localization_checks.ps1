@@ -820,8 +820,20 @@ function Get-PlaceholderTokens {
         return @()
     }
 
+    # Keep this intentionally narrow to the placeholder formats the repository
+    # actually ships today: %{name}, %s, {}, and .NET-style indexed braces.
     $sanitized = $Value.Replace('{{', '  ').Replace('}}', '  ')
-    return @([regex]::Matches($sanitized, '%\{[^}]+\}|\{\d+(?:\s*,\s*-?\d+)?(?:\s*:[^}]*)?\}') | ForEach-Object { $_.Value })
+    $tokens = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($match in [regex]::Matches($sanitized, '%\{[^}]+\}|\{(?:\d+(?:\s*,\s*-?\d+)?(?:\s*:[^}]*)?)?\}')) {
+        $tokens.Add($match.Value)
+    }
+
+    foreach ($match in [regex]::Matches($Value, '(?<!%)%(?:%%)*s')) {
+        $tokens.Add('%s')
+    }
+
+    return @($tokens.ToArray())
 }
 
 function Format-TokenMultiset {
