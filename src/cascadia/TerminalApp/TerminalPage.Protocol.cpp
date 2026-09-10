@@ -264,8 +264,8 @@ namespace winrt::TerminalApp::implementation
         if (const auto binding = _paneAgentSessions.find(sessionId);
             binding != _paneAgentSessions.end() &&
             !binding->second.sessionId.empty() &&
-            !binding->second.sessionId.starts_with(L"pane:") &&
-            !binding->second.sessionId.starts_with(L"sidekick-"))
+            !til::starts_with(binding->second.sessionId, L"pane:") &&
+            !til::starts_with(binding->second.sessionId, L"sidekick-"))
         {
             result.AgentSessionId = binding->second.sessionId;
         }
