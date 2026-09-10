@@ -255,6 +255,17 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
         std::vector<std::pair<std::wstring, SI::InstallResult>> wsl;
     };
 
+#if defined(_DEBUG)
+    inline void LogWslInstallForProfileDiagnostic(std::wstring_view profileKey, std::string_view event) noexcept
+    try
+    {
+        _agentPaneLog("[ShellIntegration][debug][WSL] install-for-profile event=" + std::string{ event } +
+                      " pid=" + std::to_string(GetCurrentProcessId()) +
+                      " profile=" + winrt::to_string(winrt::hstring{ profileKey }));
+    }
+    CATCH_LOG()
+#endif
+
     // Run the install sweep using the provided snapshot. Touches only
     // shells the user has a profile for; WSL work is keyed per profile so
     // the explicit and lazy new-tab entry points share one doing/done gate.
@@ -327,7 +338,14 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
             r.wsl.reserve(wslProfiles.size());
             for (const auto& target : wslProfiles)
             {
+#if defined(_DEBUG)
+                const auto result = SI::Wsl::InstallForProfile(target.profileKey,
+                                                                target.profileCommandline,
+                                                                std::wstring_view{},
+                                                                &LogWslInstallForProfileDiagnostic);
+#else
                 const auto result = SI::Wsl::InstallForProfile(target.profileKey, target.profileCommandline);
+#endif
                 auto label = SI::Wsl::ProbedDistroName(target.profileCommandline);
                 if (label.empty())
                 {
@@ -397,12 +415,22 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
 
         co_await winrt::resume_background();
 
-        if (const auto result = SI::Wsl::InstallForProfile(
-                target.profileKey,
-                target.profileCommandline,
-                std::wstring_view{ actualCommandline },
-                std::move(install));
-            result && !result->success)
+        std::optional<SI::InstallResult> result;
+#if defined(_DEBUG)
+        result = SI::Wsl::InstallForProfile(
+            target.profileKey,
+            target.profileCommandline,
+            std::wstring_view{ actualCommandline },
+            std::move(install),
+            &LogWslInstallForProfileDiagnostic);
+#else
+        result = SI::Wsl::InstallForProfile(
+            target.profileKey,
+            target.profileCommandline,
+            std::wstring_view{ actualCommandline },
+            std::move(install));
+#endif
+        if (result && !result->success)
         {
             const auto label = target.profileName.empty() ? target.profileCommandline : target.profileName;
             _agentPaneLog("[ShellIntegration] WSL new-tab install FAILED for " +

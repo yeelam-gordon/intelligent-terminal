@@ -790,7 +790,30 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
             static NewTabReconcileGate gate;
             return gate;
         }
+
+#if defined(_DEBUG)
+        inline void NotifyInstallForProfileDiagnostic(void (*observer)(std::wstring_view, std::string_view) noexcept,
+                                                      std::wstring_view profileKey,
+                                                      std::string_view event) noexcept
+        {
+            if (observer)
+            {
+                observer(profileKey, event);
+            }
+        }
+
+        inline std::string_view InstallForProfileOutcomeEvent(const InstallResult& result) noexcept
+        {
+            if (!result.success)
+            {
+                return "failed";
+            }
+            return result.alreadyInstalled ? "nochange" : "completed";
+        }
+#endif
     }
+
+    using InstallForProfileDiagnosticObserver = void (*)(std::wstring_view profileKey, std::string_view event) noexcept;
 
     // nullopt from the installer means work was cancelled before installation.
     // Any returned result or thrown exception consumes the profile's attempt.
@@ -798,7 +821,8 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
     inline std::optional<InstallResult> InstallForProfile(std::wstring_view profileKey,
                                                           std::wstring_view profileCommandline,
                                                           std::wstring_view effectiveCommandline,
-                                                          InstallFn&& installer)
+                                                          InstallFn&& installer,
+                                                          InstallForProfileDiagnosticObserver diagnosticObserver = nullptr)
     {
         namespace SI = ::Microsoft::Terminal::ShellIntegration;
 
@@ -820,6 +844,9 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
         auto& gate = details::SharedInstallForProfileGate();
         if (!gate.TryClaim(profileKey))
         {
+#if defined(_DEBUG)
+            details::NotifyInstallForProfileDiagnostic(diagnosticObserver, profileKey, "skip-already-doing-or-done");
+#endif
             return InstallResult{ true, true, {}, false };
         }
 
@@ -830,10 +857,31 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
             gate.MarkHandled(profileKey);
         });
 
+#if defined(_DEBUG)
+        details::NotifyInstallForProfileDiagnostic(diagnosticObserver, profileKey, "attempt-started");
+
+        try
+        {
+            if (const auto result = installer(commandline))
+            {
+                details::NotifyInstallForProfileDiagnostic(diagnosticObserver, profileKey, details::InstallForProfileOutcomeEvent(*result));
+                return *result;
+            }
+
+            details::NotifyInstallForProfileDiagnostic(diagnosticObserver, profileKey, "cancelled");
+        }
+        catch (...)
+        {
+            details::NotifyInstallForProfileDiagnostic(diagnosticObserver, profileKey, "thrown");
+            throw;
+        }
+#else
+        (void)diagnosticObserver;
         if (const auto result = installer(commandline))
         {
             return *result;
         }
+#endif
 
         markHandled.release();
         return std::nullopt;
@@ -841,7 +889,8 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
 
     inline std::optional<InstallResult> InstallForProfile(std::wstring_view profileKey,
                                                           std::wstring_view profileCommandline,
-                                                          std::wstring_view effectiveCommandline = {})
+                                                          std::wstring_view effectiveCommandline = {},
+                                                          InstallForProfileDiagnosticObserver diagnosticObserver = nullptr)
     {
         return InstallForProfile(
             profileKey,
@@ -849,7 +898,8 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
             effectiveCommandline,
             [](std::wstring_view commandline) -> std::optional<InstallResult> {
                 return Install(std::wstring{ commandline });
-            });
+            },
+            diagnosticObserver);
     }
 
 }
