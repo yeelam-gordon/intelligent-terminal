@@ -942,7 +942,7 @@ function Remove-InvariantSegments {
     )
 
     $result = if ($null -eq $Value) { '' } else { [string]$Value }
-    foreach ($token in @($LockedTokens + (Get-PlaceholderTokens -Value $Value)) | Sort-Object Length -Descending -Unique) {
+    foreach ($token in @($LockedTokens + (Get-PlaceholderTokens -Value $Value)) | Sort-Object Length -Descending) {
         if (-not [string]::IsNullOrEmpty($token)) {
             $result = $result.Replace($token, ' ')
         }
@@ -987,7 +987,7 @@ function Get-PseudoLetterSignal {
     )
 
     $text = if ($null -eq $Value) { '' } else { [string]$Value }
-    foreach ($token in @($LockedTokens + (Get-PlaceholderTokens -Value $Value)) | Sort-Object Length -Descending -Unique) {
+    foreach ($token in @($LockedTokens + (Get-PlaceholderTokens -Value $Value)) | Sort-Object Length -Descending) {
         if (-not [string]::IsNullOrEmpty($token)) {
             $text = $text.Replace($token, ' ')
         }
@@ -1010,7 +1010,7 @@ function Test-ContainsDirectionalPseudoSignal {
     )
 
     $text = if ($null -eq $Value) { '' } else { [string]$Value }
-    foreach ($token in @($LockedTokens + (Get-PlaceholderTokens -Value $Value)) | Sort-Object Length -Descending -Unique) {
+    foreach ($token in @($LockedTokens + (Get-PlaceholderTokens -Value $Value)) | Sort-Object Length -Descending) {
         if (-not [string]::IsNullOrEmpty($token)) {
             $text = $text.Replace($token, ' ')
         }

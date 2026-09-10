@@ -366,27 +366,27 @@ Describe 'File-based localization checks' -Tag 'Unit' {
         $reorderedTargetPath = Join-Path $TestDrive 'placeholders\reordered-target.resw'
 
         Write-ReswFixtureFile -Path $sourcePath -Resources @(
-            @{ Name = 'message'; Value = 'Hello {{user}} {0} {0} {} %{Name} %{name} %s %%s %%%s' }
+            @{ Name = 'message'; Value = 'Hello {{user}} {0} {0} {} %{Name} %{name} %{path} {name} %s %%s %%%s' }
         )
         Write-ReswFixtureFile -Path $targetPath -Resources @(
             @{ Name = 'message'; Value = 'Bonjour {{user}} {0} {} %{Name} %{name} %%s' }
         )
         Write-ReswFixtureFile -Path $caseMismatchTargetPath -Resources @(
-            @{ Name = 'message'; Value = 'Bonjour {{user}} {0} {0} {} %{Name} %{Name} %s %%s' }
+            @{ Name = 'message'; Value = 'Bonjour {{user}} {0} {0} {} %{Name} %{Name} %{path} {name} %s %%s' }
         )
         Write-ReswFixtureFile -Path $reorderedTargetPath -Resources @(
-            @{ Name = 'message'; Value = 'Bonjour {} %{name} {0} %s %{Name} {0} {{user}} %%%s %%s' }
+            @{ Name = 'message'; Value = 'Bonjour {} %{path} %{name} {0} %s %{Name} {0} {name} {{user}} %%%s %%s' }
         )
 
         $result = Test-PlaceholderParity -SourceFile $sourcePath -TargetFile $targetPath
         $result.status | Should -Be 'FIXABLE'
-        $result.results[0].expected | Should -Be '%s × 2, %{Name}, %{name}, {0} × 2, {}'
+        $result.results[0].expected | Should -Be '%s × 2, %{Name}, %{name}, %{path}, {0} × 2, {}'
         $result.results[0].observed | Should -Be '%{Name}, %{name}, {0}, {}'
 
         $caseMismatch = Test-PlaceholderParity -SourceFile $sourcePath -TargetFile $caseMismatchTargetPath
         $caseMismatch.status | Should -Be 'FIXABLE'
-        $caseMismatch.results[0].expected | Should -Be '%s × 2, %{Name}, %{name}, {0} × 2, {}'
-        $caseMismatch.results[0].observed | Should -Be '%s, %{Name} × 2, {0} × 2, {}'
+        $caseMismatch.results[0].expected | Should -Be '%s × 2, %{Name}, %{name}, %{path}, {0} × 2, {}'
+        $caseMismatch.results[0].observed | Should -Be '%s, %{Name} × 2, %{path}, {0} × 2, {}'
 
         (Test-PlaceholderParity -SourceFile $sourcePath -TargetFile $reorderedTargetPath).status | Should -Be 'PASS'
     }
@@ -683,6 +683,50 @@ auth.prompt: "Welcome back"
         )
 
         (Test-PseudoLocale -SourceFile $reswWrappedEnglishSource -TargetFile $reswWrappedEnglishTarget -Locale 'qps-ploc').status | Should -Be 'FIXABLE'
+    }
+
+    It 'ignores distinct equal-length invariant tokens across pseudo wrappers' {
+        $sourcePath = Join-Path $TestDrive 'pseudo-equal-length\source.yml'
+        $rtlMark = [string][char]0x200F
+
+        Write-WtaFixtureFile -Path $sourcePath -Entries @(
+            @{ Name = 'invariant'; Value = '%{name} %{path} B D'; Comments = @('{Locked="B","D"}') }
+            @{ Name = 'mixed'; Value = 'Open %{name} %{path} B D'; Comments = @('{Locked="B","D"}') }
+            @{ Name = 'fullyLocked'; Value = 'C'; Comments = @('{Locked}') }
+        )
+
+        foreach ($case in @(
+            @{
+                Locale = 'qps-ploc'
+                TargetEntries = @(
+                    @{ Name = 'invariant'; Value = '[%{name} %{path} B D]' }
+                    @{ Name = 'mixed'; Value = '[Öpen %{name} %{path} B D]' }
+                    @{ Name = 'fullyLocked'; Value = 'C' }
+                )
+            },
+            @{
+                Locale = 'qps-ploca'
+                TargetEntries = @(
+                    @{ Name = 'invariant'; Value = '[!!_%{name} %{path} B D_!!]' }
+                    @{ Name = 'mixed'; Value = '[!!_Öpen %{name} %{path} B D_!!]' }
+                    @{ Name = 'fullyLocked'; Value = 'C' }
+                )
+            },
+            @{
+                Locale = 'qps-plocm'
+                TargetEntries = @(
+                    @{ Name = 'invariant'; Value = ('[!! {0}%{{name}} %{{path}} B D{0} !!]' -f $rtlMark) }
+                    @{ Name = 'mixed'; Value = ('[!! {0}Öpen %{{name}} %{{path}} B D{0} !!]' -f $rtlMark) }
+                    @{ Name = 'fullyLocked'; Value = 'C' }
+                )
+            }
+        )) {
+            $targetPath = Join-Path $TestDrive ("pseudo-equal-length\{0}.yml" -f $case.Locale)
+            Write-WtaFixtureFile -Path $targetPath -Entries $case.TargetEntries
+
+            $result = Test-PseudoLocale -SourceFile $sourcePath -TargetFile $targetPath -Locale $case.Locale
+            $result.status | Should -Be 'PASS'
+        }
     }
 
     It 'finds source-only missing keys across untouched shipped targets and passes once they are translated' {
