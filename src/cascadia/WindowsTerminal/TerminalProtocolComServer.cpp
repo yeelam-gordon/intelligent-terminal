@@ -9,6 +9,7 @@
 
 #include <json/json.h>
 #include <til/io.h>
+#include "../inc/TerminalProtocolProxyRegistration.h"
 #include "../TerminalProtocol/ProtocolParsing.h"
 
 #include <algorithm>
@@ -59,25 +60,29 @@ try
     g_comMtaThread = std::thread([&ready, &regHr]() {
         auto coInit = wil::CoInitializeEx(COINIT_MULTITHREADED);
 
-        // Classic-COM class factory (WRL) — marshaled via the OpenConsoleProxy
-        // proxy/stub, not WinRT MBM.
-        const auto factory = Make<SimpleClassFactory<TerminalProtocolComServer>>();
-        if (!factory)
+        regHr = Microsoft::Terminal::Protocol::RegisterTerminalProtocolProxy();
+        if (SUCCEEDED(regHr))
         {
-            regHr = E_OUTOFMEMORY;
-        }
-        else
-        {
-            ComPtr<IUnknown> unk;
-            regHr = factory.As(&unk);
-            if (SUCCEEDED(regHr))
+            // Classic-COM class factory (WRL) — marshaled via the OpenConsoleProxy
+            // proxy/stub, not WinRT MBM.
+            const auto factory = Make<SimpleClassFactory<TerminalProtocolComServer>>();
+            if (!factory)
             {
-                regHr = CoRegisterClassObject(
-                    __uuidof(TerminalProtocolComServer),
-                    unk.Get(),
-                    CLSCTX_LOCAL_SERVER,
-                    REGCLS_MULTIPLEUSE,
-                    &g_comRegistration);
+                regHr = E_OUTOFMEMORY;
+            }
+            else
+            {
+                ComPtr<IUnknown> unk;
+                regHr = factory.As(&unk);
+                if (SUCCEEDED(regHr))
+                {
+                    regHr = CoRegisterClassObject(
+                        __uuidof(TerminalProtocolComServer),
+                        unk.Get(),
+                        CLSCTX_LOCAL_SERVER,
+                        REGCLS_MULTIPLEUSE,
+                        &g_comRegistration);
+                }
             }
         }
 
