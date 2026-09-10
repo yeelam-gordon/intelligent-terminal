@@ -343,9 +343,11 @@ post-steps:
         fail('guide permits only its guidance comment and a non-mutating acknowledgement');
       }
       const addCommentCount = queuedTypes.filter(type => type === 'add_comment').length;
-      const expectedComments = hasFixable ? 1 : 0;
-      if (addCommentCount !== expectedComments) {
-        fail(`guide checker outcome requires exactly ${expectedComments} queued add_comment item(s), found ${addCommentCount}`);
+      if (addCommentCount > 1) {
+        fail(`guide permits at most 1 queued add_comment item, found ${addCommentCount}`);
+      }
+      if (hasFixable && addCommentCount !== 1) {
+        fail(`guide checker outcome requires exactly 1 queued add_comment item when any final checker bundle is FIXABLE, found ${addCommentCount}`);
       }
       NODE
 
@@ -410,9 +412,13 @@ write only actual final checker bundles to that fixed path:
 {"version":1,"mode":"guide","bundles":[/* actual final checker JSON bundles */]}
 ```
 
-Never hand-author bundle fields or include initial attempts. All `PASS` means no
-visible output; any `FIXABLE` means exactly one concise `add-comment`. `BLOCKED`
-or `INVALID_INPUT` is not a successful guide outcome.
+Never hand-author bundle fields or include initial attempts. Final checker
+`PASS` bundles do not suppress concrete read-only review findings that stay
+outside checker JSON. Emit zero safe outputs only when the final checker bundles
+are all `PASS` and the independent read-only review has no findings. Emit
+exactly one concise `add-comment` when any final checker bundle is `FIXABLE` or
+the independent read-only review finds a concrete human-language issue.
+`BLOCKED` or `INVALID_INPUT` is not a successful guide outcome.
 
 Use the SKILL.md batching example for the final rerun: dot-source
 `.github/skills/ensure-localization/scripts/localization_checks.ps1` once in
@@ -447,8 +453,12 @@ block is mismatched or omitted.
 The comment must:
 
 - say trusted-base file checks found actionable localization issues;
-- list only actual `check`, `file`, and `resource` identifiers, without quoting
-  untrusted file content;
+- for mechanical checker findings, list only actual `check`, `file`, and
+  `resource` identifiers;
+- for human-language findings outside checker JSON, label them separately as
+  read-only review findings and list only `file` and `resource` identifiers;
+- never invent a checker name for a human review finding or quote untrusted file
+  content;
 - link only to these applicable references pinned to
   `${{ needs.prepare.outputs.trusted_code_revision }}`:
   - `.github/skills/ensure-localization/SKILL.md`
@@ -457,7 +467,8 @@ The comment must:
 - include one copyable local Copilot prompt to fix only those findings, rerun
   the matching skill checks, and finish with an independent read-only review;
 - state that the workflow neither edited the fork branch nor performed full
-  language-quality validation.
+  language-quality validation, and do not claim exhaustive localization-quality
+  certification.
 - before emitting it, inspect the actual native `add_comment` schema or help
   that the runtime exposes, then call that native tool directly with inline
   arguments only: explicit `pr_number`

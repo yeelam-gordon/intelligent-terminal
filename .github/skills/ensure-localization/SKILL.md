@@ -14,6 +14,15 @@ Keep terminology consistent within each locale and across RESW and localization
 YAML for the same product. Grammar may vary with context, but established product
 keywords should not alternate between unrelated translations.
 
+## Language-quality acceptance
+
+For every scoped customer-facing value in a real non-English locale, the final
+text must actually be in that locale's target language. Copying the English
+source or leaving a provisional English fallback is not a repair, even when all
+six checks pass. English locales, source-authoritative locks, and legitimate
+identical names or technical terms are allowed exceptions; translate the
+unlocked surrounding words.
+
 ## Caller context
 
 The caller owns repository or PR context, trusted revisions, skip policy,
@@ -253,9 +262,12 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
    with one independent read-only review before requesting any branch write.
    Do not swap in a different guessed key set or reuse a stale pre-edit
    comparable subset after a missing key has been added.
-8. Read-only review or fork guidance: stay read-only; report only the actual
-   `PASS`, `FIXABLE`, `BLOCKED`, or `INVALID_INPUT` outcomes plus concise human
-   review.
+8. Read-only review or fork guidance: stay read-only; cover every scoped target,
+   including real locales, not only pseudo-locales. Assess actual target-language
+   content rather than only key parity, parent-key lists, or checker bundles;
+   reject obvious English sentences, stubs, and provisional fallbacks unless a
+   declared exception applies. Report only the actual `PASS`, `FIXABLE`,
+   `BLOCKED`, or `INVALID_INPUT` outcomes plus concise human review.
 
 ## Gotchas
 
