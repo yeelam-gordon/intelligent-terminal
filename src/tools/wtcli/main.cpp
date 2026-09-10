@@ -6,6 +6,7 @@
 
 #include "Formatting.h"
 #include "wtcli_functions.h"
+#include "../../cascadia/inc/TerminalProtocolProxyRegistration.h"
 #include "../../cascadia/TerminalProtocol/ProtocolParsing.h"
 
 // Classic-COM Terminal protocol. Generated from
@@ -101,8 +102,16 @@ static winrt::com_ptr<ITerminalProtocol> ConnectToTerminal(bool* outAuthenticate
         return nullptr;
     }
 
+    auto hr = Microsoft::Terminal::Protocol::RegisterTerminalProtocolProxy();
+    if (FAILED(hr))
+    {
+        if (!quiet)
+            fprintf(stderr, "[wtcli] Failed to register protocol proxy: 0x%08X\n", static_cast<uint32_t>(hr));
+        return nullptr;
+    }
+
     winrt::com_ptr<ITerminalProtocol> server;
-    auto hr = CoCreateInstance(cls, nullptr, CLSCTX_LOCAL_SERVER, __uuidof(ITerminalProtocol), server.put_void());
+    hr = CoCreateInstance(cls, nullptr, CLSCTX_LOCAL_SERVER, __uuidof(ITerminalProtocol), server.put_void());
     if (FAILED(hr))
     {
         if (!quiet)
