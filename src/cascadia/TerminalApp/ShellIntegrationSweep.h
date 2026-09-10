@@ -367,7 +367,8 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
             return;
         }
 
-        // FRE saves settings directly; publish that intent before queuing.
+        // Publish the current UI-thread enabled intent before queuing; FRE direct-settings
+        // saves also reach this path, but the state here reflects the present enabled request.
         desiredEnabledState.store(true, std::memory_order_release);
 
         const auto install = [ownerLifetime = std::move(ownerLifetime), &desiredEnabledState, &reconcileMutex](std::wstring_view commandline) -> std::optional<SI::InstallResult> {
