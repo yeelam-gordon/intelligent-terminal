@@ -134,7 +134,8 @@ public:
     void Close();
 
     std::shared_ptr<Pane> AttachPane(std::shared_ptr<Pane> pane,
-                                     winrt::Microsoft::Terminal::Settings::Model::SplitDirection splitType);
+                                     winrt::Microsoft::Terminal::Settings::Model::SplitDirection splitType,
+                                     float splitSize = 0.5f);
     std::shared_ptr<Pane> DetachPane(std::shared_ptr<Pane> pane);
 
     bool RepositionAgentPane(winrt::Microsoft::Terminal::Settings::Model::SplitDirection splitDirection);
@@ -306,6 +307,7 @@ private:
     bool _broadcastEnabled{ false };
     bool _isAgentPane{ false };
     bool _isSourceOfAgentPane{ false };
+    bool _focusBorderEnabled{ true };
 
     // Mouse drag-to-resize state on the splitter.
     bool _splitterDragging{ false };
@@ -331,6 +333,7 @@ private:
     void _UpdateBorders();
     void _EnsureAgentChip();
     void _UpdateAgentChipBackground();
+    void _SetFocusBorderEnabled(bool value);
     Borders _GetCommonBorders();
     winrt::Windows::UI::Xaml::Media::SolidColorBrush _ComputeBorderColor();
 

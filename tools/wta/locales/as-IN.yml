@@ -51,6 +51,7 @@ chat.turn_canceled: "(বাতিল কৰা হৈছে)"
 chat.turn_executed: "→ সম্পাদন কৰা হ’ল: %{title}"
 # Persistent tool-category labels shown after a status marker and before a subject.
 chat.tool_kind.run: "চলাও"
+chat.tool_kind.insert: "সন্নিবেশ কৰক"
 chat.tool_kind.read: "পঢ়া"
 chat.tool_kind.search: "সন্ধান"
 chat.tool_kind.edit: "সম্পাদনা"
@@ -137,8 +138,25 @@ agents.status.idle: "নিষ্ক্ৰিয়"
 layout.welcome_hint: "  (Ctrl+Shift+. এজেণ্ট পেন দেখুৱাওক/লুকুৱাওক • Ctrl+Shift+/ এজেণ্ট ছেশ্বন দেখুৱাওক/লুকুৱাওক)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── সংযোগ স্থিতি ────────────────────────────────────────────────────────
-connection.starting: "এজেণ্ট আৰম্ভ হৈ আছে..."
+# Preparing the AI agent connection, including preflight and reuse of a cached agent.
+connection.starting: "এজেণ্টৰ সংযোগ প্ৰস্তুত কৰা হৈছে..."
 connection.reconnecting: "পুনৰ সংযোগ হৈ আছে..."
+# Retiring old AI agent sessions for /restart, before the next connection phases.
+connection.restarting: "এজেণ্ট পুনৰ আৰম্ভ কৰা হৈছে..."
+# Connecting the pane to WTA's local coordinator process, not to an AI model.
+connection.coordinator: "স্থানীয় সমন্বয়কৰ সৈতে সংযোগ কৰা হৈছে..."
+# Initializing the helper/coordinator connection, including local preparation and AI agent initialization.
+connection.initializing: "এজেণ্টৰ সংযোগ আৰম্ভ কৰা হৈছে..."
+# Refreshing the user's authentication with the AI agent after login; not verifying the agent's identity.
+connection.authenticating: "এজেণ্টৰ সৈতে ব্যৱহাৰকাৰীৰ প্ৰমাণীকৰণ কৰা হৈছে..."
+# Reading the coordinator's registry snapshot, including existing history; not fetching history from the AI agent.
+connection.syncing_sessions: "অধিবেশনৰ তালিকা পঢ়া হৈছে..."
+# Creating the AI agent session, including local registration; internal agent progress is unknown.
+connection.creating_session: "এজেণ্টৰ অধিবেশন সৃষ্টি কৰা হৈছে..."
+# Applying the requested AI model before the connection is ready. Preserve %{model}.
+connection.selecting_model: "অধিবেশনৰ মডেল নিৰ্ধাৰণ কৰা হৈছে: %{model}..."  # {Locked="%{model}"}
+# Activity row while connecting to restore a conversation. Keep the actual stage first so narrow panes show it; session_id is shortened to eight characters.
+connection.resuming_stage: "%{stage} (%{session_id} পুনৰ চলাই থকা হৈছে)"  # {Locked="%{stage}","%{session_id}"}
 connection.connecting_activity: "এজেণ্টলৈ সংযোগ হৈ আছে…"
 connection.lost: "এজেণ্টৰ সৈতে সংযোগ হেৰাই গ'ল। পুনৰ সংযোগ কৰিবলৈ /restart টাইপ কৰক।"  # {Locked="/restart"}
 
@@ -160,8 +178,8 @@ system.resuming_session: "সত্ৰ %{session_id} পুনৰাৰম্ভ
 system.unknown_command: "অজানা কমাণ্ড \"%{command}\" — প্ৰম্প্ট হিচাপে পঠিওৱা হ'ল। তালিকাৰ বাবে /help টাইপ কৰক।"  # {Locked="/help"} — slash-command name.
 system.busy_use_stop: "বৰ্তমানৰ প্ৰম্প্ট শেষ হোৱালৈ অপেক্ষা কৰক, অথবা আগতে /stop কৰক।"  # {Locked="/stop"} — slash-command name.
 system.cannot_focus_session: "সত্ৰ %{session_id} ফোকাচ কৰিব নোৱাৰি: ই live যেন লাগে কিন্তু এতিয়াও কোনো pane GUID বান্ধা হোৱা নাই। অলপ পাছত পুনৰ চেষ্টা কৰক।"
-system.cannot_resume_no_load_session: "agent pane-ত পুনৰাৰম্ভ কৰিব নোৱাৰি: %{agent}-এ ACP `loadSession` ক্ষমতা ঘোষণা কৰা নাই। তাৰ সলনি নতুন terminal pane-ত পুনৰাৰম্ভ কৰিবলৈ Enter (Shift নোহোৱাকৈ) টিপক।"  # {Locked="ACP","loadSession","Enter","Shift"} — protocol/UI terms.
-system.cannot_resume_no_resume_flag: "%{agent} সত্ৰ পুনৰাৰম্ভ কৰিব নোৱাৰি: এই agent-ৰ `--resume`-ধৰণৰ flag নাই। তাৰ সলনি ACP-ৰ জৰিয়তে agent pane-ৰ ভিতৰত পুনৰাৰম্ভ কৰিবলৈ Shift+Enter টিপি চেষ্টা কৰক।"  # {Locked="--resume","Shift","Enter","ACP"} — flag and UI terms.
+system.cannot_resume_no_load_session: "agent pane-ত পুনৰাৰম্ভ কৰিব নোৱাৰি: %{agent}-এ ACP `loadSession` ক্ষমতা ঘোষণা কৰা নাই।"  # {Locked="ACP","loadSession"} — protocol/UI terms.
+system.cannot_resume_no_resume_flag: "%{agent} সত্ৰ পুনৰাৰম্ভ কৰিব নোৱাৰি: এই agent-ৰ `--resume`-ধৰণৰ flag নাই।"  # {Locked="--resume"} — flag and UI terms.
 system.cannot_resume_unknown_agent: "সত্ৰ %{session_id} পুনৰাৰম্ভ কৰিব নোৱাৰি: ইয়াৰ উৎস agent এই WTA build-ৰ বাবে অজানা।"
 system.cannot_resume_phantom_via_flag: "%{agent} সত্ৰ %{session_id} পুনৰাৰম্ভ কৰিব নোৱাৰি: ই আৰম্ভ হৈছিল কিন্তু কোনো কথোপকথন সঞ্চিত হোৱা নাই, সেয়ে %{agent} নিজেই resume নাকচ কৰিব। শাৰী আঁতৰোৱা হৈছে।"
 system.cannot_resume_phantom_via_load: "%{agent} সত্ৰ %{session_id} পুনৰাৰম্ভ কৰিব নোৱাৰি: ই আৰম্ভ হৈছিল কিন্তু কোনো কথোপকথন সঞ্চিত হোৱা নাই, সেয়ে %{agent}-এ load নাকচ কৰিব। শাৰী আঁতৰোৱা হৈছে।"
@@ -242,4 +260,6 @@ config_picker.title: "ছিচেন কনফিগাৰেচন (↑ ↓ �
 system.no_config_options: "সংযুক্ত এজেণ্টে কোনো কনফিগাৰযোগ্য ছিচেন বিকল্প বিজ্ঞাপন কৰা নাছিল।"
 # {option} is an Agent-provided option name; {error} is the ACP error.
 system.config_update_failed: "আপডেট কৰিবলৈ ব্যৰ্থ হ’ল %{option}: %{error}"
+system.yolo_disable_pending: "এজেণ্ট প্ৰদানকাৰীয়ে বিশেষাধিকাৰ মোড বন্ধ থকা প্ৰয়োজনীয় ছেশ্বন অৱস্থাটো এতিয়াও নিশ্চিত কৰা নাই"  # Shown after the localized failure prefix while prompts remain blocked until the AI agent provider confirms that its privileged session mode is off. Provider means an AI agent provider, not a network provider.
+system.provider_command_blocked_by_policy: "%{command}: আপোনাৰ সংগঠনৰ নীতিয়ে Yolo mode নিষ্ক্ৰিয় কৰিছে।"  # {Locked="Yolo","%{command}"} Shown when AllowYoloMode blocks a provider-advertised privileged command.
 system.model_unknown: "অজ্ঞাত মডেল %{model} — উপলব্ধ তালিকা চাবলৈ /model টাইপ কৰক।"  # {Locked="%{model}","/model"}

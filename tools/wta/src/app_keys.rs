@@ -15,7 +15,60 @@ fn modifiers_allow_text_input(modifiers: KeyModifiers) -> bool {
 }
 
 impl App {
+    fn handle_global_ctrl_c(&mut self) {
+        let tab = self.current_tab();
+        let cancelling = tab.turn.is_cancelling();
+        let has_active_request =
+            tab.turn.is_in_flight() || !tab.user_input.is_empty() || !tab.permission.is_empty();
+        if has_active_request || cancelling {
+            let tab_id = self.active_tab_key().to_string();
+            self.request_turn_cancel_for_tab(&tab_id);
+            if !cancelling {
+                let tab = self.current_tab_mut();
+                tab.messages
+                    .push(ChatMessage::success(t!("system.cancelled").into_owned()));
+                tab.scroll_to_bottom();
+            }
+            self.close_pane_armed_at = None;
+        } else if !self.current_tab().input.is_empty() || !self.current_tab().attachments.is_empty()
+        {
+            let tab = self.current_tab_mut();
+            tab.clear_input();
+            self.close_pane_armed_at = None;
+        } else {
+            let now = std::time::Instant::now();
+            let armed = self
+                .close_pane_armed_at
+                .map(|t| now.duration_since(t) < CLOSE_PANE_ARM_WINDOW)
+                .unwrap_or(false);
+            if armed {
+                self.close_pane_armed_at = None;
+                self.transient_hint = None;
+                self.request_close_agent_pane();
+            } else {
+                self.close_pane_armed_at = Some(now);
+                self.transient_hint = Some((
+                    t!("system.close_pane_hint").into_owned(),
+                    now + CLOSE_PANE_ARM_WINDOW,
+                ));
+            }
+        }
+    }
+
     pub(super) fn handle_key(&mut self, key: KeyEvent) {
+        let input_vertical_key = key.modifiers.is_empty()
+            && matches!(key.code, KeyCode::Up | KeyCode::Down)
+            && self.mode == AppMode::Chat
+            && self.current_tab().current_view == View::Chat
+            && self.pane_focused
+            && self.current_tab().input_has_nav_focus()
+            && !self.help_overlay_visible
+            && !self.command_popup_visible()
+            && (!self.current_tab().input_history_is_browsing()
+                || self.current_tab().input_all_selected);
+        if !input_vertical_key {
+            self.current_tab_mut().input_vertical_goal = None;
+        }
         // Per-keystroke and carries the raw `KeyCode` (the typed character for
         // `Char` keys) — the user's prompt can be reconstructed from this
         // stream. Trace only so it never persists in shipping (info) or
@@ -42,6 +95,10 @@ impl App {
             // Don't clear `transient_hint` here — it has its own deadline and
             // ui::render checks expiry on each draw. Clearing on every key
             // would steal too much of the hint's visible lifetime.
+        }
+        if is_ctrl_c && self.mode == AppMode::Chat {
+            self.handle_global_ctrl_c();
+            return;
         }
 
         // The source picker is also reachable from Setup when the configured
@@ -300,19 +357,19 @@ impl App {
                         .select(Some(cur.saturating_sub(1)));
                     self.update_agents_focus_for_tab(&tab_id);
                 }
-                KeyCode::Enter => {
+                // Only a bare Enter activates a row. A row has exactly one
+                // resume style, so a modifier can never mean "resume the
+                // other way" — any modified Enter (Shift, Alt, Ctrl, ...)
+                // is an accident and is swallowed by the `_` arm below
+                // rather than leaking to the chat input behind the view.
+                KeyCode::Enter if key.modifiers.is_empty() => {
                     if let Some(idx) = self.current_tab().agents_list_state.selected() {
                         let selected = rows.get(idx).cloned();
                         if let Some(s) = selected {
-                            // B-10: route through the unified
-                            // state-machine dispatcher. Shift flips
-                            // the default per-origin (see
-                            // session_mgmt::decide_enter_action) —
-                            // Live rows ignore Shift; dead rows use
-                            // it as an escape hatch to the *other*
-                            // resume style.
-                            let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-                            self.activate_agent_session_with_shift(&s, shift);
+                            // session_mgmt::decide_enter_action picks
+                            // the single resume style the row's origin
+                            // dictates.
+                            self.activate_agent_session_routed(&s);
                         }
                     }
                 }
@@ -407,10 +464,43 @@ impl App {
                             && request.input.chars().count() < MAX_ANSWER_CHARS =>
                     {
                         request.selected = request.request.choices.len();
-                        request.input.push(character);
+                        request.insert_input_char(character);
+                    }
+                    KeyCode::Backspace
+                        if request.freeform_selected()
+                            && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        request.delete_word_before_cursor();
                     }
                     KeyCode::Backspace if request.freeform_selected() => {
-                        request.input.pop();
+                        request.delete_before_cursor();
+                    }
+                    KeyCode::Delete if request.freeform_selected() => {
+                        request.delete_at_cursor();
+                    }
+                    KeyCode::Left
+                        if request.freeform_selected()
+                            && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        request.move_cursor_word_left();
+                    }
+                    KeyCode::Right
+                        if request.freeform_selected()
+                            && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        request.move_cursor_word_right();
+                    }
+                    KeyCode::Left if request.freeform_selected() => {
+                        request.move_cursor_left();
+                    }
+                    KeyCode::Right if request.freeform_selected() => {
+                        request.move_cursor_right();
+                    }
+                    KeyCode::Home if request.freeform_selected() => {
+                        request.move_cursor_home();
+                    }
+                    KeyCode::End if request.freeform_selected() => {
+                        request.move_cursor_end();
                     }
                     KeyCode::Enter => {
                         if request.freeform_selected() {
@@ -534,6 +624,19 @@ impl App {
             return;
         }
 
+        if input_vertical_key {
+            let width = self
+                .input_dialog_area
+                .map(|area| area.width)
+                .unwrap_or_else(|| self.main_area_width());
+            if self
+                .current_tab_mut()
+                .move_cursor_vertical(width, key.code == KeyCode::Up)
+            {
+                return;
+            }
+        }
+
         match key.code {
             KeyCode::Up if self.current_tab().turn.recommendations().is_some() => {
                 if self.current_tab().recommendation_focus == RecommendationFocus::Input {
@@ -636,10 +739,12 @@ impl App {
                 // slash-command popup cannot edit the input behind a card.
             }
             KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.current_tab_mut().toggle_thinking_details();
                 self.current_tab_mut().toggle_all_completed_tool_calls();
             }
             KeyCode::F(12) => {
                 self.show_debug_panel = !self.show_debug_panel;
+                self.invalidate_input_layout();
                 self.debug_capture_enabled
                     .store(self.show_debug_panel, Ordering::Relaxed);
                 self.debug_scroll = 0;
@@ -657,65 +762,6 @@ impl App {
                 self.debug_scroll = self.debug_scroll.saturating_sub(10);
                 return;
             }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // In-flight: state is Submitted/Streaming or Surfaced{end_pending}.
-                let in_flight = !self.current_tab().turn.is_idle()
-                    && !matches!(
-                        self.current_tab().turn,
-                        TurnState::Surfaced {
-                            end_pending: false,
-                            ..
-                        }
-                    );
-                if in_flight {
-                    // Send a session/cancel to the ACP client. The client
-                    // will fire the protocol notification and signal the
-                    // per-prompt oneshot so the spawned task drops out of
-                    // conn.prompt() immediately.
-                    let session_id = self.current_tab().session_id.clone();
-                    if let Some(sid) = session_id.clone() {
-                        let _ = self.cancel_tx.send(CancelRequest { session_id: sid });
-                    }
-                    if let Some(sid) = session_id {
-                        self.turn_cancel(&sid);
-                    }
-                    let tab = self.current_tab_mut();
-                    tab.messages
-                        .push(ChatMessage::success(t!("system.cancelled").into_owned()));
-                    tab.scroll_to_bottom();
-                    self.close_pane_armed_at = None;
-                } else if !self.current_tab().input.is_empty()
-                    || !self.current_tab().attachments.is_empty()
-                {
-                    // Mirror bash readline: Ctrl+C clears the whole draft,
-                    // including any queued image attachments.
-                    let tab = self.current_tab_mut();
-                    tab.clear_input();
-                    self.close_pane_armed_at = None;
-                } else {
-                    // Idle + empty input. First press arms; second press
-                    // within CLOSE_PANE_ARM_WINDOW asks WT to close the
-                    // pane. We never set should_quit ourselves — the pane
-                    // teardown will kill our ConPty, which is the only
-                    // path that should terminate wta.
-                    let now = std::time::Instant::now();
-                    let armed = self
-                        .close_pane_armed_at
-                        .map(|t| now.duration_since(t) < CLOSE_PANE_ARM_WINDOW)
-                        .unwrap_or(false);
-                    if armed {
-                        self.close_pane_armed_at = None;
-                        self.transient_hint = None;
-                        self.request_close_agent_pane();
-                    } else {
-                        self.close_pane_armed_at = Some(now);
-                        self.transient_hint = Some((
-                            t!("system.close_pane_hint").into_owned(),
-                            now + CLOSE_PANE_ARM_WINDOW,
-                        ));
-                    }
-                }
-            }
             KeyCode::Esc if self.help_overlay_visible => {
                 self.help_overlay_visible = false;
             }
@@ -730,22 +776,11 @@ impl App {
                 // Dismiss armed fix card or cancel in-flight autofix request.
                 // `turn_cancel` bumps generation, emits autofix_state_cleared,
                 // and resets the state machine to Idle.
-                let session_id = self.current_tab().session_id.clone();
-                if let Some(sid) = session_id {
-                    self.turn_cancel(&sid);
-                } else {
-                    // No session attached yet — fall back to manual cleanup
-                    // (no chunks can be in flight in that case).
-                    let pane_to_clear = {
-                        let tab = self.current_tab_mut();
-                        tab.autofix.generation = tab.autofix.generation.wrapping_add(1);
-                        tab.autofix.armed_at = None;
-                        tab.autofix.pane_id.take()
-                    };
-                    if pane_to_clear.is_some() {
-                        let active = self.active_tab_key().to_string();
-                        self.emit_autofix_state_cleared(&active);
-                    }
+                let tab_id = self.active_tab_key().to_string();
+                let completed_turn_count = self.current_tab().completed_turns.len();
+                self.request_turn_cancel_for_tab(&tab_id);
+                if self.current_tab().completed_turns.len() > completed_turn_count {
+                    self.current_tab_mut().scroll_to_bottom();
                 }
             }
             // Dismiss the bottom-bar Suggested indicator (autofix produced an
@@ -863,6 +898,19 @@ impl App {
                     // turn isn't accepting one. The ACP transport rejects
                     // too, but bouncing here keeps the user's input intact.
                     if !self.current_tab().turn.accepts_new_prompt() {
+                        // Cancellation has already produced its own status
+                        // line. Keep the draft intact and wait for the real
+                        // terminal boundary instead of claiming the agent is
+                        // busy or accidentally submitting into the old turn.
+                        if !self.current_tab().turn.is_cancelling() {
+                            let tab = self.current_tab_mut();
+                            tab.messages
+                                .push(ChatMessage::warning(t!("system.agent_busy").into_owned()));
+                            tab.scroll_to_bottom();
+                        }
+                        return;
+                    }
+                    if self.prompt_reconfiguration_pending_for_tab(self.active_tab_key()) {
                         let tab = self.current_tab_mut();
                         tab.messages
                             .push(ChatMessage::warning(t!("system.agent_busy").into_owned()));
@@ -872,6 +920,8 @@ impl App {
                     let is_agent_command = self
                         .agent_command_for_input(&self.current_tab().input)
                         .is_some();
+                    let is_byok = self.current_model_is_byok();
+                    let agent_id = self.current_agent_id.clone();
                     let tab = self.current_tab_mut();
                     let display_text = std::mem::take(&mut tab.input);
                     let (text, images) = tab.attachments.take_for_submission(display_text.clone());
@@ -902,7 +952,9 @@ impl App {
                     } else {
                         PromptSubmission::new(text.clone(), Some(pane_context))
                     }
-                    .with_images(images);
+                    .with_images(images)
+                    .with_byok(is_byok)
+                    .with_agent_id(agent_id);
                     prompt_timing_log(
                         prompt.id,
                         prompt.submitted_at_unix_s,
@@ -920,7 +972,11 @@ impl App {
                         context: TurnContext::default(),
                         autofix: None,
                     };
-                    self.turn_submit_prompt(&session_id, submitted);
+                    self.turn_submit_prompt_with_cancellation(
+                        &session_id,
+                        submitted,
+                        prompt.cancellation_token(),
+                    );
                     let _ = self.prompt_tx.send(prompt);
                 }
             }

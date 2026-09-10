@@ -22,11 +22,34 @@ fn cli_parses_initial_load_session_id() {
 }
 
 #[test]
+fn cli_parses_initial_yolo_control_owner() {
+    let cli = Cli::try_parse_from([
+        "wta",
+        "--initial-load-session-id",
+        "abc-123",
+        "--initial-yolo-control-owner",
+        "manual",
+    ])
+    .expect("saved Yolo owner must parse");
+    assert_eq!(cli.initial_yolo_control_owner.as_deref(), Some("manual"));
+    assert!(Cli::try_parse_from(["wta", "--initial-yolo-control-owner", "unknown"]).is_err());
+}
+
+#[test]
 fn cli_initial_load_session_id_defaults_to_none() {
     let cli = Cli::try_parse_from(["wta"]).expect("no flags must parse");
     assert!(cli.initial_load_session_id.is_none());
     assert!(cli.initial_load_cwd.is_none());
+    assert!(cli.initial_yolo_control_owner.is_none());
+    assert!(cli.initial_pane_position.is_none());
     assert!(!cli.follows_global_acp_model);
+}
+
+#[test]
+fn cli_parses_initial_pane_position() {
+    let cli = Cli::try_parse_from(["wta", "--initial-pane-position", "left"])
+        .expect("restored pane position must parse");
+    assert_eq!(cli.initial_pane_position.as_deref(), Some("left"));
 }
 
 #[test]
@@ -322,29 +345,40 @@ fn hooks_cli_filter_into_scope_maps_each_variant() {
     ));
 }
 
-/// `--only-missing` is the Settings "Install hooks" button's contract with
-/// wta. It must stay opt-in: a bare `wta hooks install` remains the full
-/// (re)install a user reaches for when something is broken.
+/// Smart reconciliation is the default. The destructive first-install flow is
+/// available only through an explicit `--force` recovery request.
 #[test]
-fn hooks_install_only_missing_is_opt_in() {
+fn hooks_install_force_is_opt_in() {
     use crate::cli::args::HooksAction;
 
     let default = Cli::try_parse_from(["wta", "hooks", "install"]).expect("flags must parse");
     match default.command {
         Some(Command::Hooks {
-            action: HooksAction::Install { only_missing, .. },
-        }) => assert!(!only_missing),
+            action: HooksAction::Install { force, .. },
+        }) => assert!(!force),
         other => panic!("expected Command::Hooks/Install, got {other:?}"),
     }
 
-    let opted = Cli::try_parse_from(["wta", "hooks", "install", "--only-missing"])
-        .expect("flags must parse");
-    match opted.command {
+    let forced =
+        Cli::try_parse_from(["wta", "hooks", "install", "--force"]).expect("flags must parse");
+    match forced.command {
         Some(Command::Hooks {
-            action: HooksAction::Install { only_missing, .. },
-        }) => assert!(only_missing),
+            action: HooksAction::Install { force, .. },
+        }) => assert!(force),
         other => panic!("expected Command::Hooks/Install, got {other:?}"),
     }
+
+    assert!(Cli::try_parse_from(["wta", "hooks", "install", "--only-missing"]).is_err());
+}
+
+#[test]
+fn master_session_management_reconciliation_defaults_on_and_can_be_disabled() {
+    let default = Cli::try_parse_from(["wta", "--master", r"\\.\pipe\m"]).unwrap();
+    assert!(!default.no_session_management);
+
+    let disabled =
+        Cli::try_parse_from(["wta", "--master", r"\\.\pipe\m", "--no-session-management"]).unwrap();
+    assert!(disabled.no_session_management);
 }
 
 // ── json_str_or_num: tolerant scalar extraction for human table rows ─────────

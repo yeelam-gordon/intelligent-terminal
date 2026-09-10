@@ -112,6 +112,9 @@
     <ClInclude Include="SharedWta.h" />
     <ClInclude Include="AgentPaneLog.h" />
     <ClInclude Include="AgentPaneDragStash.h" />
+    <ClInclude Include="ContentTransfer.h" />
+    <ClInclude Include="AgentPaneLifetime.h" />
+    <ClInclude Include="..\inc\AgentPaneRestore.h" />
     <ClInclude Include="Tab.h">
       <DependentUpon>Tab.idl</DependentUpon>
     </ClInclude>
@@ -201,6 +204,7 @@
     <ClInclude Include="AgentPaneContent.h">
       <DependentUpon>AgentPaneContent.xaml</DependentUpon>
     </ClInclude>
+    <ClInclude Include="AutofixState.h" />
     <ClInclude Include="AgentUsage.h" />
     <ClInclude Include="FreOverlay.h">
       <DependentUpon>FreOverlay.xaml</DependentUpon>
@@ -329,6 +333,7 @@
       <DependentUpon>MarkdownPaneContent.xaml</DependentUpon>
       <SubType>Code</SubType>
     </ClCompile>
+    <ClCompile Include="AgentPaneLifetime.cpp" />
     <ClCompile Include="AgentPaneContent.cpp">
       <DependentUpon>AgentPaneContent.xaml</DependentUpon>
       <SubType>Code</SubType>

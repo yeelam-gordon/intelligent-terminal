@@ -28,6 +28,7 @@
 #include "../TerminalSettingsModel/CascadiaSettings.h"
 #include "../TerminalSettingsModel/AcpRuntimeState.h"
 #include "../inc/AgentPolicy.h"
+#include "../inc/AgentRegistry.h"
 #include "../inc/CustomModelProviderUtils.h"
 #include "JsonTestClass.h"
 
@@ -47,6 +48,7 @@ namespace SettingsModelUnitTests
         // Round-trip tests
         TEST_METHOD(CustomAcpAgentRoundtrips);
         TEST_METHOD(CustomDelegateAgentRoundtrips);
+        TEST_METHOD(CustomAgentCollectionsRoundtrip);
         TEST_METHOD(QuotedPathCustomCommandRoundtrips);
 
         // Policy: AcpAgent
@@ -85,8 +87,22 @@ namespace SettingsModelUnitTests
         TEST_METHOD(AcpRuntimeModelsAreScopedByAgent);
         TEST_METHOD(AgentPanePositionRoundtripsAndDefaults);
         TEST_METHOD(ShowTokenUsageAndCostRoundtripsAndDefaultsOff);
+        TEST_METHOD(AgentSessionManagementRoundtripsDefaultsOnAndHonorsPolicy);
         TEST_METHOD(AutoErrorSettingsRoundtrip);
         TEST_METHOD(EffectiveAutoFixFalseWhenDetectionOff);
+        TEST_METHOD(AutoFixPolicyPreservesErrorDetection);
+        TEST_METHOD(AgentPaneYoloModeRoundtripsAndDefaults);
+        TEST_METHOD(EffectiveAgentPaneYoloModeFalseForOpenCode);
+        TEST_METHOD(EffectiveAgentPaneYoloModeFalseWhenDefaultAgentBlocked);
+        TEST_METHOD(CanEnableAgentPaneYoloModeTracksPolicyAndProvider);
+        TEST_METHOD(OpenCodeDefaultClearsStoredAgentPaneYoloMode);
+        TEST_METHOD(EffectiveAgentPaneYoloModeFalseWhenPolicyBlocked);
+        TEST_METHOD(PolicyBlockClearsStoredAgentPaneYoloMode);
+        TEST_METHOD(IsYoloModePolicyLockedTracksBlocked);
+        TEST_METHOD(YoloSettingsNoticeTracksSelectedProviderAndPreference);
+        TEST_METHOD(PolicyChangeWatcherTargetsProductKey);
+        TEST_METHOD(PolicyChangeWatcherObservesRecursiveMutation);
+        TEST_METHOD(PolicyChangeWatcherTracksPolicyCreatedFromMissingAncestors);
 
         TEST_CLASS_CLEANUP(ClassCleanup)
         {
@@ -124,11 +140,17 @@ namespace SettingsModelUnitTests
 
         static std::shared_ptr<AgentPolicy::PolicySnapshot> MakePolicy(
             std::optional<std::set<std::wstring, AgentPolicy::CaseInsensitiveLess>> allowedAgents = std::nullopt,
-            AgentPolicy::PolicyState customAgents = AgentPolicy::PolicyState::NotConfigured)
+            AgentPolicy::PolicyState customAgents = AgentPolicy::PolicyState::NotConfigured,
+            AgentPolicy::PolicyState yoloMode = AgentPolicy::PolicyState::NotConfigured,
+            AgentPolicy::PolicyState autoFix = AgentPolicy::PolicyState::NotConfigured,
+            AgentPolicy::PolicyState agentSessionHooks = AgentPolicy::PolicyState::NotConfigured)
         {
             auto snap = std::make_shared<AgentPolicy::PolicySnapshot>();
             snap->allowedAgents = std::move(allowedAgents);
             snap->customAgents = customAgents;
+            snap->yoloMode = yoloMode;
+            snap->agentSessionHooks = agentSessionHooks;
+            snap->autoFix = autoFix;
             return snap;
         }
 
@@ -163,6 +185,31 @@ namespace SettingsModelUnitTests
         const auto& globals = settings->GlobalSettings();
         VERIFY_ARE_EQUAL(winrt::hstring{ L"custom:helper" }, globals.DelegateAgent());
         VERIFY_ARE_EQUAL(winrt::hstring{ L"helper.cmd --acp" }, globals.DelegateCustomCommand());
+    }
+
+    void CustomAgentAndPolicyTests::CustomAgentCollectionsRoundtrip()
+    {
+        const auto settings = MakeSettings(
+            R"("acpCustomCommands": ["test", "test2"], "delegateCustomCommands": ["delegate1", "delegate2"])");
+        const auto& globals = settings->GlobalSettings();
+
+        const auto acpCommands = globals.AcpCustomCommands();
+        VERIFY_ARE_EQUAL(uint32_t{ 2 }, acpCommands.Size());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"test" }, acpCommands.GetAt(0));
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"test2" }, acpCommands.GetAt(1));
+
+        const auto delegateCommands = globals.DelegateCustomCommands();
+        VERIFY_ARE_EQUAL(uint32_t{ 2 }, delegateCommands.Size());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"delegate1" }, delegateCommands.GetAt(0));
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"delegate2" }, delegateCommands.GetAt(1));
+
+        const auto serialized = settings->ToJson();
+        VERIFY_ARE_EQUAL(Json::ArrayIndex{ 2 }, serialized["acpCustomCommands"].size());
+        VERIFY_ARE_EQUAL(std::string{ "test" }, serialized["acpCustomCommands"][0].asString());
+        VERIFY_ARE_EQUAL(std::string{ "test2" }, serialized["acpCustomCommands"][1].asString());
+        VERIFY_ARE_EQUAL(Json::ArrayIndex{ 2 }, serialized["delegateCustomCommands"].size());
+        VERIFY_ARE_EQUAL(std::string{ "delegate1" }, serialized["delegateCustomCommands"][0].asString());
+        VERIFY_ARE_EQUAL(std::string{ "delegate2" }, serialized["delegateCustomCommands"][1].asString());
     }
 
     void CustomAgentAndPolicyTests::QuotedPathCustomCommandRoundtrips()
@@ -619,31 +666,377 @@ namespace SettingsModelUnitTests
         VERIFY_IS_FALSE(defaulted->GlobalSettings().ShowTokenUsageAndCost());
     }
 
+    void CustomAgentAndPolicyTests::AgentSessionManagementRoundtripsDefaultsOnAndHonorsPolicy()
+    {
+        const auto disabled = MakeSettings(R"("agentSessionManagementEnabled": false)");
+        SetPolicy(MakePolicy());
+        VERIFY_IS_FALSE(disabled->GlobalSettings().AgentSessionManagementEnabled());
+        VERIFY_IS_FALSE(disabled->GlobalSettings().EffectiveAgentSessionManagementEnabled());
+
+        const auto defaulted = MakeSettings({});
+        SetPolicy(MakePolicy());
+        VERIFY_IS_TRUE(defaulted->GlobalSettings().AgentSessionManagementEnabled());
+        VERIFY_IS_TRUE(defaulted->GlobalSettings().EffectiveAgentSessionManagementEnabled());
+
+        const auto blocked = MakeSettings(R"("agentSessionManagementEnabled": true)");
+        SetPolicy(MakePolicy(
+            std::nullopt,
+            AgentPolicy::PolicyState::NotConfigured,
+            AgentPolicy::PolicyState::NotConfigured,
+            AgentPolicy::PolicyState::NotConfigured,
+            AgentPolicy::PolicyState::Blocked));
+        VERIFY_IS_TRUE(blocked->GlobalSettings().AgentSessionManagementEnabled());
+        VERIFY_IS_FALSE(blocked->GlobalSettings().EffectiveAgentSessionManagementEnabled());
+    }
+
     void CustomAgentAndPolicyTests::AutoErrorSettingsRoundtrip()
     {
-        const auto settings = MakeSettings(R"("autoErrorDetectionEnabled": true, "autoFixEnabled": true)");
-        VERIFY_IS_TRUE(settings->GlobalSettings().AutoErrorDetectionEnabled());
-        VERIFY_IS_TRUE(settings->GlobalSettings().AutoFixEnabled());
+        const auto enabled = MakeSettings(R"("autoErrorDetectionEnabled": true, "autoFixEnabled": true)");
+        VERIFY_IS_TRUE(enabled->GlobalSettings().AutoErrorDetectionEnabled());
+        VERIFY_IS_TRUE(enabled->GlobalSettings().AutoFixEnabled());
+
+        const auto detectionOnly = MakeSettings(R"("autoErrorDetectionEnabled": true, "autoFixEnabled": false)");
+        VERIFY_IS_TRUE(detectionOnly->GlobalSettings().AutoErrorDetectionEnabled());
+        VERIFY_IS_FALSE(detectionOnly->GlobalSettings().AutoFixEnabled());
 
         const auto off = MakeSettings(R"("autoErrorDetectionEnabled": false, "autoFixEnabled": false)");
         VERIFY_IS_FALSE(off->GlobalSettings().AutoErrorDetectionEnabled());
         VERIFY_IS_FALSE(off->GlobalSettings().AutoFixEnabled());
+
+        const auto defaulted = MakeSettings({});
+        VERIFY_IS_TRUE(defaulted->GlobalSettings().AutoErrorDetectionEnabled());
+        VERIFY_IS_FALSE(defaulted->GlobalSettings().AutoFixEnabled());
     }
 
     void CustomAgentAndPolicyTests::EffectiveAutoFixFalseWhenDetectionOff()
     {
-        // Auto-suggest depends on detection: even with autoFixEnabled=true, the
-        // effective value must be false when detection is off, so failures with
-        // nothing to detect never reach the agent.
         const auto detectionOff = MakeSettings(
             R"("autoErrorDetectionEnabled": false, "autoFixEnabled": true)");
-        SetPolicy(MakePolicy()); // autoFix NotConfigured → allowed
+        SetPolicy(MakePolicy());
         VERIFY_IS_FALSE(detectionOff->GlobalSettings().EffectiveAutoFixEnabled());
 
-        // Both on (and policy allows) → effective true.
         const auto bothOn = MakeSettings(
             R"("autoErrorDetectionEnabled": true, "autoFixEnabled": true)");
         SetPolicy(MakePolicy());
         VERIFY_IS_TRUE(bothOn->GlobalSettings().EffectiveAutoFixEnabled());
+    }
+
+    void CustomAgentAndPolicyTests::AutoFixPolicyPreservesErrorDetection()
+    {
+        const auto settings = MakeSettings(
+            R"("autoErrorDetectionEnabled": true, "autoFixEnabled": true)");
+        SetPolicy(MakePolicy(
+            std::nullopt,
+            AgentPolicy::PolicyState::NotConfigured,
+            AgentPolicy::PolicyState::NotConfigured,
+            AgentPolicy::PolicyState::Blocked));
+
+        VERIFY_IS_TRUE(settings->GlobalSettings().EffectiveAutoErrorDetectionEnabled());
+        VERIFY_IS_FALSE(settings->GlobalSettings().EffectiveAutoFixEnabled());
+        VERIFY_IS_TRUE(settings->GlobalSettings().IsAutoFixPolicyLocked());
+    }
+
+    void CustomAgentAndPolicyTests::AgentPaneYoloModeRoundtripsAndDefaults()
+    {
+        // Explicit value survives load, and the underlying setting is
+        // readable independent of policy (policy NotConfigured → allowed).
+        const auto settings = MakeSettings(R"("agentPane.yoloMode": true)");
+        SetPolicy(MakePolicy());
+        VERIFY_IS_TRUE(settings->GlobalSettings().AgentPaneYoloMode());
+        VERIFY_IS_TRUE(settings->GlobalSettings().EffectiveAgentPaneYoloMode());
+
+        // Absent → falls back to the `false` default (MTSMSettings.h).
+        const auto defaulted = MakeSettings({});
+        SetPolicy(MakePolicy());
+        VERIFY_IS_FALSE(defaulted->GlobalSettings().AgentPaneYoloMode());
+        VERIFY_IS_FALSE(defaulted->GlobalSettings().EffectiveAgentPaneYoloMode());
+    }
+
+    void CustomAgentAndPolicyTests::EffectiveAgentPaneYoloModeFalseForOpenCode()
+    {
+        const auto openCode = MakeSettings(
+            R"("acpAgent": "opencode", "agentPane.yoloMode": true)");
+        SetPolicy(MakePolicy());
+        VERIFY_IS_TRUE(openCode->GlobalSettings().AgentPaneYoloMode());
+        VERIFY_IS_FALSE(openCode->GlobalSettings().EffectiveAgentPaneYoloMode());
+
+        const auto custom = MakeSettings(
+            R"("acpAgent": "custom:local", "agentPane.yoloMode": true)");
+        VERIFY_IS_TRUE(custom->GlobalSettings().EffectiveAgentPaneYoloMode());
+    }
+
+    void CustomAgentAndPolicyTests::EffectiveAgentPaneYoloModeFalseWhenDefaultAgentBlocked()
+    {
+        const auto builtIn = MakeSettings(
+            R"("acpAgent": "copilot", "agentPane.yoloMode": true)");
+        SetPolicy(MakePolicy(
+            std::set<std::wstring, AgentPolicy::CaseInsensitiveLess>{ L"gemini" }));
+        VERIFY_ARE_EQUAL(winrt::hstring{}, builtIn->GlobalSettings().EffectiveAcpAgent());
+        VERIFY_IS_TRUE(builtIn->GlobalSettings().AgentPaneYoloMode());
+        VERIFY_IS_FALSE(builtIn->GlobalSettings().EffectiveAgentPaneYoloMode());
+
+        const auto custom = MakeSettings(
+            R"("acpAgent": "custom:local", "agentPane.yoloMode": true)");
+        SetPolicy(MakePolicy(
+            /*allowedAgents*/ std::nullopt,
+            AgentPolicy::PolicyState::Blocked));
+        VERIFY_ARE_EQUAL(winrt::hstring{}, custom->GlobalSettings().EffectiveAcpAgent());
+        VERIFY_IS_TRUE(custom->GlobalSettings().AgentPaneYoloMode());
+        VERIFY_IS_FALSE(custom->GlobalSettings().EffectiveAgentPaneYoloMode());
+    }
+
+    void CustomAgentAndPolicyTests::CanEnableAgentPaneYoloModeTracksPolicyAndProvider()
+    {
+        const auto settings = MakeSettings(R"("acpAgent": "copilot")");
+        SetPolicy(MakePolicy());
+        const auto globals = settings->GlobalSettings();
+
+        VERIFY_IS_TRUE(globals.CanEnableAgentPaneYoloMode());
+        VERIFY_IS_TRUE(globals.CanEnableAgentPaneYoloModeForAgent(L"gemini"));
+        VERIFY_IS_TRUE(globals.CanEnableAgentPaneYoloModeForAgent(L"custom:local"));
+        VERIFY_IS_FALSE(globals.CanEnableAgentPaneYoloModeForAgent(L"opencode"));
+        VERIFY_IS_FALSE(globals.CanEnableAgentPaneYoloModeForAgent(L""));
+
+        SetPolicy(MakePolicy(
+            /*allowedAgents*/ std::nullopt,
+            AgentPolicy::PolicyState::NotConfigured,
+            AgentPolicy::PolicyState::Blocked));
+        VERIFY_IS_FALSE(globals.CanEnableAgentPaneYoloMode());
+        VERIFY_IS_FALSE(globals.CanEnableAgentPaneYoloModeForAgent(L"gemini"));
+
+        SetPolicy(MakePolicy(
+            std::set<std::wstring, AgentPolicy::CaseInsensitiveLess>{ L"gemini" }));
+        VERIFY_IS_FALSE(globals.CanEnableAgentPaneYoloMode());
+        VERIFY_IS_FALSE(globals.CanEnableAgentPaneYoloModeForAgent(L"copilot"));
+
+        SetPolicy(MakePolicy(
+            /*allowedAgents*/ std::nullopt,
+            AgentPolicy::PolicyState::Blocked));
+        VERIFY_IS_FALSE(globals.CanEnableAgentPaneYoloModeForAgent(L"custom:local"));
+    }
+
+    void CustomAgentAndPolicyTests::OpenCodeDefaultClearsStoredAgentPaneYoloMode()
+    {
+        const auto openCode = MakeSettings(
+            R"("acpAgent": "opencode", "agentPane.yoloMode": true)");
+        const auto openCodeGlobals = openCode->GlobalSettings();
+        const auto openCodeImpl = winrt::get_self<implementation::GlobalAppSettings>(openCodeGlobals);
+        VERIFY_IS_TRUE(openCodeImpl->ClearAgentPaneYoloModeIfUnavailableDefault());
+        VERIFY_IS_FALSE(openCodeGlobals.AgentPaneYoloMode());
+        VERIFY_IS_FALSE(openCodeImpl->ClearAgentPaneYoloModeIfUnavailableDefault());
+
+        const auto custom = MakeSettings(
+            R"("acpAgent": "custom:opencode", "agentPane.yoloMode": true)");
+        const auto customGlobals = custom->GlobalSettings();
+        const auto customImpl = winrt::get_self<implementation::GlobalAppSettings>(customGlobals);
+        VERIFY_IS_FALSE(customImpl->ClearAgentPaneYoloModeIfUnavailableDefault());
+        VERIFY_IS_TRUE(customGlobals.AgentPaneYoloMode());
+    }
+
+    void CustomAgentAndPolicyTests::EffectiveAgentPaneYoloModeFalseWhenPolicyBlocked()
+    {
+        // The AllowYoloMode admin policy overrides the user's toggle: even
+        // with the setting on, a Blocked policy must force the effective
+        // value to false, matching the AutoFix policy-gate pattern above.
+        const auto settings = MakeSettings(R"("agentPane.yoloMode": true)");
+        SetPolicy(MakePolicy(/*allowedAgents*/ std::nullopt,
+                              /*customAgents*/ AgentPolicy::PolicyState::NotConfigured,
+                              /*yoloMode*/ AgentPolicy::PolicyState::Blocked));
+        VERIFY_IS_FALSE(settings->GlobalSettings().EffectiveAgentPaneYoloMode());
+        // The raw (non-effective) setting still reflects the user's choice —
+        // only the effective/gated accessor is policy-clamped.
+        VERIFY_IS_TRUE(settings->GlobalSettings().AgentPaneYoloMode());
+    }
+
+    void CustomAgentAndPolicyTests::PolicyBlockClearsStoredAgentPaneYoloMode()
+    {
+        const auto settings = MakeSettings(R"("agentPane.yoloMode": true)");
+        SetPolicy(MakePolicy(/*allowedAgents*/ std::nullopt,
+                              /*customAgents*/ AgentPolicy::PolicyState::NotConfigured,
+                              /*yoloMode*/ AgentPolicy::PolicyState::Blocked));
+
+        const auto globals = settings->GlobalSettings();
+        const auto impl = winrt::get_self<implementation::GlobalAppSettings>(globals);
+        VERIFY_IS_TRUE(impl->ClearAgentPaneYoloModeIfPolicyBlocked());
+        VERIFY_IS_FALSE(globals.AgentPaneYoloMode());
+        VERIFY_IS_FALSE(impl->ClearAgentPaneYoloModeIfPolicyBlocked());
+    }
+
+    void CustomAgentAndPolicyTests::YoloSettingsNoticeTracksSelectedProviderAndPreference()
+    {
+        using namespace ::Microsoft::Terminal::Settings::Model::AgentRegistry;
+
+        VERIFY_ARE_EQUAL(YoloSettingsNotice::None,
+                         GetYoloSettingsNotice(L"opencode", true, false, true));
+        VERIFY_ARE_EQUAL(YoloSettingsNotice::Conditional,
+                         GetYoloSettingsNotice(L"gemini", true, false, true));
+        VERIFY_ARE_EQUAL(YoloSettingsNotice::None,
+                         GetYoloSettingsNotice(L"gemini", false, false, true));
+        VERIFY_ARE_EQUAL(YoloSettingsNotice::None,
+                         GetYoloSettingsNotice(L"copilot", true, false, true));
+        VERIFY_ARE_EQUAL(YoloSettingsNotice::None,
+                         GetYoloSettingsNotice(L"opencode", false, false, true));
+        VERIFY_ARE_EQUAL(YoloSettingsNotice::None,
+                         GetYoloSettingsNotice(L"opencode", true, true, true));
+        VERIFY_ARE_EQUAL(YoloSettingsNotice::None,
+                         GetYoloSettingsNotice(L"opencode", true, false, false));
+        VERIFY_ARE_EQUAL(YoloSettingsNotice::None,
+                         GetYoloSettingsNotice(L"custom:opencode", true, false, true));
+    }
+
+    void CustomAgentAndPolicyTests::IsYoloModePolicyLockedTracksBlocked()
+    {
+        const auto settings = MakeSettings({});
+
+        SetPolicy(MakePolicy(std::nullopt, AgentPolicy::PolicyState::NotConfigured, AgentPolicy::PolicyState::NotConfigured));
+        VERIFY_IS_FALSE(settings->GlobalSettings().IsYoloModePolicyLocked());
+
+        SetPolicy(MakePolicy(std::nullopt, AgentPolicy::PolicyState::NotConfigured, AgentPolicy::PolicyState::Allowed));
+        VERIFY_IS_FALSE(settings->GlobalSettings().IsYoloModePolicyLocked());
+
+        SetPolicy(MakePolicy(std::nullopt, AgentPolicy::PolicyState::NotConfigured, AgentPolicy::PolicyState::Blocked));
+        VERIFY_IS_TRUE(settings->GlobalSettings().IsYoloModePolicyLocked());
+    }
+
+    void CustomAgentAndPolicyTests::PolicyChangeWatcherObservesRecursiveMutation()
+    {
+        const auto keyPath = L"Software\\IntelligentTerminal\\Tests\\PolicyWatcher-" +
+                             std::to_wstring(GetCurrentProcessId()) + L"-" +
+                             std::to_wstring(GetTickCount64());
+        const auto cleanup = wil::scope_exit([&] {
+            RegDeleteTreeW(HKEY_CURRENT_USER, keyPath.c_str());
+        });
+
+        wil::unique_hkey key;
+        VERIFY_ARE_EQUAL(
+            static_cast<LSTATUS>(ERROR_SUCCESS),
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                keyPath.c_str(),
+                0,
+                nullptr,
+                0,
+                KEY_NOTIFY | KEY_CREATE_SUB_KEY,
+                nullptr,
+                &key,
+                nullptr));
+        wil::unique_event changed;
+        changed.create();
+        std::atomic_uint32_t callbackCount{ 0 };
+        auto watcher = AgentPolicy::details::CreatePolicyChangeWatcher(
+            std::move(key),
+            [&](wil::RegistryChangeKind) {
+                callbackCount.fetch_add(1, std::memory_order_relaxed);
+                changed.SetEvent();
+            });
+        VERIFY_IS_TRUE(static_cast<bool>(watcher));
+
+        wil::unique_hkey policyKey;
+        const auto policyPath = keyPath + L"\\IntelligentTerminal";
+        VERIFY_ARE_EQUAL(
+            static_cast<LSTATUS>(ERROR_SUCCESS),
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                policyPath.c_str(),
+                0,
+                nullptr,
+                0,
+                KEY_SET_VALUE,
+                nullptr,
+                &policyKey,
+                nullptr));
+        constexpr DWORD blocked = 0;
+        VERIFY_ARE_EQUAL(
+            static_cast<LSTATUS>(ERROR_SUCCESS),
+            RegSetValueExW(
+                policyKey.get(),
+                L"AllowYoloMode",
+                0,
+                REG_DWORD,
+                reinterpret_cast<const BYTE*>(&blocked),
+                sizeof(blocked)));
+
+        VERIFY_ARE_EQUAL(WAIT_OBJECT_0, WaitForSingleObject(changed.get(), 5000));
+        VERIFY_IS_GREATER_THAN_OR_EQUAL(callbackCount.load(std::memory_order_relaxed), 1u);
+    }
+
+    void CustomAgentAndPolicyTests::PolicyChangeWatcherTargetsProductKey()
+    {
+        VERIFY_ARE_EQUAL(
+            std::wstring_view{ AgentPolicy::PolicyRegKey },
+            std::wstring_view{ AgentPolicy::PolicyWatchRegKey });
+    }
+
+    void CustomAgentAndPolicyTests::PolicyChangeWatcherTracksPolicyCreatedFromMissingAncestors()
+    {
+        const auto keyPath = L"Software\\IntelligentTerminal\\Tests\\PolicyWatcherAncestors-" +
+                             std::to_wstring(GetCurrentProcessId()) + L"-" +
+                             std::to_wstring(GetTickCount64());
+        const auto cleanup = wil::scope_exit([&] {
+            RegDeleteTreeW(HKEY_CURRENT_USER, keyPath.c_str());
+        });
+
+        wil::unique_hkey root;
+        VERIFY_ARE_EQUAL(
+            static_cast<LSTATUS>(ERROR_SUCCESS),
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                keyPath.c_str(),
+                0,
+                nullptr,
+                0,
+                KEY_NOTIFY | KEY_CREATE_SUB_KEY,
+                nullptr,
+                &root,
+                nullptr));
+        wil::unique_event changed;
+        changed.create();
+        wil::unique_registry_watcher_nothrow watcher;
+        const auto arm = [&] {
+            watcher = AgentPolicy::details::CreatePolicyChangeWatcher(
+                root.get(),
+                L"Policies\\Microsoft",
+                [&](wil::RegistryChangeKind) {
+                    changed.SetEvent();
+                });
+            VERIFY_IS_TRUE(static_cast<bool>(watcher));
+        };
+        const auto createAndObserve = [&](const wchar_t* relativePath) {
+            VERIFY_WIN32_BOOL_SUCCEEDED(ResetEvent(changed.get()));
+            arm();
+            wil::unique_hkey created;
+            VERIFY_ARE_EQUAL(
+                static_cast<LSTATUS>(ERROR_SUCCESS),
+                RegCreateKeyExW(
+                    root.get(),
+                    relativePath,
+                    0,
+                    nullptr,
+                    0,
+                    KEY_NOTIFY | KEY_CREATE_SUB_KEY | KEY_SET_VALUE,
+                    nullptr,
+                    &created,
+                    nullptr));
+            VERIFY_ARE_EQUAL(WAIT_OBJECT_0, WaitForSingleObject(changed.get(), 5000));
+            return created;
+        };
+
+        createAndObserve(L"Policies");
+        createAndObserve(L"Policies\\Microsoft");
+        auto policyKey = createAndObserve(L"Policies\\Microsoft\\IntelligentTerminal");
+
+        VERIFY_WIN32_BOOL_SUCCEEDED(ResetEvent(changed.get()));
+        arm();
+        constexpr DWORD blocked = 0;
+        VERIFY_ARE_EQUAL(
+            static_cast<LSTATUS>(ERROR_SUCCESS),
+            RegSetValueExW(
+                policyKey.get(),
+                L"AllowYoloMode",
+                0,
+                REG_DWORD,
+                reinterpret_cast<const BYTE*>(&blocked),
+                sizeof(blocked)));
+        VERIFY_ARE_EQUAL(WAIT_OBJECT_0, WaitForSingleObject(changed.get(), 5000));
     }
 }

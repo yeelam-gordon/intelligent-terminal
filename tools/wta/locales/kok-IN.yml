@@ -51,6 +51,7 @@ chat.turn_canceled: "(रद्द केल्लें)"
 chat.turn_executed: "→ निश्पादीत: %{title}"
 # स्थिती चिन्हा उपरांत आनी विशया आदीं दाखोवपी कायम साधन-वर्ग लेबलां.
 chat.tool_kind.run: "चलयात"
+chat.tool_kind.insert: "घालात"
 chat.tool_kind.read: "वाचात"
 chat.tool_kind.search: "सोदात"
 chat.tool_kind.edit: "संपादन करात"
@@ -136,8 +137,25 @@ agents.status.idle: "निश्क्रिय"
 layout.welcome_hint: "  (Ctrl+Shift+. एजेंट पेन दाखयात/लिपयात • Ctrl+Shift+/ एजेंट सत्र दाखयात/लिपयात)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── कनेक्शन स्थिती ────────────────────────────────────────────────────────
-connection.starting: "एजेंट सुरू जाता..."
+# Preparing the AI agent connection, including preflight and reuse of a cached agent.
+connection.starting: "एजेंटाक जोडपाची तयारी करता..."
 connection.reconnecting: "परतून जोडता..."
+# Retiring old AI agent sessions for /restart, before the next connection phases.
+connection.restarting: "एजेंट परत सुरू करता..."
+# Connecting the pane to WTA's local coordinator process, not to an AI model.
+connection.coordinator: "थळाव्या समन्वयकाक जोडता..."
+# Initializing the helper/coordinator connection, including local preparation and AI agent initialization.
+connection.initializing: "एजेंटा कडेन जोडणी सुरू करता..."
+# Refreshing the user's authentication with the AI agent after login; not verifying the agent's identity.
+connection.authenticating: "एजेंटा कडेन वापरप्याची वळख प्रमाणीत करता..."
+# Reading the coordinator's registry snapshot, including existing history; not fetching history from the AI agent.
+connection.syncing_sessions: "सत्रांची वळेरी वाचता..."
+# Creating the AI agent session, including local registration; internal agent progress is unknown.
+connection.creating_session: "एजेंटाचें सत्र तयार करता..."
+# Applying the requested AI model before the connection is ready. Preserve %{model}.
+connection.selecting_model: "सत्राचें मॉडेल सेट करता: %{model}..."  # {Locked="%{model}"}
+# Activity row while connecting to restore a conversation. Keep the actual stage first so narrow panes show it; session_id is shortened to eight characters.
+connection.resuming_stage: "%{stage} (%{session_id} फुडें चालू करता)"  # {Locked="%{stage}","%{session_id}"}
 connection.connecting_activity: "एजेंटाक जोडटा…"
 connection.lost: "एजेंटाशी जोडणी तुटली. परतून जोडपाक /restart टायप करात."  # {Locked="/restart"}
 
@@ -158,8 +176,8 @@ system.resuming_session: "सत्र %{session_id} परत सुरू ज�
 system.unknown_command: "अज्ञात कमांड \"%{command}\" — प्रॉम्प्ट म्हूण धाडली. वळेरी खातीर /help टायप करात."  # {Locked="/help"}
 system.busy_use_stop: "सद्याचो प्रॉम्प्ट सोंप मेरेन रावात, वा पयलीं /stop वापरात."  # {Locked="/stop"}
 system.cannot_focus_session: "सत्र %{session_id} चेर फोकस करूंक शकना: तें live दिसता पूण अजून कसलेच पेन GUID बांदिलें ना. थोड्या वेळान परत प्रयत्न करात."
-system.cannot_resume_no_load_session: "एजंट पेनांत परत सुरू करूंक शकना: %{agent} नें ACP `loadSession` क्षमता जाहीर करूंक ना. त्याऐवजी नव्या टर्मिनल पेनांत परत सुरू करपाक Enter (Shift शिवाय) दामात."  # {Locked="ACP","loadSession","Enter","Shift"}
-system.cannot_resume_no_resume_flag: "%{agent} सत्र परत सुरू करूंक शकना: ह्या एजंटाक `--resume` सारको फ्लॅग ना. त्याऐवजी ACP वरवीं एजंट पेनांत परत सुरू करपाचो प्रयत्न करपाक Shift+Enter दामात."  # {Locked="--resume","Shift","Enter","ACP"}
+system.cannot_resume_no_load_session: "एजंट पेनांत परत सुरू करूंक शकना: %{agent} नें ACP `loadSession` क्षमता जाहीर करूंक ना."  # {Locked="ACP","loadSession"}
+system.cannot_resume_no_resume_flag: "%{agent} सत्र परत सुरू करूंक शकना: ह्या एजंटाक `--resume` सारको फ्लॅग ना."  # {Locked="--resume"}
 system.cannot_resume_unknown_agent: "सत्र %{session_id} परत सुरू करूंक शकना: ताचो स्रोत एजंट ह्या WTA बिल्डाक खबर ना."
 system.cannot_resume_phantom_via_flag: "%{agent} सत्र %{session_id} परत सुरू करूंक शकना: तें सुरू जालें पूण कसलोच संवाद जमा जालो ना, देखून %{agent} स्वतः resume नाकारतलो. ओळ काडटा."
 system.cannot_resume_phantom_via_load: "%{agent} सत्र %{session_id} परत सुरू करूंक शकना: तें सुरू जालें पूण कसलोच संवाद जमा जालो ना, देखून %{agent} load नाकारतलो. ओळ काडटा."
@@ -240,4 +258,6 @@ config_picker.title: "सत्र संफिग्रेशन (↑ ↓ • E
 system.no_config_options: "जोडिल्ल्या एजंटान कसलेच संफिग्रेशन करपासारखे सत्र पर्याय सांगले नानात."
 # {option} is an Agent-provided option name; {error} is the ACP error.
 system.config_update_failed: "%{option} अद्ययावत करपाक अपेस आले: %{error}"
+system.yolo_disable_pending: "एजंट प्रदात्यान विशेषाधिकार मोड बंद आशिल्ली गरजेची सत्र स्थिती अजून मान्य केल्ली ना"  # Shown after the localized failure prefix while prompts remain blocked until the AI agent provider confirms that its privileged session mode is off. Provider means an AI agent provider, not a network provider.
+system.provider_command_blocked_by_policy: "%{command}: तुमच्या संघटनेच्या धोरणान Yolo mode बंद केल्लो आसा."  # {Locked="Yolo","%{command}"} Shown when AllowYoloMode blocks a provider-advertised privileged command.
 system.model_unknown: "अज्ञात मॉडेल %{model} — उपलब्ध वळेरी पळोवपाक /model टायप करात."  # {Locked="%{model}","/model"}

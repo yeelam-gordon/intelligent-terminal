@@ -75,13 +75,13 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
 
     enum class InstallTargets : uint8_t
     {
-        None = 0x0,
-        Pwsh = 0x1,
-        WindowsPowerShell = 0x2,
-        Bash = 0x4,
-        Wsl = 0x8,
-        Native = 0x7,
-        All = 0xF,
+        None = 0x00,
+        Pwsh = 0x01,
+        WindowsPowerShell = 0x02,
+        Bash = 0x04,
+        Wsl = 0x08,
+        WindowsShells = 0x07, // Pwsh | WindowsPowerShell | Bash (Git Bash)
+        All = 0xFF,
     };
 
     constexpr InstallTargets operator|(InstallTargets lhs, InstallTargets rhs) noexcept
@@ -93,6 +93,13 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
     {
         return (static_cast<uint8_t>(set) & static_cast<uint8_t>(flag)) == static_cast<uint8_t>(flag);
     }
+
+    static_assert(HasInstallTarget(InstallTargets::Pwsh, InstallTargets::Pwsh));
+    static_assert(HasInstallTarget(InstallTargets::Pwsh | InstallTargets::Bash, InstallTargets::Bash));
+    static_assert(!HasInstallTarget(InstallTargets::None, InstallTargets::Pwsh));
+    static_assert(!HasInstallTarget(InstallTargets::WindowsShells, InstallTargets::Wsl));
+    static_assert(HasInstallTarget(InstallTargets::All, static_cast<InstallTargets>(0x10)));
+    static_assert(!HasInstallTarget(InstallTargets::WindowsShells, static_cast<InstallTargets>(0x10)));
 
     // Return the profile's launch commandline IF it is a WSL profile
     // (else empty). Uses the pure SI::IsWslProfile predicate (unit-tested in
@@ -358,4 +365,5 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
                       " for " + logIdentity +
                       (result.errorMessage.empty() ? std::string{} : " error=" + winrt::to_string(winrt::hstring{ result.errorMessage })));
     }
+
 }

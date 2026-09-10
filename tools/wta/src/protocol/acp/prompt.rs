@@ -281,26 +281,43 @@ mod tests {
     fn embedded_prompts_use_the_mcp_tool_schema_as_authority() {
         for prompt in [EMBEDDED_DEFAULT_PROMPT, EMBEDDED_AUTOFIX_PROMPT] {
             assert!(prompt.contains("provides an MCP server for this session"));
-            assert!(prompt.contains("terminal_send"));
+            assert!(prompt.contains("run_command_in_current_shell"));
             assert!(!prompt.contains("request_terminal_actions"));
+            for removed in ["terminal_send", "terminal_open", "terminal_open_and_send"] {
+                assert!(!prompt.contains(removed), "prompt still names {removed}");
+            }
+            for removed in [
+                "`run_command`",
+                "`open_workspace`",
+                "`run_command_in_workspace`",
+                "`delegate_task`",
+            ] {
+                assert!(!prompt.contains(removed), "prompt still names {removed}");
+            }
             assert!(prompt.contains("advertised input schema as the sole authority"));
             assert!(!prompt.contains(r#"{"type""#));
             assert!(!prompt.contains("recommended_choice"));
             assert!(!prompt.contains("```json"));
         }
         // The default prompt drives every action, so it must name each tool.
-        for tool in ["terminal_send", "terminal_open", "terminal_open_and_send"] {
+        for tool in [
+            "run_command_in_current_shell",
+            "create_workspace",
+            "delegate_task_in_new_workspace",
+        ] {
             assert!(
                 EMBEDDED_DEFAULT_PROMPT.contains(tool),
                 "default prompt must name {tool}"
             );
         }
-        // Autofix is deliberately restricted to `terminal_send` — the Helper
-        // rejects any other action for an autofix turn — so naming the target
-        // tools there would invite a call that cannot be accepted.
-        // `terminal_open` alone would already catch `terminal_open_and_send`
-        // by substring; both are asserted so the intent survives a rename.
-        for tool in ["terminal_open", "terminal_open_and_send"] {
+        assert!(EMBEDDED_DEFAULT_PROMPT
+            .contains("A requested destination alone never implies delegation"));
+        assert!(EMBEDDED_DEFAULT_PROMPT.contains("running a command in a new tab or split"));
+        assert!(EMBEDDED_DEFAULT_PROMPT.contains("only when another agent should own the work"));
+        // Autofix is deliberately restricted to `run_command_in_current_shell` — the Helper
+        // rejects any other action for an autofix turn — so naming workspace
+        // or delegation tools there would invite a call that cannot be accepted.
+        for tool in ["create_workspace", "delegate_task_in_new_workspace"] {
             assert!(
                 !EMBEDDED_AUTOFIX_PROMPT.contains(tool),
                 "autofix prompt must not name {tool}"
@@ -309,7 +326,43 @@ mod tests {
         assert!(EMBEDDED_DEFAULT_PROMPT.contains("Submit exactly one action"));
         assert!(EMBEDDED_DEFAULT_PROMPT.contains("`request_user_input`"));
         assert!(EMBEDDED_DEFAULT_PROMPT.contains("instead of guessing"));
-        assert!(EMBEDDED_AUTOFIX_PROMPT.contains("Submit exactly one `terminal_send` call"));
+        assert!(EMBEDDED_AUTOFIX_PROMPT
+            .contains("Submit exactly one `run_command_in_current_shell` call"));
+    }
+
+    #[test]
+    fn autofix_advertises_on_demand_resolution_without_assuming_near_matches() {
+        assert!(
+            EMBEDDED_AUTOFIX_PROMPT.contains("available on demand through `wta resolve-command`")
+        );
+        assert!(EMBEDDED_AUTOFIX_PROMPT.contains("do not call it routinely for every Autofix"));
+        assert!(
+            EMBEDDED_AUTOFIX_PROMPT.contains("preserve the failing pane's `--shell` and `--cwd`")
+        );
+        assert!(EMBEDDED_AUTOFIX_PROMPT.contains(
+            "An `indeterminate` or `unsupported` result, or a failed query, \
+             does not prove that a command is missing."
+        ));
+        assert!(!EMBEDDED_AUTOFIX_PROMPT.contains("Near Matches"));
+    }
+
+    #[test]
+    fn autofix_distinguishes_obvious_typos_from_unknown_local_commands() {
+        assert!(EMBEDDED_AUTOFIX_PROMPT.contains(
+            "`gti status` -> `git status`, go directly to `run_command_in_current_shell`"
+        ));
+        assert!(EMBEDDED_AUTOFIX_PROMPT
+            .contains("Do not call the resolver or substitute other discovery tools"));
+        assert!(EMBEDDED_AUTOFIX_PROMPT
+            .contains("without claiming that installation or execution was verified"));
+        assert!(EMBEDDED_AUTOFIX_PROMPT
+            .contains("an unfamiliar local command or genuine ambiguity requires local evidence"));
+        assert!(EMBEDDED_AUTOFIX_PROMPT.contains("do not invent local command names"));
+        assert!(EMBEDDED_AUTOFIX_PROMPT
+            .contains("A command-not-found error alone does not require a query"));
+        assert!(
+            !EMBEDDED_AUTOFIX_PROMPT.contains("For an obvious typo supported by the query results")
+        );
     }
 
     #[test]

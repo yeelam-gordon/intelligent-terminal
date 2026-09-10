@@ -83,7 +83,7 @@ wta new-tab -c "pwsh.exe" -n "Build"      # create a new tab
 wta split-pane -h                         # split the current pane horizontally
 wta delegate "fix this build"             # open a delegate agent in a new tab
 wta sessions list                         # inspect sessions known to master
-wta hooks install                         # install the agent-hook bridge
+wta hooks install                         # ensure the agent-hook bridge is current
 wta resolve-command which --cwd . --json  # resolve from cwd + PATH + shell-specific sources
 ```
 
@@ -113,12 +113,12 @@ name and a distinct bearer capability, so name-keyed Agent caches cannot
 overwrite another session's header. Master maps the capability to SessionId,
 resolves the current Helper through `session_to_helper`, and forwards the typed
 input over the existing ACP pipe.
-The endpoint exposes `terminal_send`, `terminal_open`, and
-`terminal_open_and_send`, which return after the Helper
-confirms that the recommendation card was presented, and `request_user_input`,
-which blocks until the user answers, cancels, disconnects, or the request times
-out. The latter is a WTA-owned fallback and does not intercept provider-native
-question tools.
+The endpoint exposes `run_command_in_current_shell`, `create_workspace`, and
+`delegate_task_in_new_workspace`, which return after the Helper confirms that
+the recommendation card was presented, and `request_user_input`, which blocks
+until the user answers, cancels, disconnects, or the request times out. The
+latter is a WTA-owned fallback and does not intercept provider-native question
+tools.
 
 ---
 
@@ -247,7 +247,7 @@ tree. It is an independent Rust project but a **companion** to Windows Terminal:
 
 See `doc/specs/Multi-window-agent-pane.md` for the full helper+master design, and
 `tools/wta/AGENTS.md` for the per-crate conventions (logging layout, session
-liveness model, hooks auto-upgrade, third-party notice generation).
+liveness model, hooks reconciliation, third-party notice generation).
 
 ---
 
@@ -305,5 +305,5 @@ Fallback: if WT pane creation fails, WTA downgrades to the local-child path.
 
 - Helper+master architecture: ✅ current primary (and only) runtime model
 - COM/CLI control plane: ✅ done; sole WT transport
-- Autofix, delegate (`?<prompt>`), session-management view, hooks auto-upgrade: ✅ shipped
+- Autofix, delegate (`?<prompt>`), session-management view, hooks reconciliation: ✅ shipped
 - MCP server mode, standalone single-process TUI: ❌ removed

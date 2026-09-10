@@ -48,6 +48,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         void Detach();
 
         Control::InteractivityAutomationPeer OnCreateAutomationPeer();
+        void AttachAutomationPeer(const Control::InteractivityAutomationPeer& peer);
         ::Microsoft::Console::Render::IRenderData* GetRenderData() const;
 
 #pragma region Input Methods
@@ -77,6 +78,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                         const Core::Point delta,
                         const Core::Point pixelPosition,
                         const Control::MouseButtonState state);
+        bool MouseWheel(const ::Microsoft::Terminal::Core::ControlKeyStates modifiers,
+                        const Core::Point delta,
+                        const Core::Point pixelPosition,
+                        const Control::MouseButtonState state,
+                        bool prioritizeZoom);
 
         void UpdateScrollbar(const float newValue);
 

@@ -898,16 +898,17 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
     void MainPage::SaveButton_Click(const IInspectable& /*sender*/, const RoutedEventArgs& /*args*/)
     {
+        const auto globals = _settingsClone.GlobalSettings();
+        globals.ClearAgentPaneYoloModeIfUnavailableDefault();
+        globals.ClearAgentPaneYoloModeIfPolicyBlocked();
+
         _settingsClone.LogSettingChanges(false);
         if (!_settingsClone.WriteSettingsToDisk())
         {
             ShowLoadWarningsDialog.raise(*this, _settingsClone.Warnings());
         }
 
-        // Install shell integration if error detection was enabled. Detection
-        // is what needs the OSC 133 marks; auto-suggest is a strict subset and
-        // can't be on without it. Only raise once — _InitShellIntegration
-        // handles both targets and shows a single dialog when done.
+        // Both enabled modes require OSC 133 shell integration.
         if (_settingsClone.GlobalSettings().AutoErrorDetectionEnabled())
         {
             InitShellIntegrationRequested.raise(*this, ShellIntegrationTarget::Pwsh);

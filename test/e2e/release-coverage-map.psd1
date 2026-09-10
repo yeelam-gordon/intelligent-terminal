@@ -16,6 +16,12 @@
     '/model works'                      = '/model opens the model picker'
     '/agent picker works'               = '/agent appears in the slash menu and opens a keyboard-operable picker'
     'Invalid /agent selection is safe'  = '/agent rejects an unavailable id without changing the pane or global setting'
+    # PR #505 provider-native Yolo. Publishable mappings are zero-token only. Real model/tool
+    # acceptance intentionally stays local-only and therefore has no release-report mapping.
+    'Yolo setting persists'             = 'Feature provider-native Yolo with Copilot\.Yolo setting persists'
+    'Settings hides unsupported automatic approval and forces it off' = 'Settings hides unsupported automatic approval and forces it off'
+    'Settings explains Gemini automatic approval restrictions' = 'Settings explains Gemini automatic approval restrictions'
+    'AllowYoloMode hides automatic approval and turns it off' = 'AllowYoloMode hides automatic approval and turns it off'
     'Esc/back navigation works'         = 'Esc/back navigation works|TRIGGERS the selected option'
     # §2/§5 WT accelerators + delegation palette (Feature.AgentHotkeys) — driven via window-level
     # OS keystrokes (Send-WtWindowKey), which reach WT's keybinding layer (the conpty path can't).
@@ -66,9 +72,11 @@
     'PowerShell shell integration installed' = 'PowerShell shell integration emits|PowerShell-level errors emit a non-zero command-finished mark on Windows PowerShell 5\.1'
 
     # §4 session view / focus
-    # NOTE: 'Shift+Enter behavior works' is NOT E2E-mapped — its contract (Live row Shift+Enter ->
-    # FocusPane) is deterministically covered by the Rust unit test
-    # shift_enter_on_class_a_live_row_focuses; focus-pane semantics aren't stably observable in E2E.
+    # NOTE: 'Only a bare Enter activates a row' is NOT E2E-mapped — its contract (a modified Enter
+    # never activates a row) is deterministically covered by the Rust unit tests
+    # modified_enter_on_live_row_dispatches_nothing / modified_enter_on_class_a_dead_row_dispatches_nothing /
+    # modified_enter_on_class_b_dead_row_dispatches_nothing; "nothing happened" and focus-pane
+    # semantics aren't stably observable in E2E.
     #
     # NOTE: 'Idle state is correct' is covered end-to-end by Feature.SessionState (the It name
     # contains the item title, so the report auto-credits it): it runs a real shell copilot

@@ -51,6 +51,7 @@ chat.turn_canceled: "(откажано)"
 chat.turn_executed: "→ извршено: %{title}"
 # Persistent tool-category labels shown after a status marker and before a subject.
 chat.tool_kind.run: "Изврши"
+chat.tool_kind.insert: "Вметни"
 chat.tool_kind.read: "Прочитај"
 chat.tool_kind.search: "Пребарај"
 chat.tool_kind.edit: "Уреди"
@@ -132,8 +133,25 @@ agents.status.idle: "Неактивен"
 layout.welcome_hint: "  (Ctrl+Shift+. прикажи/скриј панел на агентот • Ctrl+Shift+/ прикажи/скриј сесија на агентот)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
-connection.starting: "Стартување на агентот..."
+# Preparing the AI agent connection, including preflight and reuse of a cached agent.
+connection.starting: "Подготовка на врската со агентот..."
+# Retiring old AI agent sessions for /restart, before the next connection phases.
+connection.restarting: "Рестартирање на агентот..."
 connection.reconnecting: "Повторно поврзување..."
+# Connecting the pane to WTA's local coordinator process, not to an AI model.
+connection.coordinator: "Поврзување со локалниот координатор..."
+# Initializing the helper/coordinator connection, including local preparation and AI agent initialization.
+connection.initializing: "Иницијализација на врската со агентот..."
+# Refreshing the user's authentication with the AI agent after login; not verifying the agent's identity.
+connection.authenticating: "Автентикација на корисникот кај агентот..."
+# Reading the coordinator's registry snapshot, including existing history; not fetching history from the AI agent.
+connection.syncing_sessions: "Читање на списокот со сесии..."
+# Creating the AI agent session, including local registration; internal agent progress is unknown.
+connection.creating_session: "Создавање сесија на агентот..."
+# Applying the requested AI model before the connection is ready. Preserve %{model}.
+connection.selecting_model: "Поставување модел за сесијата: %{model}..."  # {Locked="%{model}"}
+# Activity row while connecting to restore a conversation. Keep the actual stage first so narrow panes show it; session_id is shortened to eight characters.
+connection.resuming_stage: "%{stage} (продолжување на %{session_id})"  # {Locked="%{stage}","%{session_id}"}
 connection.connecting_activity: "Поврзување со агентот…"
 connection.lost: "Врската со агентот беше изгубена. Внесете /restart за повторно поврзување."  # {Locked="/restart"}
 
@@ -154,8 +172,8 @@ system.resuming_session: "Се продолжува сесијата %{session_i
 system.unknown_command: "Непозната команда \"%{command}\" — испратена како барање. Внесете /help за списокот."  # {Locked="/help"}
 system.busy_use_stop: "Почекајте тековното барање да заврши или прво употребете /stop."  # {Locked="/stop"}
 system.cannot_focus_session: "Не може да се фокусира сесијата %{session_id}: изгледа активна, но сè уште не е поврзан GUID на панел. Обидете се повторно за момент."
-system.cannot_resume_no_load_session: "Не може да се продолжи во панелот на агентот: %{agent} не ја објави можноста ACP `loadSession`. Притиснете Enter (без Shift) за наместо тоа да продолжите во нов терминален панел."  # {Locked="ACP","loadSession","Enter","Shift"}
-system.cannot_resume_no_resume_flag: "Не може да се продолжи сесијата на %{agent}: овој агент нема знаменце во стил `--resume`. Притиснете Shift+Enter за да се обидете да продолжите во панелот на агентот преку ACP."  # {Locked="--resume","Shift","Enter","ACP"}
+system.cannot_resume_no_load_session: "Не може да се продолжи во панелот на агентот: %{agent} не ја објави можноста ACP `loadSession`."  # {Locked="ACP","loadSession"}
+system.cannot_resume_no_resume_flag: "Не може да се продолжи сесијата на %{agent}: овој агент нема знаменце во стил `--resume`."  # {Locked="--resume"}
 system.cannot_resume_unknown_agent: "Не може да се продолжи сесијата %{session_id}: нејзиниот изворен агент е непознат за оваа изведба на WTA."
 system.cannot_resume_phantom_via_flag: "Не може да се продолжи сесијата на %{agent} %{session_id}: таа е стартувана, но никогаш не собрала разговор, па самиот %{agent} би го одбил продолжувањето. Редот се отстранува."
 system.cannot_resume_phantom_via_load: "Не може да се продолжи сесијата на %{agent} %{session_id}: таа е стартувана, но никогаш не собрала разговор, па %{agent} би го одбил вчитувањето. Редот се отстранува."
@@ -239,4 +257,6 @@ config_picker.title: "Конфигурација на сесијата (↑ ↓ 
 system.no_config_options: "Поврзаниот агент не рекламираше никакви опции за сесија што може да се конфигурираат."
 # {option} is an Agent-provided option name; {error} is the ACP error.
 system.config_update_failed: "Не успеа да се ажурира %{option}: %{error}"
+system.yolo_disable_pending: "давателот не ја потврди потребната непривилегирана состојба на сесијата"  # Shown after the localized failure prefix while prompts remain blocked until the AI agent provider confirms that its privileged session mode is off. Provider means an AI agent provider, not a network provider.
+system.provider_command_blocked_by_policy: "%{command}: Режимот Yolo е оневозможен од политиката на вашата организација."  # {Locked="Yolo","%{command}"} Shown when AllowYoloMode blocks a provider-advertised privileged command.
 system.model_unknown: "Непознат модел %{model} — внесете /model за да ја видите достапната листа."  # {Locked="%{model}","/model"}

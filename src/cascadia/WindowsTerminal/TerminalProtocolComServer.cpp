@@ -97,9 +97,10 @@ HRESULT TerminalProtocolComServer::s_StopListening()
 {
     std::unique_lock lock{ g_mtx };
 
+    HRESULT result = S_OK;
     if (g_comRegistration)
     {
-        RETURN_IF_FAILED(CoRevokeClassObject(g_comRegistration));
+        result = CoRevokeClassObject(g_comRegistration);
         g_comRegistration = 0;
     }
 
@@ -113,7 +114,7 @@ HRESULT TerminalProtocolComServer::s_StopListening()
         g_comMtaThread.join();
     }
 
-    return S_OK;
+    return result;
 }
 
 TerminalProtocolComServer::~TerminalProtocolComServer()
@@ -276,6 +277,19 @@ static Json::Value _toJson(const Protocol::PaneOutput& o)
     v["line_count"] = o.LineCount;
     v["truncated"] = static_cast<bool>(o.Truncated);
     v["has_marks"] = static_cast<bool>(o.HasMarks);
+    return v;
+}
+
+static Json::Value _toJson(const Protocol::PaneContext& context)
+{
+    Json::Value v;
+    v["pane"] = _toJson(context.Pane);
+    v["content"] = winrt::to_string(context.Content);
+    v["output_source"] = winrt::to_string(context.OutputSource);
+    v["fallback_reason"] = winrt::to_string(context.FallbackReason);
+    v["line_count"] = context.LineCount;
+    v["truncated"] = static_cast<bool>(context.Truncated);
+    v["has_marks"] = static_cast<bool>(context.HasMarks);
     return v;
 }
 
@@ -504,8 +518,8 @@ try
     // ITerminalProtocol method is gated on this call.
     Json::Value v;
     v["authenticated"] = true;
-    // 2.2 — SendInput restored on the COM surface; pane identifiers remain GUIDs.
-    v["protocol_version"] = "2.2";
+    // 2.3 — GetPaneContext resolves and captures bounded pane context in one call.
+    v["protocol_version"] = "2.3";
     *resultJson = _bstrFromJson(v);
     return S_OK;
 }
@@ -537,6 +551,7 @@ try
         "subscribe",
         "unsubscribe",
         "send_event",
+        "get_pane_context",
     };
 
     Json::Value methods(Json::arrayValue);
@@ -609,7 +624,6 @@ try
     return S_OK;
 }
 CATCH_RETURN()
-
 STDMETHODIMP TerminalProtocolComServer::ListTabs(unsigned __int64 windowIdFilter, BSTR* json)
 try
 {
@@ -711,6 +725,67 @@ try
     }
 
     return E_FAIL; // Pane not found
+}
+CATCH_RETURN()
+
+STDMETHODIMP TerminalProtocolComServer::GetPaneContext(
+    GUID sourceSessionId,
+    boolean hasExplicitSource,
+    long maxLines,
+    long maxCharacters,
+    BSTR* json)
+try
+{
+    RETURN_HR_IF_NULL(E_POINTER, json);
+    *json = nullptr;
+    RETURN_HR_IF(E_NOT_VALID_STATE, !s_emperor);
+
+    constexpr long MaxContextLines = 1000;
+    constexpr long MaxContextCharacters = 100000;
+    RETURN_HR_IF(E_INVALIDARG, maxLines < 0 || maxLines > MaxContextLines);
+    RETURN_HR_IF(E_INVALIDARG, maxCharacters < 0 || maxCharacters > MaxContextCharacters);
+
+    const auto windows = s_emperor->GetWindows();
+    if (hasExplicitSource)
+    {
+        RETURN_HR_IF(E_INVALIDARG, InlineIsEqualGUID(sourceSessionId, GUID{}));
+
+        for (const auto& host : windows)
+        {
+            const auto page = _getPage(host.get());
+            if (!page)
+            {
+                continue;
+            }
+
+            auto context = page.GetProtocolPaneContext(
+                winrt::guid{ sourceSessionId },
+                true,
+                maxLines,
+                maxCharacters)
+                               .get();
+            if (context.Pane.SessionId != winrt::guid{})
+            {
+                context.Pane.WindowId = host->Logic().WindowProperties().WindowId();
+                *json = _bstrFromJson(_toJson(context));
+                return S_OK;
+            }
+        }
+        return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    }
+
+    const auto host = _getMostRecentHost(windows);
+    RETURN_HR_IF(E_FAIL, !host);
+
+    const auto page = _getPage(host.get());
+    RETURN_HR_IF(E_FAIL, !page);
+
+    auto context = page.GetProtocolPaneContext({}, false, maxLines, maxCharacters).get();
+    RETURN_HR_IF(E_FAIL, context.Pane.SessionId == winrt::guid{});
+
+    context.Pane.WindowId = host->Logic().WindowProperties().WindowId();
+    *json = _bstrFromJson(_toJson(context));
+    return S_OK;
 }
 CATCH_RETURN()
 
@@ -1117,6 +1192,9 @@ try
         // a new tab and asks wta to open an agent pane in it.
         _dispatchResumeInNewAgentTabToPage(eventH);
         return S_OK;
+    case ProtocolParsing::SendEventRoute::PaneAgentSession:
+        _dispatchPaneAgentSessionToPage(eventH);
+        return S_OK;
     case ProtocolParsing::SendEventRoute::AgentChipTarget:
         // Helper override for which pane gets the "Agent" chip; null
         // pane_session_id reverts the tab to source-flag-driven chip.
@@ -1135,7 +1213,12 @@ try
     {
         Json::StreamWriterBuilder wb;
         wb["indentation"] = "";
-        s_NotifyEventToComClients(Json::writeString(wb, evt));
+        const auto normalized = Json::writeString(wb, evt);
+        // Hooks publish agent lifecycle events through the broadcast route.
+        // Mirror those events into TerminalPage so a persisted layout records
+        // the same pane/session binding as WTA's registry.
+        _dispatchPaneAgentSessionToPage(winrt::to_hstring(normalized));
+        s_NotifyEventToComClients(normalized);
         return S_OK;
     }
     default:
@@ -1467,6 +1550,39 @@ void TerminalProtocolComServer::_dispatchResumeInNewAgentTabToPage(const winrt::
                 catch (...)
                 {
                     // Swallow: page may have been torn down during dispatch.
+                }
+            });
+    }
+}
+
+void TerminalProtocolComServer::_dispatchPaneAgentSessionToPage(const winrt::hstring& eventJson)
+{
+    if (!s_emperor)
+    {
+        return;
+    }
+    for (const auto& host : s_emperor->GetWindows())
+    {
+        auto page = _getPage(host.get());
+        if (!page)
+        {
+            continue;
+        }
+        const auto dispatcher = page.Dispatcher();
+        if (!dispatcher)
+        {
+            continue;
+        }
+        dispatcher.RunAsync(
+            winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
+            [page, eventJson]() {
+                try
+                {
+                    page.OnPaneAgentSessionChanged(eventJson);
+                }
+                catch (...)
+                {
+                    // Page may have been torn down during dispatch.
                 }
             });
     }

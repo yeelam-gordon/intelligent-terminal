@@ -20,7 +20,6 @@ mod custom_model_provider;
 mod cwd_util;
 mod event;
 mod helper;
-mod history_loader;
 #[cfg(test)]
 #[path = "hook_contract_tests.rs"]
 mod hook_contract_tests;
@@ -122,15 +121,22 @@ fn helper_config(cli: Cli) -> helper::config::HelperConfig {
         delegate_agent: cli.delegate_agent,
         delegate_model: cli.delegate_model,
         no_autofix: cli.no_autofix,
+        yolo_mode: cli.yolo_mode,
+        yolo_policy_blocked: cli.yolo_policy_blocked,
         setup: cli.setup,
         initial_view: match cli.initial_view {
             InitialView::Chat => helper::config::InitialView::Chat,
             InitialView::Sessions => helper::config::InitialView::Sessions,
         },
+        initial_pane_position: cli.initial_pane_position,
         owner_tab_id: cli.owner_tab_id,
         owner_window_id: cli.owner_window_id,
         initial_load_session_id: cli.initial_load_session_id,
         initial_load_cwd: cli.initial_load_cwd,
+        initial_yolo_control_owner: cli
+            .initial_yolo_control_owner
+            .as_deref()
+            .and_then(crate::app_contracts::YoloControlOwner::from_wire),
         start_stashed: cli.start_stashed,
     }
 }
@@ -140,6 +146,7 @@ fn master_config(cli: Cli) -> master::config::MasterConfig {
         agent: cli.agent,
         agent_id: cli.agent_id,
         allowed_agent_ids: cli.allowed_agent_ids,
+        session_management_enabled: !cli.no_session_management,
     }
 }
 

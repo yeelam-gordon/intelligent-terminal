@@ -51,6 +51,7 @@ chat.turn_canceled: "(avbroten)"
 chat.turn_executed: "→ utført: %{title}"
 # Persistent tool-category labels shown after a status marker and before a subject.
 chat.tool_kind.run: "Køyr"
+chat.tool_kind.insert: "Set inn"
 chat.tool_kind.read: "Les"
 chat.tool_kind.search: "Søk"
 chat.tool_kind.edit: "Rediger"
@@ -123,8 +124,25 @@ agents.status.idle: "Inaktiv"
 layout.welcome_hint: "  (Ctrl+Shift+. for å vise/gøyme agentpanelet • Ctrl+Shift+/ for å vise/gøyme agentøkta)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
-connection.starting: "Startar agenten..."
+# Preparing the AI agent connection, including preflight and reuse of a cached agent.
+connection.starting: "Førebur tilkopling til agenten..."
+# Retiring old AI agent sessions for /restart, before the next connection phases.
+connection.restarting: "Startar agenten på nytt..."
 connection.reconnecting: "Koplar til på nytt..."
+# Connecting the pane to WTA's local coordinator process, not to an AI model.
+connection.coordinator: "Koplar til den lokale koordinatoren..."
+# Initializing the helper/coordinator connection, including local preparation and AI agent initialization.
+connection.initializing: "Initialiserer tilkoplinga til agenten..."
+# Refreshing the user's authentication with the AI agent after login; not verifying the agent's identity.
+connection.authenticating: "Autentiserer brukaren hjå agenten..."
+# Reading the coordinator's registry snapshot, including existing history; not fetching history from the AI agent.
+connection.syncing_sessions: "Les øktlista..."
+# Creating the AI agent session, including local registration; internal agent progress is unknown.
+connection.creating_session: "Opprettar agentøkt..."
+# Applying the requested AI model before the connection is ready. Preserve %{model}.
+connection.selecting_model: "Set øktmodell: %{model}..."  # {Locked="%{model}"}
+# Activity row while connecting to restore a conversation. Keep the actual stage first so narrow panes show it; session_id is shortened to eight characters.
+connection.resuming_stage: "%{stage} (tek opp att %{session_id})"  # {Locked="%{stage}","%{session_id}"}
 connection.connecting_activity: "Koplar til agenten…"
 connection.lost: "Tilkoblinga til agenten gjekk tapt. Skriv /restart for å kople til på nytt."  # {Locked="/restart"}
 
@@ -145,8 +163,8 @@ system.resuming_session: "Held fram med økta %{session_id}..."
 system.unknown_command: "Ukjend kommando \"%{command}\" — send som ledetekst. Skriv /help for lista."
 system.busy_use_stop: "Vent til gjeldande ledetekst er ferdig, eller bruk /stop først."
 system.cannot_focus_session: "Kan ikkje fokusera økta %{session_id}: ho ser ut til å vera aktiv, men ingen rute-GUID er bunden enno. Prøv igjen om ein augneblink."
-system.cannot_resume_no_load_session: "Kan ikkje halda fram i agentruta: %{agent} annonserte ikkje ACP `loadSession`-funksjonen. Trykk Enter (utan Shift) for å halda fram i ei ny terminalrute i staden."
-system.cannot_resume_no_resume_flag: "Kan ikkje halda fram %{agent}-økta: denne agenten har ikkje noko `--resume`-liknande flagg. Trykk Shift+Enter for å prøva å halda fram inne i agentruta via ACP i staden."
+system.cannot_resume_no_load_session: "Kan ikkje halda fram i agentruta: %{agent} annonserte ikkje ACP `loadSession`-funksjonen."
+system.cannot_resume_no_resume_flag: "Kan ikkje halda fram %{agent}-økta: denne agenten har ikkje noko `--resume`-liknande flagg."
 system.cannot_resume_unknown_agent: "Kan ikkje halda fram økta %{session_id}: kjeldeagenten er ukjend for denne bygginga."
 system.cannot_resume_phantom_via_flag: "Kan ikkje halda fram %{agent}-økta %{session_id}: ho vart starta, men samla aldri opp nokon samtale, så %{agent} ville sjølv avvisa framhaldet. Fjernar rada."
 system.cannot_resume_phantom_via_load: "Kan ikkje halda fram %{agent}-økta %{session_id}: ho vart starta, men samla aldri opp nokon samtale, så %{agent} ville avvisa innlastinga. Fjernar rada."
@@ -239,4 +257,6 @@ config_picker.title: "Sesjonskonfigurasjon (↑ ↓ • Enter • Esc)"
 system.no_config_options: "Den tilknytta agenten annonserte ingen konfigurerbare sesjonsalternativ."
 # {option} is an Agent-provided option name; {error} is the ACP error.
 system.config_update_failed: "Klarte ikkje å oppdatere %{option}: %{error}"
+system.yolo_disable_pending: "AI-agentleverandøren har ikkje stadfesta at økta er i den påkravde ikkje-privilegerte tilstanden"  # Shown after the localized failure prefix while prompts remain blocked until the AI agent provider confirms that its privileged session mode is off. Provider means an AI agent provider, not a network provider.
+system.provider_command_blocked_by_policy: "%{command}: Yolo-modus er deaktivert av organisasjonen sin policy."  # {Locked="Yolo","%{command}"} Shown when AllowYoloMode blocks a provider-advertised privileged command.
 system.model_unknown: "Ukjend modell %{model} — skriv /model for å sjå lista over tilgjengelege."  # {Locked="%{model}","/model"}

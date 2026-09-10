@@ -4,6 +4,7 @@
 #pragma once
 
 #include <ThrottledFunc.h>
+#include <atomic>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -110,6 +111,7 @@ namespace winrt::TerminalApp::implementation
         WINRT_PROPERTY(winrt::hstring, Window);
         WINRT_PROPERTY(winrt::hstring, Content);
         WINRT_PROPERTY(uint32_t, TabIndex);
+        WINRT_PROPERTY(uint64_t, TransferId, 0);
         WINRT_PROPERTY(Windows::Foundation::IReference<Windows::Foundation::Point>, WindowPosition);
 
     public:
@@ -202,6 +204,8 @@ namespace winrt::TerminalApp::implementation
         void RequestSetMaximized(bool newMaximized);
 
         void SetStartupActions(std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions);
+        void SetStartupTransfer(uint64_t transferId) noexcept { _startupTransferId = transferId; }
+        void ContentTransferReceiverReady();
         void SetStartupConnection(winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection connection);
 
         static std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> ConvertExecuteCommandlineToActions(const Microsoft::Terminal::Settings::Model::ExecuteCommandlineArgs& args);
@@ -221,7 +225,8 @@ namespace winrt::TerminalApp::implementation
 
         safe_void_coroutine ProcessStartupActions(std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions,
                                                   const winrt::hstring cwd = winrt::hstring{},
-                                                  const winrt::hstring env = winrt::hstring{});
+                                                  const winrt::hstring env = winrt::hstring{},
+                                                  bool forceFirstActionSynchronous = false);
         safe_void_coroutine CreateTabFromConnection(winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection connection);
 
         TerminalApp::WindowProperties WindowProperties() const noexcept { return _WindowProperties; };
@@ -235,7 +240,7 @@ namespace winrt::TerminalApp::implementation
 
         bool OnDirectKeyEvent(const uint32_t vkey, const uint8_t scanCode, const bool down);
 
-        void AttachContent(Windows::Foundation::Collections::IVector<Microsoft::Terminal::Settings::Model::ActionAndArgs> args, uint32_t tabIndex);
+        bool AttachContent(Windows::Foundation::Collections::IVector<Microsoft::Terminal::Settings::Model::ActionAndArgs> args, uint32_t tabIndex, uint64_t transferId = 0);
         void SendContentToOther(winrt::TerminalApp::RequestReceiveContentArgs args);
 
         uint32_t NumberOfTabs() const;
@@ -247,6 +252,7 @@ namespace winrt::TerminalApp::implementation
         Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVector<Microsoft::Terminal::Protocol::TabInfo>> GetProtocolTabs();
         Windows::Foundation::IAsyncOperation<Windows::Foundation::Collections::IVector<Microsoft::Terminal::Protocol::PaneInfo>> GetProtocolPanes(uint32_t tabIdFilter);
         Windows::Foundation::IAsyncOperation<Microsoft::Terminal::Protocol::PaneOutput> ReadProtocolPaneOutput(winrt::guid sessionId, hstring source, int32_t maxLines);
+        Windows::Foundation::IAsyncOperation<Microsoft::Terminal::Protocol::PaneContext> GetProtocolPaneContext(winrt::guid sourceSessionId, bool hasExplicitSource, int32_t maxLines, int32_t maxCharacters);
         Windows::Foundation::IAsyncOperation<Microsoft::Terminal::Protocol::ProcessStatus> GetProtocolProcessStatus(winrt::guid sessionId);
         Windows::Foundation::IAsyncOperation<Microsoft::Terminal::Protocol::SessionVariable> GetProtocolSessionVariable(winrt::guid sessionId, hstring name);
         Windows::Foundation::IAsyncOperation<bool> SetProtocolSessionVariable(winrt::guid sessionId, hstring name, hstring value);
@@ -262,6 +268,7 @@ namespace winrt::TerminalApp::implementation
         void OnDefaultPasteRequested(hstring eventJson);
         void OnAgentStateChanged(hstring eventJson);
         void OnResumeInNewAgentTabRequested(hstring eventJson);
+        void OnPaneAgentSessionChanged(hstring eventJson);
         void OnAgentChipTargetChanged(hstring eventJson);
         void OnRestartAgentStackRequested(hstring eventJson);
         void OnAgentSessionsRetired(hstring eventJson);
@@ -377,6 +384,9 @@ namespace winrt::TerminalApp::implementation
 
         winrt::Windows::UI::Xaml::Controls::Grid::LayoutUpdated_revoker _layoutUpdatedRevoker;
         StartupState _startupState{ StartupState::NotInitialized };
+        uint64_t _startupTransferId{ 0 };
+        bool _transferReceiverReady{ false };
+        void _TryCompleteStartupTransfer();
 
         std::vector<Microsoft::Terminal::Settings::Model::ActionAndArgs> _startupActions;
         winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection _startupConnection{ nullptr };
@@ -438,6 +448,7 @@ namespace winrt::TerminalApp::implementation
             std::wstring acpModel;
             std::optional<::Microsoft::Terminal::CustomModels::LaunchConfiguration> customModelLaunch;
             std::vector<std::pair<winrt::guid, std::wstring>> profileBackends;
+            bool agentSessionManagementEnabled{ true };
         };
         AgentSettingsSnapshot _lastAgentSettings{};
         bool _agentSettingsSnapshotInitialized{ false };
@@ -447,6 +458,12 @@ namespace winrt::TerminalApp::implementation
             ModelHotUpdate,
             AgentRebind,
             RecreatePane,
+        };
+        enum class AgentHooksReconciliationScope
+        {
+            None,
+            All,
+            SelectedAgent,
         };
         struct AgentPaneSettingsBindingRequest
         {
@@ -490,7 +507,7 @@ namespace winrt::TerminalApp::implementation
         // changes are reconciled separately so unready helpers can be
         // recreated before the settings snapshot advances. This remains the
         // unified dispatch point for the autofix gate, delegate agent/model,
-        // and credential-free model catalogs.
+        // credential-free model catalogs, and YOLO default/policy.
         // `delegateAgent` holds the resolved effective value (custom-command
         // ids already expanded).
         struct AgentRuntimeConfigSnapshot
@@ -500,6 +517,9 @@ namespace winrt::TerminalApp::implementation
             std::wstring customModelSelection;
             std::vector<::Microsoft::Terminal::CustomModels::CatalogEntry> customModels;
             bool autofixEnabled{ false };
+            std::wstring defaultAgentId;
+            bool yoloEnabled{ false };
+            bool yoloPolicyBlocked{ false };
         };
         AgentRuntimeConfigSnapshot _lastAgentRuntimeConfig{};
         bool _agentRuntimeConfigInitialized{ false };
@@ -560,10 +580,34 @@ namespace winrt::TerminalApp::implementation
             std::string cwd;
         };
         std::unordered_map<winrt::hstring, _PendingLoadSession> _pendingLoadSessions;
+
+        // Depth of in-flight `ProcessStartupActions` replays. A restored agent
+        // pane arrives as one of those actions, so a tab created during a
+        // replay must not also pre-warm a blank one — it would race the
+        // restore and leave the tab with two. `_PrewarmAgentPanesAfterStartup`
+        // picks up whatever the replay did not provide.
+        //
+        // A counter rather than a flag: `ExecuteCommandline` can hand a second
+        // batch to this window while the startup batch is still suspended
+        // between actions, and a flag would let that inner batch clear the
+        // suppression out from under the outer one.
+        uint32_t _startupActionReplayDepth{ 0 };
+        // Tabs that skipped their own pre-warm because a replay was in flight.
+        // Drained when the outermost replay finishes. Recording the tabs —
+        // rather than re-scanning every tab in the window — is what keeps an
+        // unrelated `wt` handoff from resurrecting an agent pane the user
+        // deliberately closed.
+        std::vector<winrt::weak_ref<Tab>> _tabsAwaitingPrewarm;
         AgentSettingsSnapshot _CaptureAgentSettingsSnapshot() const;
         static AgentSettingsChangeKind _ClassifyAgentSettingsChange(
             const AgentSettingsSnapshot& previous,
             const AgentSettingsSnapshot& current);
+        static AgentHooksReconciliationScope _ClassifyAgentHooksReconciliation(
+            const AgentSettingsSnapshot& previous,
+            const AgentSettingsSnapshot& current);
+        winrt::fire_and_forget _ReconcileAgentHooksAsync(
+            AgentHooksReconciliationScope scope,
+            std::wstring agentId);
         static bool _ShouldDeferAgentSettingsChange(
             AgentSettingsChangeKind changeKind,
             bool canHostPane,
@@ -578,6 +622,11 @@ namespace winrt::TerminalApp::implementation
             bool helperEventReady) noexcept;
         static bool _CanRetainAgentPaneForMasterRestart(
             winrt::Microsoft::Terminal::TerminalConnection::ConnectionState connectionState) noexcept;
+        static bool _ResolveHotAutomaticYoloForAgentBinding(
+            const AgentRuntimeConfigSnapshot& previous,
+            const AgentRuntimeConfigSnapshot& current,
+            const AgentPaneSettingsBinding& binding,
+            std::wstring_view actualCurrentAgentId) noexcept;
         static AgentPaneRecreationOptions _GetAgentPaneRecreationOptions(
             bool wasStashed,
             bool isActiveTab) noexcept;
@@ -609,6 +658,10 @@ namespace winrt::TerminalApp::implementation
             uint64_t generation);
         static bool _AgentSettingsChanged(const AgentSettingsSnapshot& a, const AgentSettingsSnapshot& b);
         AgentRuntimeConfigSnapshot _CaptureAgentRuntimeConfig() const;
+        static Json::Value _BuildAgentReadyRuntimeConfigPayload(
+            std::string_view tabId,
+            std::string_view windowId,
+            const AgentRuntimeConfigSnapshot& config);
         // Diffs the hot-updatable runtime config against the last snapshot
         // and, on change, emits one `agent_config_changed` event carrying
         // only the changed fields. No agent-pane teardown.
@@ -617,6 +670,19 @@ namespace winrt::TerminalApp::implementation
         // ProtocolVtSequenceReceived. Single source of the wta protocol-event
         // wire shape — callers just supply the method name and a params object.
         void _RaiseProtocolEvent(std::string_view method, const Json::Value& params);
+        // Raises one `connection_state` protocol event. Terminal end states
+        // (`closed` / `failed`) must go through `_TryRaiseTerminalEndStateEvent`
+        // so only the first producer emits.
+        void _RaiseConnectionStateEvent(std::string_view paneId,
+                                        std::string_view state,
+                                        std::string_view tabId = {});
+        // Terminal end states are deduplicated per TermControl lifetime. When
+        // `_SetupControl` wires a new control that reuses the same SessionId,
+        // it clears any stale tombstone before subscribing that control's
+        // events.
+        bool _TryRaiseTerminalEndStateEvent(std::string_view paneId,
+                                            std::string_view state,
+                                            std::string_view tabId = {});
         void _BeginAgentSessionRetirement(bool scopeAll,
                                           std::vector<winrt::hstring> tabIds,
                                           std::string reason,
@@ -680,7 +746,22 @@ namespace winrt::TerminalApp::implementation
                                               std::string_view initialLoadSessionId = {},
                                               std::string_view initialLoadCwd = {},
                                               std::wstring_view initialAuthAgent = {},
-                                              bool focusPane = true);
+                                              std::string_view initialView = {},
+                                              std::wstring_view initialPanePosition = {},
+                                              float initialPaneSize = 0.0f,
+                                              bool focusPane = true,
+                                              std::wstring_view initialYoloControlOwner = {});
+        winrt::hstring _GetAgentPaneIdentity(Tab* tab) const;
+        winrt::hstring _GetAgentPaneCustomCommand(Tab* tab) const;
+        void _PrewarmAgentPanesAfterStartup();
+        // Rebuild an agent pane from a persisted layout entry. `contentArgs`
+        // carries only the stable resume command line; everything runtime-bound
+        // (the master pipe, the owner ids, the resolved CLI path) is
+        // re-derived, and the agent selection is re-checked against policy.
+        bool _RestoreAgentPaneFromLayout(const winrt::com_ptr<Tab>& tab,
+                                         const winrt::Microsoft::Terminal::Settings::Model::NewTerminalArgs& contentArgs,
+                                         winrt::Microsoft::Terminal::Settings::Model::SplitDirection splitDirection,
+                                         float splitSize);
         // Wraps the raw terminal pane's TerminalPaneContent in an
         // AgentPaneContent so the leaf renders the 36px XAML agent bar
         // above the wta TermControl + the bottom-bar below.
@@ -784,6 +865,37 @@ namespace winrt::TerminalApp::implementation
         void _DuplicateTab(const Tab& tab);
 
         safe_void_coroutine _ExportTab(const Tab& tab, winrt::hstring filepath);
+        void _RefreshAgentRestoreIdentity(Tab* tab);
+        void _StampAgentResumeCommandlines(std::vector<winrt::Microsoft::Terminal::Settings::Model::ActionAndArgs>& actions);
+        // Pane ids whose terminal end event (`closed` / `failed`) already went
+        // out on ProtocolVtSequenceReceived for the current TermControl
+        // lifetime. `_SetupControl` clears any stale mark when a new control
+        // starts using that SessionId. Only terminal end states belong in this
+        // set; non-terminal updates stay untracked.
+        std::unordered_set<std::string> _panesWithEmittedTerminalEndState;
+        struct _PaneAgentSession
+        {
+            winrt::hstring sessionId;
+            winrt::hstring agent;
+            winrt::hstring resumeCommandline;
+        };
+        // Most recent resumable agent session observed in each shell pane.
+        // Retained after the CLI exits so a persisted-layout restore can
+        // relaunch it; removed only when the pane itself closes or a new
+        // binding replaces it.
+        std::unordered_map<winrt::guid, _PaneAgentSession> _paneAgentSessions;
+        struct _PendingRestoredSessionBinding
+        {
+            winrt::hstring sessionId;
+            winrt::hstring agent;
+            winrt::hstring cwd;
+        };
+        // Layout replay precedes WTA startup. Keep births until the owning
+        // helper acknowledges its COM subscription, not merely ACP readiness.
+        std::unordered_map<winrt::guid, _PendingRestoredSessionBinding> _pendingRestoredSessionBindings;
+        std::unordered_set<winrt::hstring> _tabsAwaitingRestoredBindings;
+        void _NotifyRestoredSessionBindings(const winrt::com_ptr<Tab>& tab);
+        void _ReplayRestoredSessionBindings(const winrt::com_ptr<Tab>& tab);
 
         winrt::Windows::Foundation::IAsyncAction _HandleCloseTabRequested(winrt::TerminalApp::Tab tab, bool skipConfirmClose = false);
         void _CloseTabAtIndex(uint32_t index);
@@ -795,6 +907,7 @@ namespace winrt::TerminalApp::implementation
         void _RegisterTerminalEvents(Microsoft::Terminal::Control::TermControl term);
         std::string _FindSessionIdForControl(const Microsoft::Terminal::Control::TermControl& control);
         std::string _FindTabIdForControl(const Microsoft::Terminal::Control::TermControl& control);
+        std::string _FindTabIdForSessionId(std::string_view sessionId);
         void _RegisterTabEvents(Tab& hostingTab);
 
         void _DismissTabContextMenus();
@@ -836,6 +949,9 @@ namespace winrt::TerminalApp::implementation
         std::optional<uint32_t> _GetTabIndex(const TerminalApp::Tab& tab) const noexcept;
         TerminalApp::Tab _GetFocusedTab() const noexcept;
         winrt::com_ptr<Tab> _GetFocusedTabImpl() const noexcept;
+        static std::shared_ptr<Pane> _SourceTerminalPaneForTab(const winrt::com_ptr<Tab>& tab);
+        static winrt::Microsoft::Terminal::Settings::Model::Profile _SourceTerminalProfileForTab(const winrt::com_ptr<Tab>& tab);
+        static winrt::Microsoft::Terminal::Settings::Model::Profile _ResolveAgentSourceProfile(const winrt::com_ptr<Tab>& tab, const winrt::Microsoft::Terminal::Settings::Model::CascadiaSettings& settings);
         TerminalApp::Tab _GetTabByTabViewItem(const IInspectable& tabViewItem) const noexcept;
 
         // Spec A §4.1: routing indirection so TabManagement.cpp doesn't have to
@@ -859,7 +975,7 @@ namespace winrt::TerminalApp::implementation
 
         void _Scroll(ScrollDirection scrollDirection, const Windows::Foundation::IReference<uint32_t>& rowsToScroll);
 
-        void _SplitPane(const winrt::com_ptr<Tab>& tab,
+        bool _SplitPane(const winrt::com_ptr<Tab>& tab,
                         const Microsoft::Terminal::Settings::Model::SplitDirection splitType,
                         const float splitSize,
                         std::shared_ptr<Pane> newPane,
@@ -951,6 +1067,7 @@ namespace winrt::TerminalApp::implementation
         void _FocusAgentPane();
         void _RepositionAgentPanes();
         static winrt::Microsoft::Terminal::Settings::Model::SplitDirection _AgentPanePositionToSplitDirection(const winrt::hstring& position);
+        static winrt::hstring _SplitDirectionToAgentPanePosition(winrt::Microsoft::Terminal::Settings::Model::SplitDirection direction);
         static winrt::hstring _AgentPanePositionToContentPosition(const winrt::hstring& position);
 
         // First-run experience
@@ -963,7 +1080,9 @@ namespace winrt::TerminalApp::implementation
         winrt::Microsoft::Terminal::Control::TermControl _CreateNewControlAndContent(const winrt::Microsoft::Terminal::Settings::TerminalSettingsCreateResult& settings,
                                                                                      const winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection& connection);
         winrt::Microsoft::Terminal::Control::TermControl _SetupControl(const winrt::Microsoft::Terminal::Control::TermControl& term);
-        winrt::Microsoft::Terminal::Control::TermControl _AttachControlToContent(const uint64_t& contentGuid);
+        winrt::Microsoft::Terminal::Control::TermControl _AttachControlToContent(
+            const uint64_t& contentGuid,
+            const winrt::Microsoft::Terminal::Settings::Model::NewTerminalArgs& newTerminalArgs = nullptr);
 
         TerminalApp::IPaneContent _makeSettingsContent();
         std::shared_ptr<Pane> _MakeTerminalPane(const Microsoft::Terminal::Settings::Model::NewTerminalArgs& newTerminalArgs = nullptr,
@@ -1049,12 +1168,41 @@ namespace winrt::TerminalApp::implementation
         void _OnTabStripDroppedOutside(const winrt::Windows::Foundation::IInspectable& sender, const TerminalApp::TabStripDroppedOutsideEventArgs& e);
         void _OnTabDroppedOutsideCore();
 
-        void _DetachPaneFromWindow(std::shared_ptr<Pane> pane);
+        void _DetachPaneFromWindow(std::shared_ptr<Pane> pane, const winrt::com_ptr<Tab>& sourceTab, uint64_t firstPaneContentId = 0);
         void _DetachTabFromWindow(const winrt::com_ptr<Tab>& tabImpl);
         void _MoveContent(std::vector<winrt::Microsoft::Terminal::Settings::Model::ActionAndArgs>&& actions,
                           const winrt::hstring& windowName,
                           const uint32_t tabIndex,
+                          const winrt::com_ptr<Tab>& sourceTab,
+                          const std::shared_ptr<Pane>& sourcePane,
                           const std::optional<winrt::Windows::Foundation::Point>& dragPoint = std::nullopt);
+        bool _AttachTransferredContent(TerminalPage& source, const winrt::com_ptr<Tab>& sourceTab, const std::shared_ptr<Pane>& sourcePane,
+                                       Windows::Foundation::Collections::IVector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions, uint32_t tabIndex);
+        struct ReceivingContentTransfer
+        {
+            winrt::com_ptr<Tab> sourceTab;
+            uint64_t firstContentId{ 0 };
+            uint32_t actionIndex{ 0 };
+            // Reader-thread callbacks may publish only after UI ownership commits.
+            std::shared_ptr<std::atomic<bool>> publication{ std::make_shared<std::atomic<bool>>(false) };
+            std::unordered_set<std::string> sessionIds;
+            std::vector<std::function<void()>> afterCommit;
+            std::unordered_map<uint64_t, winrt::TerminalApp::AgentPaneContent> sourceAgents;
+            std::vector<Microsoft::Terminal::Control::TermControl> controls;
+            std::vector<winrt::com_ptr<Tab>> tabs;
+            std::vector<std::pair<winrt::TerminalApp::AgentPaneContent, winrt::TerminalApp::AgentPaneContent>> agents;
+        };
+        ReceivingContentTransfer* _receivingContentTransfer{ nullptr };
+        enum class ContentTransferStage
+        {
+            BeforeClaim,
+            ControlAttached,
+            BeforeFirstPaneInsertion,
+            BeforeSplitInsertion,
+        };
+        // Friend-accessible deterministic failure injection; never configured by production.
+        std::function<void(ContentTransferStage, uint64_t, uint32_t)> _contentTransferTestHook;
+        void _CheckpointContentTransfer(ContentTransferStage stage, uint64_t contentId = 0);
         void _sendDraggedTabToWindow(const winrt::hstring& windowId, const uint32_t tabIndex, std::optional<winrt::Windows::Foundation::Point> dragPoint);
 
         void _PopulateContextMenu(const Microsoft::Terminal::Control::TermControl& control, const Microsoft::UI::Xaml::Controls::CommandBarFlyout& sender, const bool withSelection);

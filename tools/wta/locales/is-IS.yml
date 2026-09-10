@@ -51,6 +51,7 @@ chat.turn_canceled: "(hætt við)"
 chat.turn_executed: "→ keyrt: %{title}"
 # Varanleg merki verkfæraflokka sem birtast á eftir stöðumerki og á undan viðfangsefninu.
 chat.tool_kind.run: "Keyra"
+chat.tool_kind.insert: "Setja inn"
 chat.tool_kind.read: "Lesa"
 chat.tool_kind.search: "Leita"
 chat.tool_kind.edit: "Breyta"
@@ -123,8 +124,25 @@ agents.status.idle: "Aðgerðarlaus"
 layout.welcome_hint: "  (Ctrl+Shift+. til að sýna/fela agentspjald • Ctrl+Shift+/ til að sýna/fela agentlotu)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
-connection.starting: "Ræsi agent..."
+# Preparing the AI agent connection, including preflight and reuse of a cached agent.
+connection.starting: "Undirbý tengingu við agent..."
 connection.reconnecting: "Endurtengi..."
+# Retiring old AI agent sessions for /restart, before the next connection phases.
+connection.restarting: "Endurræsi agent..."
+# Connecting the pane to WTA's local coordinator process, not to an AI model.
+connection.coordinator: "Tengist staðbundinni samræmingarþjónustu..."
+# Initializing the helper/coordinator connection, including local preparation and AI agent initialization.
+connection.initializing: "Frumstilli tengingu við agent..."
+# Refreshing the user's authentication with the AI agent after login; not verifying the agent's identity.
+connection.authenticating: "Auðkenni notanda hjá agent..."
+# Reading the coordinator's registry snapshot, including existing history; not fetching history from the AI agent.
+connection.syncing_sessions: "Les lotulista..."
+# Creating the AI agent session, including local registration; internal agent progress is unknown.
+connection.creating_session: "Bý til lotu fyrir agent..."
+# Applying the requested AI model before the connection is ready. Preserve %{model}.
+connection.selecting_model: "Stilli líkan lotunnar: %{model}..."  # {Locked="%{model}"}
+# Activity row while connecting to restore a conversation. Keep the actual stage first so narrow panes show it; session_id is shortened to eight characters.
+connection.resuming_stage: "%{stage} (held áfram með %{session_id})"  # {Locked="%{stage}","%{session_id}"}
 connection.connecting_activity: "Tengist agent…"
 connection.lost: "Tengingin við agent rofnaði. Sláðu inn /restart til að tengjast aftur."  # {Locked="/restart"}
 
@@ -145,8 +163,8 @@ system.resuming_session: "Held áfram með setu %{session_id}..."
 system.unknown_command: "Óþekkt skipun \"%{command}\" — send sem kvaðning. Sláðu inn /help til að sjá listann."
 system.busy_use_stop: "Bíddu þar til núverandi kvaðning lýkur, eða notaðu /stop fyrst."
 system.cannot_focus_session: "Ekki er hægt að færa fókus á setu %{session_id}: hún virðist virk en ekkert GUID rúðu er enn bundið. Reyndu aftur eftir augnablik."
-system.cannot_resume_no_load_session: "Ekki er hægt að halda áfram í agent-rúðu: %{agent} auglýsti ekki ACP `loadSession`-getuna. Ýttu á Enter (án Shift) til að halda áfram í nýrri terminal-rúðu í staðinn."
-system.cannot_resume_no_resume_flag: "Ekki er hægt að halda áfram með %{agent}-setu: þessi agent er ekki með `--resume`-líkt flagg. Ýttu á Shift+Enter til að reyna að halda áfram inni í agent-rúðunni í gegnum ACP í staðinn."
+system.cannot_resume_no_load_session: "Ekki er hægt að halda áfram í agent-rúðu: %{agent} auglýsti ekki ACP `loadSession`-getuna."
+system.cannot_resume_no_resume_flag: "Ekki er hægt að halda áfram með %{agent}-setu: þessi agent er ekki með `--resume`-líkt flagg."
 system.cannot_resume_unknown_agent: "Ekki er hægt að halda áfram með setu %{session_id}: uppruna-agent hennar er óþekktur í þessari smíði."
 system.cannot_resume_phantom_via_flag: "Ekki er hægt að halda áfram með %{agent}-setu %{session_id}: hún var ræst en safnaði aldrei neinu samtali, þannig að %{agent} myndi sjálfur hafna áframhaldi. Fjarlægi röðina."
 system.cannot_resume_phantom_via_load: "Ekki er hægt að halda áfram með %{agent}-setu %{session_id}: hún var ræst en safnaði aldrei neinu samtali, þannig að %{agent} myndi hafna hleðslunni. Fjarlægi röðina."
@@ -239,4 +257,6 @@ config_picker.title: "Stilling lotu (↑ ↓ • Enter • Esc)"
 system.no_config_options: "Tengdi fulltrúinn auglýsti enga stillanlega lotuvalkosti."
 # {option} is an Agent-provided option name; {error} is the ACP error.
 system.config_update_failed: "Tókst ekki að uppfæra %{option}: %{error}"
+system.yolo_disable_pending: "veitandi agentsins hefur ekki staðfest að lotan sé í nauðsynlegri stöðu án aukinna réttinda"  # Shown after the localized failure prefix while prompts remain blocked until the AI agent provider confirms that its privileged session mode is off. Provider means an AI agent provider, not a network provider.
+system.provider_command_blocked_by_policy: "%{command}: Yolo-hamur er óvirkur samkvæmt stefnu fyrirtækis þíns."  # {Locked="Yolo","%{command}"} Shown when AllowYoloMode blocks a provider-advertised privileged command.
 system.model_unknown: "Óþekkt líkan %{model} — sláðu inn /model til að sjá tiltækan lista."  # {Locked="%{model}","/model"}

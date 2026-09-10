@@ -115,6 +115,20 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) no_autofix: bool,
 
+    /// Disable automatic agent hook reconciliation at master startup.
+    #[arg(long, hide = true)]
+    pub(crate) no_session_management: bool,
+
+    /// Ask supported providers to enable their advertised ACP session Yolo mode.
+    /// Hidden because Terminal owns this setting.
+    #[arg(long, hide = true)]
+    pub(crate) yolo_mode: bool,
+
+    /// Refuse provider-native Yolo changes when organization policy blocks
+    /// them. Hidden because Terminal supplies the policy result.
+    #[arg(long, hide = true)]
+    pub(crate) yolo_policy_blocked: bool,
+
     /// Enter diagnostic setup mode with the given reason instead of connecting directly.
     /// Values: agent-missing, agent-error
     #[arg(long)]
@@ -126,6 +140,10 @@ pub(crate) struct Cli {
     /// Wired to WT's Ctrl+Shift+/ binding via TerminalPage.
     #[arg(long, value_enum, default_value_t = InitialView::Chat)]
     pub(crate) initial_view: InitialView,
+
+    /// Initial per-tab agent pane position restored by Windows Terminal.
+    #[arg(long, hide = true, value_parser = ["left", "right", "top", "up", "bottom"])]
+    pub(crate) initial_pane_position: Option<String>,
 
     /// UI language override, passed by Windows Terminal from the
     /// `settings.json` `Language` field. When present, wta uses this
@@ -169,6 +187,14 @@ pub(crate) struct Cli {
     /// resumed conversation runs against the right repo root. Hidden.
     #[arg(long, hide = true, value_name = "PATH")]
     pub(crate) initial_load_cwd: Option<String>,
+
+    /// Saved Yolo ownership provenance paired with an initial loaded session.
+    #[arg(
+        long,
+        hide = true,
+        value_parser = ["automatic", "manual", "provider-restored"]
+    )]
+    pub(crate) initial_yolo_control_owner: Option<String>,
 
     /// Pre-warm mode: the helper is being spawned for a tab whose agent
     /// pane is *already stashed* on the C++ side (see TerminalPage::
@@ -493,20 +519,19 @@ impl SessionsOriginArg {
 /// Subcommands for `wta hooks`.
 #[derive(Subcommand, Debug)]
 pub(crate) enum HooksAction {
-    /// (Re-)install the wt-agent-hooks bridge. Installs for all supported
-    /// CLIs by default, or a single CLI with `--cli`. `--only-missing` skips
-    /// CLIs that are already current and upgrades the ones that are behind.
-    /// With `--json` returns a structured per-CLI outcome report.
+    /// Ensure the wt-agent-hooks bridge is installed and current. Reconciles
+    /// all supported CLIs by default, or a single CLI with `--cli`. Use
+    /// `--force` to rerun the first-install flow unconditionally. With
+    /// `--json` returns a structured per-CLI outcome report.
     Install {
         /// Which CLI to install for. Default: `all`.
         #[arg(long, value_enum, default_value_t = HooksCliFilter::All)]
         cli: HooksCliFilter,
-        /// Skip CLIs whose hook bridge is already complete and current. A
-        /// complete but out-of-date bridge is upgraded rather than
-        /// re-installed, because a second `install` no-ops; missing, partial,
-        /// disabled and stale-path bridges are installed as usual.
+        /// Rerun the first-install flow even when hooks already appear
+        /// installed. Intended as a manual recovery path when status cannot
+        /// observe the underlying problem.
         #[arg(long)]
-        only_missing: bool,
+        force: bool,
     },
     /// Print per-CLI install state. Returns JSON with `--json`,
     /// or a human-readable table by default.

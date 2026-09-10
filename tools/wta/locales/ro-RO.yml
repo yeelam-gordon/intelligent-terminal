@@ -51,6 +51,7 @@ chat.turn_canceled: "(anulat)"
 chat.turn_executed: "→ executat: %{title}"
 # Etichete persistente pentru categoriile de instrumente, afișate după un marcator de stare și înaintea subiectului.
 chat.tool_kind.run: "Rulare"
+chat.tool_kind.insert: "Inserare"
 chat.tool_kind.read: "Citire"
 chat.tool_kind.search: "Căutare"
 chat.tool_kind.edit: "Editare"
@@ -123,8 +124,25 @@ agents.status.idle: "Inactiv"
 layout.welcome_hint: "  (Ctrl+Shift+. afișare/ascundere panou agent • Ctrl+Shift+/ afișare/ascundere sesiune agent)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
-connection.starting: "Se pornește agentul..."
+# Preparing the AI agent connection, including preflight and reuse of a cached agent.
+connection.starting: "Se pregătește conexiunea cu agentul..."
+# Retiring old AI agent sessions for /restart, before the next connection phases.
+connection.restarting: "Se repornește agentul..."
 connection.reconnecting: "Reconectare..."
+# Connecting the pane to WTA's local coordinator process, not to an AI model.
+connection.coordinator: "Conectare la coordonatorul local..."
+# Initializing the helper/coordinator connection, including local preparation and AI agent initialization.
+connection.initializing: "Se inițializează conexiunea cu agentul..."
+# Refreshing the user's authentication with the AI agent after login; not verifying the agent's identity.
+connection.authenticating: "Se autentifică utilizatorul la agent..."
+# Reading the coordinator's registry snapshot, including existing history; not fetching history from the AI agent.
+connection.syncing_sessions: "Se citește lista de sesiuni..."
+# Creating the AI agent session, including local registration; internal agent progress is unknown.
+connection.creating_session: "Se creează sesiunea agentului..."
+# Applying the requested AI model before the connection is ready. Preserve %{model}.
+connection.selecting_model: "Se setează modelul sesiunii: %{model}..."  # {Locked="%{model}"}
+# Activity row while connecting to restore a conversation. Keep the actual stage first so narrow panes show it; session_id is shortened to eight characters.
+connection.resuming_stage: "%{stage} (se reia %{session_id})"  # {Locked="%{stage}","%{session_id}"}
 connection.connecting_activity: "Se conectează la agent…"
 connection.lost: "Conexiunea la agent s-a pierdut. Tastați /restart pentru reconectare."  # {Locked="/restart"}
 
@@ -145,8 +163,8 @@ system.resuming_session: "Se reia sesiunea %{session_id}..."
 system.unknown_command: "Comandă necunoscută \"%{command}\" — trimisă ca solicitare. Tastați /help pentru listă."  # {Locked="/help"}
 system.busy_use_stop: "Așteptați finalizarea solicitării curente sau folosiți mai întâi /stop."  # {Locked="/stop"}
 system.cannot_focus_session: "Nu se poate focaliza sesiunea %{session_id}: pare activă, dar încă nu este legat niciun GUID de panou. Încercați din nou în câteva momente."
-system.cannot_resume_no_load_session: "Nu se poate relua în panoul agentului: %{agent} nu a anunțat capacitatea ACP `loadSession`. Apăsați Enter (fără Shift) pentru a relua în schimb într-un panou de terminal nou."  # {Locked="ACP","loadSession","Enter","Shift"}
-system.cannot_resume_no_resume_flag: "Nu se poate relua sesiunea %{agent}: acest agent nu are un semnalizator de tip `--resume`. Apăsați Shift+Enter pentru a încerca reluarea în panoul agentului prin ACP."  # {Locked="--resume","Shift","Enter","ACP"}
+system.cannot_resume_no_load_session: "Nu se poate relua în panoul agentului: %{agent} nu a anunțat capacitatea ACP `loadSession`."  # {Locked="ACP","loadSession"}
+system.cannot_resume_no_resume_flag: "Nu se poate relua sesiunea %{agent}: acest agent nu are un semnalizator de tip `--resume`."  # {Locked="--resume"}
 system.cannot_resume_unknown_agent: "Nu se poate relua sesiunea %{session_id}: agentul său sursă este necunoscut acestei compilări WTA."
 system.cannot_resume_phantom_via_flag: "Nu se poate relua sesiunea %{agent} %{session_id}: a fost pornită, dar nu a acumulat nicio conversație, așa că %{agent} însuși ar respinge reluarea. Se elimină rândul."
 system.cannot_resume_phantom_via_load: "Nu se poate relua sesiunea %{agent} %{session_id}: a fost pornită, dar nu a acumulat nicio conversație, așa că %{agent} ar respinge încărcarea. Se elimină rândul."
@@ -238,4 +256,6 @@ config_picker.title: "Configurare sesiune (↑ ↓ • Enter • Esc)"
 system.no_config_options: "Agentul conectat nu a anunțat nicio opțiune de sesiune configurabilă."
 # {option} is an Agent-provided option name; {error} is the ACP error.
 system.config_update_failed: "Nu s-a putut actualiza %{option}: %{error}"
+system.yolo_disable_pending: "furnizorul nu a confirmat starea neprivilegiată necesară a sesiunii"  # Shown after the localized failure prefix while prompts remain blocked until the AI agent provider confirms that its privileged session mode is off. Provider means an AI agent provider, not a network provider.
+system.provider_command_blocked_by_policy: "%{command}: Modul Yolo este dezactivat de politica organizației dumneavoastră."  # {Locked="Yolo","%{command}"} Shown when AllowYoloMode blocks a provider-advertised privileged command.
 system.model_unknown: "Model necunoscut %{model} — tastați /model pentru a vedea lista disponibilă."  # {Locked="%{model}","/model"}

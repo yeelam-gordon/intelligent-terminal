@@ -15,7 +15,9 @@
 #include "ShellIntegrationSweep.h"
 #include "WindowsPackageManagerFactory.h"
 
+#include <ScopedResourceLoader.h>
 #include <winrt/Windows.UI.Xaml.Documents.h>
+#include <limits>
 #include <mutex>
 
 using namespace winrt::Windows::Foundation;
@@ -117,48 +119,102 @@ namespace winrt::TerminalApp::implementation
 
         const auto allowedAgents = Reg::FilteredAcpAgents();
         const auto availableAgents = ::Microsoft::Terminal::AgentAvailability::ProbeHostAgentIds();
-        auto items = AgentComboBox().Items();
-        items.Clear();
-        int32_t selectedIndex = 0;
-        int32_t idx = 0;
-
-        for (const auto& a : allowedAgents)
         {
-            const bool installed = availableAgents.contains(std::wstring{ a.id });
-            const bool isCopilot = (a.id == L"copilot");
+            _refreshingAgentComboBox = true;
+            const auto resetRefreshing = wil::scope_exit([&]() noexcept {
+                _refreshingAgentComboBox = false;
+            });
+            auto items = AgentComboBox().Items();
+            items.Clear();
+            int32_t selectedIndex = 0;
+            int32_t idx = 0;
 
-            // Show Copilot always + detected agents only
-            if (!isCopilot && !installed)
-                continue;
-
-            auto entry = winrt::make<FreAgentEntry>();
-            entry.Id(winrt::hstring{ a.id });
-
-            if (isCopilot && !installed)
+            for (const auto& a : allowedAgents)
             {
-                entry.DisplayLabel(winrt::hstring{ std::wstring(a.displayName) + std::wstring(RS_(L"FreOverlay_AgentStatusWillInstall")) });
-            }
-            else
-            {
-                entry.DisplayLabel(winrt::hstring{ std::wstring(a.displayName) + std::wstring(RS_(L"FreOverlay_AgentStatusInstalled")) });
+                const bool installed = availableAgents.contains(std::wstring{ a.id });
+                const bool isCopilot = (a.id == L"copilot");
+
+                // Show Copilot always + detected agents only
+                if (!isCopilot && !installed)
+                    continue;
+
+                auto entry = winrt::make<FreAgentEntry>();
+                entry.Id(winrt::hstring{ a.id });
+
+                if (isCopilot && !installed)
+                {
+                    entry.DisplayLabel(winrt::hstring{ std::wstring(a.displayName) + std::wstring(RS_(L"FreOverlay_AgentStatusWillInstall")) });
+                }
+                else
+                {
+                    entry.DisplayLabel(winrt::hstring{ std::wstring(a.displayName) + std::wstring(RS_(L"FreOverlay_AgentStatusInstalled")) });
+                }
+
+                items.Append(entry);
+
+                if (a.id == selectedId)
+                {
+                    selectedIndex = idx;
+                }
+                idx++;
             }
 
-            items.Append(entry);
-
-            if (a.id == selectedId)
+            if (items.Size() > 0)
             {
-                selectedIndex = idx;
+                AgentComboBox().SelectedIndex(selectedIndex);
             }
-            idx++;
+        }
+        _UpdateAutomaticApprovalState();
+    }
+
+    winrt::hstring FreOverlay::_SelectedAgentId()
+    {
+        if (const auto selected = AgentComboBox().SelectedItem())
+        {
+            if (const auto entry = selected.try_as<winrt::TerminalApp::FreAgentEntry>())
+            {
+                return entry.Id();
+            }
+        }
+        return {};
+    }
+
+    void FreOverlay::_UpdateAutomaticApprovalState()
+    {
+        if (!_settings)
+        {
+            return;
         }
 
-        if (items.Size() > 0)
+        const auto canEnable = _settings.GlobalSettings().CanEnableAgentPaneYoloModeForAgent(
+            _SelectedAgentId());
+        const auto toggle = AutomaticApprovalToggle();
+        if (!canEnable)
         {
-            AgentComboBox().SelectedIndex(selectedIndex);
+            toggle.IsOn(false);
+        }
+        toggle.IsEnabled(canEnable);
+        AutomaticApprovalSetting().Visibility(
+            canEnable ? Visibility::Visible : Visibility::Collapsed);
+    }
+
+    void FreOverlay::_OnAgentSelectionChanged(
+        const IInspectable& /*sender*/,
+        const SelectionChangedEventArgs& /*args*/)
+    {
+        if (!_refreshingAgentComboBox)
+        {
+            _UpdateAutomaticApprovalState();
         }
     }
 
     // ── Initialize ──────────────────────────────────────────────────────
+
+    void FreOverlay::UpdateSettings(const winrt::Microsoft::Terminal::Settings::Model::CascadiaSettings& settings)
+    {
+        _settings = settings;
+        _UpdateAutomaticApprovalState();
+    }
 
     void FreOverlay::Initialize(const winrt::Microsoft::Terminal::Settings::Model::CascadiaSettings& settings)
     {
@@ -202,9 +258,15 @@ namespace winrt::TerminalApp::implementation
         WelcomeSubtitleLink().Text(RS_(L"FreOverlay_WelcomeSubtitleLink"));
         SettingsSubtitlePrefix().Text(RS_(L"FreOverlay_SettingsSubtitlePrefix"));
         SettingsSubtitleLink().Text(RS_(L"FreOverlay_SettingsSubtitleLink"));
-        AutoDetectShellIntegrationHintPrefix().Text(RS_(L"FreOverlay_AutoDetectShellIntegrationHintPrefix"));
-        AutoDetectShellIntegrationHintLink().Text(RS_(L"FreOverlay_AutoDetectShellIntegrationHintLink"));
-
+        {
+            const ScopedResourceLoader settingsResources{
+                L"Microsoft.Terminal.Settings.Editor/Resources"
+            };
+            AutomaticApprovalTitle().Text(
+                settingsResources.GetLocalizedString(L"AIAgents_YoloMode/Header"));
+            AutomaticApprovalDescription().Text(
+                settingsResources.GetLocalizedString(L"AIAgents_YoloMode/HelpText"));
+        }
         // Split the description on "ACP" (locked token) so it can be rendered as an inline Hyperlink.
         {
             const auto descStr = RS_(L"FreOverlay_AgentDescription/Text");
@@ -225,14 +287,13 @@ namespace winrt::TerminalApp::implementation
         }
 
         // Set toggle On/Off labels
-        AutoDetectToggle().OnContent(winrt::box_value(RS_(L"FreOverlay_ToggleOn")));
-        AutoDetectToggle().OffContent(winrt::box_value(RS_(L"FreOverlay_ToggleOff")));
-        AutoErrorToggle().OnContent(winrt::box_value(RS_(L"FreOverlay_ToggleOn")));
-        AutoErrorToggle().OffContent(winrt::box_value(RS_(L"FreOverlay_ToggleOff")));
         ShowTokenUsageAndCostToggle().OnContent(winrt::box_value(RS_(L"FreOverlay_ToggleOn")));
         ShowTokenUsageAndCostToggle().OffContent(winrt::box_value(RS_(L"FreOverlay_ToggleOff")));
         SessionManagementToggle().OnContent(winrt::box_value(RS_(L"FreOverlay_ToggleOn")));
         SessionManagementToggle().OffContent(winrt::box_value(RS_(L"FreOverlay_ToggleOff")));
+        AutomaticApprovalToggle().OnContent(winrt::box_value(RS_(L"FreOverlay_ToggleOn")));
+        AutomaticApprovalToggle().OffContent(winrt::box_value(RS_(L"FreOverlay_ToggleOff")));
+        AutomaticApprovalToggle().IsOn(globals.EffectiveAgentPaneYoloMode());
 
         // Populate agent ComboBox using GPO-filtered list — only agents
         // permitted by policy are shown. Each entry's status label reflects the
@@ -263,30 +324,30 @@ namespace winrt::TerminalApp::implementation
         else if (currentPos == L"top") PanePositionComboBox().SelectedIndex(3);
         else PanePositionComboBox().SelectedIndex(0); // default: bottom
 
-        // Set toggles from current settings, respecting GPO policy.
-        // Detection drives the suggestion toggle's enabled state (see
-        // _UpdateSuggestionEnabledState), so configure it first.
-        AutoDetectToggle().IsOn(globals.EffectiveAutoErrorDetectionEnabled());
-
-        // Master-detail: EffectiveAutoFixEnabled already returns false when
-        // detection is off, so the suggestion toggle starts consistent with the
-        // master toggle (and reflects the stored preference when detection is
-        // on).
-        AutoErrorToggle().IsOn(globals.EffectiveAutoFixEnabled());
+        // Map the two persisted settings to the single error-detection choice.
+        // EffectiveAutoFixEnabled already accounts for both the auto-fix policy
+        // and detection being disabled.
+        const auto detectionMode = !globals.EffectiveAutoErrorDetectionEnabled()
+            ? ErrorDetectionMode::Off
+            : globals.EffectiveAutoFixEnabled()
+            ? ErrorDetectionMode::DetectAndFix
+            : ErrorDetectionMode::Detect;
+        _SetErrorDetectionMode(detectionMode);
         ShowTokenUsageAndCostToggle().IsOn(globals.ShowTokenUsageAndCost());
-        if (globals.IsAutoFixPolicyLocked())
-        {
-            const auto policyText = RS_(L"FreOverlay_PolicyLocked");
-            AutoErrorPolicyNotice().Text(policyText);
-            AutoErrorPolicyNotice().Visibility(Visibility::Visible);
-            // Accessibility: explain why the toggle is disabled
-            Automation::AutomationProperties::SetHelpText(AutoErrorToggle(), policyText);
-        }
+        SessionManagementToggle().IsOn(globals.EffectiveAgentSessionManagementEnabled());
 
-        // Apply the detection→suggestion dependency once both toggles are
-        // configured (also covers the GPO-locked case via the policy check
-        // inside the helper).
-        _UpdateSuggestionEnabledState();
+        const bool autoFixLocked = globals.IsAutoFixPolicyLocked();
+        ErrorDetectionAutoFixOption().IsEnabled(!autoFixLocked);
+        ErrorDetectionPolicyNotice().Visibility(autoFixLocked ? Visibility::Visible : Visibility::Collapsed);
+        // Accessibility: explain why this dropdown option is disabled.
+        Automation::AutomationProperties::SetHelpText(
+            ErrorDetectionAutoFixOption(),
+            autoFixLocked ? RS_(L"FreOverlay_ErrorDetectionAutoFixPolicyLocked") : winrt::hstring{});
+        if (autoFixLocked)
+        {
+            const auto policyText = RS_(L"FreOverlay_ErrorDetectionAutoFixPolicyLocked");
+            ErrorDetectionPolicyNotice().Text(policyText);
+        }
 
         // Session management toggle — honour AllowAgentSessionHooks GPO
         if (globals.IsAgentSessionHooksPolicyLocked())
@@ -308,11 +369,11 @@ namespace winrt::TerminalApp::implementation
         Automation::AutomationProperties::SetName(
             SettingsPage(), RS_(L"FreOverlay_SettingsTitle/Text"));
         Automation::AutomationProperties::SetName(
-            AutoDetectToggle(), RS_(L"FreOverlay_AutoDetectLabel/Text"));
-        Automation::AutomationProperties::SetName(
-            AutoErrorToggle(), RS_(L"FreOverlay_AutoErrorLabel/Text"));
+            ErrorDetectionComboBox(), RS_(L"FreOverlay_ErrorDetectionLabel/Text"));
         Automation::AutomationProperties::SetName(
             ShowTokenUsageAndCostToggle(), RS_(L"FreOverlay_ShowTokenUsageAndCostLabel/Text"));
+        Automation::AutomationProperties::SetName(
+            AutomaticApprovalToggle(), AutomaticApprovalTitle().Text());
         Automation::AutomationProperties::SetName(
             SessionManagementToggle(), RS_(L"FreOverlay_SessionLabel/Text"));
         Automation::AutomationProperties::SetName(
@@ -344,80 +405,118 @@ namespace winrt::TerminalApp::implementation
             /*nodeMissing*/ !_IsNodeInstalled());
     }
 
-    // ── Agent selection changed ─────────────────────────────────────────
+    // ── Error detection mode ────────────────────────────────────────────
 
-    void FreOverlay::_OnAgentSelectionChanged(const IInspectable& /*sender*/,
-                                              const winrt::Windows::UI::Xaml::Controls::SelectionChangedEventArgs& /*args*/)
+    FreOverlay::ErrorDetectionMode FreOverlay::_CurrentErrorDetectionMode()
     {
-        // Show Node.js install hint for Claude/Codex (they use npx adapters)
-        if (const auto selected = AgentComboBox().SelectedItem())
+        const auto comboBox = ErrorDetectionComboBox();
+        if (!comboBox)
         {
-            if (const auto entry = selected.try_as<winrt::TerminalApp::FreAgentEntry>())
-            {
-                const auto id = entry.Id();
-                const bool needsNode = (id == L"claude" || id == L"codex");
-                AgentInstallHintRow().Visibility(needsNode ? Visibility::Visible : Visibility::Collapsed);
-            }
+            return ErrorDetectionMode::Off;
+        }
+
+        switch (comboBox.SelectedIndex())
+        {
+        case static_cast<int32_t>(ErrorDetectionMode::Detect):
+            return ErrorDetectionMode::Detect;
+        case static_cast<int32_t>(ErrorDetectionMode::DetectAndFix):
+            return ErrorDetectionMode::DetectAndFix;
+        default:
+            return ErrorDetectionMode::Off;
         }
     }
 
-    void FreOverlay::_OnSessionManagementToggled(const IInspectable& /*sender*/,
-                                                  const RoutedEventArgs& /*args*/)
+    void FreOverlay::_SetErrorDetectionMode(ErrorDetectionMode mode)
     {
-        // Guard: event can fire during InitializeComponent before controls exist
-        auto toggle = SessionManagementToggle();
-        // Hide/show the whole hint row (icon + text), not just the text — the
-        // monochrome FontIcon lives in the same StackPanel and would otherwise
-        // be left dangling when the toggle is off.
-        auto row = SessionManagementHintRow();
-        if (toggle && row)
+        if (mode == ErrorDetectionMode::DetectAndFix &&
+            _settings &&
+            _settings.GlobalSettings().IsAutoFixPolicyLocked())
         {
-            row.Visibility(toggle.IsOn() ? Visibility::Visible : Visibility::Collapsed);
+            mode = ErrorDetectionMode::Detect;
+        }
+
+        if (const auto comboBox = ErrorDetectionComboBox())
+        {
+            comboBox.SelectedIndex(static_cast<int32_t>(mode));
         }
     }
 
-    // ── Detection → suggestion dependency ───────────────────────────────
-
-    void FreOverlay::_OnAutoDetectToggled(const IInspectable& /*sender*/,
-                                          const RoutedEventArgs& /*args*/)
+    void FreOverlay::_OnSettingsFormScrollerSizeChanged(
+        const IInspectable& /*sender*/,
+        const SizeChangedEventArgs& /*args*/)
     {
-        _UpdateSuggestionEnabledState();
-
-        // Hide/show the whole hint row (icon + text) — the (i) glyph would
-        // otherwise dangle when detection is off and the side-effect described
-        // by the hint no longer applies. Mirrors SessionManagementHintRow.
-        auto toggle = AutoDetectToggle();
-        auto row = AutoDetectShellIntegrationHintRow();
-        if (toggle && row)
-        {
-            row.Visibility(toggle.IsOn() ? Visibility::Visible : Visibility::Collapsed);
-        }
+        _UpdateSettingsFormWidth();
     }
 
-    void FreOverlay::_UpdateSuggestionEnabledState()
+    void FreOverlay::_UpdateSettingsFormWidth()
     {
-        // Guard: Toggled can fire during InitializeComponent before the
-        // sibling control exists.
-        auto detect = AutoDetectToggle();
-        auto suggest = AutoErrorToggle();
-        if (!detect || !suggest)
+        const auto scroller = SettingsFormScroller();
+        const auto stack = SettingsFormStack();
+        const auto errorDetectionComboBox = ErrorDetectionComboBox();
+        if (!scroller || !stack || !errorDetectionComboBox)
         {
             return;
         }
 
-        const bool detectionOn = detect.IsOn();
-        const bool autoFixLocked = _settings && _settings.GlobalSettings().IsAutoFixPolicyLocked();
+        const Size unconstrained{
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+        };
 
-        // Master-detail: detection off ⇒ turn the suggestion off and disable it
-        // (can't configure a suggestion you can't detect).
-        // Detection on ⇒ re-enable it; its On/Off is the stored preference
-        // (set on init), so re-enabling doesn't force it on. The auto-fix GPO
-        // can still lock it off.
-        if (!detectionOn)
+        double longestDescriptionWidth = 0;
+        const auto measureDescription = [&](const TextBlock& description) {
+            description.Measure(unconstrained);
+            longestDescriptionWidth = std::max(
+                longestDescriptionWidth,
+                static_cast<double>(description.DesiredSize().Width));
+        };
+        measureDescription(AgentDescriptionText());
+        measureDescription(PanePositionDescriptionText());
+        measureDescription(ErrorDetectionDescriptionText());
+        measureDescription(SessionDescriptionText());
+        measureDescription(TokenUsageDescriptionText());
+
+        TextBlock optionProbe;
+        optionProbe.FontSize(errorDetectionComboBox.FontSize());
+        double longestOptionWidth = 0;
+        const auto measureOption = [&](const winrt::hstring& text) {
+            optionProbe.Text(text);
+            optionProbe.Measure(unconstrained);
+            longestOptionWidth = std::max(
+                longestOptionWidth,
+                static_cast<double>(optionProbe.DesiredSize().Width));
+        };
+        measureOption(RS_(L"FreOverlay_ErrorDetectionDetectOption/Content"));
+        measureOption(RS_(L"FreOverlay_ErrorDetectionAutoFixOption/Content"));
+        measureOption(RS_(L"FreOverlay_ErrorDetectionOffOption/Content"));
+
+        // Reserve enough room for the longest localized option plus the
+        // ComboBox padding and drop-down glyph when calculating the form width.
+        // The ComboBox itself keeps its XAML MinWidth and follows the selected
+        // option's natural width.
+        constexpr double comboBoxChromeWidth = 48;
+        const double errorDetectionWidth = longestOptionWidth + comboBoxChromeWidth;
+
+        double longestControlWidth = AgentComboBox().MinWidth();
+        longestControlWidth = std::max(longestControlWidth, PanePositionComboBox().MinWidth());
+        longestControlWidth = std::max(longestControlWidth, errorDetectionWidth);
+
+        constexpr double cardHorizontalPadding = 32;
+        constexpr double columnSpacing = 24;
+        constexpr double maximumFormWidth = 1000;
+        const double desiredWidth =
+            longestDescriptionWidth +
+            columnSpacing +
+            longestControlWidth +
+            cardHorizontalPadding;
+
+        const double viewportWidth = scroller.ViewportWidth() > 0
+            ? scroller.ViewportWidth()
+            : scroller.ActualWidth();
+        if (viewportWidth > 0)
         {
-            suggest.IsOn(false);
+            stack.Width(std::min({ desiredWidth, viewportWidth, maximumFormWidth }));
         }
-        suggest.IsEnabled(detectionOn && !autoFixLocked);
     }
 
     // ── Page navigation ─────────────────────────────────────────────────
@@ -433,6 +532,7 @@ namespace winrt::TerminalApp::implementation
             [weak = get_weak()]() {
                 if (auto self = weak.get())
                 {
+                    self->_UpdateSettingsFormWidth();
                     self->SaveButton().Focus(FocusState::Programmatic);
                 }
             });
@@ -1217,8 +1317,7 @@ namespace winrt::TerminalApp::implementation
             // Same remediation as generic shell-integration failure: turn
             // off error detection so the user can save and continue. Once
             // they fix execution policy they can re-enable it from Settings.
-            AutoDetectToggle().IsOn(false);
-            _UpdateSuggestionEnabledState();
+            _SetErrorDetectionMode(ErrorDetectionMode::Off);
             if (_settings)
             {
                 _settings.GlobalSettings().AutoErrorDetectionEnabled(false);
@@ -1228,10 +1327,9 @@ namespace winrt::TerminalApp::implementation
         case FreProblemKind::ShellIntegration:
             ErrorText().Text(RS_(L"FreOverlay_InstallErrorShellIntegration"));
             url += L"#4-shell-integration";
-            // Remediation: turn off error detection (and its dependent
-            // suggestion) so the user can save and continue without it.
-            AutoDetectToggle().IsOn(false);
-            _UpdateSuggestionEnabledState();
+            // Remediation: turn off error detection so the user can save and
+            // continue without it.
+            _SetErrorDetectionMode(ErrorDetectionMode::Off);
             if (_settings)
             {
                 _settings.GlobalSettings().AutoErrorDetectionEnabled(false);
@@ -1429,13 +1527,24 @@ namespace winrt::TerminalApp::implementation
             }
         }
 
+        const auto errorDetectionMode = _CurrentErrorDetectionMode();
+        const bool errorDetectionEnabled = errorDetectionMode != ErrorDetectionMode::Off;
+        const bool autoFixEnabled = errorDetectionMode == ErrorDetectionMode::DetectAndFix;
+
         if (_settings)
         {
             const auto& globals = _settings.GlobalSettings();
             globals.AcpAgent(agentId);
+            globals.AgentPaneYoloMode(AutomaticApprovalToggle().IsOn());
+            globals.ClearAgentPaneYoloModeIfUnavailableDefault();
+            globals.ClearAgentPaneYoloModeIfPolicyBlocked();
             globals.DelegateAgent(agentId);
-            globals.AutoErrorDetectionEnabled(AutoDetectToggle().IsOn());
-            globals.AutoFixEnabled(AutoErrorToggle().IsOn());
+            globals.AutoErrorDetectionEnabled(errorDetectionEnabled);
+            globals.AutoFixEnabled(autoFixEnabled);
+            if (!globals.IsAgentSessionHooksPolicyLocked())
+            {
+                globals.AgentSessionManagementEnabled(SessionManagementToggle().IsOn());
+            }
             globals.ShowTokenUsageAndCost(ShowTokenUsageAndCostToggle().IsOn());
 
             const auto posIdx = PanePositionComboBox().SelectedIndex();
@@ -1461,8 +1570,9 @@ namespace winrt::TerminalApp::implementation
         _agentPaneLog("[FRE] Save: agent=" + winrt::to_string(agentId)
             + " needsCopilot=" + (needsCopilot ? "y" : "n")
             + " needsNode=" + (needsNode ? "y" : "n")
-            + " detect=" + (AutoDetectToggle().IsOn() ? "on" : "off")
-            + " suggest=" + (AutoErrorToggle().IsOn() ? "on" : "off")
+            + " detect=" + (errorDetectionEnabled ? "on" : "off")
+            + " autoFix=" + (autoFixEnabled ? "on" : "off")
+            + " automaticApproval=" + (AutomaticApprovalToggle().IsOn() ? "on" : "off")
             + " tokenUsageAndCost=" + (ShowTokenUsageAndCostToggle().IsOn() ? "on" : "off")
             + " hooks=" + (SessionManagementToggle().IsOn() ? "on" : "off"));
 
@@ -1626,11 +1736,10 @@ namespace winrt::TerminalApp::implementation
             // Helper internally does co_await winrt::resume_background(),
             // so the continuation may resume on a thread-pool thread.
             // Hop back to the UI thread before the subsequent
-            // AutoDetectToggle().IsOn() read and any later _ShowProblem
-            // call. Without this, XAML access from the thread pool
-            // throws RPC_E_WRONG_THREAD, which IAsyncAction swallows —
-            // the SavingOverlay would then be stuck with no error
-            // surfaced.
+            // XAML access and any later _ShowProblem call. Without this,
+            // XAML access from the thread pool throws RPC_E_WRONG_THREAD,
+            // which IAsyncAction swallows — the SavingOverlay would then be
+            // stuck with no error surfaced.
             co_await winrt::resume_foreground(dispatcher);
             self = weak.get();
             if (!self) co_return;
@@ -1643,7 +1752,7 @@ namespace winrt::TerminalApp::implementation
         }
 
         // 5. Shell integration — only when error detection is enabled.
-        if (AutoDetectToggle().IsOn())
+        if (errorDetectionEnabled)
         {
             auto self = weak.get();
             if (!self) co_return;
@@ -1804,7 +1913,7 @@ namespace winrt::TerminalApp::implementation
 
         // Guard against being called before InitializeComponent has populated
         // the named XAML elements — matches the pattern used elsewhere in
-        // this file (see _UpdateSuggestionEnabledState, _OnAutoDetectToggled).
+        // this file (see _SetErrorDetectionMode).
         auto scroller = SettingsFormScroller();
         auto overlay = SavingOverlay();
         auto ring = SavingProgressRing();

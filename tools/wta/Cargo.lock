@@ -2629,6 +2629,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
@@ -3357,6 +3358,7 @@ dependencies = [
  "strsim",
  "sys-locale",
  "textwrap",
+ "time",
  "tokio",
  "tokio-util",
  "tracelogging",

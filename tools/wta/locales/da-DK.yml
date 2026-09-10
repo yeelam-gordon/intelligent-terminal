@@ -51,6 +51,7 @@ chat.turn_canceled: "(annulleret)"
 chat.turn_executed: "→ udført: %{title}"
 # Persistent tool-category labels shown after a status marker and before a subject.
 chat.tool_kind.run: "Kør"
+chat.tool_kind.insert: "Indsæt"
 chat.tool_kind.read: "Læs"
 chat.tool_kind.search: "Søg"
 chat.tool_kind.edit: "Rediger"
@@ -124,8 +125,25 @@ agents.status.idle: "Inaktiv"
 layout.welcome_hint: "  (Ctrl+Shift+. for at vise/skjule agentpanelet • Ctrl+Shift+/ for at vise/skjule agentsessionen)"  # {Locked="Ctrl+Shift+.","Ctrl+Shift+/"}
 
 # ── Connection state ────────────────────────────────────────────────────────
-connection.starting: "Starter agenten..."
+# Preparing the AI agent connection, including preflight and reuse of a cached agent.
+connection.starting: "Forbereder forbindelsen til agenten..."
 connection.reconnecting: "Genopretter forbindelse..."
+# Retiring old AI agent sessions for /restart, before the next connection phases.
+connection.restarting: "Genstarter agenten..."
+# Connecting the pane to WTA's local coordinator process, not to an AI model.
+connection.coordinator: "Opretter forbindelse til den lokale koordinator..."
+# Initializing the helper/coordinator connection, including local preparation and AI agent initialization.
+connection.initializing: "Initialiserer forbindelsen til agenten..."
+# Refreshing the user's authentication with the AI agent after login; not verifying the agent's identity.
+connection.authenticating: "Godkender brugeren hos agenten..."
+# Reading the coordinator's registry snapshot, including existing history; not fetching history from the AI agent.
+connection.syncing_sessions: "Læser sessionslisten..."
+# Creating the AI agent session, including local registration; internal agent progress is unknown.
+connection.creating_session: "Opretter agentsession..."
+# Applying the requested AI model before the connection is ready. Preserve %{model}.
+connection.selecting_model: "Indstiller sessionsmodel: %{model}..."  # {Locked="%{model}"}
+# Activity row while connecting to restore a conversation. Keep the actual stage first so narrow panes show it; session_id is shortened to eight characters.
+connection.resuming_stage: "%{stage} (genoptager %{session_id})"  # {Locked="%{stage}","%{session_id}"}
 connection.connecting_activity: "Opretter forbindelse til agenten…"
 connection.lost: "Forbindelsen til agenten gik tabt. Skriv /restart for at oprette forbindelse igen."  # {Locked="/restart"}
 
@@ -147,8 +165,8 @@ system.resuming_session: "Genoptager session %{session_id}..."
 system.unknown_command: "Ukendt kommando \"%{command}\" — sendt som prompt. Skriv /help for at se listen."
 system.busy_use_stop: "Vent på, at den aktuelle prompt afsluttes, eller brug /stop først."
 system.cannot_focus_session: "Kan ikke fokusere på session %{session_id}: den ser ud til at være aktiv, men der er endnu ikke knyttet nogen rude-GUID. Prøv igen om et øjeblik."
-system.cannot_resume_no_load_session: "Kan ikke genoptage i agentrude: %{agent} annoncerede ikke ACP `loadSession`-funktionen. Tryk på Enter (uden Shift) for i stedet at genoptage i en ny terminalrude."
-system.cannot_resume_no_resume_flag: "Kan ikke genoptage %{agent}-session: denne agent har ikke noget `--resume`-lignende flag. Tryk på Shift+Enter for i stedet at prøve at genoptage inde i agentruden via ACP."
+system.cannot_resume_no_load_session: "Kan ikke genoptage i agentrude: %{agent} annoncerede ikke ACP `loadSession`-funktionen."
+system.cannot_resume_no_resume_flag: "Kan ikke genoptage %{agent}-session: denne agent har ikke noget `--resume`-lignende flag."
 system.cannot_resume_unknown_agent: "Kan ikke genoptage session %{session_id}: kildeagenten er ukendt for dette build."
 system.cannot_resume_phantom_via_flag: "Kan ikke genoptage %{agent}-session %{session_id}: den blev startet, men der blev aldrig opbygget nogen samtale, så %{agent} ville selv afvise genoptagelsen. Fjerner rækken."
 system.cannot_resume_phantom_via_load: "Kan ikke genoptage %{agent}-session %{session_id}: den blev startet, men der blev aldrig opbygget nogen samtale, så %{agent} ville afvise indlæsningen. Fjerner rækken."
@@ -241,4 +259,6 @@ config_picker.title: "Sessionskonfiguration (↑ ↓ • Enter • Esc)"
 system.no_config_options: "Den tilsluttede agent annoncerede ingen konfigurerbare sessionsindstillinger."
 # {option} is an Agent-provided option name; {error} is the ACP error.
 system.config_update_failed: "Kunne ikke opdatere %{option}: %{error}"
+system.yolo_disable_pending: "udbyderen har ikke bekræftet den påkrævede ikke-privilegerede sessionstilstand"  # Shown after the localized failure prefix while prompts remain blocked until the AI agent provider confirms that its privileged session mode is off. Provider means an AI agent provider, not a network provider.
+system.provider_command_blocked_by_policy: "%{command}: Yolo-tilstand er deaktiveret af din organisations politik."  # {Locked="Yolo","%{command}"} Shown when AllowYoloMode blocks a provider-advertised privileged command.
 system.model_unknown: "Ukendt model %{model} — skriv /model for at se den tilgængelige liste."  # {Locked="%{model}","/model"}

@@ -45,13 +45,19 @@ pub struct WtaMeta {
     /// only for diagnostics / back-compat; helpers no longer set it.
     pub agent_cmd: Option<String>,
     /// Canonical agent id (`copilot` / `claude` / `gemini` / …) the
-    /// helper's tab wants. **This is the authoritative selector**: the
-    /// master reconstructs the agent command internally from this id
+    /// helper's tab requests. The master validates this selection and
+    /// reconstructs the agent command internally from this id
     /// (`agent_registry::build_acp_command`) and never executes a string
     /// supplied over the pipe. Also stamps the per-session `cli_source`
     /// so the F2 view labels each row with its real CLI. `None` on older
-    /// helpers — master then falls back to its own `--agent` default.
+    /// helpers — master then falls back to its own `--agent` default. This
+    /// request is not trusted for agent-specific permission behavior; the
+    /// helper uses `resolved_agent_id` returned by the master.
     pub agent_id: Option<String>,
+    /// Canonical agent id selected by the master after allowlist validation
+    /// and fallback resolution. Returned only in the initialize response so
+    /// helper-side agent-specific behavior never trusts its own request.
+    pub resolved_agent_id: Option<String>,
     /// Model override the tab wants (e.g. `gpt-5`). Folded into the
     /// reconstructed command by `build_acp_command` for agents that
     /// take a `--model` flag (adapter agents ignore it and receive the
@@ -102,6 +108,7 @@ impl WtaMeta {
         blank(&self.pane_session_id)
             && blank(&self.agent_cmd)
             && blank(&self.agent_id)
+            && blank(&self.resolved_agent_id)
             && blank(&self.model)
             && blank(&self.provider_binding)
             && blank(&self.agent_source)
@@ -153,6 +160,7 @@ pub fn extract_wta_meta(meta: &mut Option<acp::schema::v1::Meta>) -> WtaMeta {
         pane_session_id: str_field("pane_session_id"),
         agent_cmd: str_field("agent_cmd"),
         agent_id: str_field("agent_id"),
+        resolved_agent_id: str_field("resolved_agent_id"),
         model: str_field("model"),
         provider_binding: str_field("provider_binding"),
         agent_source: str_field("agent_source"),
@@ -194,6 +202,7 @@ pub fn inject_wta_meta(meta: &mut Option<acp::schema::v1::Meta>, wta: &WtaMeta) 
     put("pane_session_id", &wta.pane_session_id);
     put("agent_cmd", &wta.agent_cmd);
     put("agent_id", &wta.agent_id);
+    put("resolved_agent_id", &wta.resolved_agent_id);
     put("model", &wta.model);
     put("provider_binding", &wta.provider_binding);
     put("agent_source", &wta.agent_source);
@@ -487,7 +496,9 @@ pub enum WtaExtRequest {
     FocusSession(FocusSessionParams),
     /// `_intellterm.wta/sessions/list` — full registry snapshot.
     SessionsList(SessionsListParams),
-    /// `_intellterm.wta/session_hook` — a real per-session hook event.
+    /// `_intellterm.wta/session_hook` — a helper-originated session event
+    /// (resume bookkeeping, pane lifecycle). Agent CLI hooks reach master over
+    /// the COM broadcast instead.
     SessionHook(crate::agent_sessions::SessionEvent),
     /// `_intellterm.wta/session_born_bound` — a #266 binding-only registration
     /// (same body as `SessionHook` plus an optional `wsl_distro` → binding-only
@@ -884,6 +895,10 @@ pub struct SessionHookResponse {
 }
 
 /// Build a fire-and-forget helper → master `session_hook` ExtRequest.
+///
+/// Still used for events the helper itself originates (resume bookkeeping,
+/// born-bound registration). Agent CLI hooks do NOT travel this path: master
+/// subscribes to the COM broadcast and routes them itself.
 pub fn build_session_hook_request(
     event: &crate::agent_sessions::SessionEvent,
 ) -> acp::schema::v1::ExtRequest {
@@ -946,7 +961,6 @@ pub fn parse_session_hook_params(
 ) -> Result<crate::agent_sessions::SessionEvent, serde_json::Error> {
     serde_json::from_str::<SessionHookParams>(raw.get()).map(Into::into)
 }
-
 /// Parse a born-bound body into `(event, wsl_distro)`. Reuses
 /// [`parse_session_hook_params`] for the event (it ignores the extra
 /// `wsl_distro` key) and separately extracts the optional distro.
@@ -959,6 +973,7 @@ pub fn parse_born_bound_params(
         wsl_distro: Option<String>,
     }
     let event = parse_session_hook_params(raw)?;
+
     // Propagate a malformed `wsl_distro` (present but the wrong JSON type) as a
     // parse error so the master answers `invalid_params`, rather than silently
     // dropping the distro and mislabelling the row as a host session. A missing
@@ -1036,6 +1051,25 @@ pub struct SessionInfo {
     /// `SessionInfo` directly.
     #[serde(skip)]
     pub bound_pid: Option<u32>,
+    /// True while this row's pane binding was established by WTA itself
+    /// (`/sessions` resume → `ResumePaneAssigned`) rather than by a hook.
+    ///
+    /// WTA creates the resume pane and binds it *before* the agent CLI even
+    /// starts, so the binding is authoritative: for that pane, only this
+    /// session id may claim ownership. The flag exists because Copilot's
+    /// `--resume` boots a throwaway bootstrap session first and only switches
+    /// to the requested one seconds later; its `SessionStart` hook therefore
+    /// arrives carrying the *bootstrap* id together with the resumed pane's
+    /// GUID. Honouring that handoff ends the resumed row, and terminal-state
+    /// rows refuse resurrection, so the row stays `Ended` for the rest of its
+    /// life while the CLI keeps running. See
+    /// [`apply_event_locked`]'s `SessionStarted` arm.
+    ///
+    /// Cleared whenever the row gives up the pane (ended, pane closed,
+    /// rebound), so the protection releases itself without a timer.
+    /// Master-internal — never serialized, exactly like [`Self::bound_pid`].
+    #[serde(skip)]
+    pub born_bound_pane: bool,
 }
 
 impl SessionInfo {
@@ -1057,6 +1091,7 @@ impl SessionInfo {
             last_error: None,
             location: crate::agent_sessions::SessionLocation::Host,
             bound_pid: None,
+            born_bound_pane: false,
         }
     }
 
@@ -1068,13 +1103,13 @@ impl SessionInfo {
     }
 }
 
-/// Convert an `AgentSession` (the helper-side representation, also used
-/// by the disk scanner `history_loader::load_all`) into a `SessionInfo`
-/// for upsert into master's registry.
+/// Convert an `AgentSession` (the helper-side representation, also produced
+/// by `session_history`'s mapping of ACP `session/list` rows) into a
+/// `SessionInfo` for upsert into master's registry.
 ///
-/// Used by master at startup to seed the registry with historical
-/// rows scanned from `~/.copilot/`, `~/.claude/`, `~/.gemini/` so
-/// `wta sessions list` and session management viewers see the full set, not just live
+/// Used by master at startup to seed the registry with historical rows
+/// returned by the agent's own ACP `session/list` so `wta sessions list`
+/// and session management viewers see the full set, not just live
 /// sessions created via `session/new` after master booted.
 pub fn agent_session_to_session_info(s: &AgentSession) -> SessionInfo {
     let last_activity_at_ms = s
@@ -1103,6 +1138,9 @@ pub fn agent_session_to_session_info(s: &AgentSession) -> SessionInfo {
         // History-scan / helper-sourced rows have no bound pid; only the
         // file watcher's bind step populates it.
         bound_pid: None,
+        // Master-internal: only master's own `ResumePaneAssigned` reducer
+        // marks a pane binding as WTA-owned.
+        born_bound_pane: false,
     }
 }
 
@@ -1199,6 +1237,28 @@ pub trait SessionRegistry: Send + Sync {
         sid: &acp::schema::v1::SessionId,
         candidate: &str,
     ) -> bool;
+
+    /// Atomically replace `title` for `sid` with the listing agent's current
+    /// `session/list` title, whatever the row already holds. Returns `true`
+    /// iff the title actually changed. The candidate must be non-empty.
+    ///
+    /// The CLI owns a session's display name and keeps rewriting it: Copilot
+    /// reports the session's *first user message* until it generates a real
+    /// summary, then swaps in the summary. [`upgrade_title_if_synthetic`]
+    /// cannot recover from that, because the transient first-message echo is
+    /// an ordinary non-synthetic title — adopting it once would freeze the row
+    /// on it forever. This is the counterpart primitive that lets the poll
+    /// re-adopt the agent's current answer.
+    ///
+    /// Callers must first establish that the listing agent owns this row (in
+    /// master that is `row_refreshable_by_connected_agent` plus a session-id
+    /// match against that agent's own `session/list`) and must filter
+    /// placeholder and injected-context candidates with
+    /// [`title_is_displayable`], since this method applies whatever it is
+    /// given.
+    ///
+    /// [`upgrade_title_if_synthetic`]: SessionRegistry::upgrade_title_if_synthetic
+    async fn adopt_agent_title(&self, sid: &acp::schema::v1::SessionId, candidate: &str) -> bool;
 }
 
 /// Production implementation. Uses `tokio::sync::Mutex` for parity with the
@@ -1244,8 +1304,8 @@ pub(crate) fn title_is_synthetic(info: &SessionInfo) -> bool {
 
 /// The literal heading the delegate `?<prompt>` flow injects into the prompt it
 /// bakes into a freshly launched agent CLI: `"<prompt>\n\n## Terminal Context
-/// (pane <id>)\n```…```"` (built in `main.rs`, which references this same
-/// constant so the two can't drift).
+/// (pane <id>)\n```…```"` (built in `cli/delegate.rs`, which references this
+/// same constant so the two can't drift).
 ///
 /// Agent CLIs (e.g. Copilot) briefly surface a session's *first user message* as
 /// its `session/list` title before they generate their real chat summary. For a
@@ -1258,12 +1318,36 @@ pub(crate) const TERMINAL_CONTEXT_TITLE_MARKER: &str = "## Terminal Context (pan
 /// [`TERMINAL_CONTEXT_TITLE_MARKER`]) rather than a real CLI-generated summary.
 ///
 /// Such a title must not be adopted as a session's display title: it leaks the
-/// injected terminal context (pane GUID included), and adopting it would lock
-/// the row out of the later upgrade to the CLI's real summary name (an echoed
-/// title is non-synthetic, so `refresh_synthetic_titles_from` would skip it
-/// forever). Callers drop it so the row stays synthetic and keeps upgrading.
+/// injected terminal context (pane GUID and the captured pane output included)
+/// into the session list for the whole window before the CLI generates its real
+/// summary. Callers drop it so the row keeps its own title and the next poll
+/// adopts the summary instead.
+///
+/// This filter is load-bearing for
+/// [`SessionRegistry::adopt_agent_title`], which overwrites whatever it is
+/// handed: an unfiltered echo would not merely stick (the pre-`adopt` failure
+/// mode, where a non-synthetic echo locked the row out of every later upgrade)
+/// but actively replace a good title, and be re-adopted on every 5 s poll until
+/// the summary lands.
 pub(crate) fn title_is_injected_context_echo(title: &str) -> bool {
     title.contains(TERMINAL_CONTEXT_TITLE_MARKER)
+}
+
+/// Whether a `session/list` title reported for `cli` is fit to become a
+/// session's display name.
+///
+/// The single source of truth for "is this candidate usable", shared by the
+/// producer (`master::host_titles_via_acp`, which builds the title map) and the
+/// destructive consumer (`master::refresh_titles_from_listing`, which feeds
+/// [`SessionRegistry::adopt_agent_title`]). An agent's *latest* answer is not
+/// automatically a *displayable* one: it can be empty, the delegate's injected
+/// first-message echo, or a CLI's own untouched-session placeholder. Keeping
+/// both ends on one predicate means a future caller can't reintroduce a
+/// clobbering candidate by rebuilding the map by hand.
+pub(crate) fn title_is_displayable(cli: Option<&CliSource>, title: &str) -> bool {
+    !title.is_empty()
+        && !title_is_injected_context_echo(title)
+        && !cli.is_some_and(|cli| crate::agent_sessions::title_is_placeholder(cli, title))
 }
 
 #[async_trait::async_trait]
@@ -1386,6 +1470,21 @@ impl SessionRegistry for InMemoryRegistry {
         entry.title = Some(candidate.to_string());
         true
     }
+
+    async fn adopt_agent_title(&self, sid: &acp::schema::v1::SessionId, candidate: &str) -> bool {
+        if candidate.is_empty() {
+            return false;
+        }
+        let mut guard = self.inner.lock().await;
+        let Some(entry) = guard.sessions.get_mut(sid) else {
+            return false;
+        };
+        if entry.title.as_deref() == Some(candidate) {
+            return false;
+        }
+        entry.title = Some(candidate.to_string());
+        true
+    }
 }
 
 #[allow(dead_code)] // Used through apply_event once Task B forwards hook events.
@@ -1397,7 +1496,7 @@ fn now_ms() -> u64 {
 }
 
 fn pane_key(pane_session_id: &str) -> String {
-    pane_session_id.to_ascii_lowercase()
+    crate::agent_sessions::pane_key(pane_session_id)
 }
 
 fn upsert_locked(state: &mut RegistryState, info: SessionInfo) {
@@ -1438,6 +1537,7 @@ fn end_entry(state: &mut RegistryState, sid: &acp::schema::v1::SessionId, now: u
     if let Some(pane) = entry.pane_session_id.take() {
         state.active_by_pane.remove(&pane_key(&pane));
     }
+    entry.born_bound_pane = false;
     entry.current_tool = None;
     entry.attention_reason = None;
     entry.last_activity_at_ms = Some(now);
@@ -1542,6 +1642,31 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
                 return true;
             }
 
+            // A pane that WTA bound itself during `/sessions` resume belongs to
+            // exactly one session id: the one the user asked to resume. Copilot's
+            // `--resume` boots a throwaway bootstrap session first and only
+            // switches to the requested one seconds later, so its (deferred)
+            // SessionStart hook reports the *bootstrap* id against the resumed
+            // pane's GUID. Taking the handoff would end the resumed row, and
+            // terminal-state rows refuse resurrection, so the row would sit at
+            // Ended for the rest of the CLI's life while the watcher's status
+            // fallback is silently dropped. Require the hook's session id to
+            // match the pane's born-bound owner; a mismatch still records the
+            // session, it just gets no pane binding.
+            let pane_owned_by_other_born_bound = state
+                .active_by_pane
+                .get(&pane_session_id)
+                .filter(|owner_sid| **owner_sid != sid)
+                .and_then(|owner_sid| state.sessions.get(owner_sid))
+                .is_some_and(|owner| {
+                    owner.born_bound_pane
+                        && matches!(
+                            owner.status,
+                            Some(AgentStatus::Idle | AgentStatus::Working | AgentStatus::Attention)
+                        )
+                });
+            let pane_known = pane_known && !pane_owned_by_other_born_bound;
+
             if pane_known {
                 if let Some(prev_sid) = state.active_by_pane.get(&pane_session_id).cloned() {
                     if prev_sid != sid {
@@ -1595,6 +1720,10 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
             } else {
                 entry.pane_session_id = None;
             }
+            // The CLI's own hook has now claimed (or disclaimed) this pane, so
+            // the WTA-owned resume binding no longer needs protecting: a later
+            // session started in the same pane may take over normally.
+            entry.born_bound_pane = false;
             true
         }
         SessionEvent::ToolStarting { key, tool_name } => {
@@ -1693,6 +1822,7 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
                 if let Some(pane) = entry.pane_session_id.take() {
                     state.active_by_pane.remove(&pane_key(&pane));
                 }
+                entry.born_bound_pane = false;
             }
             entry.current_tool = None;
             entry.attention_reason = None;
@@ -1708,6 +1838,7 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
             };
             entry.status = Some(AgentStatus::Ended);
             entry.pane_session_id = None;
+            entry.born_bound_pane = false;
             entry.current_tool = None;
             entry.attention_reason = None;
             entry.last_activity_at_ms = Some(now);
@@ -1723,6 +1854,17 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
             let Some(entry) = state.sessions.get_mut(&sid) else {
                 return false;
             };
+            // Idempotent, unlike the `remove`-based PaneClosed arm above: the
+            // pane binding survives a failure, so a repeat would otherwise
+            // re-report a change every time. Every helper in the window
+            // observes the same WT `connection_state: failed` and publishes
+            // its own copy, so without this each one re-broadcasts
+            // `sessions/changed` for a row that already says exactly this.
+            if entry.status == Some(AgentStatus::Error)
+                && entry.last_error.as_deref() == Some(reason.as_str())
+            {
+                return false;
+            }
             entry.status = Some(AgentStatus::Error);
             entry.last_error = Some(reason);
             entry.last_activity_at_ms = Some(now);
@@ -1766,6 +1908,10 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
             }
             entry.pane_session_id = Some(pane_session_id.clone());
             entry.last_activity_at_ms = Some(now);
+            // WTA created this pane and bound it before the agent CLI started,
+            // so until the CLI's own hook confirms the binding, no other
+            // session id may claim the pane. See `born_bound_pane`.
+            entry.born_bound_pane = true;
             state.active_by_pane.insert(pane_session_id, sid);
             true
         }
@@ -2149,12 +2295,13 @@ mod tests {
 
     #[test]
     fn title_is_injected_context_echo_detects_delegate_marker_only() {
-        // Mirrors the `?<prompt>` prompt built in `main.rs` from
+        // Mirrors the `?<prompt>` prompt built in `cli/delegate.rs` from
         // `TERMINAL_CONTEXT_TITLE_MARKER`: an agent CLI can echo this whole first
         // user message back as a `session/list` title before it generates a real
-        // summary. Such an echo must be dropped (see `host_titles_via_acp`) so the
-        // born-bound row stays synthetic and keeps upgrading — the counterpart
-        // behaviour is covered by `refresh_synthetic_titles_from_skips_when_id_absent`.
+        // summary. Such an echo must be dropped (see `host_titles_via_acp`), or
+        // `adopt_agent_title` would overwrite the row's title with the injected
+        // pane GUID and captured pane output on every poll until the summary
+        // lands.
         let echo = format!(
             "hi test\n\n{}8A9B4ABA-BEB4-4F94-B0D3-55569420B902)\n```\nPowerShell 7.6.3\n```",
             TERMINAL_CONTEXT_TITLE_MARKER
@@ -2167,6 +2314,35 @@ mod tests {
         ));
         assert!(!title_is_injected_context_echo("hi test"));
         assert!(!title_is_injected_context_echo(""));
+    }
+
+    #[test]
+    fn title_is_displayable_rejects_empty_echo_and_provider_placeholder() {
+        assert!(title_is_displayable(
+            Some(&CliSource::Copilot),
+            "Check Copilot Resume Hooks"
+        ));
+        assert!(title_is_displayable(None, "Check Copilot Resume Hooks"));
+        assert!(!title_is_displayable(Some(&CliSource::Copilot), ""));
+        assert!(!title_is_displayable(
+            Some(&CliSource::Copilot),
+            &format!("hi\n\n{TERMINAL_CONTEXT_TITLE_MARKER}pane-1)\n```\nx\n```")
+        ));
+        // An unknown cli can't recognize a provider placeholder, but the echo
+        // and empty checks still apply.
+        assert!(!title_is_displayable(
+            None,
+            &format!("hi\n\n{TERMINAL_CONTEXT_TITLE_MARKER}pane-1)\n```\nx\n```")
+        ));
+        let placeholder = "New session - 2026-07-23T01:14:00.422Z";
+        assert!(!title_is_displayable(
+            Some(&CliSource::OpenCode),
+            placeholder
+        ));
+        assert!(
+            title_is_displayable(Some(&CliSource::Copilot), placeholder),
+            "another CLI's placeholder shape is a real title here"
+        );
     }
 
     #[tokio::test]
@@ -2290,6 +2466,79 @@ mod tests {
         assert_eq!(found.last_activity_at_ms, Some(123_456_789));
         assert_eq!(found.origin, Some(SessionOrigin::Unknown));
         assert_eq!(found.cwd, PathBuf::from("C:\\Users\\alice"));
+    }
+
+    // ── adopt_agent_title ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn adopt_agent_title_replaces_a_stale_real_title() {
+        // Copilot surfaces the first user message as a session's
+        // `session/list` title until it generates a summary. That echo is
+        // non-synthetic, so `upgrade_title_if_synthetic` can never correct it.
+        let reg = InMemoryRegistry::new();
+        reg.upsert(info_with(
+            "s1",
+            "/repo/proj",
+            Some("first user message echoed as a title"),
+        ))
+        .await;
+        let sid = acp::schema::v1::SessionId::new("s1".to_string());
+        assert!(
+            !reg.upgrade_title_if_synthetic(&sid, "Check Copilot Resume Hooks")
+                .await
+        );
+        assert!(
+            reg.adopt_agent_title(&sid, "Check Copilot Resume Hooks")
+                .await
+        );
+        assert_eq!(
+            reg.lookup(&sid).await.unwrap().title.as_deref(),
+            Some("Check Copilot Resume Hooks")
+        );
+    }
+
+    #[tokio::test]
+    async fn adopt_agent_title_is_a_no_op_for_empty_same_or_missing() {
+        let reg = InMemoryRegistry::new();
+        reg.upsert(info_with("s1", "/repo/proj", Some("Same")))
+            .await;
+        let sid = acp::schema::v1::SessionId::new("s1".to_string());
+        // Empty candidate must never blank out a title.
+        assert!(!reg.adopt_agent_title(&sid, "").await);
+        // Steady state returns false so the poll doesn't broadcast every tick.
+        assert!(!reg.adopt_agent_title(&sid, "Same").await);
+        assert_eq!(
+            reg.lookup(&sid).await.unwrap().title.as_deref(),
+            Some("Same")
+        );
+        assert!(
+            !reg.adopt_agent_title(
+                &acp::schema::v1::SessionId::new("nope".to_string()),
+                "Real Title"
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn adopt_agent_title_preserves_other_fields() {
+        let reg = InMemoryRegistry::new();
+        let mut row = info_with("s1", "/repo/proj", Some("old"));
+        row.pane_session_id = Some("pane-abc".to_string());
+        row.status = Some(AgentStatus::Working);
+        row.cli_source = Some(CliSource::Copilot);
+        row.last_activity_at_ms = Some(123_456_789);
+        reg.upsert(row).await;
+
+        let sid = acp::schema::v1::SessionId::new("s1".to_string());
+        assert!(reg.adopt_agent_title(&sid, "new").await);
+
+        let found = reg.lookup(&sid).await.unwrap();
+        assert_eq!(found.title.as_deref(), Some("new"));
+        assert_eq!(found.pane_session_id.as_deref(), Some("pane-abc"));
+        assert_eq!(found.status, Some(AgentStatus::Working));
+        assert_eq!(found.cli_source, Some(CliSource::Copilot));
+        assert_eq!(found.last_activity_at_ms, Some(123_456_789));
     }
 
     // ── _meta.wta extract / inject ──────────────────────────────────
@@ -2487,6 +2736,7 @@ mod tests {
             last_error: Some("previous failure".into()),
             location: crate::agent_sessions::SessionLocation::Host,
             bound_pid: None,
+            born_bound_pane: false,
         };
 
         let json = serde_json::to_string(&row).expect("serialize SessionInfo");
@@ -2555,6 +2805,7 @@ mod tests {
             last_error: None,
             location: crate::agent_sessions::SessionLocation::Host,
             bound_pid: None,
+            born_bound_pane: false,
         };
         let raw = build_sessions_list_response(vec![row.clone()]);
         let parsed = parse_sessions_list_response(&raw).expect("response parses");
@@ -2806,6 +3057,56 @@ mod tests {
         assert_eq!(row.pane_session_id.as_deref(), Some("p"));
     }
 
+    /// Master's counterpart to the helper-side idempotency test. Every helper
+    /// publishes its own copy of the same WT `connection_state: failed`, and
+    /// `apply_event`'s return value gates the `sessions/changed` broadcast — so
+    /// a repeat that reports `true` would push one notification per helper for
+    /// a row that already says exactly this.
+    #[tokio::test]
+    async fn master_reducer_repeated_connection_failure_reports_no_change() {
+        let reg = InMemoryRegistry::new();
+        reg.apply_event(crate::agent_sessions::SessionEvent::SessionStarted {
+            key: "sid".into(),
+            cli_source: crate::agent_sessions::CliSource::Claude,
+            pane_session_id: "p".into(),
+            cwd: PathBuf::from("C:\\x"),
+            title: "t".into(),
+        })
+        .await;
+
+        let first = reg
+            .apply_event(crate::agent_sessions::SessionEvent::ConnectionFailed {
+                pane_session_id: "p".into(),
+                reason: "ECONNRESET".into(),
+            })
+            .await;
+        assert!(first, "the first failure must land and broadcast");
+
+        let repeat = reg
+            .apply_event(crate::agent_sessions::SessionEvent::ConnectionFailed {
+                pane_session_id: "p".into(),
+                reason: "ECONNRESET".into(),
+            })
+            .await;
+        assert!(
+            !repeat,
+            "a sibling helper's identical copy must not re-broadcast"
+        );
+
+        let changed = reg
+            .apply_event(crate::agent_sessions::SessionEvent::ConnectionFailed {
+                pane_session_id: "p".into(),
+                reason: "pipe closed".into(),
+            })
+            .await;
+        assert!(changed, "a different reason is new information");
+        let row = reg
+            .lookup(&acp::schema::v1::SessionId::new("sid"))
+            .await
+            .unwrap();
+        assert_eq!(row.last_error.as_deref(), Some("pipe closed"));
+    }
+
     #[tokio::test]
     async fn master_reducer_resume_dispatched_promotes_ended_without_binding_pane() {
         let reg = InMemoryRegistry::new();
@@ -2855,6 +3156,7 @@ mod tests {
             last_error: None,
             location: crate::agent_sessions::SessionLocation::Host,
             bound_pid: None,
+            born_bound_pane: false,
         })
         .await;
         reg.apply_event(crate::agent_sessions::SessionEvent::ResumeDispatched {
@@ -2876,6 +3178,167 @@ mod tests {
         assert!(changed);
         assert_eq!(row.status, Some(crate::agent_sessions::AgentStatus::Idle));
         assert_eq!(row.pane_session_id.as_deref(), Some("new-pane"));
+    }
+
+    /// Seed a `/sessions` resume: a historical row promoted to Idle and bound
+    /// to a freshly-spawned pane by WTA itself, before the CLI has started.
+    async fn seed_resumed_pane(reg: &InMemoryRegistry, key: &str, pane: &str) {
+        let mut info = SessionInfo::new(
+            acp::schema::v1::SessionId::new(key.to_string()),
+            PathBuf::from("C:\\x"),
+        );
+        info.status = Some(crate::agent_sessions::AgentStatus::Historical);
+        info.cli_source = Some(crate::agent_sessions::CliSource::Copilot);
+        reg.upsert(info).await;
+        reg.apply_event(crate::agent_sessions::SessionEvent::ResumeDispatched { key: key.into() })
+            .await;
+        reg.apply_event(crate::agent_sessions::SessionEvent::ResumePaneAssigned {
+            key: key.into(),
+            pane_session_id: pane.into(),
+        })
+        .await;
+    }
+
+    /// Regression: Copilot's `--resume` boots a throwaway bootstrap session and
+    /// only switches to the requested one seconds later, so the SessionStart
+    /// hook reports the bootstrap id against the resumed pane's GUID. That must
+    /// not evict the resumed row — doing so ended it permanently, because
+    /// terminal-state rows refuse resurrection.
+    #[tokio::test]
+    async fn master_reducer_foreign_session_start_cannot_steal_a_resumed_pane() {
+        let reg = InMemoryRegistry::new();
+        seed_resumed_pane(&reg, "resumed", "pane-1").await;
+
+        reg.apply_event(crate::agent_sessions::SessionEvent::SessionStarted {
+            key: "bootstrap".into(),
+            cli_source: crate::agent_sessions::CliSource::Copilot,
+            pane_session_id: "pane-1".into(),
+            cwd: PathBuf::from("C:\\x"),
+            title: "t".into(),
+        })
+        .await;
+
+        let resumed = reg
+            .lookup(&acp::schema::v1::SessionId::new("resumed"))
+            .await
+            .unwrap();
+        assert_eq!(
+            resumed.status,
+            Some(crate::agent_sessions::AgentStatus::Idle),
+            "the resumed row must survive a foreign session start on its pane"
+        );
+        assert_eq!(resumed.pane_session_id.as_deref(), Some("pane-1"));
+
+        let bootstrap = reg
+            .lookup(&acp::schema::v1::SessionId::new("bootstrap"))
+            .await
+            .unwrap();
+        assert!(
+            bootstrap.pane_session_id.is_none(),
+            "the bootstrap session is still recorded, just never bound to the pane"
+        );
+    }
+
+    /// The point of keeping the row live: the hookless watcher's status
+    /// fallback still reaches it. An Ended row would drop the event.
+    #[tokio::test]
+    async fn master_reducer_resumed_row_still_takes_status_after_foreign_session_start() {
+        let reg = InMemoryRegistry::new();
+        seed_resumed_pane(&reg, "resumed", "pane-1").await;
+        reg.apply_event(crate::agent_sessions::SessionEvent::SessionStarted {
+            key: "bootstrap".into(),
+            cli_source: crate::agent_sessions::CliSource::Copilot,
+            pane_session_id: "pane-1".into(),
+            cwd: PathBuf::from("C:\\x"),
+            title: "t".into(),
+        })
+        .await;
+
+        let changed = reg
+            .apply_event(crate::agent_sessions::SessionEvent::ToolStarting {
+                key: "resumed".into(),
+                tool_name: "shell".into(),
+            })
+            .await;
+        let resumed = reg
+            .lookup(&acp::schema::v1::SessionId::new("resumed"))
+            .await
+            .unwrap();
+
+        assert!(changed);
+        assert_eq!(
+            resumed.status,
+            Some(crate::agent_sessions::AgentStatus::Working)
+        );
+    }
+
+    /// The guard releases itself: once the CLI's own hook claims the pane for
+    /// the resumed id, a genuinely new session in that pane takes over as
+    /// before.
+    #[tokio::test]
+    async fn master_reducer_own_session_start_releases_the_resumed_pane_guard() {
+        let reg = InMemoryRegistry::new();
+        seed_resumed_pane(&reg, "resumed", "pane-1").await;
+        reg.apply_event(crate::agent_sessions::SessionEvent::SessionStarted {
+            key: "resumed".into(),
+            cli_source: crate::agent_sessions::CliSource::Copilot,
+            pane_session_id: "pane-1".into(),
+            cwd: PathBuf::from("C:\\x"),
+            title: "t".into(),
+        })
+        .await;
+
+        reg.apply_event(crate::agent_sessions::SessionEvent::SessionStarted {
+            key: "typed-later".into(),
+            cli_source: crate::agent_sessions::CliSource::Copilot,
+            pane_session_id: "pane-1".into(),
+            cwd: PathBuf::from("C:\\x"),
+            title: "t".into(),
+        })
+        .await;
+
+        let resumed = reg
+            .lookup(&acp::schema::v1::SessionId::new("resumed"))
+            .await
+            .unwrap();
+        let typed = reg
+            .lookup(&acp::schema::v1::SessionId::new("typed-later"))
+            .await
+            .unwrap();
+        assert_eq!(
+            resumed.status,
+            Some(crate::agent_sessions::AgentStatus::Ended)
+        );
+        assert!(resumed.pane_session_id.is_none());
+        assert_eq!(typed.pane_session_id.as_deref(), Some("pane-1"));
+    }
+
+    /// The other release path: the resumed session exits (`/exit` → SessionEnd
+    /// hook), so the next session started in that pane binds normally.
+    #[tokio::test]
+    async fn master_reducer_session_stopped_releases_the_resumed_pane_guard() {
+        let reg = InMemoryRegistry::new();
+        seed_resumed_pane(&reg, "resumed", "pane-1").await;
+        reg.apply_event(crate::agent_sessions::SessionEvent::SessionStopped {
+            key: "resumed".into(),
+            reason: "user_exit".into(),
+        })
+        .await;
+
+        reg.apply_event(crate::agent_sessions::SessionEvent::SessionStarted {
+            key: "typed-later".into(),
+            cli_source: crate::agent_sessions::CliSource::Copilot,
+            pane_session_id: "pane-1".into(),
+            cwd: PathBuf::from("C:\\x"),
+            title: "t".into(),
+        })
+        .await;
+
+        let typed = reg
+            .lookup(&acp::schema::v1::SessionId::new("typed-later"))
+            .await
+            .unwrap();
+        assert_eq!(typed.pane_session_id.as_deref(), Some("pane-1"));
     }
 
     // ─── Task C sessions/list + sessions/changed schemas ───────────
@@ -3745,6 +4208,7 @@ mod tests {
         let original = WtaMeta {
             agent_cmd: Some("npx -y @agentclientprotocol/claude-agent-acp@0.65.0".to_string()),
             agent_id: Some("gemini".to_string()),
+            resolved_agent_id: Some("copilot".to_string()),
             model: Some("gemini-2.5-pro".to_string()),
             provider_binding: Some("custom:provider-openrouter:qwen/qwen3.5-9b".to_string()),
             agent_source: Some("wsl".to_string()),
@@ -3800,6 +4264,7 @@ mod tests {
                 pane_session_id: Some("  ".to_string()),
                 agent_cmd: Some(String::new()),
                 agent_id: Some("\t".to_string()),
+                resolved_agent_id: Some(" ".to_string()),
                 model: Some(" ".to_string()),
                 provider_binding: Some(" ".to_string()),
                 agent_source: Some(" ".to_string()),
@@ -3842,6 +4307,7 @@ mod tests {
                 pane_session_id: Some("  ".to_string()),
                 agent_cmd: Some(String::new()),
                 agent_id: Some("\t".to_string()),
+                resolved_agent_id: Some(" ".to_string()),
                 model: Some(" ".to_string()),
                 provider_binding: Some(" ".to_string()),
                 agent_source: Some(" ".to_string()),

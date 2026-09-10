@@ -26,6 +26,7 @@ pub enum AppEvent {
         current_model_id: Option<String>,
         load_session_supported: bool,
         image_supported: bool,
+        session_capabilities_ready: bool,
     },
     /// The old helper↔master ACP task has closed its pipe intentionally and
     /// the stable helper process may start the replacement connection.
@@ -35,6 +36,10 @@ pub enum AppEvent {
     SessionAttached {
         tab_id: String,
         session_id: String,
+        /// Present only for a session lazily created by this exact prompt.
+        /// Lifecycle-created sessions (`/new`, `session/load`, startup
+        /// fallback) are not prompt-owned.
+        prompt_id: Option<u64>,
         available_models: Vec<AcpModelInfo>,
         current_model_id: Option<String>,
     },
@@ -49,6 +54,15 @@ pub enum AppEvent {
         session_id: String,
         available_models: Vec<AcpModelInfo>,
         current_model_id: Option<String>,
+    },
+    RuntimeYoloReconcileCompleted {
+        reconcile_id: u64,
+        fail_closed: bool,
+        restart_required: bool,
+        result: Result<(), String>,
+    },
+    YoloControlOwnerChanged {
+        session_id: String,
     },
     ModelSetCompleted {
         session_id: String,
@@ -79,9 +93,15 @@ pub enum AppEvent {
         session_id: String,
         config_id: String,
         message: String,
+        restart_required: bool,
     },
     TabError {
         tab_id: String,
+        message: String,
+    },
+    PromptError {
+        tab_id: String,
+        prompt_id: u64,
         message: String,
     },
     TabSystemMessage {
@@ -114,6 +134,11 @@ pub enum AppEvent {
     /// The helper's pipe to wta-master closed. A retained helper reconnects
     /// its existing immutable binding over the stable pipe.
     MasterDisconnected,
+    /// The ACP client has conclusively retired its transport and no prompt
+    /// or lifecycle task owned by that client can produce more events.
+    /// Releases cancellation barriers for both dispatched and still-queued
+    /// prompts.
+    AgentTransportRetired,
     AgentSoftStop {
         session_id: String,
         reason: crate::protocol::acp::soft_stop::SoftStopReason,
@@ -137,10 +162,15 @@ pub enum AppEvent {
     },
     UserMessageReplayChunk {
         session_id: String,
+        message_id: Option<String>,
         text: String,
     },
     AgentMessageEnd {
         session_id: String,
+    },
+    PromptCancellationSettled {
+        prompt_id: u64,
+        started: bool,
     },
     TimingMetric {
         session_id: String,
@@ -152,6 +182,7 @@ pub enum AppEvent {
         title: String,
         status: String,
         kind: crate::app::ToolCallKind,
+        query: Option<crate::app::ToolCallOutput>,
         /// See `ChatMessage::ToolCall::location`.
         location: Option<String>,
         /// See `ChatMessage::ToolCall::location_is_command`.
@@ -168,6 +199,8 @@ pub enum AppEvent {
         title: Option<String>,
         status: Option<String>,
         kind: Option<crate::app::ToolCallKind>,
+        /// Omitted input leaves the retained query unchanged.
+        query: Option<crate::app::ToolCallOutput>,
         /// `Some` only when the agent's `tool_call_update` actually
         /// reported new `locations`/`raw_input` — `None` means "no
         /// change", so the existing card's location hint (if any) is

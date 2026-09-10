@@ -33,6 +33,7 @@ namespace TerminalApp
         String Window { get; };
         String Content { get; };
         UInt32 TabIndex { get; };
+        UInt64 TransferId { get; };
         Windows.Foundation.IReference<Windows.Foundation.Point> WindowPosition { get; };
     };
 
@@ -144,6 +145,7 @@ namespace TerminalApp
         Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.TabInfo> > GetProtocolTabs();
         Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.PaneInfo> > GetProtocolPanes(UInt32 tabIdFilter);
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.PaneOutput> ReadProtocolPaneOutput(Guid sessionId, String source, Int32 maxLines);
+        Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.PaneContext> GetProtocolPaneContext(Guid sourceSessionId, Boolean hasExplicitSource, Int32 maxLines, Int32 maxCharacters);
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.ProcessStatus> GetProtocolProcessStatus(Guid sessionId);
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.SessionVariable> GetProtocolSessionVariable(Guid sessionId, String name);
         Windows.Foundation.IAsyncOperation<Boolean> SetProtocolSessionVariable(Guid sessionId, String name, String value);
@@ -193,6 +195,13 @@ namespace TerminalApp
         // publishes a `load_session` event back to wta carrying the new
         // tab's StableId so wta calls ACP `session/load` for that tab.
         void OnResumeInNewAgentTabRequested(String eventJson);
+
+        // Inbound event from a hookless WTA delegate carrying
+        // {method:"pane_agent_session_changed",
+        //  params:{pane_id,agent_session_id,resume_commandline}}.
+        // Records the known pane/agent binding so a persisted layout can
+        // resume the agent CLI even when no agent hook is installed.
+        void OnPaneAgentSessionChanged(String eventJson);
 
         // Inbound event from WTA carrying
         // {method:"set_agent_chip_target",params:{tab_id, pane_session_id?}}.

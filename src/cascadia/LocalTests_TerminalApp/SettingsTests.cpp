@@ -3,6 +3,7 @@
 
 #include "pch.h"
 
+#include "../inc/AgentYoloPolicy.h"
 #include "../TerminalApp/TerminalPage.h"
 #include "../UnitTests_SettingsModel/TestUtils.h"
 #include "../TerminalSettingsAppAdapterLib/TerminalSettings.h"
@@ -73,9 +74,12 @@ namespace TerminalAppLocalTests
 
         TEST_METHOD(TestElevateArg);
         TEST_METHOD(TestAgentSettingsChangeClassification);
+        TEST_METHOD(TestAgentHooksReconciliationClassification);
         TEST_METHOD(TestAgentSettingsFocusGate);
         TEST_METHOD(TestAgentPaneRebindCapability);
         TEST_METHOD(TestAgentPaneSwitchCapability);
+        TEST_METHOD(TestDefaultProviderYoloInheritance);
+        TEST_METHOD(TestHotDefaultProviderYoloUsesOutgoingBinding);
         TEST_METHOD(TestAgentPaneSettingsRebindRouting);
         TEST_METHOD(TestAgentPaneModelHotUpdateRouting);
 
@@ -1712,6 +1716,46 @@ namespace TerminalAppLocalTests
             Page::_ClassifyAgentSettingsChange(customModelChange, changedCustomModel));
     }
 
+    void SettingsTests::TestAgentHooksReconciliationClassification()
+    {
+        using Page = winrt::TerminalApp::implementation::TerminalPage;
+        using Scope = Page::AgentHooksReconciliationScope;
+
+        const Page::AgentSettingsSnapshot enabled{
+            L"copilot", L"", L"", std::nullopt, {}, true
+        };
+        VERIFY_ARE_EQUAL(
+            Scope::None,
+            Page::_ClassifyAgentHooksReconciliation(enabled, enabled));
+
+        auto turnedOff = enabled;
+        turnedOff.agentSessionManagementEnabled = false;
+        VERIFY_ARE_EQUAL(
+            Scope::None,
+            Page::_ClassifyAgentHooksReconciliation(enabled, turnedOff));
+        VERIFY_ARE_EQUAL(
+            Scope::All,
+            Page::_ClassifyAgentHooksReconciliation(turnedOff, enabled));
+
+        auto switchedAgent = enabled;
+        switchedAgent.acpAgent = L"claude";
+        VERIFY_ARE_EQUAL(
+            Scope::SelectedAgent,
+            Page::_ClassifyAgentHooksReconciliation(enabled, switchedAgent));
+
+        auto switchedCustomAgent = enabled;
+        switchedCustomAgent.acpAgent = L"custom:local";
+        VERIFY_ARE_EQUAL(
+            Scope::None,
+            Page::_ClassifyAgentHooksReconciliation(enabled, switchedCustomAgent));
+
+        auto switchedWhileDisabled = turnedOff;
+        switchedWhileDisabled.acpAgent = L"claude";
+        VERIFY_ARE_EQUAL(
+            Scope::None,
+            Page::_ClassifyAgentHooksReconciliation(turnedOff, switchedWhileDisabled));
+    }
+
     void SettingsTests::TestAgentSettingsFocusGate()
     {
         using Page = winrt::TerminalApp::implementation::TerminalPage;
@@ -2069,6 +2113,67 @@ namespace TerminalAppLocalTests
         const auto payload = Page::_BuildAgentPaneSettingsRebindPayload(wslCodex);
         VERIFY_ARE_EQUAL(std::string{ "wsl" }, payload["agent_source"].asString());
         VERIFY_ARE_EQUAL(std::string{ "Ubuntu" }, payload["wsl_distro"].asString());
+    }
+
+    void SettingsTests::TestDefaultProviderYoloInheritance()
+    {
+        namespace Policy = ::Microsoft::Terminal::Settings::Model::AgentYoloPolicy;
+
+        VERIFY_IS_TRUE(Policy::CanUserRequestEnable(false));
+        VERIFY_IS_FALSE(Policy::CanUserRequestEnable(true));
+        VERIFY_IS_TRUE(Policy::IsAutomaticProviderKnownUnsupported(L"opencode"));
+        VERIFY_IS_FALSE(Policy::IsAutomaticProviderKnownUnsupported(L"copilot"));
+        VERIFY_IS_TRUE(Policy::IsAutomaticEnableAvailable(false, L"copilot"));
+        VERIFY_IS_FALSE(Policy::IsAutomaticEnableAvailable(true, L"copilot"));
+        VERIFY_IS_FALSE(Policy::IsAutomaticEnableAvailable(false, L"opencode"));
+        VERIFY_IS_FALSE(Policy::IsAutomaticEnableAvailable(false, L""));
+
+        const auto automatic = [](const bool configuredEnabled,
+                                  const bool policyBlocked,
+                                  const std::wstring_view defaultAgentId,
+                                  const std::wstring_view currentAgentId) {
+            return Policy::ShouldRequestAutomaticEnable(
+                configuredEnabled,
+                policyBlocked,
+                defaultAgentId,
+                currentAgentId);
+        };
+
+        VERIFY_IS_TRUE(automatic(true, false, L"copilot", L"copilot"));
+        VERIFY_IS_TRUE(automatic(true, false, L"CoPiLoT", L"copilot"));
+        VERIFY_IS_FALSE(automatic(true, false, L"copilot", L"claude"));
+        VERIFY_IS_FALSE(automatic(true, false, L"opencode", L"opencode"));
+        VERIFY_IS_FALSE(automatic(true, false, L"", L""));
+        VERIFY_IS_FALSE(automatic(false, false, L"copilot", L"copilot"));
+        VERIFY_IS_FALSE(automatic(true, true, L"copilot", L"copilot"));
+    }
+
+    void SettingsTests::TestHotDefaultProviderYoloUsesOutgoingBinding()
+    {
+        using Page = winrt::TerminalApp::implementation::TerminalPage;
+
+        Page::AgentRuntimeConfigSnapshot previous;
+        previous.defaultAgentId = L"copilot";
+        previous.yoloEnabled = false;
+
+        Page::AgentRuntimeConfigSnapshot current;
+        current.defaultAgentId = L"gemini";
+        current.yoloEnabled = true;
+
+        Page::AgentPaneSettingsBinding globalFollower;
+        globalFollower.agentId = L"gemini";
+        globalFollower.followsGlobalAcpModel = true;
+        VERIFY_IS_FALSE(Page::_ResolveHotAutomaticYoloForAgentBinding(
+            previous, current, globalFollower, L"copilot"));
+        VERIFY_IS_TRUE(Page::_ResolveHotAutomaticYoloForAgentBinding(
+            previous, current, globalFollower, L"gemini"));
+        VERIFY_IS_FALSE(Page::_ResolveHotAutomaticYoloForAgentBinding(
+            previous, current, globalFollower, L""));
+
+        Page::AgentPaneSettingsBinding agentOverride;
+        agentOverride.agentId = L"gemini";
+        VERIFY_IS_TRUE(Page::_ResolveHotAutomaticYoloForAgentBinding(
+            previous, current, agentOverride, L"gemini"));
     }
 
     void SettingsTests::TestAgentPaneModelHotUpdateRouting()

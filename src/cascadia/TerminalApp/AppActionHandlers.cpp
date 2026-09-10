@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include "pch.h"
+#include "../inc/AgentPaneRestore.h"
 #include "App.h"
 
 #include "TerminalPage.h"
@@ -289,12 +290,24 @@ namespace winrt::TerminalApp::implementation
 
             const auto& activeTab{ _senderOrFocusedTab(sender) };
 
-            _SplitPane(activeTab,
-                       realArgs.SplitDirection(),
-                       // This is safe, we're already filtering so the value is (0, 1)
-                       realArgs.SplitSize(),
-                       _MakePane(realArgs.ContentArgs(), duplicateFromTab));
-            args.Handled(true);
+            // A persisted agent pane replays as an ordinary splitPane action,
+            // but it cannot be built by `_MakePane`: the helper needs this
+            // run's master pipe and owner ids, and its agent has to be
+            // re-checked against policy rather than taken from saved state.
+            // Hand it to the spawn path, which does its own split.
+            if (const auto& terminalArgs{ realArgs.ContentArgs().try_as<NewTerminalArgs>() };
+                terminalArgs && !terminalArgs.ContentId() && ::Microsoft::Terminal::AgentPaneRestore::IsPaneType(terminalArgs.Type()))
+            {
+                _RestoreAgentPaneFromLayout(activeTab, terminalArgs, realArgs.SplitDirection(), realArgs.SplitSize());
+                args.Handled(true);
+                return;
+            }
+
+            args.Handled(_SplitPane(activeTab,
+                                   realArgs.SplitDirection(),
+                                   // This is safe, we're already filtering so the value is (0, 1)
+                                   realArgs.SplitSize(),
+                                   _MakePane(realArgs.ContentArgs(), duplicateFromTab)));
         }
     }
 
@@ -490,7 +503,6 @@ namespace winrt::TerminalApp::implementation
         if (args == nullptr)
         {
             LOG_IF_FAILED(_OpenNewTab(nullptr));
-            args.Handled(true);
         }
         else if (const auto& realArgs = args.ActionArgs().try_as<NewTabArgs>())
         {
@@ -500,8 +512,18 @@ namespace winrt::TerminalApp::implementation
                 return;
             }
 
-            LOG_IF_FAILED(_OpenNewTab(realArgs.ContentArgs()));
-            args.Handled(true);
+            // Agent restore records are not executable command lines, including
+            // legacy layouts that place one in a newTab action.
+            if (const auto& terminalArgs{ realArgs.ContentArgs().try_as<NewTerminalArgs>() };
+                terminalArgs && !terminalArgs.ContentId() && ::Microsoft::Terminal::AgentPaneRestore::IsPaneType(terminalArgs.Type()))
+            {
+                terminalArgs.Commandline({});
+                terminalArgs.SetContentType({});
+            }
+
+            const auto result = _OpenNewTab(realArgs.ContentArgs());
+            LOG_IF_FAILED(result);
+            args.Handled(result == S_OK);
         }
     }
 
@@ -1726,7 +1748,7 @@ namespace winrt::TerminalApp::implementation
     }
 
     void TerminalPage::_HandleTriggerAutofix(const IInspectable& /*sender*/,
-                                              const ActionEventArgs& args)
+                                             const ActionEventArgs& args)
     {
         // Per-tab: read autofix state from the active tab's AgentPaneContent.
         const auto activeTab = _GetFocusedTabImpl();
@@ -1821,7 +1843,12 @@ namespace winrt::TerminalApp::implementation
         SYSTEMTIME st{};
         GetLocalTime(&st);
         const auto zipName = fmt::format(L"intelligent-terminal-logs-{:04d}{:02d}{:02d}-{:02d}{:02d}{:02d}.zip",
-                                          st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+                                         st.wYear,
+                                         st.wMonth,
+                                         st.wDay,
+                                         st.wHour,
+                                         st.wMinute,
+                                         st.wSecond);
         const auto zipPath = desktop / zipName;
 
         // Resolve absolute paths to tar.exe and explorer.exe up-front so we
@@ -1843,15 +1870,16 @@ namespace winrt::TerminalApp::implementation
         // leaking an absolute path. argv[0] must still be present in lpCommandLine
         // even though lpApplicationName provides the executable.
         auto cmdline = fmt::format(LR"("{}" -a -c -f "{}" -C "{}" logs)",
-                                    tarExe.wstring(), zipPath.wstring(), logsDir.parent_path().wstring());
+                                   tarExe.wstring(),
+                                   zipPath.wstring(),
+                                   logsDir.parent_path().wstring());
 
         STARTUPINFOW si{};
         si.cb = sizeof(si);
         si.dwFlags = STARTF_USESHOWWINDOW;
         si.wShowWindow = SW_HIDE;
         PROCESS_INFORMATION pi{};
-        if (!CreateProcessW(tarExe.c_str(), cmdline.data(), nullptr, nullptr, FALSE,
-                            CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+        if (!CreateProcessW(tarExe.c_str(), cmdline.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
         {
             co_return;
         }
@@ -2028,9 +2056,18 @@ namespace winrt::TerminalApp::implementation
 
                 allAlreadyInstalled = true; // becomes false on first non-alreadyInstalled below
 
-                if (shellPresence.pwsh)              { consider(results.pwsh,              L"PowerShell"); }
-                if (shellPresence.windowsPowerShell) { consider(results.windowsPowerShell, L"Windows PowerShell"); }
-                if (shellPresence.bash)              { consider(results.bash,              L"bash"); }
+                if (shellPresence.pwsh)
+                {
+                    consider(results.pwsh, L"PowerShell");
+                }
+                if (shellPresence.windowsPowerShell)
+                {
+                    consider(results.windowsPowerShell, L"Windows PowerShell");
+                }
+                if (shellPresence.bash)
+                {
+                    consider(results.bash, L"bash");
+                }
                 for (const auto& [distName, wslRes] : results.wsl)
                 {
                     consider(wslRes, L"WSL bash (" + distName + L")");
@@ -2168,7 +2205,7 @@ namespace winrt::TerminalApp::implementation
             // for VS" (which uses Windows PowerShell) and no pwsh
             // profile must not get pwsh integration written.
             // GH#613: startup/settings reloads leave WSL to the lazy new-tab path.
-            (void)ShellIntegrationSweep::RunInstall(shellPresence, wslCommandlines, ShellIntegrationSweep::InstallTargets::Native);
+            (void)ShellIntegrationSweep::RunInstall(shellPresence, wslCommandlines, ShellIntegrationSweep::InstallTargets::WindowsShells);
         }
         else
         {

@@ -30,6 +30,7 @@ namespace winrt::TerminalApp::implementation
 
         // Initialize with settings to populate controls.
         void Initialize(const winrt::Microsoft::Terminal::Settings::Model::CascadiaSettings& settings);
+        void UpdateSettings(const winrt::Microsoft::Terminal::Settings::Model::CascadiaSettings& settings);
 
         // Event — sender must be the WinRT projected type.
         til::typed_event<winrt::TerminalApp::FreOverlay, winrt::Windows::Foundation::IInspectable> Completed;
@@ -43,10 +44,8 @@ namespace winrt::TerminalApp::implementation
                                  const winrt::Windows::UI::Xaml::RoutedEventArgs& args);
         void _OnAgentSelectionChanged(const winrt::Windows::Foundation::IInspectable& sender,
                                       const winrt::Windows::UI::Xaml::Controls::SelectionChangedEventArgs& args);
-        void _OnSessionManagementToggled(const winrt::Windows::Foundation::IInspectable& sender,
-                                         const winrt::Windows::UI::Xaml::RoutedEventArgs& args);
-        void _OnAutoDetectToggled(const winrt::Windows::Foundation::IInspectable& sender,
-                                  const winrt::Windows::UI::Xaml::RoutedEventArgs& args);
+        void _OnSettingsFormScrollerSizeChanged(const winrt::Windows::Foundation::IInspectable& sender,
+                                                const winrt::Windows::UI::Xaml::SizeChangedEventArgs& args);
 
         // No-op kept for IDL compatibility.
         void ResetDragOffset();
@@ -119,15 +118,24 @@ namespace winrt::TerminalApp::implementation
         // editing, and parks focus on the help link.
         void _FinalizeProblemDisplay(const std::wstring& url);
 
-        // Apply the detection→suggestion master-detail dependency: detection
-        // off turns the suggestion toggle off and disables it; detection on
-        // re-enables it (preserving the stored value).
-        void _UpdateSuggestionEnabledState();
+        enum class ErrorDetectionMode : int32_t
+        {
+            Detect = 0,
+            DetectAndFix = 1,
+            Off = 2,
+        };
+
+        ErrorDetectionMode _CurrentErrorDetectionMode();
+        void _SetErrorDetectionMode(ErrorDetectionMode mode);
+        void _UpdateSettingsFormWidth();
 
         // (Re)build the agent dropdown from the GPO-filtered registry, labeling
         // each entry with its live install state. Safe to call repeatedly (e.g.
         // after a save) and preserves the current selection.
         void _PopulateAgentComboBox();
+        winrt::hstring _SelectedAgentId();
+        void _UpdateAutomaticApprovalState();
+        bool _refreshingAgentComboBox{ false };
 
         // Detect whether a generic executable is on PATH. ACP agent choices
         // use WTA's authoritative Host availability probe instead.
