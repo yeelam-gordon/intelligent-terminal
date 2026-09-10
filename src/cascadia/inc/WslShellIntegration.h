@@ -25,14 +25,20 @@
 
 #pragma once
 
-#include <optional>
+#include <mutex>
+#include <set>
 
 #include "ShellIntegrationCommon.h"
 #include "BashShellIntegration.h"
-#include "ShellIntegrationProfileGate.h"
 
 namespace Microsoft::Terminal::ShellIntegration::Wsl
 {
+#if defined(_DEBUG)
+    using InstallDiagnosticObserver = void (*)(std::wstring_view launchCommandline, std::string_view event) noexcept;
+#else
+    using InstallDiagnosticObserver = void (*)(std::wstring_view, std::string_view) noexcept;
+#endif
+
     namespace details
     {
         // True for distro names that are safe to embed verbatim in a
@@ -557,6 +563,43 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
             }
             return id;
         }
+
+        inline std::mutex& InstallAttemptedCommandlinesMutex() noexcept
+        {
+            static std::mutex mutex;
+            return mutex;
+        }
+
+        inline std::set<std::wstring, std::less<>>& InstallAttemptedCommandlines() noexcept
+        {
+            static std::set<std::wstring, std::less<>> commandlines;
+            return commandlines;
+        }
+
+        inline std::string_view InstallOutcomeEvent(const InstallResult& result) noexcept
+        {
+            if (!result.success)
+            {
+                return "failed";
+            }
+            return result.alreadyInstalled ? "nochange" : "completed";
+        }
+
+        inline void NotifyInstallDiagnostic(InstallDiagnosticObserver observer,
+                                            std::wstring_view launchCommandline,
+                                            std::string_view event) noexcept
+        {
+#if defined(_DEBUG)
+            if (observer)
+            {
+                observer(launchCommandline, event);
+            }
+#else
+            (void)observer;
+            (void)launchCommandline;
+            (void)event;
+#endif
+        }
     }
 
     // Returns the distro name a prior Install/Uninstall already resolved for
@@ -665,14 +708,62 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
     // Synchronous — call from a background thread. The first call for each
     // commandline can block up to 30s on a cold-start; subsequent calls
     // return immediately from the cache.
-    inline InstallResult Install(const std::wstring& launchCommandline)
+    template<typename InstallFn>
+    inline InstallResult Install(std::wstring_view launchCommandline,
+                                 InstallFn&& install,
+                                 InstallDiagnosticObserver diagnosticObserver)
     {
-        WslBashFlavor flavor{ launchCommandline };
-        if (!flavor.Valid())
+        bool started;
         {
-            return { false, false, std::wstring{ flavor.ErrorMessage() } };
+            std::lock_guard<std::mutex> guard{ details::InstallAttemptedCommandlinesMutex() };
+            started = details::InstallAttemptedCommandlines().emplace(launchCommandline).second;
         }
-        return orchestrator::Install(flavor);
+        if (!started)
+        {
+            details::NotifyInstallDiagnostic(diagnosticObserver, launchCommandline, "skip-already-attempted");
+            return { true, true, {} };
+        }
+
+        details::NotifyInstallDiagnostic(diagnosticObserver, launchCommandline, "attempt-started");
+
+#if defined(_DEBUG)
+        try
+        {
+            const auto result = install(launchCommandline);
+            details::NotifyInstallDiagnostic(diagnosticObserver, launchCommandline, details::InstallOutcomeEvent(result));
+            return result;
+        }
+        catch (...)
+        {
+            details::NotifyInstallDiagnostic(diagnosticObserver, launchCommandline, "thrown");
+            throw;
+        }
+#else
+        (void)diagnosticObserver;
+        return install(launchCommandline);
+#endif
+    }
+
+    namespace details
+    {
+        inline InstallResult InstallShellIntegration(std::wstring_view commandline)
+        {
+            WslBashFlavor flavor{ std::wstring{ commandline } };
+            if (!flavor.Valid())
+            {
+                return { false, false, std::wstring{ flavor.ErrorMessage() } };
+            }
+            return orchestrator::Install(flavor);
+        }
+    }
+
+    inline InstallResult Install(const std::wstring& launchCommandline,
+                                 InstallDiagnosticObserver diagnosticObserver = nullptr)
+    {
+        return Install(
+            std::wstring_view{ launchCommandline },
+            details::InstallShellIntegration,
+            diagnosticObserver);
     }
 
     inline InstallResult Uninstall(const std::wstring& launchCommandline)
@@ -687,219 +778,6 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
             return { true, true, {} };
         }
         return orchestrator::Uninstall(flavor);
-    }
-
-    // Returns the effective commandline only when it is still launching the
-    // configured WSL profile. We compare the actual launch selection after
-    // stripping any exec tail (`-e fish`, `-- sh -c`, etc.) so appended
-    // in-distro commands still qualify, but an override that really launches
-    // a different shell or distro does not.
-    inline std::wstring_view QualifyingProfileLaunchCommandline(std::wstring_view profileCommandline,
-                                                                std::wstring_view effectiveCommandline) noexcept
-    {
-        namespace SI = ::Microsoft::Terminal::ShellIntegration;
-
-        if (!SI::IsWslProfile(profileCommandline) || !SI::IsWslProfile(effectiveCommandline))
-        {
-            return {};
-        }
-
-        const bool profileIsBash =
-            SI::details::CommandlineHasExeToken(profileCommandline, L"bash") &&
-            SI::details::IsSystem32BashLauncher(profileCommandline);
-        const bool effectiveIsBash =
-            SI::details::CommandlineHasExeToken(effectiveCommandline, L"bash") &&
-            SI::details::IsSystem32BashLauncher(effectiveCommandline);
-        if (profileIsBash != effectiveIsBash)
-        {
-            return {};
-        }
-
-        const auto expectedSelection = details::StripExecTail(profileCommandline, profileIsBash);
-        const auto actualSelection = details::StripExecTail(effectiveCommandline, effectiveIsBash);
-        return SI::details::EqualsCi(expectedSelection, actualSelection) ? effectiveCommandline :
-                                                                           std::wstring_view{};
-    }
-
-    // Process-wide bookkeeping shared by explicit and new-tab WSL installs.
-    // InstallForProfile claims a profile before invoking the installer,
-    // releases that claim if settings were disabled before the work ran, and
-    // marks the profile handled once an install attempt actually runs.
-    //
-    // Keyed by profile GUID, not distro: each profile gets one attempt per
-    // process, regardless of success. Release only cancels work that never ran;
-    // settings toggles cannot re-arm a handled profile. Uninstall is unchanged.
-    class NewTabReconcileGate
-    {
-    public:
-        // True exactly once per `profileKey` for the life of this process.
-        // Every later call is a cheap no-op: one map lookup, no allocation,
-        // no I/O.
-        bool TryClaim(std::wstring_view profileKey)
-        {
-            std::lock_guard<std::mutex> guard{ _mutex };
-            if (_states.find(profileKey) != _states.end())
-            {
-                return false;
-            }
-            _states.emplace(profileKey, State::InFlight);
-            return true;
-        }
-
-        // Give back a claim whose work never ran. Deliberately a no-op once
-        // the profile is Handled -- see the state note above.
-        void Release(std::wstring_view profileKey)
-        {
-            std::lock_guard<std::mutex> guard{ _mutex };
-            if (const auto it = _states.find(profileKey);
-                it != _states.end() && it->second == State::InFlight)
-            {
-                _states.erase(it);
-            }
-        }
-
-        // Record that `profileKey` has been reconciled in this process, so
-        // TryClaim refuses it from now on and Release can no longer reopen
-        // it. Idempotent, and valid from any state.
-        void MarkHandled(std::wstring_view profileKey)
-        {
-            std::lock_guard<std::mutex> guard{ _mutex };
-            if (const auto it = _states.find(profileKey); it != _states.end())
-            {
-                it->second = State::Handled;
-                return;
-            }
-            _states.emplace(profileKey, State::Handled);
-        }
-
-    private:
-        enum class State
-        {
-            InFlight, // claimed; the attempt may still be abandoned
-            Handled, // reconciled in this process; terminal
-        };
-
-        std::mutex _mutex;
-        std::map<std::wstring, State, std::less<>> _states;
-    };
-
-    namespace details
-    {
-        inline NewTabReconcileGate& SharedInstallForProfileGate()
-        {
-            static NewTabReconcileGate gate;
-            return gate;
-        }
-
-#if defined(_DEBUG)
-        inline void NotifyInstallForProfileDiagnostic(void (*observer)(std::wstring_view, std::string_view) noexcept,
-                                                      std::wstring_view profileKey,
-                                                      std::string_view event) noexcept
-        {
-            if (observer)
-            {
-                observer(profileKey, event);
-            }
-        }
-
-        inline std::string_view InstallForProfileOutcomeEvent(const InstallResult& result) noexcept
-        {
-            if (!result.success)
-            {
-                return "failed";
-            }
-            return result.alreadyInstalled ? "nochange" : "completed";
-        }
-#endif
-    }
-
-    using InstallForProfileDiagnosticObserver = void (*)(std::wstring_view profileKey, std::string_view event) noexcept;
-
-    // nullopt from the installer means work was cancelled before installation.
-    // Any returned result or thrown exception consumes the profile's attempt.
-    template<typename InstallFn>
-    inline std::optional<InstallResult> InstallForProfile(std::wstring_view profileKey,
-                                                          std::wstring_view profileCommandline,
-                                                          std::wstring_view effectiveCommandline,
-                                                          InstallFn&& installer,
-                                                          InstallForProfileDiagnosticObserver diagnosticObserver = nullptr)
-    {
-        namespace SI = ::Microsoft::Terminal::ShellIntegration;
-
-        if (profileKey.empty() || !SI::IsWslProfile(profileCommandline))
-        {
-            return std::nullopt;
-        }
-
-        auto commandline = profileCommandline;
-        if (!effectiveCommandline.empty())
-        {
-            commandline = QualifyingProfileLaunchCommandline(profileCommandline, effectiveCommandline);
-            if (commandline.empty())
-            {
-                return std::nullopt;
-            }
-        }
-
-        auto& gate = details::SharedInstallForProfileGate();
-        if (!gate.TryClaim(profileKey))
-        {
-#if defined(_DEBUG)
-            details::NotifyInstallForProfileDiagnostic(diagnosticObserver, profileKey, "skip-already-doing-or-done");
-#endif
-            return InstallResult{ true, true, {}, false };
-        }
-
-        auto releaseClaim = wil::scope_exit([&]() noexcept {
-            gate.Release(profileKey);
-        });
-        auto markHandled = wil::scope_exit([&]() noexcept {
-            gate.MarkHandled(profileKey);
-        });
-
-#if defined(_DEBUG)
-        details::NotifyInstallForProfileDiagnostic(diagnosticObserver, profileKey, "attempt-started");
-
-        try
-        {
-            if (const auto result = installer(commandline))
-            {
-                details::NotifyInstallForProfileDiagnostic(diagnosticObserver, profileKey, details::InstallForProfileOutcomeEvent(*result));
-                return *result;
-            }
-
-            details::NotifyInstallForProfileDiagnostic(diagnosticObserver, profileKey, "cancelled");
-        }
-        catch (...)
-        {
-            details::NotifyInstallForProfileDiagnostic(diagnosticObserver, profileKey, "thrown");
-            throw;
-        }
-#else
-        (void)diagnosticObserver;
-        if (const auto result = installer(commandline))
-        {
-            return *result;
-        }
-#endif
-
-        markHandled.release();
-        return std::nullopt;
-    }
-
-    inline std::optional<InstallResult> InstallForProfile(std::wstring_view profileKey,
-                                                          std::wstring_view profileCommandline,
-                                                          std::wstring_view effectiveCommandline = {},
-                                                          InstallForProfileDiagnosticObserver diagnosticObserver = nullptr)
-    {
-        return InstallForProfile(
-            profileKey,
-            profileCommandline,
-            effectiveCommandline,
-            [](std::wstring_view commandline) -> std::optional<InstallResult> {
-                return Install(std::wstring{ commandline });
-            },
-            diagnosticObserver);
     }
 
 }

@@ -37,38 +37,38 @@ using namespace TerminalCoreUnitTests;
 
 namespace
 {
-    struct WslInstallForProfileObserverEvent
+    struct WslInstallObserverEvent
     {
-        std::wstring profileKey;
+        std::wstring commandline;
         std::string event;
     };
 
-    std::mutex g_wslInstallForProfileObserverMutex;
-    std::vector<WslInstallForProfileObserverEvent> g_wslInstallForProfileObserverEvents;
+    std::mutex g_wslInstallObserverMutex;
+    std::vector<WslInstallObserverEvent> g_wslInstallObserverEvents;
 
-    void ObserveWslInstallForProfile(std::wstring_view profileKey, std::string_view event) noexcept
+    void ObserveWslInstall(std::wstring_view commandline, std::string_view event) noexcept
     {
-        std::lock_guard lock{ g_wslInstallForProfileObserverMutex };
-        g_wslInstallForProfileObserverEvents.emplace_back(WslInstallForProfileObserverEvent{
-            std::wstring{ profileKey },
+        std::lock_guard lock{ g_wslInstallObserverMutex };
+        g_wslInstallObserverEvents.emplace_back(WslInstallObserverEvent{
+            std::wstring{ commandline },
             std::string{ event },
         });
     }
 
-    size_t WslInstallForProfileObserverEventCount()
+    size_t WslInstallObserverEventCount()
     {
-        std::lock_guard lock{ g_wslInstallForProfileObserverMutex };
-        return g_wslInstallForProfileObserverEvents.size();
+        std::lock_guard lock{ g_wslInstallObserverMutex };
+        return g_wslInstallObserverEvents.size();
     }
 
-    std::vector<std::string> WslInstallForProfileObserverEventsSince(std::wstring_view profileKey, size_t startIndex)
+    std::vector<std::string> WslInstallObserverEventsSince(std::wstring_view commandline, size_t startIndex)
     {
         std::vector<std::string> events;
-        std::lock_guard lock{ g_wslInstallForProfileObserverMutex };
-        for (size_t i = startIndex; i < g_wslInstallForProfileObserverEvents.size(); ++i)
+        std::lock_guard lock{ g_wslInstallObserverMutex };
+        for (size_t i = startIndex; i < g_wslInstallObserverEvents.size(); ++i)
         {
-            const auto& observed = g_wslInstallForProfileObserverEvents[i];
-            if (observed.profileKey == profileKey)
+            const auto& observed = g_wslInstallObserverEvents[i];
+            if (observed.commandline == commandline)
             {
                 events.emplace_back(observed.event);
             }
@@ -76,11 +76,11 @@ namespace
         return events;
     }
 
-    void VerifyWslInstallForProfileObserverEvents(std::wstring_view profileKey,
-                                                  size_t startIndex,
-                                                  const std::vector<std::string>& expected)
+    void VerifyWslInstallObserverEvents(std::wstring_view commandline,
+                                        size_t startIndex,
+                                        const std::vector<std::string>& expected)
     {
-        const auto actual = WslInstallForProfileObserverEventsSince(profileKey, startIndex);
+        const auto actual = WslInstallObserverEventsSince(commandline, startIndex);
         VERIFY_ARE_EQUAL(expected.size(), actual.size());
         for (size_t i = 0; i < expected.size(); ++i)
         {
@@ -212,24 +212,11 @@ class TerminalCoreUnitTests::ShellIntegrationTests final
     TEST_METHOD(Wsl_StripExecTail_StripsExistingExecCommand);
     TEST_METHOD(Wsl_QualifyBareLauncher_QualifiesBareWslBash);
 
-    TEST_METHOD(Wsl_InstallForProfile_FreThenNewTabSharesHandledState);
-    TEST_METHOD(Wsl_InstallForProfile_NewTabThenFreSharesHandledState);
-    TEST_METHOD(Wsl_InstallForProfile_InFlightSecondCallerReturnsImmediately);
-    TEST_METHOD(Wsl_InstallForProfile_CompletedAttemptSkipsLaterRetry);
-    TEST_METHOD(Wsl_InstallForProfile_FailedAttemptSkipsLaterRetry);
-    TEST_METHOD(Wsl_InstallForProfile_ThrownAttemptSkipsLaterRetry);
-    TEST_METHOD(Wsl_InstallForProfile_DifferentProfilesSameCommandlineInstallIndependently);
-    TEST_METHOD(Wsl_InstallForProfile_DiagnosticObserver_CompletedThenHandledSkip);
-    TEST_METHOD(Wsl_InstallForProfile_DiagnosticObserver_InFlightSkipAndCancelled);
-    TEST_METHOD(Wsl_InstallForProfile_DiagnosticObserver_MapsNoChangeFailureAndThrown);
-    TEST_METHOD(Wsl_InstallForProfile_NulloptRetrySucceeds);
-    TEST_METHOD(Wsl_InstallForProfile_InvalidOrMismatchedCommandlineDoesNotConsumeClaim);
-
-    // The qualifying-launch policy the lazy WSL reconcile admits on (GH#613).
-    TEST_METHOD(Qualifies_WslProfileWithMatchingCommandline);
-    TEST_METHOD(Qualifies_EffectiveCommandlineKeepsProfileSelection);
-    TEST_METHOD(Qualifies_DifferentSelectionNeverQualifies);
-    TEST_METHOD(Qualifies_NonWslProfileNeverQualifies);
+    TEST_METHOD(Wsl_Install_DuplicateCommandlineSkipsAfterCompletion);
+    TEST_METHOD(Wsl_Install_DuplicateCommandlineSkipsWhileInFlight);
+    TEST_METHOD(Wsl_Install_DistinctCommandlinesInstallIndependently);
+    TEST_METHOD(Wsl_Install_FailureAndExceptionConsumeAttempt);
+    TEST_METHOD(Wsl_Install_DiagnosticObserver_TracksDecision);
 
     // Profile-presence gate (ShellIntegrationProfileGate.h)
     TEST_METHOD(ProfileGate_PwshSourceMatches);
@@ -344,10 +331,10 @@ private:
         return n;
     }
 
-    static std::wstring _UniqueWslInstallProfileKey()
+    static std::wstring _UniqueWslInstallCommandline()
     {
         static std::atomic<uint64_t> counter{ 0 };
-        return L"test-wsl-install-profile-" + std::to_wstring(counter.fetch_add(1, std::memory_order_relaxed));
+        return L"wsl.exe -d shellintegration-test-" + std::to_wstring(counter.fetch_add(1, std::memory_order_relaxed));
     }
 
     static InstallResult _SuccessfulWslInstall(const bool alreadyInstalled = false)
@@ -1991,83 +1978,47 @@ void ShellIntegrationTests::Wsl_QualifyBareLauncher_QualifiesBareWslBash()
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Wsl::InstallForProfile (GH#613) — shared once-per-profile install gate
-// used by explicit install flows and the lazy new-tab reconcile.
+// Wsl::Install (GH#613) — exact-commandline gate shared by explicit install
+// flows and the lazy new-tab reconcile. Non-WSL filtering stays at the
+// callers; IsWslProfile tests below cover that recognizer.
 // ───────────────────────────────────────────────────────────────────
 
-void ShellIntegrationTests::Wsl_InstallForProfile_FreThenNewTabSharesHandledState()
+void ShellIntegrationTests::Wsl_Install_DuplicateCommandlineSkipsAfterCompletion()
 {
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
+    using Microsoft::Terminal::ShellIntegration::Wsl::Install;
 
-    const auto profileKey = _UniqueWslInstallProfileKey();
-    std::vector<std::wstring> invokedCommandlines;
+    const auto commandline = _UniqueWslInstallCommandline();
+    size_t installCalls = 0;
 
-    const auto explicitResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [&](std::wstring_view commandline) -> std::optional<InstallResult> {
-            invokedCommandlines.emplace_back(commandline);
+    const auto firstResult = Install(
+        commandline,
+        [&](std::wstring_view actualCommandline) {
+            ++installCalls;
+            VERIFY_ARE_EQUAL(commandline, std::wstring{ actualCommandline });
             return _SuccessfulWslInstall();
-        });
+        },
+        nullptr);
 
-    size_t secondCalls = 0;
-    const auto newTabResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        L"wsl.exe -d Ubuntu -e fish",
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++secondCalls;
+    const auto secondResult = Install(
+        commandline,
+        [&](std::wstring_view) {
+            ++installCalls;
             return _SuccessfulWslInstall();
-        });
+        },
+        nullptr);
 
-    VERIFY_IS_TRUE(explicitResult.has_value());
-    VERIFY_IS_TRUE(newTabResult.has_value());
-    VERIFY_ARE_EQUAL(static_cast<size_t>(1), invokedCommandlines.size());
-    VERIFY_ARE_EQUAL(static_cast<size_t>(0), secondCalls);
-    VERIFY_ARE_EQUAL(std::wstring{ L"wsl.exe -d Ubuntu" }, invokedCommandlines[0]);
-    VERIFY_IS_TRUE(newTabResult->alreadyInstalled);
+    VERIFY_IS_TRUE(firstResult.success);
+    VERIFY_IS_TRUE(secondResult.success);
+    VERIFY_ARE_EQUAL(static_cast<size_t>(1), installCalls);
+    VERIFY_IS_FALSE(firstResult.alreadyInstalled);
+    VERIFY_IS_TRUE(secondResult.alreadyInstalled);
 }
 
-void ShellIntegrationTests::Wsl_InstallForProfile_NewTabThenFreSharesHandledState()
+void ShellIntegrationTests::Wsl_Install_DuplicateCommandlineSkipsWhileInFlight()
 {
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
+    using Microsoft::Terminal::ShellIntegration::Wsl::Install;
 
-    const auto profileKey = _UniqueWslInstallProfileKey();
-    std::vector<std::wstring> invokedCommandlines;
-
-    const auto newTabResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        L"wsl.exe -d Ubuntu --exec fish",
-        [&](std::wstring_view commandline) -> std::optional<InstallResult> {
-            invokedCommandlines.emplace_back(commandline);
-            return _SuccessfulWslInstall();
-        });
-
-    size_t secondCalls = 0;
-    const auto explicitResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++secondCalls;
-            return _SuccessfulWslInstall();
-        });
-
-    VERIFY_IS_TRUE(newTabResult.has_value());
-    VERIFY_IS_TRUE(explicitResult.has_value());
-    VERIFY_ARE_EQUAL(static_cast<size_t>(1), invokedCommandlines.size());
-    VERIFY_ARE_EQUAL(static_cast<size_t>(0), secondCalls);
-    VERIFY_ARE_EQUAL(std::wstring{ L"wsl.exe -d Ubuntu --exec fish" }, invokedCommandlines[0]);
-    VERIFY_IS_TRUE(explicitResult->alreadyInstalled);
-}
-
-void ShellIntegrationTests::Wsl_InstallForProfile_InFlightSecondCallerReturnsImmediately()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
-
-    const auto profileKey = _UniqueWslInstallProfileKey();
+    const auto commandline = _UniqueWslInstallCommandline();
     std::mutex releaseMutex;
     std::condition_variable releaseCv;
     bool releaseFirst{ false };
@@ -2075,45 +2026,54 @@ void ShellIntegrationTests::Wsl_InstallForProfile_InFlightSecondCallerReturnsImm
     std::atomic<size_t> secondCalls{ 0 };
     std::promise<void> firstEnteredPromise;
     auto firstEnteredFuture = firstEnteredPromise.get_future();
-    std::promise<std::optional<InstallResult>> firstResultPromise;
+    std::promise<InstallResult> firstResultPromise;
     auto firstResultFuture = firstResultPromise.get_future();
-    std::promise<std::optional<InstallResult>> secondResultPromise;
+    std::promise<InstallResult> secondResultPromise;
     auto secondResultFuture = secondResultPromise.get_future();
 
     std::thread firstCaller{ [&]() {
         try
         {
-            firstResultPromise.set_value(InstallForProfile(
-                profileKey,
-                L"wsl.exe -d Ubuntu",
-                std::wstring_view{},
-                [&](std::wstring_view) -> std::optional<InstallResult> {
-                    firstEnteredPromise.set_value();
+            firstResultPromise.set_value(Install(
+                commandline,
+                [&](std::wstring_view) {
                     ++firstCalls;
+                    firstEnteredPromise.set_value();
                     std::unique_lock lock{ releaseMutex };
                     releaseCv.wait(lock, [&]() noexcept { return releaseFirst; });
                     return _SuccessfulWslInstall();
-                }));
+                },
+                nullptr));
         }
         catch (...)
         {
             firstResultPromise.set_exception(std::current_exception());
         }
     } };
+    std::thread secondCaller;
+    const auto joinThreads = wil::scope_exit([&]() noexcept {
+        if (firstCaller.joinable())
+        {
+            firstCaller.join();
+        }
+        if (secondCaller.joinable())
+        {
+            secondCaller.join();
+        }
+    });
 
     VERIFY_ARE_EQUAL(std::future_status::ready, firstEnteredFuture.wait_for(std::chrono::seconds{ 5 }));
 
-    std::thread secondCaller{ [&]() {
+    secondCaller = std::thread{ [&]() {
         try
         {
-            secondResultPromise.set_value(InstallForProfile(
-                profileKey,
-                L"wsl.exe -d Ubuntu",
-                L"wsl.exe -d Ubuntu -e bash",
-                [&](std::wstring_view) -> std::optional<InstallResult> {
+            secondResultPromise.set_value(Install(
+                commandline,
+                [&](std::wstring_view) {
                     ++secondCalls;
                     return _SuccessfulWslInstall();
-                }));
+                },
+                nullptr));
         }
         catch (...)
         {
@@ -2129,457 +2089,174 @@ void ShellIntegrationTests::Wsl_InstallForProfile_InFlightSecondCallerReturnsImm
         releaseFirst = true;
     }
     releaseCv.notify_all();
-    firstCaller.join();
-    secondCaller.join();
 
     VERIFY_ARE_EQUAL(std::future_status::ready, firstResultFuture.wait_for(std::chrono::seconds{ 5 }));
     const auto firstResult = firstResultFuture.get();
 
-    VERIFY_IS_TRUE(firstResult.has_value());
-    VERIFY_IS_TRUE(secondResult.has_value());
+    VERIFY_IS_TRUE(firstResult.success);
+    VERIFY_IS_TRUE(secondResult.success);
     VERIFY_ARE_EQUAL(static_cast<size_t>(1), firstCalls.load());
     VERIFY_ARE_EQUAL(static_cast<size_t>(0), secondCalls.load());
-    VERIFY_IS_TRUE(secondResult->alreadyInstalled);
+    VERIFY_IS_TRUE(secondResult.alreadyInstalled);
 }
 
-void ShellIntegrationTests::Wsl_InstallForProfile_CompletedAttemptSkipsLaterRetry()
+void ShellIntegrationTests::Wsl_Install_DistinctCommandlinesInstallIndependently()
 {
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
+    using Microsoft::Terminal::ShellIntegration::Wsl::Install;
 
-    const auto profileKey = _UniqueWslInstallProfileKey();
-    size_t installCalls = 0;
-
-    const auto firstResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++installCalls;
-            return _SuccessfulWslInstall(true);
-        });
-
-    const auto secondResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++installCalls;
-            return _SuccessfulWslInstall();
-        });
-
-    VERIFY_IS_TRUE(firstResult.has_value());
-    VERIFY_IS_TRUE(secondResult.has_value());
-    VERIFY_ARE_EQUAL(static_cast<size_t>(1), installCalls);
-    VERIFY_IS_TRUE(firstResult->alreadyInstalled);
-    VERIFY_IS_TRUE(secondResult->alreadyInstalled);
-}
-
-void ShellIntegrationTests::Wsl_InstallForProfile_FailedAttemptSkipsLaterRetry()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
-
-    const auto profileKey = _UniqueWslInstallProfileKey();
-    size_t installCalls = 0;
-
-    const auto firstResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++installCalls;
-            return _FailedWslInstall(L"boom");
-        });
-
-    const auto secondResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        L"wsl.exe -d Ubuntu -e zsh",
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++installCalls;
-            return _SuccessfulWslInstall();
-        });
-
-    VERIFY_IS_TRUE(firstResult.has_value());
-    VERIFY_IS_TRUE(secondResult.has_value());
-    VERIFY_ARE_EQUAL(static_cast<size_t>(1), installCalls);
-    VERIFY_IS_FALSE(firstResult->success);
-    VERIFY_ARE_EQUAL(std::wstring{ L"boom" }, firstResult->errorMessage);
-    VERIFY_IS_TRUE(secondResult->alreadyInstalled);
-}
-
-void ShellIntegrationTests::Wsl_InstallForProfile_ThrownAttemptSkipsLaterRetry()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
-
-    const auto profileKey = _UniqueWslInstallProfileKey();
-    size_t installCalls = 0;
-    bool threw = false;
-
-    try
-    {
-        (void)InstallForProfile(
-            profileKey,
-            L"wsl.exe -d Ubuntu",
-            std::wstring_view{},
-            [&](std::wstring_view) -> std::optional<InstallResult> {
-                ++installCalls;
-                throw std::runtime_error{ "boom" };
-            });
-    }
-    catch (const std::exception&)
-    {
-        threw = true;
-    }
-
-    const auto retryResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++installCalls;
-            return _SuccessfulWslInstall();
-        });
-
-    VERIFY_IS_TRUE(threw);
-    VERIFY_IS_TRUE(retryResult.has_value());
-    VERIFY_ARE_EQUAL(static_cast<size_t>(1), installCalls);
-    VERIFY_IS_TRUE(retryResult->alreadyInstalled);
-}
-
-void ShellIntegrationTests::Wsl_InstallForProfile_DifferentProfilesSameCommandlineInstallIndependently()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
-
-    const auto ubuntuKey = _UniqueWslInstallProfileKey();
-    const auto debianKey = _UniqueWslInstallProfileKey();
+    const auto baseCommandline = _UniqueWslInstallCommandline();
+    const auto alternateCommandline = baseCommandline + L" -e bash";
     std::vector<std::wstring> invokedCommandlines;
 
-    const auto ubuntuResult = InstallForProfile(
-        ubuntuKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [&](std::wstring_view commandline) -> std::optional<InstallResult> {
+    const auto firstResult = Install(
+        baseCommandline,
+        [&](std::wstring_view commandline) {
             invokedCommandlines.emplace_back(commandline);
             return _SuccessfulWslInstall();
-        });
+        },
+        nullptr);
 
-    const auto debianResult = InstallForProfile(
-        debianKey,
-        L"wsl.exe -d Ubuntu",
-        L"wsl.exe -d Ubuntu --exec fish",
-        [&](std::wstring_view commandline) -> std::optional<InstallResult> {
+    const auto secondResult = Install(
+        alternateCommandline,
+        [&](std::wstring_view commandline) {
             invokedCommandlines.emplace_back(commandline);
             return _SuccessfulWslInstall();
-        });
+        },
+        nullptr);
 
-    VERIFY_IS_TRUE(ubuntuResult.has_value());
-    VERIFY_IS_TRUE(debianResult.has_value());
+    VERIFY_IS_TRUE(firstResult.success);
+    VERIFY_IS_TRUE(secondResult.success);
     VERIFY_ARE_EQUAL(static_cast<size_t>(2), invokedCommandlines.size());
-    VERIFY_ARE_EQUAL(std::wstring{ L"wsl.exe -d Ubuntu" }, invokedCommandlines[0]);
-    VERIFY_ARE_EQUAL(std::wstring{ L"wsl.exe -d Ubuntu --exec fish" }, invokedCommandlines[1]);
+    VERIFY_ARE_EQUAL(baseCommandline, invokedCommandlines[0]);
+    VERIFY_ARE_EQUAL(alternateCommandline, invokedCommandlines[1]);
 }
 
-void ShellIntegrationTests::Wsl_InstallForProfile_DiagnosticObserver_CompletedThenHandledSkip()
+void ShellIntegrationTests::Wsl_Install_FailureAndExceptionConsumeAttempt()
 {
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
+    using Microsoft::Terminal::ShellIntegration::Wsl::Install;
 
-    const auto profileKey = _UniqueWslInstallProfileKey();
-    const auto startIndex = WslInstallForProfileObserverEventCount();
+    const auto failedCommandline = _UniqueWslInstallCommandline();
+    size_t failedCalls = 0;
 
-    const auto firstResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [](std::wstring_view) -> std::optional<InstallResult> {
-            return _SuccessfulWslInstall();
-        },
-        &ObserveWslInstallForProfile);
-
-    const auto secondResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        L"wsl.exe -d Ubuntu -e fish",
-        [](std::wstring_view) -> std::optional<InstallResult> {
-            return _SuccessfulWslInstall();
-        },
-        &ObserveWslInstallForProfile);
-
-    VERIFY_IS_TRUE(firstResult.has_value());
-    VERIFY_IS_TRUE(secondResult.has_value());
-#if defined(_DEBUG)
-    VerifyWslInstallForProfileObserverEvents(profileKey,
-                                             startIndex,
-                                             { "attempt-started", "completed", "skip-already-doing-or-done" });
-#else
-    VerifyWslInstallForProfileObserverEvents(profileKey, startIndex, {});
-#endif
-}
-
-void ShellIntegrationTests::Wsl_InstallForProfile_DiagnosticObserver_InFlightSkipAndCancelled()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
-
-    const auto profileKey = _UniqueWslInstallProfileKey();
-    const auto startIndex = WslInstallForProfileObserverEventCount();
-    std::mutex releaseMutex;
-    std::condition_variable releaseCv;
-    bool releaseFirst{ false };
-    std::promise<void> firstEnteredPromise;
-    auto firstEnteredFuture = firstEnteredPromise.get_future();
-    std::promise<std::optional<InstallResult>> firstResultPromise;
-    auto firstResultFuture = firstResultPromise.get_future();
-    std::promise<std::optional<InstallResult>> secondResultPromise;
-    auto secondResultFuture = secondResultPromise.get_future();
-
-    std::thread firstCaller{ [&]() {
-        try
-        {
-            firstResultPromise.set_value(InstallForProfile(
-                profileKey,
-                L"wsl.exe -d Ubuntu",
-                std::wstring_view{},
-                [&](std::wstring_view) -> std::optional<InstallResult> {
-                    firstEnteredPromise.set_value();
-                    std::unique_lock lock{ releaseMutex };
-                    releaseCv.wait(lock, [&]() noexcept { return releaseFirst; });
-                    return std::nullopt;
-                },
-                &ObserveWslInstallForProfile));
-        }
-        catch (...)
-        {
-            firstResultPromise.set_exception(std::current_exception());
-        }
-    } };
-
-    VERIFY_ARE_EQUAL(std::future_status::ready, firstEnteredFuture.wait_for(std::chrono::seconds{ 5 }));
-
-    std::thread secondCaller{ [&]() {
-        try
-        {
-            secondResultPromise.set_value(InstallForProfile(
-                profileKey,
-                L"wsl.exe -d Ubuntu",
-                L"wsl.exe -d Ubuntu -e bash",
-                [](std::wstring_view) -> std::optional<InstallResult> {
-                    return _SuccessfulWslInstall();
-                },
-                &ObserveWslInstallForProfile));
-        }
-        catch (...)
-        {
-            secondResultPromise.set_exception(std::current_exception());
-        }
-    } };
-
-    VERIFY_ARE_EQUAL(std::future_status::ready, secondResultFuture.wait_for(std::chrono::seconds{ 5 }));
-
-    {
-        std::lock_guard lock{ releaseMutex };
-        releaseFirst = true;
-    }
-    releaseCv.notify_all();
-    firstCaller.join();
-    secondCaller.join();
-
-    VERIFY_ARE_EQUAL(std::future_status::ready, firstResultFuture.wait_for(std::chrono::seconds{ 5 }));
-    VERIFY_ARE_EQUAL(std::future_status::ready, secondResultFuture.wait_for(std::chrono::seconds{ 5 }));
-    const auto firstResult = firstResultFuture.get();
-    const auto secondResult = secondResultFuture.get();
-
-    VERIFY_IS_FALSE(firstResult.has_value());
-    VERIFY_IS_TRUE(secondResult.has_value());
-#if defined(_DEBUG)
-    VerifyWslInstallForProfileObserverEvents(profileKey,
-                                             startIndex,
-                                             { "attempt-started", "skip-already-doing-or-done", "cancelled" });
-#else
-    VerifyWslInstallForProfileObserverEvents(profileKey, startIndex, {});
-#endif
-}
-
-void ShellIntegrationTests::Wsl_InstallForProfile_DiagnosticObserver_MapsNoChangeFailureAndThrown()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
-
-    const auto noChangeKey = _UniqueWslInstallProfileKey();
-    const auto failedKey = _UniqueWslInstallProfileKey();
-    const auto thrownKey = _UniqueWslInstallProfileKey();
-    const auto startIndex = WslInstallForProfileObserverEventCount();
-
-    const auto noChangeResult = InstallForProfile(
-        noChangeKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [](std::wstring_view) -> std::optional<InstallResult> {
-            return _SuccessfulWslInstall(true);
-        },
-        &ObserveWslInstallForProfile);
-
-    const auto failedResult = InstallForProfile(
-        failedKey,
-        L"wsl.exe -d Debian",
-        std::wstring_view{},
-        [](std::wstring_view) -> std::optional<InstallResult> {
+    const auto failedResult = Install(
+        failedCommandline,
+        [&](std::wstring_view) {
+            ++failedCalls;
             return _FailedWslInstall(L"boom");
         },
-        &ObserveWslInstallForProfile);
+        nullptr);
 
+    const auto failedRetryResult = Install(
+        failedCommandline,
+        [&](std::wstring_view) {
+            ++failedCalls;
+            return _SuccessfulWslInstall();
+        },
+        nullptr);
+
+    VERIFY_IS_FALSE(failedResult.success);
+    VERIFY_ARE_EQUAL(std::wstring{ L"boom" }, failedResult.errorMessage);
+    VERIFY_IS_TRUE(failedRetryResult.alreadyInstalled);
+    VERIFY_ARE_EQUAL(static_cast<size_t>(1), failedCalls);
+
+    const auto thrownCommandline = _UniqueWslInstallCommandline();
+    size_t thrownCalls = 0;
     bool threw = false;
+
     try
     {
-        (void)InstallForProfile(
-            thrownKey,
-            L"wsl.exe -d Arch",
-            std::wstring_view{},
-            [](std::wstring_view) -> std::optional<InstallResult> {
+        (void)Install(
+            thrownCommandline,
+            [&](std::wstring_view) -> InstallResult {
+                ++thrownCalls;
                 throw std::runtime_error{ "boom" };
             },
-            &ObserveWslInstallForProfile);
+            nullptr);
     }
     catch (const std::exception&)
     {
         threw = true;
     }
 
-    VERIFY_IS_TRUE(noChangeResult.has_value());
-    VERIFY_IS_TRUE(failedResult.has_value());
-    VERIFY_IS_TRUE(noChangeResult->alreadyInstalled);
-    VERIFY_IS_FALSE(failedResult->success);
+    const auto thrownRetryResult = Install(
+        thrownCommandline,
+        [&](std::wstring_view) {
+            ++thrownCalls;
+            return _SuccessfulWslInstall();
+        },
+        nullptr);
+
+    VERIFY_IS_TRUE(threw);
+    VERIFY_IS_TRUE(thrownRetryResult.alreadyInstalled);
+    VERIFY_ARE_EQUAL(static_cast<size_t>(1), thrownCalls);
+}
+
+void ShellIntegrationTests::Wsl_Install_DiagnosticObserver_TracksDecision()
+{
+    using Microsoft::Terminal::ShellIntegration::Wsl::Install;
+
+    const auto completedCommandline = _UniqueWslInstallCommandline();
+    const auto noChangeCommandline = _UniqueWslInstallCommandline();
+    const auto failedCommandline = _UniqueWslInstallCommandline();
+    const auto thrownCommandline = _UniqueWslInstallCommandline();
+    const auto startIndex = WslInstallObserverEventCount();
+
+    const auto completedResult = Install(
+        completedCommandline,
+        [](std::wstring_view) {
+            return _SuccessfulWslInstall();
+        },
+        &ObserveWslInstall);
+    const auto skippedResult = Install(
+        completedCommandline,
+        [](std::wstring_view) {
+            return _SuccessfulWslInstall();
+        },
+        &ObserveWslInstall);
+    const auto noChangeResult = Install(
+        noChangeCommandline,
+        [](std::wstring_view) {
+            return _SuccessfulWslInstall(true);
+        },
+        &ObserveWslInstall);
+    const auto failedResult = Install(
+        failedCommandline,
+        [](std::wstring_view) {
+            return _FailedWslInstall(L"boom");
+        },
+        &ObserveWslInstall);
+
+    bool threw = false;
+    try
+    {
+        (void)Install(
+            thrownCommandline,
+            [](std::wstring_view) -> InstallResult {
+                throw std::runtime_error{ "boom" };
+            },
+            &ObserveWslInstall);
+    }
+    catch (const std::exception&)
+    {
+        threw = true;
+    }
+
+    VERIFY_IS_TRUE(completedResult.success);
+    VERIFY_IS_TRUE(skippedResult.alreadyInstalled);
+    VERIFY_IS_TRUE(noChangeResult.alreadyInstalled);
+    VERIFY_IS_FALSE(failedResult.success);
     VERIFY_IS_TRUE(threw);
 #if defined(_DEBUG)
-    VerifyWslInstallForProfileObserverEvents(noChangeKey, startIndex, { "attempt-started", "nochange" });
-    VerifyWslInstallForProfileObserverEvents(failedKey, startIndex, { "attempt-started", "failed" });
-    VerifyWslInstallForProfileObserverEvents(thrownKey, startIndex, { "attempt-started", "thrown" });
+    VerifyWslInstallObserverEvents(completedCommandline, startIndex, { "attempt-started", "completed", "skip-already-attempted" });
+    VerifyWslInstallObserverEvents(noChangeCommandline, startIndex, { "attempt-started", "nochange" });
+    VerifyWslInstallObserverEvents(failedCommandline, startIndex, { "attempt-started", "failed" });
+    VerifyWslInstallObserverEvents(thrownCommandline, startIndex, { "attempt-started", "thrown" });
 #else
-    VerifyWslInstallForProfileObserverEvents(noChangeKey, startIndex, {});
-    VerifyWslInstallForProfileObserverEvents(failedKey, startIndex, {});
-    VerifyWslInstallForProfileObserverEvents(thrownKey, startIndex, {});
+    VerifyWslInstallObserverEvents(completedCommandline, startIndex, {});
+    VerifyWslInstallObserverEvents(noChangeCommandline, startIndex, {});
+    VerifyWslInstallObserverEvents(failedCommandline, startIndex, {});
+    VerifyWslInstallObserverEvents(thrownCommandline, startIndex, {});
 #endif
-}
-
-void ShellIntegrationTests::Wsl_InstallForProfile_NulloptRetrySucceeds()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
-
-    const auto profileKey = _UniqueWslInstallProfileKey();
-    size_t installCalls = 0;
-
-    const auto abandonedResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        L"wsl.exe -d Ubuntu -e fish",
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++installCalls;
-            return std::nullopt;
-        });
-
-    const auto retryResult = InstallForProfile(
-        profileKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++installCalls;
-            return _SuccessfulWslInstall();
-        });
-
-    VERIFY_IS_FALSE(abandonedResult.has_value());
-    VERIFY_IS_TRUE(retryResult.has_value());
-    VERIFY_ARE_EQUAL(static_cast<size_t>(2), installCalls);
-}
-
-void ShellIntegrationTests::Wsl_InstallForProfile_InvalidOrMismatchedCommandlineDoesNotConsumeClaim()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::InstallForProfile;
-
-    const auto nonWslKey = _UniqueWslInstallProfileKey();
-    size_t nonWslCalls = 0;
-    const auto nonWslResult = InstallForProfile(
-        nonWslKey,
-        L"cmd.exe",
-        std::wstring_view{},
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++nonWslCalls;
-            return _SuccessfulWslInstall();
-        });
-
-    const auto wslKey = _UniqueWslInstallProfileKey();
-    size_t wslCalls = 0;
-    const auto mismatchedResult = InstallForProfile(
-        wslKey,
-        L"wsl.exe -d Ubuntu",
-        L"wsl.exe -d Debian --exec bash",
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++wslCalls;
-            return _SuccessfulWslInstall();
-        });
-    const auto retryResult = InstallForProfile(
-        wslKey,
-        L"wsl.exe -d Ubuntu",
-        std::wstring_view{},
-        [&](std::wstring_view) -> std::optional<InstallResult> {
-            ++wslCalls;
-            return _SuccessfulWslInstall();
-        });
-
-    VERIFY_IS_FALSE(nonWslResult.has_value());
-    VERIFY_IS_FALSE(mismatchedResult.has_value());
-    VERIFY_IS_TRUE(retryResult.has_value());
-    VERIFY_ARE_EQUAL(static_cast<size_t>(0), nonWslCalls);
-    VERIFY_ARE_EQUAL(static_cast<size_t>(1), wslCalls);
-}
-
-// ───────────────────────────────────────────────────────────────────
-// The qualifying-launch policy (GH#613).
-//
-// The new-tab hook compares the configured WSL profile commandline with the
-// ACTUAL commandline on the created TermControl. Matching distro selection is
-// what matters, so the helper strips any exec tail from both sides before
-// comparing.
-// ───────────────────────────────────────────────────────────────────
-
-void ShellIntegrationTests::Qualifies_WslProfileWithMatchingCommandline()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::QualifyingProfileLaunchCommandline;
-
-    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu" },
-                     QualifyingProfileLaunchCommandline(L"wsl.exe -d Ubuntu", L"wsl.exe -d Ubuntu"));
-
-    const auto sys32Bash = std::wstring{ Microsoft::Terminal::ShellIntegration::details::WindowsDir() } +
-                           L"\\System32\\bash.exe";
-    VERIFY_ARE_EQUAL(std::wstring_view{ sys32Bash },
-                     QualifyingProfileLaunchCommandline(sys32Bash, sys32Bash));
-}
-
-void ShellIntegrationTests::Qualifies_EffectiveCommandlineKeepsProfileSelection()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::QualifyingProfileLaunchCommandline;
-
-    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu -e fish" },
-                     QualifyingProfileLaunchCommandline(L"wsl.exe -d Ubuntu", L"wsl.exe -d Ubuntu -e fish"));
-    VERIFY_ARE_EQUAL(std::wstring_view{ L"wsl.exe -d Ubuntu --exec zsh" },
-                     QualifyingProfileLaunchCommandline(L"wsl.exe -d Ubuntu", L"wsl.exe -d Ubuntu --exec zsh"));
-}
-
-void ShellIntegrationTests::Qualifies_DifferentSelectionNeverQualifies()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::QualifyingProfileLaunchCommandline;
-
-    VERIFY_IS_TRUE(QualifyingProfileLaunchCommandline(L"wsl.exe -d Ubuntu", L"cmd.exe").empty());
-    VERIFY_IS_TRUE(QualifyingProfileLaunchCommandline(L"wsl.exe -d Ubuntu", L"wsl.exe -d Debian").empty());
-    VERIFY_IS_TRUE(QualifyingProfileLaunchCommandline(L"wsl.exe -d Ubuntu", L"C:\\Windows\\System32\\bash.exe").empty());
-}
-
-void ShellIntegrationTests::Qualifies_NonWslProfileNeverQualifies()
-{
-    using Microsoft::Terminal::ShellIntegration::Wsl::QualifyingProfileLaunchCommandline;
-
-    VERIFY_IS_TRUE(QualifyingProfileLaunchCommandline(L"pwsh.exe -nologo", L"wsl -d Debian").empty());
-    VERIFY_IS_TRUE(QualifyingProfileLaunchCommandline(L"pwsh.exe", L"pwsh.exe").empty());
-    VERIFY_IS_TRUE(QualifyingProfileLaunchCommandline(L"powershell.exe", L"powershell.exe").empty());
-    VERIFY_IS_TRUE(QualifyingProfileLaunchCommandline(L"C:\\Program Files\\Git\\bin\\bash.exe -i -l",
-                                                      L"C:\\Program Files\\Git\\bin\\bash.exe -i -l").empty());
-    VERIFY_IS_TRUE(QualifyingProfileLaunchCommandline(L"", L"").empty());
 }
 
 // ───────────────────────────────────────────────────────────────────
