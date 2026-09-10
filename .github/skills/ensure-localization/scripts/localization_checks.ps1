@@ -329,6 +329,67 @@ function Parse-LeadingQuotedTokenList {
     return @(Parse-QuotedTokenList -Text $Text -AllowTrailingText)
 }
 
+function Test-IsLocaleScopeName {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+
+    $candidate = $Value.Trim()
+    if ($script:SupportedPseudoLocales -contains $candidate) {
+        return $true
+    }
+
+    return [regex]::IsMatch($candidate, '^(?:[a-z]{2,3}|[A-Za-z]{2,8}(?:-[A-Za-z0-9]{2,8})+)$')
+}
+
+function Test-IsLegacyBareLockToken {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+
+    return [regex]::IsMatch($Value.Trim(), '^[A-Z][A-Z0-9_]*$')
+}
+
+function Resolve-UnquotedLockPayload {
+    param([string]$Payload)
+
+    $parts = @($Payload -split '\s*,\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($parts.Count -eq 0) {
+        return [pscustomobject]@{
+            Kind = 'invalid'
+            Values = @()
+            Reason = 'Unquoted lock directives must be locale scopes or use the canonical quoted token form {Locked="token"}.'
+        }
+    }
+
+    $trimmedParts = @($parts | ForEach-Object { $_.Trim() })
+    if (@($trimmedParts | Where-Object { -not (Test-IsLocaleScopeName -Value $_) }).Count -eq 0) {
+        return [pscustomobject]@{
+            Kind = 'locale'
+            Values = $trimmedParts
+            Reason = $null
+        }
+    }
+
+    if ($trimmedParts.Count -eq 1 -and (Test-IsLegacyBareLockToken -Value $trimmedParts[0])) {
+        return [pscustomobject]@{
+            Kind = 'token'
+            Values = $trimmedParts
+            Reason = $null
+        }
+    }
+
+    return [pscustomobject]@{
+        Kind = 'invalid'
+        Values = @()
+        Reason = "Unquoted lock directive payload '$Payload' is ambiguous. Use locale scopes like {Locked=qps-ploc} or quote literal tokens like {Locked=""token""}."
+    }
+}
+
 function Split-WtaScalarAndComment {
     param(
         [Parameter(Mandatory)][string]$Value,
@@ -777,12 +838,27 @@ function Resolve-LockPolicy {
                     continue
                 }
 
+                $payloadResolution = Resolve-UnquotedLockPayload -Payload $payload
+                if ($payloadResolution.Kind -eq 'token') {
+                    foreach ($token in $payloadResolution.Values) {
+                        $null = $tokens.Add($token)
+                    }
+                    continue
+                }
+
+                if ($payloadResolution.Kind -eq 'invalid') {
+                    if (-not $blockedReason) {
+                        $blockedReason = $payloadResolution.Reason
+                    }
+                    continue
+                }
+
                 $needsLocale = $true
                 if ([string]::IsNullOrWhiteSpace($Locale)) {
                     continue
                 }
 
-                $scopedLocales = @($payload -split '\s*,\s*' | Where-Object { $_ })
+                $scopedLocales = @($payloadResolution.Values)
                 if ($scopedLocales -notcontains $Locale) {
                     continue
                 }

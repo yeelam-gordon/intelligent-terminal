@@ -396,6 +396,12 @@ Describe 'File-based localization checks' -Tag 'Unit' {
         $targetPath = Join-Path $TestDrive 'locks\target.yml'
         $literalSourcePath = Join-Path $TestDrive 'locks\literal-source.resw'
         $literalTargetPath = Join-Path $TestDrive 'locks\literal-target.resw'
+        $legacyTokenSourcePath = Join-Path $TestDrive 'locks\legacy-token-source.resw'
+        $legacyTokenTargetPath = Join-Path $TestDrive 'locks\legacy-token-target.resw'
+        $localeScopedSourcePath = Join-Path $TestDrive 'locks\locale-scoped-source.resw'
+        $localeScopedTargetPath = Join-Path $TestDrive 'locks\locale-scoped-target.resw'
+        $ambiguousSourcePath = Join-Path $TestDrive 'locks\ambiguous-source.resw'
+        $ambiguousTargetPath = Join-Path $TestDrive 'locks\ambiguous-target.resw'
         $fileSourcePath = Join-Path $TestDrive 'locks\file-level-source.yml'
         $fileTargetPath = Join-Path $TestDrive 'locks\file-level-target.yml'
         $leadingScopedSourcePath = Join-Path $TestDrive 'locks\leading-scoped-source.yml'
@@ -443,6 +449,79 @@ Describe 'File-based localization checks' -Tag 'Unit' {
         $literal.status | Should -Be 'FIXABLE'
         @($literal.results.resource) | Should -Be @('path')
         $literal.results[0].expected | Should -Be 'C:\'
+
+        Write-ReswFixtureFile -Path $legacyTokenSourcePath -Resources @(
+            @{
+                Name = 'answerback'
+                Value = 'ENQ (Request Terminal Status) response'
+                Comment = '{Locked=ENQ}{Locked="Request Terminal Status"}'
+            }
+        )
+        Write-ReswFixtureFile -Path $legacyTokenTargetPath -Resources @(
+            @{
+                Name = 'answerback'
+                Value = 'REQ (Request Terminal Status) response'
+            }
+        )
+
+        $legacyToken = Test-LockedContent -SourceFile $legacyTokenSourcePath -TargetFile $legacyTokenTargetPath
+        $legacyToken.status | Should -Be 'FIXABLE'
+        @($legacyToken.results.resource) | Should -Be @('answerback')
+        $legacyToken.results[0].expected | Should -Be 'ENQ'
+
+        $legacyPolicy = Resolve-LockPolicy -Comments @('{Locked=ENQ}') -InheritedTokenComments @() -Locale 'de-DE'
+        $legacyPolicy.NeedsLocale | Should -BeFalse
+        $legacyPolicy.FullLock | Should -BeFalse
+        @($legacyPolicy.Tokens) | Should -Be @('ENQ')
+        (Test-IsLocaleScopeName -Value 'fr') | Should -BeTrue
+        (Test-IsLocaleScopeName -Value 'ja') | Should -BeTrue
+        (Test-IsLocaleScopeName -Value 'fr-FR') | Should -BeTrue
+        (Test-IsLocaleScopeName -Value 'qps-ploc') | Should -BeTrue
+        (Test-IsLocaleScopeName -Value 'ENQ') | Should -BeFalse
+
+        Write-ReswFixtureFile -Path $localeScopedSourcePath -Resources @(
+            @{
+                Name = 'product'
+                Value = 'Intelligent Terminal'
+                Comment = '{Locked=fr}'
+            }
+        )
+        Write-ReswFixtureFile -Path $localeScopedTargetPath -Resources @(
+            @{
+                Name = 'product'
+                Value = 'Terminal intelligent'
+            }
+        )
+
+        $neutralLocalePolicy = Resolve-LockPolicy -Comments @('{Locked=fr}') -InheritedTokenComments @() -Locale 'fr'
+        $neutralLocalePolicy.NeedsLocale | Should -BeTrue
+        $neutralLocalePolicy.FullLock | Should -BeTrue
+        @($neutralLocalePolicy.Tokens) | Should -Be @()
+
+        $unrelatedNeutralLocalePolicy = Resolve-LockPolicy -Comments @('{Locked=fr}') -InheritedTokenComments @() -Locale 'ja'
+        $unrelatedNeutralLocalePolicy.NeedsLocale | Should -BeTrue
+        $unrelatedNeutralLocalePolicy.FullLock | Should -BeFalse
+        @($unrelatedNeutralLocalePolicy.Tokens) | Should -Be @()
+
+        (Test-LockedContent -SourceFile $localeScopedSourcePath -TargetFile $localeScopedTargetPath -Locale 'ja').status | Should -Be 'PASS'
+
+        Write-ReswFixtureFile -Path $ambiguousSourcePath -Resources @(
+            @{
+                Name = 'protocol'
+                Value = 'ENQ'
+                Comment = '{Locked=ENQ,fr-FR}'
+            }
+        )
+        Write-ReswFixtureFile -Path $ambiguousTargetPath -Resources @(
+            @{
+                Name = 'protocol'
+                Value = 'REQ'
+            }
+        )
+
+        $ambiguous = Test-LockedContent -SourceFile $ambiguousSourcePath -TargetFile $ambiguousTargetPath -Locale 'fr-FR'
+        $ambiguous.status | Should -Be 'BLOCKED'
+        $ambiguous.results[0].observed | Should -Match 'canonical quoted token form|quote literal tokens'
 
         Write-Utf8TextFile -Path $fileSourcePath -Content @'
 # {Locked="Intelligent Terminal"}
