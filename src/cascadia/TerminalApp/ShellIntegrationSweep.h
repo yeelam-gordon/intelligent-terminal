@@ -45,6 +45,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <set>
 #include <string>
 #include <vector>
@@ -55,6 +56,7 @@
 #include "AgentPaneLog.h"
 
 #include <winrt/Microsoft.Terminal.Settings.Model.h>
+#include <wil/resource.h>
 
 namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
 {
