@@ -24,7 +24,6 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -189,102 +188,6 @@ namespace Microsoft::Terminal::ShellIntegration
             {
                 // Swallow — backup is best-effort.
             }
-        }
-
-        // Overwrite `target` with `contents` WITHOUT opening it for
-        // truncation, and without ever creating a new file object.
-        //
-        // Used for every shell-integration write — both the user's profile
-        // ($PROFILE / ~/.bashrc) and the script it sources — local and UNC
-        // (`\\wsl$\<distro>\...`, `\\wsl.localhost\<distro>\...`) alike. The
-        // WslShellIntegration install helper reaches a distro's ~/.bashrc over
-        // exactly such a UNC path, and GH#613 now runs that install
-        // CONCURRENTLY with the WSL tab's bash starting up, so what either
-        // file looks like mid-write matters: the starting shell may be
-        // sourcing the script at the very moment it is rewritten.
-        //
-        // GUARANTEE — precisely, and no more than this:
-        //   • The existing file object is kept. Its identity, permissions/ACL,
-        //     owner, hardlinks and Linux uid/gid/mode survive, and when
-        //     `target` is a symlink the OS resolves it for us so we write
-        //     THROUGH the link instead of replacing it.
-        //   • The whole payload goes out in a SINGLE WriteFile at offset 0,
-        //     and the file is shrunk to its new length only afterwards. That
-        //     removes the zero-length window a truncating open
-        //     (`std::ios::trunc`) previously left, in which a shell sourcing
-        //     the profile could read nothing at all.
-        //
-        //   • Because the payload is always the file's WHOLE desired content,
-        //     two installers racing each other (two windows, or this app and
-        //     another) each write an equivalent one-block file and the last
-        //     complete write wins. Appending only the new block would instead
-        //     let both of them land and leave the block in twice.
-        //
-        // This is NOT an atomic write, on WSL/UNC or anywhere else. A reader
-        // racing a write that SHRINKS the file can still observe a stale tail
-        // (the bytes of the block being removed) between the WriteFile and the
-        // SetEndOfFile, and a reader racing a write that GROWS it can see a
-        // prefix. What is ruled out is the zero-length file a truncating open
-        // exposed, and duplicated content from concurrent appends — no more
-        // than that. Preserving the user's file identity is worth the residual
-        // window; swapping in a replacement file would hand a dotfile-managed
-        // ~/.bashrc or $PROFILE whatever ownership and mode the \\wsl$
-        // provider assigns to newly created files.
-        //
-        // Opened shared read/write/delete: a shell reading the profile, or a
-        // dotfile manager renaming it, must not fail with a sharing violation
-        // just because we have it open.
-        //
-        // Returns an empty string on success, or a human-readable reason.
-        [[nodiscard]] inline std::wstring OverwriteFileContents(const std::filesystem::path& target,
-                                                                std::string_view contents)
-        {
-            if (contents.size() > (std::numeric_limits<DWORD>::max)())
-            {
-                return L"Refusing to write '" + target.wstring() + L"': contents too large";
-            }
-
-            wil::unique_hfile file{ CreateFileW(target.c_str(),
-                                                GENERIC_WRITE,
-                                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                                nullptr,
-                                                OPEN_ALWAYS,
-                                                FILE_ATTRIBUTE_NORMAL,
-                                                nullptr) };
-            if (!file)
-            {
-                // Capture immediately: every later call, including the
-                // std::wstring building below, can clobber the thread's error.
-                const auto gle = GetLastError();
-                return L"Failed to open '" + target.wstring() + L"' for writing: " + std::to_wstring(gle);
-            }
-
-            if (!contents.empty())
-            {
-                DWORD written = 0;
-                if (!WriteFile(file.get(), contents.data(), static_cast<DWORD>(contents.size()), &written, nullptr))
-                {
-                    const auto gle = GetLastError();
-                    return L"Failed to write '" + target.wstring() + L"': " + std::to_wstring(gle);
-                }
-                if (written != contents.size())
-                {
-                    // WriteFile SUCCEEDED but wrote short (a full disk / quota
-                    // on the \\wsl$ provider does this). GetLastError says
-                    // nothing useful here, so report the counts instead.
-                    return L"Failed to write '" + target.wstring() + L"': wrote " + std::to_wstring(written) +
-                           L" of " + std::to_wstring(contents.size()) + L" bytes";
-                }
-            }
-
-            LARGE_INTEGER end{};
-            end.QuadPart = static_cast<LONGLONG>(contents.size());
-            if (!SetFilePointerEx(file.get(), end, nullptr, FILE_BEGIN) || !SetEndOfFile(file.get()))
-            {
-                const auto gle = GetLastError();
-                return L"Failed to resize '" + target.wstring() + L"': " + std::to_wstring(gle);
-            }
-            return {};
         }
 
         // Shared marker-block + orphan-recovery scanner. Each flavor's
@@ -471,39 +374,31 @@ namespace Microsoft::Terminal::ShellIntegration
                          formatFsError(L"Failed to create script directory", scriptDir, ec) };
             }
 
-            // A missing profile is NOT pre-created here. Doing that used to
-            // mean an `std::ofstream` open, which truncates — so a
-            // std::filesystem::exists() that answered "no" for a transient
-            // reason (a \\wsl$ provider or network path timing out) would
-            // have WIPED a profile that does exist. Nothing needs the file to
-            // be there early: the first-install write below opens with
-            // OPEN_ALWAYS and creates it, and every other path here only ever
-            // rewrites content we successfully read.
+            {
+                std::error_code existsEc;
+                // Use the non-throwing overload — std::filesystem::exists()
+                // without an error_code can throw filesystem_error on
+                // access failures (notably UNC providers like \\wsl$\... or
+                // a network filesystem timing out). The installer is best-
+                // effort and must NOT crash the app; treat any failure to
+                // determine existence as "doesn't exist" and try to create.
+                if (!std::filesystem::exists(profilePath, existsEc))
+                {
+                    std::ofstream{ profilePath, std::ios::binary }; // touch
+                }
+            }
+
             std::string contents;
             {
                 std::ifstream in{ profilePath, std::ios::binary };
                 if (!in)
                 {
-                    // Tell "not there yet" (fine — install from empty) apart
-                    // from "there, but we couldn't read it" (an error we must
-                    // surface: appending to, or replacing, a file whose real
-                    // contents we never saw could duplicate a block or drop
-                    // the user's content). A failed existence check counts as
-                    // the latter — it licenses reporting an error, never a
-                    // write.
-                    std::error_code existsEc;
-                    if (std::filesystem::exists(profilePath, existsEc) || existsEc)
-                    {
-                        return { false, false, L"Failed to open " + friendlyName + L" for reading" };
-                    }
+                    return { false, false, L"Failed to open " + friendlyName + L" for reading" };
                 }
-                else
+                contents.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+                if (in.bad())
                 {
-                    contents.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-                    if (in.bad())
-                    {
-                        return { false, false, L"Failed to read " + friendlyName };
-                    }
+                    return { false, false, L"Failed to read " + friendlyName };
                 }
             }
 
@@ -535,9 +430,17 @@ namespace Microsoft::Terminal::ShellIntegration
                 // a `.bak.*` file and an mtime bump on the user's PROFILE
                 // (potentially OneDrive-synced). Just write the missing
                 // script file and return.
-                if (auto scriptError = details::OverwriteFileContents(scriptPath, flavor.ScriptContent()); !scriptError.empty())
+                std::ofstream scriptRepairOut{ scriptPath, std::ios::binary | std::ios::trunc };
+                if (!scriptRepairOut)
                 {
-                    return { false, false, std::move(scriptError) };
+                    return { false, false, L"Failed to write shell-integration script" };
+                }
+                const auto scriptContent = flavor.ScriptContent();
+                scriptRepairOut.write(scriptContent.data(), scriptContent.size());
+                scriptRepairOut.close();
+                if (!scriptRepairOut)
+                {
+                    return { false, false, L"Failed to write shell-integration script (write/close failed)" };
                 }
                 return { true, false, {} };
             }
@@ -547,9 +450,19 @@ namespace Microsoft::Terminal::ShellIntegration
                 details::WriteBackup(profilePath, contents);
             }
 
-            if (auto scriptError = details::OverwriteFileContents(scriptPath, flavor.ScriptContent()); !scriptError.empty())
             {
-                return { false, false, std::move(scriptError) };
+                std::ofstream scriptOut{ scriptPath, std::ios::binary | std::ios::trunc };
+                if (!scriptOut)
+                {
+                    return { false, false, L"Failed to write shell-integration script" };
+                }
+                const auto scriptContent = flavor.ScriptContent();
+                scriptOut.write(scriptContent.data(), scriptContent.size());
+                scriptOut.close();
+                if (!scriptOut)
+                {
+                    return { false, false, L"Failed to write shell-integration script (write/close failed)" };
+                }
             }
 
             if (found)
@@ -566,19 +479,16 @@ namespace Microsoft::Terminal::ShellIntegration
                 contents += eol;
             }
 
-            // Both cases write the profile's WHOLE desired content in place,
-            // never through a truncating open. Writing everything even for a
-            // first-time insertion is deliberate: appending just the block
-            // would let two installers racing each other (two windows, or this
-            // app and another) each land theirs and leave the block in twice,
-            // whereas equivalent whole-file writes simply end with whichever
-            // one finished last. The cost is that a shell reading this file
-            // right now — GH#613 runs the WSL install alongside that tab's
-            // bash — can see a partial state; it can never see an empty file
-            // or a duplicated block. See details::OverwriteFileContents.
-            if (auto writeError = details::OverwriteFileContents(profilePath, contents); !writeError.empty())
+            std::ofstream profileOut{ profilePath, std::ios::binary | std::ios::trunc };
+            if (!profileOut)
             {
-                return { false, false, L"Failed to write " + friendlyName + L": " + writeError };
+                return { false, false, L"Failed to write " + friendlyName };
+            }
+            profileOut.write(contents.data(), contents.size());
+            profileOut.close();
+            if (!profileOut)
+            {
+                return { false, false, L"Failed to write " + friendlyName + L" (write/close failed)" };
             }
             return { true, false, {} };
         }
@@ -653,10 +563,16 @@ namespace Microsoft::Terminal::ShellIntegration
 
             contents.erase(existing->first, removeEnd - existing->first);
 
-            // In-place overwrite — same rationale as Install above.
-            if (auto writeError = details::OverwriteFileContents(profilePath, contents); !writeError.empty())
+            std::ofstream profileOut{ profilePath, std::ios::binary | std::ios::trunc };
+            if (!profileOut)
             {
-                return { false, false, L"Failed to write " + friendlyName + L": " + writeError };
+                return { false, false, L"Failed to write " + friendlyName };
+            }
+            profileOut.write(contents.data(), contents.size());
+            profileOut.close();
+            if (!profileOut)
+            {
+                return { false, false, L"Failed to write " + friendlyName + L" (write/close failed)" };
             }
             return { true, false, {} };
         }

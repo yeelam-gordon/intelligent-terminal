@@ -25,8 +25,6 @@
 
 #pragma once
 
-#include <map>
-
 #include "ShellIntegrationCommon.h"
 #include "BashShellIntegration.h"
 #include "ShellIntegrationProfileGate.h"
@@ -689,52 +687,48 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
         return orchestrator::Uninstall(flavor);
     }
 
-    // Process-wide bookkeeping for the lazy, new-tab-triggered WSL reconcile
-    // (GH#613). Owned by ShellIntegrationSweep::WslNewTabReconcileGate() and
-    // driven from TerminalPage::_ReconcileWslProfileForNewTab, on the
-    // TerminalApp new-tab lifecycle; it decides whether that call proceeds to
-    // the Wsl::Install / Wsl::Uninstall helpers above.
+    // Returns the effective commandline only when it is still launching the
+    // configured WSL profile. We compare the actual launch selection after
+    // stripping any exec tail (`-e fish`, `-- sh -c`, etc.) so appended
+    // in-distro commands still qualify, but an override that really launches
+    // a different shell or distro does not.
+    inline std::wstring_view QualifyingProfileLaunchCommandline(std::wstring_view profileCommandline,
+                                                                std::wstring_view effectiveCommandline) noexcept
+    {
+        namespace SI = ::Microsoft::Terminal::ShellIntegration;
+
+        if (!SI::IsWslProfile(profileCommandline) || !SI::IsWslProfile(effectiveCommandline))
+        {
+            return {};
+        }
+
+        const bool profileIsBash =
+            SI::details::CommandlineHasExeToken(profileCommandline, L"bash") &&
+            SI::details::IsSystem32BashLauncher(profileCommandline);
+        const bool effectiveIsBash =
+            SI::details::CommandlineHasExeToken(effectiveCommandline, L"bash") &&
+            SI::details::IsSystem32BashLauncher(effectiveCommandline);
+        if (profileIsBash != effectiveIsBash)
+        {
+            return {};
+        }
+
+        const auto expectedSelection = details::StripExecTail(profileCommandline, profileIsBash);
+        const auto actualSelection = details::StripExecTail(effectiveCommandline, effectiveIsBash);
+        return SI::details::EqualsCi(expectedSelection, actualSelection) ? effectiveCommandline :
+                                                                           std::wstring_view{};
+    }
+
+    // Process-wide bookkeeping for GH#613's lazy, new-tab-triggered WSL
+    // reconcile. ShellIntegrationSweep::EnsureWslInstalledAsync claims a
+    // profile before queueing background work, releases that claim if settings
+    // were disabled before the work ran, and marks the profile handled once an
+    // install attempt actually runs.
     //
-    // No ShellIntegrationSweep entry point touches WSL — not the silent
-    // startup/settings reconcile, and not the explicit FRE / Settings-UI
-    // "Install" buttons. Probing a distro means cold-starting its VM, and
-    // doing that for every WSL profile would boot distros the user never
-    // opens. Reconciling one is instead DEFERRED to the first new tab that
-    // launches that profile, at which point the user is starting the distro
-    // anyway.
-    //
-    // KEYED ON PROFILE, once per app process. The key is the profile's stable
-    // GUID (ShellIntegrationSweep::WslProfileKey), not a launch commandline:
-    // the invariant is "reconcile a given profile once", so two profiles
-    // pointing at the same distro each get their own single reconcile, and
-    // one profile launched with different appended commands still only
-    // reconciles once.
-    //
-    //     unknown --TryClaim----> InFlight --MarkHandled--> Handled
-    //        ^                       |        (attempt ran)
-    //        |                       |
-    //        +-------Release---------+
-    //         (only when the claimed
-    //          work never ran at all)
-    //
-    // Two states rather than one set, because Release means specifically "the
-    // work I claimed never ran". It removes an InFlight entry ONLY: once a
-    // profile is Handled nothing may re-open it, so a late or duplicated
-    // Release can't hand a reconciled profile back out and let the next new
-    // tab schedule a second attempt.
-    //
-    // The boundary is one SCHEDULED ATTEMPT, not one successful reconcile: an
-    // attempt that actually invoked install or uninstall becomes Handled
-    // whether it succeeded or failed, so a profile whose distro can't be
-    // integrated is not re-probed on every later tab. Release exists purely
-    // for the paths where the scheduled work never started at all (the window
-    // was torn down before the coroutine resumed).
-    //
-    // Settings toggles do NOT reset this. A profile reconciled once in this
-    // process stays reconciled until the app restarts.
-    //
-    // Deliberately pure in-memory bookkeeping with no filesystem/process
-    // interaction, so it is unit-testable without a real WSL distro.
+    // Keyed by profile GUID, not distro: each profile gets one attempt per
+    // process, regardless of success. Release only cancels work that never ran;
+    // settings toggles cannot re-arm a handled profile. Explicit setup and
+    // uninstall retain their independent baseline behavior.
     class NewTabReconcileGate
     {
     public:

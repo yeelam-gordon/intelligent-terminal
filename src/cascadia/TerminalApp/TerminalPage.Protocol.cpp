@@ -607,15 +607,6 @@ namespace winrt::TerminalApp::implementation
         if (!pane)
             co_return result;
 
-        // GH#613: `wtcli new-tab` is a genuine new-tab launch (as opposed
-        // to SplitProtocolPane below), so lazily reconcile WSL shell
-        // integration, same as the in-app new-tab paths. `args` is passed
-        // along because this path routinely carries a commandline that
-        // OVERRIDES the pinned profile's own (see the profile-pinning block
-        // above): a delegate command pinned to a focused Ubuntu profile runs
-        // that command, not Ubuntu's shell, and must not start the distro.
-        _ReconcileWslProfileForNewTab(_settings.GetProfileForArgs(args), args);
-
         _CreateNewTabFromPane(pane, -1, /*openInBackground=*/background);
         _tabContent.UpdateLayout(); // Force synchronous terminal initialization
 

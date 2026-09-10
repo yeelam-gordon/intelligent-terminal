@@ -1650,17 +1650,11 @@ namespace winrt::TerminalApp::implementation
 
             _agentPaneLog("[FRE] Installing shell integration");
 
-            // Snapshot shell presence on the UI thread BEFORE resuming on a
-            // background thread — _settings.AllProfiles() is an observable
-            // vector and iterating it concurrently with a settings reload is
-            // unsafe.
-            //
-            // GH#613: no WSL snapshot, because RunInstall does no WSL work.
-            // Even this explicit, user-initiated install must not sweep WSL:
-            // on first run the FRE would cold-start every distro the user has
-            // a profile for. WSL is reconciled by the first new tab that
-            // launches the profile instead — see
-            // TerminalPage::_ReconcileWslProfileForNewTab.
+            // Snapshot WSL distros AND non-WSL shell presence on the UI
+            // thread BEFORE resuming on a background thread —
+            // _settings.AllProfiles() is an observable vector and
+            // iterating it concurrently with a settings reload is unsafe.
+            const auto wslCommandlines = ShellIntegrationSweep::SnapshotWslCommandlines(_settings);
             const auto shellPresence = ShellIntegrationSweep::SnapshotShellPresence(_settings);
 
             co_await winrt::resume_background();
@@ -1670,10 +1664,11 @@ namespace winrt::TerminalApp::implementation
             // RunInstall reports a skipped shell as
             // success-already-installed so the FRE failure verdict
             // (below) doesn't flag a missing shell as a failure.
-            const auto results = ShellIntegrationSweep::RunInstall(shellPresence);
+            const auto results = ShellIntegrationSweep::RunInstall(shellPresence, wslCommandlines);
             const auto& pwsh7Result = results.pwsh;
             const auto& windowsPsResult = results.windowsPowerShell;
             const auto& bashResult = results.bash;
+            const auto& wslResults = results.wsl;
 
             {
                 std::string detail = "[FRE] Shell integration: pwsh7=";
@@ -1688,6 +1683,13 @@ namespace winrt::TerminalApp::implementation
                 detail += bashResult.success ? "ok" : "FAILED";
                 if (!bashResult.success && !bashResult.errorMessage.empty())
                     detail += " (" + winrt::to_string(winrt::hstring{ bashResult.errorMessage }) + ")";
+                for (const auto& [distName, r] : wslResults)
+                {
+                    detail += " wsl(" + winrt::to_string(winrt::hstring{ distName }) + ")=";
+                    detail += r.success ? "ok" : "FAILED";
+                    if (!r.success && !r.errorMessage.empty())
+                        detail += " (" + winrt::to_string(winrt::hstring{ r.errorMessage }) + ")";
+                }
                 _agentPaneLog(detail);
             }
 
@@ -1698,9 +1700,9 @@ namespace winrt::TerminalApp::implementation
             // InstallForTarget returns success-with-empty-error
             // because the file write succeeds harmlessly; only a real
             // write failure or an execution-policy block reaches here.
-            // Bash failures are NOT counted here: users without Git
-            // Bash would otherwise see false-alarm errors on every
-            // FRE / Save.
+            // Bash and WSL failures are NOT counted here: users
+            // without Git Bash or without (running) WSL would
+            // otherwise see false-alarm errors on every FRE / Save.
             if (!pwsh7Result.success || !windowsPsResult.success)
             {
                 shellIntegFailed = true;

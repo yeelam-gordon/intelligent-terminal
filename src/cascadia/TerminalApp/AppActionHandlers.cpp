@@ -289,29 +289,11 @@ namespace winrt::TerminalApp::implementation
 
             const auto& activeTab{ _senderOrFocusedTab(sender) };
 
-            auto newPane = _MakePane(realArgs.ContentArgs(), duplicateFromTab);
-
-            // GH#613: an ordinary split is never a new terminal "launch" and
-            // must not trigger the lazy WSL reconcile. The one exception is
-            // the startup promotion _SplitPane performs when there is no tab
-            // to split at all (`wt sp …` as the very first sub-command) —
-            // that really does create a tab, so treat it like one. A null
-            // pane means _MakePane handed the launch to an elevated window
-            // instead: that process opens the tab, this one creates nothing
-            // and must not spend the profile's one reconcile claim.
-            if (newPane && _WillPromoteSplitToNewTab(activeTab))
-            {
-                if (const auto& newTerminalArgs{ realArgs.ContentArgs().try_as<NewTerminalArgs>() })
-                {
-                    _ReconcileWslProfileForNewTab(_settings.GetProfileForArgs(newTerminalArgs), newTerminalArgs);
-                }
-            }
-
             _SplitPane(activeTab,
                        realArgs.SplitDirection(),
                        // This is safe, we're already filtering so the value is (0, 1)
                        realArgs.SplitSize(),
-                       std::move(newPane));
+                       _MakePane(realArgs.ContentArgs(), duplicateFromTab));
             args.Handled(true);
         }
     }
@@ -1957,23 +1939,15 @@ namespace winrt::TerminalApp::implementation
         // last-writer-wins semantics depend on UI-thread ordering (which
         // matches user intent ordering), not on coroutine resume ordering.
         _shellIntegrationDesiredEnabled.store(true, std::memory_order_release);
-        // Clicking Install is an expressed preference, so the lazy WSL
-        // reconcile may act on it from here on — see GH#613.
-        _shellIntegrationDesiredStateKnown.store(true, std::memory_order_release);
 
         const auto weak = get_weak();
         const auto dispatcher = Dispatcher();
 
-        // Snapshot which shells the user has profiles for, on the UI thread
-        // BEFORE we go background. _settings.AllProfiles() is an observable
-        // vector; iterating it concurrently with a settings reload would be
-        // unsafe.
-        //
-        // GH#613: no WSL snapshot — RunInstall does no WSL work at all, not
-        // even from this explicit "Install" button, because sweeping every
-        // WSL profile would cold-start every distro the user has a profile
-        // for. WSL is reconciled by the first new tab that launches the
-        // profile instead — see _ReconcileWslProfileForNewTab.
+        // Snapshot WSL profile commandlines AND which non-WSL shells the user has
+        // profiles for, on the UI thread BEFORE we go background.
+        // _settings.AllProfiles() is an observable vector; iterating it
+        // concurrently with a settings reload would be unsafe.
+        const auto wslCommandlines = ShellIntegrationSweep::SnapshotWslCommandlines(_settings);
         const auto shellPresence = ShellIntegrationSweep::SnapshotShellPresence(_settings);
 
         co_await winrt::resume_background();
@@ -1993,10 +1967,10 @@ namespace winrt::TerminalApp::implementation
         bool anyFailure = false;
         bool epBlocked = false;
         // Collected failure details from EVERY failing flavor (pwsh, WinPS,
-        // bash). Surfaced verbatim in the error dialog so the user sees the
-        // real reason ("Profile directory not writable", "Failed to write
-        // backup", etc.) instead of a guess. Empty when every flavor
-        // succeeded.
+        // bash, each WSL distro). Surfaced verbatim in the error dialog so
+        // the user sees the real reason ("Profile directory not writable",
+        // "Failed to write backup", etc.) instead of a guess. Empty when
+        // every flavor succeeded.
         std::wstring failureDetails;
         {
             std::lock_guard<std::mutex> guard{ _shellIntegrationReconcileMutex };
@@ -2015,11 +1989,11 @@ namespace winrt::TerminalApp::implementation
                 // Skipped shells are reported as success-already-installed
                 // so the all-installed / any-failure UI verdict below
                 // doesn't flag a missing shell as a failure.
-                const auto results = ShellIntegrationSweep::RunInstall(shellPresence);
+                const auto results = ShellIntegrationSweep::RunInstall(shellPresence, wslCommandlines);
 
-                // Aggregate verdict across all three flavors (pwsh, WinPS,
-                // bash). The earlier two-flavor version silently dropped
-                // bash failures on the floor.
+                // Aggregate verdict across ALL four flavors (pwsh, WinPS,
+                // bash, every WSL distro). The earlier two-flavor version
+                // silently dropped bash/WSL failures on the floor.
                 auto fold = [&](const auto& r, std::wstring_view label) {
                     if (r.executionPolicyBlocked)
                     {
@@ -2057,6 +2031,10 @@ namespace winrt::TerminalApp::implementation
                 if (shellPresence.pwsh)              { consider(results.pwsh,              L"PowerShell"); }
                 if (shellPresence.windowsPowerShell) { consider(results.windowsPowerShell, L"Windows PowerShell"); }
                 if (shellPresence.bash)              { consider(results.bash,              L"bash"); }
+                for (const auto& [distName, wslRes] : results.wsl)
+                {
+                    consider(wslRes, L"WSL bash (" + distName + L")");
+                }
 
                 if (!sawAny)
                 {
@@ -2155,24 +2133,15 @@ namespace winrt::TerminalApp::implementation
     // preference (including roaming/sync arrivals on fresh machines and
     // toggle-OFF cleanup that the FRE/Settings-Save dialog path doesn't
     // perform). Install/Uninstall are both idempotent.
-    //
-    // GH#613: WSL is ENTIRELY excluded from this reconcile — no install, no
-    // uninstall, no probe, no file I/O, whatever this process has cached.
-    // Touching a WSL distro means spawning `wsl.exe -d <distro>`, which
-    // cold-starts that distro's VM; doing that at silent, automatic app
-    // startup would boot every installed distro just because a profile exists
-    // for it. All WSL reconciliation — in both directions — happens lazily
-    // instead: see _ReconcileWslProfileForNewTab below. RunInstall has no WSL
-    // surface at all now, so neither do the explicit FRE / Settings-UI
-    // "Install" paths that share it.
     safe_void_coroutine TerminalPage::_ReconcileShellIntegration()
     {
         auto weak = get_weak();
 
-        // Snapshot the user's shells on the UI thread BEFORE going
-        // background. _settings.AllProfiles() is an observable vector and
-        // must not be iterated concurrently with a settings reload. No WSL
-        // snapshot is taken: neither branch below has any WSL work to do.
+        // Snapshot WSL profile commandlines AND non-WSL shell presence on the UI
+        // thread BEFORE going background. _settings.AllProfiles() is
+        // an observable vector and must not be iterated concurrently
+        // with a settings reload.
+        const auto wslCommandlines = ShellIntegrationSweep::SnapshotWslCommandlines(_settings);
         const auto shellPresence = ShellIntegrationSweep::SnapshotShellPresence(_settings);
 
         co_await winrt::resume_background();
@@ -2198,7 +2167,8 @@ namespace winrt::TerminalApp::implementation
             // profile for. A user keeping only "Developer PowerShell
             // for VS" (which uses Windows PowerShell) and no pwsh
             // profile must not get pwsh integration written.
-            (void)ShellIntegrationSweep::RunInstall(shellPresence);
+            // GH#613: startup/settings reloads leave WSL to the lazy new-tab path.
+            (void)ShellIntegrationSweep::RunInstall(shellPresence, wslCommandlines, ShellIntegrationSweep::InstallTargets::Native);
         }
         else
         {
@@ -2211,222 +2181,14 @@ namespace winrt::TerminalApp::implementation
             // use (which would write `.bak.*` for nothing). The
             // next reconcile after re-adding the X profile sweeps
             // it.
-            ShellIntegrationSweep::RunUninstall(shellPresence);
+            //
+            // WSL is similarly bounded by `wslCommandlines`: WT profile
+            // deletion != WSL distro removal (the user may still
+            // use the distro via `wsl.exe` directly), and tracking
+            // previously-installed distros across settings reloads
+            // would add complexity for a rare edge case.
+            ShellIntegrationSweep::RunUninstall(shellPresence, wslCommandlines);
         }
-    }
-
-    // Reconcile one WSL profile's shell integration — the WslShellIntegration
-    // install helper (ShellIntegrationSweep::SI::InstallWslBash ->
-    // Wsl::Install) or its uninstall counterpart — the first time that profile
-    // is launched in a NEW TAB. Once per PROFILE, per app process (GH#613).
-    // Admission is decided by Wsl::NewTabReconcileGate via
-    // ShellIntegrationSweep::TryClaimWslNewTabReconcile, keyed on the
-    // profile's stable GUID.
-    //
-    // This is the ONLY WSL entry point in the app. Neither
-    // _ReconcileShellIntegration above nor the explicit FRE / Settings-UI
-    // "Install" buttons touch WSL, because reaching a distro's ~/.bashrc
-    // means cold-starting its VM and none of those paths may boot a distro
-    // the user isn't opening. Opening a WSL tab starts that distro
-    // regardless, which is what makes this the one free moment to do it.
-    //
-    // Direction is decided from the user's expressed preference at that
-    // moment: enabled installs, disabled uninstalls (that is how a user who
-    // turns the setting off eventually gets WSL cleanup without any sweep),
-    // and "never expressed a preference" does nothing at all. Whichever way
-    // it goes, it happens ONCE: after a profile has been handled in this
-    // process nothing brings it back — not a later tab, and not a settings
-    // toggle. Toggling the setting again takes effect on the next app run.
-    //
-    // A launch qualifies only when the profile IS a WSL profile AND this
-    // really is a launch of that profile: an override that replaces the
-    // profile's commandline (`wt -p Ubuntu cmd.exe`) doesn't qualify, an
-    // append (`wt -p Ubuntu -- ls`) does, and reattaching existing content
-    // never does. See SI::QualifyingWslLaunchCommandline for the full policy.
-    // The reconcile runs that qualifying commandline; the gate and the logs
-    // identify the PROFILE.
-    //
-    // Deliberately NOT hooked into pane/split creation: _MakePane is
-    // shared by both new-tab and split-pane paths, but splitting an
-    // existing tab (or moving a pane between tabs) never represents a
-    // brand-new terminal "launch" the way opening a new tab does, so
-    // those call _MakePane directly and never reach this method. Call
-    // sites are exactly the new-tab entry points that resolve a Profile
-    // before creating the pane: _OpenNewTab, _OpenNewTerminalViaDropdown's
-    // new-tab branch, CreateProtocolTab (`wtcli new-tab`), _DuplicateTab
-    // (duplicating a tab spawns a brand-new connection for the
-    // closest-matching profile, exactly like opening a new tab), plus the one
-    // narrow case where a `splitPane` really does create a tab — see
-    // _WillPromoteSplitToNewTab. A default-terminal handoff
-    // (CreateTabFromConnection) is deliberately absent: the console session
-    // is already running and the tab is built from that process's own
-    // commandline, which is a full override of whatever profile it matches —
-    // not a launch of that profile.
-    //
-    // Cheap and synchronous up to the claim check (string compares + one
-    // small in-memory map lookup, no allocation, no I/O) so it's safe to call
-    // unconditionally from every new-tab codepath, and after the first
-    // claim it is a no-op for that profile for the rest of the process. The
-    // reconcile itself always happens on a background thread and never
-    // blocks the new tab's startup.
-    //
-    // noexcept, and best-effort by design: shell integration is a convenience
-    // on top of the tab, never a precondition for it. Every caller is in the
-    // middle of creating a tab, so a WinRT/allocation/scheduling failure in
-    // here must be logged and dropped rather than allowed to escape and take
-    // the user's new tab down with it. The scope guard below still hands the
-    // claim back before that logging happens.
-    void TerminalPage::_ReconcileWslProfileForNewTab(const Profile& profile,
-                                                     const NewTerminalArgs& newTerminalArgs) noexcept
-    try
-    {
-        auto commandline = ShellIntegrationSweep::QualifyingWslLaunchCommandline(profile, newTerminalArgs);
-        if (commandline.empty())
-        {
-            // Not a launch of a WSL profile. PowerShell / Windows PowerShell
-            // / native Bash are reconciled by the startup sweep instead.
-            return;
-        }
-
-        // Consent check, same latch the startup/settings reconcile uses. Both
-        // flags are published together, and only once the user has actually
-        // expressed a preference — a brand-new user who has never seen the FRE
-        // publishes nothing — so we never touch a distro's ~/.bashrc
-        // uninvited. Checked before the claim on purpose: a launch that isn't
-        // allowed to do anything must not burn the profile's one claim.
-        if (!_shellIntegrationDesiredStateKnown.load(std::memory_order_acquire))
-        {
-            return;
-        }
-
-        auto profileKey = ShellIntegrationSweep::WslProfileKey(profile);
-        if (!ShellIntegrationSweep::TryClaimWslNewTabReconcile(profileKey))
-        {
-            // Already handled in this process, or a reconcile for the same
-            // profile is in flight for a concurrently-opening tab.
-            return;
-        }
-
-        // The claim is now IN-FLIGHT and nothing else can claim this profile.
-        // Everything between here and handing it to the background half —
-        // string building, hstring conversions, logging — can throw
-        // std::bad_alloc, and a throw that escaped with the claim still
-        // in-flight would strand the profile: unclaimable for the rest of the
-        // process, yet never reconciled. Give it back on any such path.
-        auto claimGuard = wil::scope_exit([&]() noexcept {
-            ShellIntegrationSweep::ReleaseWslNewTabReconcile(profileKey);
-        });
-
-        auto logIdentity = "profile='" + winrt::to_string(profile.Name()) +
-                           "' guid='" + winrt::to_string(winrt::hstring{ profileKey }) + "'";
-        _agentPaneLog("[ShellIntegration] WSL new-tab reconcile claimed " + logIdentity +
-                      " commandline='" + winrt::to_string(winrt::hstring{ commandline }) + "'");
-
-        // Ownership of the claim passes to the coroutine here: from this point
-        // it either spends the attempt (Handled, whatever the outcome) or
-        // gives the claim back itself. `profileKey` is copied rather than
-        // moved so the guard above still names the right profile if
-        // constructing the coroutine frame throws.
-        _ReconcileWslProfileForNewTabAsync(profileKey, std::move(commandline), std::move(logIdentity));
-        claimGuard.release();
-    }
-    CATCH_LOG()
-
-    // Background half of _ReconcileWslProfileForNewTab. Silent — no
-    // dialog, matching _ReconcileShellIntegration; a failed probe (distro
-    // not runnable right now, transient WSL race) simply means shell
-    // integration doesn't light up for that session, exactly as if the
-    // user had auto-detection off — it is NOT retried, because the claim
-    // boundary is one scheduled attempt per profile per process, and
-    // re-probing an unreachable distro on every later tab is exactly the
-    // cold-start cost GH#613 is about. The claim is given back only on the
-    // paths that run BEFORE either helper is invoked; from the moment one is
-    // invoked the attempt is spent, however it ends.
-    safe_void_coroutine TerminalPage::_ReconcileWslProfileForNewTabAsync(std::wstring profileKey,
-                                                                        std::wstring commandline,
-                                                                        std::string logIdentity)
-    {
-        const auto weak = get_weak();
-
-        co_await winrt::resume_background();
-
-        // The page may have been torn down while this was queued. Take a
-        // strong reference before touching any member state; the gate is
-        // process-wide, so giving the claim back lets another window still
-        // be the first qualifying launch.
-        auto self = weak.get();
-        if (!self)
-        {
-            ShellIntegrationSweep::ReleaseWslNewTabReconcile(profileKey);
-            _agentPaneLog("[ShellIntegration] WSL new-tab reconcile abandoned (page torn down) for " + logIdentity);
-            co_return;
-        }
-
-        // Re-read the desired state under this page's existing reconcile
-        // lock, so the direction we act on is coherent with what the
-        // startup / Settings paths are deciding right now rather than a value
-        // snapshotted before the coroutine was even queued. The lock is held
-        // across the reconcile itself; this runs on a background thread, so
-        // nothing blocks the UI.
-        std::optional<ShellIntegrationSweep::SI::InstallResult> result;
-        const char* operation = "install";
-        {
-            std::lock_guard<std::mutex> pageGuard{ self->_shellIntegrationReconcileMutex };
-            if (self->_shellIntegrationDesiredStateKnown.load(std::memory_order_acquire))
-            {
-                const auto enabled = self->_shellIntegrationDesiredEnabled.load(std::memory_order_acquire);
-                // The user turning auto-detection off is what makes this an
-                // uninstall: this tab is starting the distro anyway, so it is
-                // also the one free moment to take our block back out of its
-                // ~/.bashrc.
-                operation = enabled ? "install" : "uninstall";
-
-                // Spend the profile's one attempt BEFORE invoking the helper,
-                // not after. The helpers spawn `wsl.exe` and touch a UNC path,
-                // so they can throw as well as fail — and an attempt that
-                // threw is still an attempt. Marking first means a throw
-                // leaves the profile Handled instead of unwinding out of here
-                // with the claim still In-Flight, which would strand the
-                // profile as permanently unclaimable-but-never-reconciled.
-                ShellIntegrationSweep::MarkWslNewTabReconcileHandled(profileKey);
-                result = enabled ? ShellIntegrationSweep::SI::InstallWslBash(commandline) :
-                                   ShellIntegrationSweep::SI::UninstallWslBash(commandline);
-            }
-        }
-
-        if (!result)
-        {
-            // The desired state is somehow no longer known, so nothing ran.
-            // Give the claim back: this launch was consumed by a race, not by
-            // an attempt, and the next tab launching this profile is still
-            // entitled to be the first qualifying one.
-            ShellIntegrationSweep::ReleaseWslNewTabReconcile(profileKey);
-            _agentPaneLog("[ShellIntegration] WSL new-tab reconcile skipped (no expressed preference "
-                          "by the time it ran) for " +
-                          logIdentity);
-            co_return;
-        }
-
-        // The one scheduled attempt ran, in whichever direction, and was
-        // already marked handled above. Logging is best-effort reporting from
-        // here on; it cannot change the outcome.
-        const auto outcome = result->success ? (result->alreadyInstalled ? "no-change" : "done") : "FAILED";
-        _agentPaneLog("[ShellIntegration] WSL new-tab " + std::string{ operation } + " " + std::string{ outcome } +
-                      " for " + logIdentity +
-                      (result->errorMessage.empty() ? std::string{} : " error=" + winrt::to_string(winrt::hstring{ result->errorMessage })));
-    }
-
-    // True when a `splitPane` request will actually be PROMOTED into a new
-    // tab instead of splitting one. _SplitPane does that in exactly one
-    // narrow case — no target tab AND no tabs at all — which happens for a
-    // startup commandline whose first sub-command is `sp` (e.g.
-    // `wt sp -p Ubuntu`). Ordinary splits never satisfy this and therefore
-    // never trigger the GH#613 reconcile. Kept next to its only two callers'
-    // rationale; the authoritative promotion branch is in
-    // TerminalPage::_SplitPane.
-    bool TerminalPage::_WillPromoteSplitToNewTab(const winrt::com_ptr<Tab>& targetTab) const
-    {
-        return !targetTab && _tabs.Size() == 0;
     }
 
     void TerminalPage::_ShowShellIntegrationDialog(const winrt::hstring& title, const winrt::hstring& message)

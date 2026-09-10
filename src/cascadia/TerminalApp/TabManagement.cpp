@@ -18,6 +18,7 @@
 
 #include "AgentPaneContent.h"
 #include "AgentPaneLog.h"
+#include "ShellIntegrationSweep.h"
 #include "SharedWta.h"
 #include "TabRowControl.h"
 #include "DebugTapConnection.h"
@@ -69,11 +70,9 @@ namespace winrt::TerminalApp::implementation
     HRESULT TerminalPage::_OpenNewTab(const INewContentArgs& newContentArgs, bool openInBackground)
     try
     {
-        const auto newTerminalArgs{ newContentArgs.try_as<NewTerminalArgs>() };
-        Profile profile{ nullptr };
-        if (newTerminalArgs)
+        if (const auto& newTerminalArgs{ newContentArgs.try_as<NewTerminalArgs>() })
         {
-            profile = _settings.GetProfileForArgs(newTerminalArgs);
+            const auto profile{ _settings.GetProfileForArgs(newTerminalArgs) };
             // GH#11114: GetProfileForArgs can return null if the index is higher
             // than the number of available profiles.
             if (!profile)
@@ -94,25 +93,7 @@ namespace winrt::TerminalApp::implementation
 
         // This call to _MakePane won't return nullptr, we already checked that
         // case above with the _maybeElevate call.
-        const auto newPane = _MakePane(newContentArgs, nullptr);
-
-        // GH#613: lazily reconcile WSL bash shell integration the first time a
-        // WSL profile is launched in a NEW tab this app run. Claimed only once
-        // the pane really exists — a launch that produced no pane started no
-        // distro, and must not spend the profile's one reconcile. Same
-        // ordering as every other call site.
-        //
-        // `newTerminalArgs` is passed so the qualifying check sees any
-        // override — `wt -p Ubuntu cmd.exe` runs Windows cmd and must not
-        // start Ubuntu. No-op for non-WSL profiles, no-op if that profile was
-        // already reconciled, and never blocks the rest of this function (the
-        // reconcile, if any, runs on a background thread).
-        if (newPane && newTerminalArgs)
-        {
-            _ReconcileWslProfileForNewTab(profile, newTerminalArgs);
-        }
-
-        _CreateNewTabFromPane(newPane, -1, openInBackground);
+        _CreateNewTabFromPane(_MakePane(newContentArgs, nullptr), -1, openInBackground);
         return S_OK;
     }
     CATCH_RETURN();
@@ -342,6 +323,40 @@ namespace winrt::TerminalApp::implementation
     {
         if (pane)
         {
+            const auto& globals = _settings.GlobalSettings();
+            if (globals.HasAutoErrorDetectionEnabled() && globals.EffectiveAutoErrorDetectionEnabled())
+            {
+                // FRE saves settings directly; publish that intent before queuing.
+                _shellIntegrationDesiredEnabled.store(true, std::memory_order_release);
+
+                const auto lifetime = get_strong();
+                pane->WalkTree([this, lifetime](const std::shared_ptr<Pane>& leaf) noexcept {
+                    try
+                    {
+                        const auto terminalContent = leaf->GetContent().try_as<winrt::TerminalApp::TerminalPaneContent>();
+                        if (!terminalContent)
+                        {
+                            return;
+                        }
+
+                        const auto termControl = terminalContent.GetTermControl();
+                        if (!termControl)
+                        {
+                            return;
+                        }
+
+                        ShellIntegrationSweep::EnsureWslInstalledAsync(
+                            terminalContent.GetProfile(),
+                            termControl.Settings().Commandline(),
+                            [lifetime, this]() noexcept {
+                                return _shellIntegrationDesiredEnabled.load(std::memory_order_acquire);
+                            },
+                            _shellIntegrationReconcileMutex);
+                    }
+                    CATCH_LOG()
+                });
+            }
+
             auto newTabImpl = winrt::make_self<Tab>(pane);
             _InitializeTab(newTabImpl, insertPosition, openInBackground);
             return *newTabImpl;
@@ -434,32 +449,7 @@ namespace winrt::TerminalApp::implementation
             {
                 insertPosition = tab.TabViewIndex() + 1;
             }
-
-            // GH#613: duplicating a tab is a genuine new-tab launch — it
-            // spawns a brand-new connection for the (closest match to the)
-            // source tab's profile, exactly like _OpenNewTab.
-            //
-            // Make the pane FIRST. _MakePane returns null when it handed the
-            // launch off to an elevated window instead: that process opens the
-            // tab and starts the distro, this one creates nothing, so claiming
-            // here would silently spend the profile's one reconcile on a tab
-            // that never existed. Resolve the profile the same way
-            // _MakeTerminalPane does for the sourceTab case (mirrored here
-            // because _MakePane doesn't surface the resolved profile back to
-            // us). No NewTerminalArgs on purpose: the duplicate path builds
-            // its settings with TerminalSettings::CreateWithProfile, so the
-            // profile's own commandline IS the effective one (a commandline
-            // override that produced the source tab is not carried over).
-            // No-op for non-WSL profiles.
-            const auto newPane = _MakePane(nullptr, tab, nullptr);
-            if (newPane)
-            {
-                if (const auto& focusedProfile = tab.GetFocusedProfile())
-                {
-                    _ReconcileWslProfileForNewTab(GetClosestProfileForDuplicationOfProfile(focusedProfile), nullptr);
-                }
-            }
-            _CreateNewTabFromPane(newPane, insertPosition);
+            _CreateNewTabFromPane(_MakePane(nullptr, tab, nullptr), insertPosition);
 
             const auto runtimeTabText{ tab.GetTabText() };
             if (!runtimeTabText.empty())
