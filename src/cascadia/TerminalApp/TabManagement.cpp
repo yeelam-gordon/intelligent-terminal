@@ -368,39 +368,12 @@ namespace winrt::TerminalApp::implementation
                     CATCH_LOG()
                 }
             });
-            const auto& globals = _settings.GlobalSettings();
-            if (globals.HasAutoErrorDetectionEnabled() && globals.EffectiveAutoErrorDetectionEnabled())
-            {
-                // FRE saves settings directly; publish that intent before queuing.
-                _shellIntegrationDesiredEnabled.store(true, std::memory_order_release);
-
-                const auto lifetime = get_strong();
-                pane->WalkTree([this, lifetime](const std::shared_ptr<Pane>& leaf) noexcept {
-                    try
-                    {
-                        const auto terminalContent = leaf->GetContent().try_as<winrt::TerminalApp::TerminalPaneContent>();
-                        if (!terminalContent)
-                        {
-                            return;
-                        }
-
-                        const auto termControl = terminalContent.GetTermControl();
-                        if (!termControl)
-                        {
-                            return;
-                        }
-
-                        ShellIntegrationSweep::EnsureWslInstalledAsync(
-                            terminalContent.GetProfile(),
-                            termControl.Settings().Commandline(),
-                            [lifetime, this]() noexcept {
-                                return _shellIntegrationDesiredEnabled.load(std::memory_order_acquire);
-                            },
-                            _shellIntegrationReconcileMutex);
-                    }
-                    CATCH_LOG()
-                });
-            }
+            ShellIntegrationSweep::QueueNewTabWslInstallWork<winrt::TerminalApp::TerminalPaneContent>(
+                _settings.GlobalSettings(),
+                pane,
+                get_strong(),
+                _shellIntegrationDesiredEnabled,
+                _shellIntegrationReconcileMutex);
             auto newTabImpl = winrt::make_self<Tab>(pane);
             if (_receivingContentTransfer)
             {

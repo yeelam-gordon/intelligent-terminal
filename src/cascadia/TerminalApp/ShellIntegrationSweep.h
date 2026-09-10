@@ -8,14 +8,14 @@
 //   • FreOverlay::Save           — FRE wizard "Install" button
 //   • TerminalPage::_InitShellIntegration — Settings UI "Install" button
 //   • TerminalPage::_ReconcileShellIntegration — startup + settings reload
-//   • EnsureWslInstalledAsync    — lazy new-tab WSL install
+//   • QueueNewTabWslInstallWork  — lazy new-tab WSL install
 //
 // The sweep callers need the same two-phase pattern:
 //
 //   1. Snapshot the live `_settings.AllProfiles()` ON THE UI THREAD
 //      (the observable vector races with settings reload). The
 //      snapshot is two cheap copies:
-//        - WSL distro names (deduped, malformed entries dropped)
+//        - WSL profile install targets (stable profile key + commandline)
 //        - non-WSL ShellPresence bitset (pwsh / WinPS / Git Bash)
 //
 //   2. Run the install OR uninstall sweep on a background thread,
@@ -38,16 +38,19 @@
 //
 // GH#613: startup omits WSL only from the shared INSTALL path by selecting a
 // native-shell target set. Explicit one-time setup (FRE / Settings "Install")
-// keeps the baseline WSL sweep, and the new-tab path independently ensures
-// the actually launched WSL profile once per app process.
+// and the new-tab path share the same low-level WSL installer, keyed once per
+// profile for the life of the process.
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
-#include <functional>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../inc/ShellIntegration.h"
@@ -62,6 +65,7 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
 {
     namespace SI = ::Microsoft::Terminal::ShellIntegration;
     using CascadiaSettings = ::winrt::Microsoft::Terminal::Settings::Model::CascadiaSettings;
+    using GlobalAppSettings = ::winrt::Microsoft::Terminal::Settings::Model::GlobalAppSettings;
     using Profile = ::winrt::Microsoft::Terminal::Settings::Model::Profile;
 
     // Bitset of "user has at least one profile for this shell".
@@ -127,13 +131,7 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
         return std::wstring{ cmd };
     }
 
-    // Snapshot the user's distinct WSL profile commandlines. MUST be called
-    // on the UI thread — settings.AllProfiles() is an observable vector and
-    // iterating concurrently with a reload is unsafe. Deduped by commandline
-    // (two profiles launching the identical command touch the distro once;
-    // two profiles for the SAME distro via different commands are probed
-    // separately but converge on the same \\wsl$ path, which the installer
-    // handles idempotently).
+    // Uninstall retains its commandline-deduplicated snapshot.
     inline std::vector<std::wstring> SnapshotWslCommandlines(const CascadiaSettings& settings)
     {
         std::vector<std::wstring> out;
@@ -145,11 +143,7 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
         for (const auto& profile : settings.AllProfiles())
         {
             auto cmd = WslProfileCommandline(profile);
-            if (cmd.empty())
-            {
-                continue;
-            }
-            if (seen.insert(cmd).second)
+            if (!cmd.empty() && seen.insert(cmd).second)
             {
                 out.emplace_back(std::move(cmd));
             }
@@ -157,8 +151,64 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
         return out;
     }
 
+    struct WslProfileInstallTarget
+    {
+        std::wstring profileKey;
+        std::wstring profileName;
+        std::wstring profileCommandline;
+    };
+
+    inline WslProfileInstallTarget MakeWslProfileInstallTarget(const Profile& profile)
+    {
+        if (!profile)
+        {
+            return {};
+        }
+        const auto commandline = WslProfileCommandline(profile);
+        if (commandline.empty())
+        {
+            return {};
+        }
+
+        const auto name = profile.Name();
+        return WslProfileInstallTarget{
+            ::Microsoft::Console::Utils::GuidToString(profile.Guid()),
+            std::wstring{ name.c_str() },
+            commandline,
+        };
+    }
+
+    // Snapshot the user's WSL profiles as stable install targets. MUST be
+    // called on the UI thread — settings.AllProfiles() is an observable
+    // vector and iterating concurrently with a reload is unsafe. The shared
+    // doing/done gate is profile-keyed, so the explicit FRE/settings path and
+    // the lazy new-tab path must snapshot the same profile identity rather
+    // than deduping only by commandline or distro.
+    inline std::vector<WslProfileInstallTarget> SnapshotWslProfiles(const CascadiaSettings& settings)
+    {
+        std::vector<WslProfileInstallTarget> out;
+        if (!settings)
+        {
+            return out;
+        }
+        std::set<std::wstring> seen;
+        for (const auto& profile : settings.AllProfiles())
+        {
+            auto target = MakeWslProfileInstallTarget(profile);
+            if (target.profileCommandline.empty())
+            {
+                continue;
+            }
+            if (seen.insert(target.profileKey).second)
+            {
+                out.emplace_back(std::move(target));
+            }
+        }
+        return out;
+    }
+
     // Snapshot which non-WSL shells the user has a profile for. Same
-    // UI-thread restriction as SnapshotWslCommandlines.
+    // UI-thread restriction as SnapshotWslProfiles.
     inline ShellPresence SnapshotShellPresence(const CascadiaSettings& settings)
     {
         ShellPresence out{};
@@ -198,6 +248,7 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
     // without Git Bash / running WSL shouldn't see a false-alarm).
     struct InstallSweepResults
     {
+        ShellPresence shellPresence;
         SI::InstallResult pwsh{ true, true, {}, false };       // skipped → already-installed
         SI::InstallResult windowsPowerShell{ true, true, {}, false };
         SI::InstallResult bash{ true, true, {}, false };
@@ -205,13 +256,15 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
     };
 
     // Run the install sweep using the provided snapshot. Touches only
-    // shells the user has a profile for; touches each WSL distro once.
+    // shells the user has a profile for; WSL work is keyed per profile so
+    // the explicit and lazy new-tab entry points share one doing/done gate.
     // Synchronous — call from a background thread.
     inline InstallSweepResults RunInstall(const ShellPresence& shellPresence,
-                                          const std::vector<std::wstring>& wslCommandlines,
+                                          const std::vector<WslProfileInstallTarget>& wslProfiles,
                                           InstallTargets targets = InstallTargets::All)
     {
         InstallSweepResults r{};
+        r.shellPresence = shellPresence;
         // PowerShell hosts: the $PROFILE WRITE is profile-gated, but the
         // execution-policy VERDICT is unconditional — a Restricted / AllSigned
         // policy must stop FRE / Save even when the user has no Windows
@@ -271,15 +324,35 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
         }
         if (HasInstallTarget(targets, InstallTargets::Wsl))
         {
-            r.wsl.reserve(wslCommandlines.size());
-            for (const auto& cmd : wslCommandlines)
+            r.wsl.reserve(wslProfiles.size());
+            for (const auto& target : wslProfiles)
             {
-                const auto res = SI::InstallWslBash(cmd);
-                auto name = SI::Wsl::ProbedDistroName(cmd);
-                r.wsl.emplace_back(name.empty() ? cmd : std::move(name), res);
+                const auto result = SI::Wsl::InstallForProfile(target.profileKey, target.profileCommandline);
+                auto label = SI::Wsl::ProbedDistroName(target.profileCommandline);
+                if (label.empty())
+                {
+                    label = target.profileName.empty() ? target.profileCommandline : target.profileName;
+                }
+                r.wsl.emplace_back(std::move(label), result.value_or(SI::InstallResult{ true, true, {}, false }));
             }
         }
         return r;
+    }
+
+    // Snapshot on the UI thread; the returned callable uses only copied data
+    // and must run on a background thread, under the caller's existing lock.
+    inline auto PrepareInstall(const CascadiaSettings& settings, InstallTargets targets = InstallTargets::All)
+    {
+        const auto shellPresence = SnapshotShellPresence(settings);
+        auto wslProfiles = std::vector<WslProfileInstallTarget>{};
+        if (HasInstallTarget(targets, InstallTargets::Wsl))
+        {
+            wslProfiles = SnapshotWslProfiles(settings);
+        }
+
+        return [shellPresence, wslProfiles = std::move(wslProfiles), targets]() {
+            return RunInstall(shellPresence, wslProfiles, targets);
+        };
     }
 
     // Run the uninstall sweep using the provided snapshot. Mirrors
@@ -307,63 +380,82 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
         }
     }
 
-    // Claim one launched WSL profile, then serialize its actual install attempt
-    // against the page's reconcile mutex. If settings were disabled before the
-    // background work starts, release the claim so a later qualifying launch can
-    // retry.
-    // The enabled callback must retain the owner of reconcileMutex for the
-    // whole coroutine. Profile properties are read before the background switch.
-    inline safe_void_coroutine EnsureWslInstalledAsync(Profile profile,
-                                                       winrt::hstring actualCommandline,
-                                                       std::function<bool()> isEnabled,
-                                                       std::mutex& reconcileMutex)
+    template<typename InstallFn>
+    inline safe_void_coroutine EnsureWslInstalledForNewTab(Profile profile,
+                                                           winrt::hstring actualCommandline,
+                                                           InstallFn install)
     {
-        if (!profile || !isEnabled || !isEnabled())
+        if (!profile)
         {
             co_return;
         }
-        const auto profileCommandline = profile.Commandline();
-        const std::wstring commandline{ SI::Wsl::QualifyingProfileLaunchCommandline(
-            std::wstring_view{ profileCommandline }, std::wstring_view{ actualCommandline }) };
-        if (commandline.empty())
+        const auto target = MakeWslProfileInstallTarget(profile);
+        if (target.profileCommandline.empty())
         {
             co_return;
         }
-
-        const auto profileKey = ::Microsoft::Console::Utils::GuidToString(profile.Guid());
-        static SI::Wsl::NewTabReconcileGate gate;
-        if (!gate.TryClaim(profileKey))
-        {
-            co_return;
-        }
-        auto releaseClaim = wil::scope_exit([&]() noexcept {
-            gate.Release(profileKey);
-        });
-
-        const auto logIdentity = "profile='" + winrt::to_string(profile.Name()) +
-                                 "' guid='" + winrt::to_string(winrt::hstring{ profileKey }) + "'";
-        _agentPaneLog("[ShellIntegration] WSL new-tab reconcile claimed " + logIdentity +
-                      " commandline='" + winrt::to_string(winrt::hstring{ commandline }) + "'");
 
         co_await winrt::resume_background();
 
-        SI::InstallResult result{};
+        if (const auto result = SI::Wsl::InstallForProfile(
+                target.profileKey,
+                target.profileCommandline,
+                std::wstring_view{ actualCommandline },
+                std::move(install));
+            result && !result->success)
         {
-            std::lock_guard<std::mutex> guard{ reconcileMutex };
-            if (!isEnabled())
-            {
-                _agentPaneLog("[ShellIntegration] WSL new-tab install skipped after disable for " + logIdentity);
-                co_return;
-            }
+            const auto label = target.profileName.empty() ? target.profileCommandline : target.profileName;
+            _agentPaneLog("[ShellIntegration] WSL new-tab install FAILED for " +
+                          winrt::to_string(winrt::hstring{ label }) +
+                          (result->errorMessage.empty() ? std::string{} : " error=" + winrt::to_string(winrt::hstring{ result->errorMessage })));
+        }
+    }
 
-            gate.MarkHandled(profileKey);
-            result = RunInstall(ShellPresence{}, { commandline }, InstallTargets::Wsl).wsl.front().second;
+    template<typename TerminalContent, typename PaneType, typename OwnerLifetime>
+    inline void QueueNewTabWslInstallWork(const GlobalAppSettings& globals,
+                                          const std::shared_ptr<PaneType>& pane,
+                                          OwnerLifetime ownerLifetime,
+                                          std::atomic<bool>& desiredEnabledState,
+                                          std::mutex& reconcileMutex) noexcept
+    try
+    {
+        if (!pane || !globals.HasAutoErrorDetectionEnabled() || !globals.EffectiveAutoErrorDetectionEnabled())
+        {
+            return;
         }
 
-        const auto outcome = result.success ? (result.alreadyInstalled ? "no-change" : "done") : "FAILED";
-        _agentPaneLog("[ShellIntegration] WSL new-tab install " + std::string{ outcome } +
-                      " for " + logIdentity +
-                      (result.errorMessage.empty() ? std::string{} : " error=" + winrt::to_string(winrt::hstring{ result.errorMessage })));
+        // FRE saves settings directly; publish that intent before queuing.
+        desiredEnabledState.store(true, std::memory_order_release);
+
+        const auto install = [ownerLifetime = std::move(ownerLifetime), &desiredEnabledState, &reconcileMutex](std::wstring_view commandline) -> std::optional<SI::InstallResult> {
+            (void)ownerLifetime;
+            std::lock_guard<std::mutex> guard{ reconcileMutex };
+            if (!desiredEnabledState.load(std::memory_order_acquire))
+            {
+                return std::nullopt;
+            }
+            return SI::Wsl::Install(std::wstring{ commandline });
+        };
+
+        pane->WalkTree([&](const std::shared_ptr<PaneType>& leaf) noexcept {
+            try
+            {
+                const auto terminal = leaf->GetContent().template try_as<TerminalContent>();
+                if (!terminal)
+                {
+                    return;
+                }
+                const auto control = terminal.GetTermControl();
+                if (!control)
+                {
+                    return;
+                }
+
+                EnsureWslInstalledForNewTab(terminal.GetProfile(), control.Settings().Commandline(), install);
+            }
+            CATCH_LOG()
+        });
     }
+    CATCH_LOG()
 
 }

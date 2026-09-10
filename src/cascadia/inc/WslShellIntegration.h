@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ShellIntegrationCommon.h"
 #include "BashShellIntegration.h"
 #include "ShellIntegrationProfileGate.h"
@@ -719,16 +721,14 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
                                                                            std::wstring_view{};
     }
 
-    // Process-wide bookkeeping for GH#613's lazy, new-tab-triggered WSL
-    // reconcile. ShellIntegrationSweep::EnsureWslInstalledAsync claims a
-    // profile before queueing background work, releases that claim if settings
-    // were disabled before the work ran, and marks the profile handled once an
-    // install attempt actually runs.
+    // Process-wide bookkeeping shared by explicit and new-tab WSL installs.
+    // InstallForProfile claims a profile before invoking the installer,
+    // releases that claim if settings were disabled before the work ran, and
+    // marks the profile handled once an install attempt actually runs.
     //
     // Keyed by profile GUID, not distro: each profile gets one attempt per
     // process, regardless of success. Release only cancels work that never ran;
-    // settings toggles cannot re-arm a handled profile. Explicit setup and
-    // uninstall retain their independent baseline behavior.
+    // settings toggles cannot re-arm a handled profile. Uninstall is unchanged.
     class NewTabReconcileGate
     {
     public:
@@ -782,4 +782,74 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
         std::mutex _mutex;
         std::map<std::wstring, State, std::less<>> _states;
     };
+
+    namespace details
+    {
+        inline NewTabReconcileGate& SharedInstallForProfileGate()
+        {
+            static NewTabReconcileGate gate;
+            return gate;
+        }
+    }
+
+    // nullopt from the installer means work was cancelled before installation.
+    // Any returned result or thrown exception consumes the profile's attempt.
+    template<typename InstallFn>
+    inline std::optional<InstallResult> InstallForProfile(std::wstring_view profileKey,
+                                                          std::wstring_view profileCommandline,
+                                                          std::wstring_view effectiveCommandline,
+                                                          InstallFn&& installer)
+    {
+        namespace SI = ::Microsoft::Terminal::ShellIntegration;
+
+        if (profileKey.empty() || !SI::IsWslProfile(profileCommandline))
+        {
+            return std::nullopt;
+        }
+
+        auto commandline = profileCommandline;
+        if (!effectiveCommandline.empty())
+        {
+            commandline = QualifyingProfileLaunchCommandline(profileCommandline, effectiveCommandline);
+            if (commandline.empty())
+            {
+                return std::nullopt;
+            }
+        }
+
+        auto& gate = details::SharedInstallForProfileGate();
+        if (!gate.TryClaim(profileKey))
+        {
+            return InstallResult{ true, true, {}, false };
+        }
+
+        auto releaseClaim = wil::scope_exit([&]() noexcept {
+            gate.Release(profileKey);
+        });
+        auto markHandled = wil::scope_exit([&]() noexcept {
+            gate.MarkHandled(profileKey);
+        });
+
+        if (const auto result = installer(commandline))
+        {
+            return *result;
+        }
+
+        markHandled.release();
+        return std::nullopt;
+    }
+
+    inline std::optional<InstallResult> InstallForProfile(std::wstring_view profileKey,
+                                                          std::wstring_view profileCommandline,
+                                                          std::wstring_view effectiveCommandline = {})
+    {
+        return InstallForProfile(
+            profileKey,
+            profileCommandline,
+            effectiveCommandline,
+            [](std::wstring_view commandline) -> std::optional<InstallResult> {
+                return Install(std::wstring{ commandline });
+            });
+    }
+
 }
