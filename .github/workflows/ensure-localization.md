@@ -185,9 +185,13 @@ jobs:
 
 safe-outputs:
 
+  github-token: ${{ secrets.GITHUB_TOKEN }}
+
   push-to-pull-request-branch:
 
     base-branch: ${{ github.event.inputs.expected_head_sha }}
+
+    github-token-for-extra-empty-commit: "${{ '' }}"
 
     allowed-files:
 
