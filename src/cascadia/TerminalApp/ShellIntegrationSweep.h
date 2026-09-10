@@ -358,7 +358,8 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
     }
 
     // Snapshot on the UI thread; the returned callable uses only copied data
-    // and must run on a background thread, under the caller's existing lock.
+    // and must run on a background thread. TerminalPage callers additionally
+    // hold their reconcile lock to serialize against settings changes.
     inline auto PrepareInstall(const CascadiaSettings& settings, InstallTargets targets = InstallTargets::All)
     {
         const auto shellPresence = SnapshotShellPresence(settings);
