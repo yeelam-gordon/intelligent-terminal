@@ -308,6 +308,7 @@ async fn resolve_pane_by_session_id(
 struct CapturedPaneContext {
     pane: serde_json::Value,
     output: Option<String>,
+    agent_session_id: Option<String>,
 }
 
 fn validate_pane_context(value: &serde_json::Value) -> Result<&serde_json::Value, &'static str> {
@@ -352,6 +353,16 @@ fn validate_pane_context(value: &serde_json::Value) -> Result<&serde_json::Value
         return Err("line_count must be a nonnegative integer");
     }
     Ok(pane)
+}
+
+fn resumable_agent_session_id(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("agent_session_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| {
+            !id.trim().is_empty() && !id.starts_with("pane:") && !id.starts_with("sidekick-")
+        })
+        .map(str::to_string)
 }
 
 async fn capture_pane_context(
@@ -412,6 +423,7 @@ async fn capture_pane_context(
         return None;
     }
 
+    let agent_session_id = response.as_ref().and_then(resumable_agent_session_id);
     let output = if let Some(value) = response {
         let protocol_truncated = value
             .get("truncated")
@@ -440,7 +452,11 @@ async fn capture_pane_context(
         let pane_id = json_str_or_num(pane.get("session_id"))?;
         read_pane_last_message_legacy(shell_mgr, &pane_id, max_lines, max_chars).await
     };
-    Some(CapturedPaneContext { pane, output })
+    Some(CapturedPaneContext {
+        pane,
+        output,
+        agent_session_id,
+    })
 }
 
 struct PlannerTerminalContext {
@@ -460,7 +476,11 @@ async fn build_terminal_context(
         ACTIVE_PANE_CONTEXT_MAX_CHARS,
     )
     .await?;
-    let active = captured.pane;
+    let CapturedPaneContext {
+        pane: active,
+        output,
+        agent_session_id,
+    } = captured;
 
     let target_pane_id = json_str_or_num(active.get("session_id"))?;
     let target_window_title = active
@@ -487,15 +507,18 @@ async fn build_terminal_context(
         "terminal_context_target_resolved"
     );
 
-    let json = serde_json::to_string(&serde_json::json!({
+    let mut terminal_context = serde_json::json!({
         "activeTarget": target_pane_id,
         "window_title": target_window_title,
         "cwd": target_cwd,
         "shell": target_shell,
         "locale": user_locale_tag(),
-        "buffer": captured.output,
-    }))
-    .ok()?;
+        "buffer": output,
+    });
+    if let Some(agent_session_id) = agent_session_id {
+        terminal_context["agent_session_id"] = serde_json::Value::String(agent_session_id);
+    }
+    let json = serde_json::to_string(&terminal_context).ok()?;
 
     Some(PlannerTerminalContext {
         json,
@@ -523,6 +546,7 @@ pub(super) struct ResolvedProviderContext {
     pub(super) resolved_fix_pane: Option<String>,
     pub(super) planner_terminal_context: Option<String>,
     pub(super) resolved_planner_pane: Option<String>,
+    pub(super) agent_session_id: Option<String>,
     pub(super) command_resolver_invocation:
         Option<crate::agent_tools::command_resolution::CommandResolverInvocation>,
 }
@@ -540,6 +564,7 @@ pub(super) async fn resolve_provider_context(
         resolved_fix_pane: None,
         planner_terminal_context: None,
         resolved_planner_pane: None,
+        agent_session_id: None,
         command_resolver_invocation: if is_autofix {
             None
         } else {
@@ -577,6 +602,7 @@ pub(super) async fn resolve_provider_context(
     resolved.shell_exe = shell_from_active(&captured.pane);
     resolved.command_resolver_invocation =
         command_resolver_invocation(resolved.shell_exe.as_deref(), Some(&captured.pane));
+    resolved.agent_session_id = captured.agent_session_id;
     resolved.context_pane = Some(captured.pane);
     resolved.terminal_output = captured.output;
 
@@ -616,6 +642,8 @@ pub(super) struct ContextRequest<'a> {
     pub(super) terminal_output: Option<&'a str>,
     /// Planner only: terminal context assembled with its authoritative target.
     pub(super) planner_terminal_context: Option<&'a str>,
+    /// Autofix only: resumable agent session currently bound to the failing pane.
+    pub(super) agent_session_id: Option<&'a str>,
     /// Resolver contract derived from the same authoritative pane.
     pub(super) command_resolver_invocation:
         Option<&'a crate::agent_tools::command_resolution::CommandResolverInvocation>,
@@ -832,12 +860,16 @@ impl ContextProvider for ShellContextProvider {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let json = serde_json::to_string(&serde_json::json!({
+        let mut shell_context = serde_json::json!({
             "shell": req.shell_exe,
             "cwd": cwd,
             "locale": user_locale_tag(),
-        }))
-        .unwrap_or_else(|_| "{}".to_string());
+        });
+        if let Some(agent_session_id) = req.agent_session_id {
+            shell_context["agent_session_id"] =
+                serde_json::Value::String(agent_session_id.to_string());
+        }
+        let json = serde_json::to_string(&shell_context).unwrap_or_else(|_| "{}".to_string());
         Some(ContextSection {
             heading: "Shell Context",
             body: format!("```json\n{}\n```", json),
@@ -992,6 +1024,7 @@ pub(super) mod tests {
                 "session_id": "pane-explicit",
                 "is_agent_pane": false,
             },
+            "agent_session_id": "agent-session-resumed",
             "content": "command output",
             "output_source": "last_command",
             "fallback_reason": "",
@@ -1048,6 +1081,10 @@ pub(super) mod tests {
 
         assert_eq!(captured.pane["session_id"], "pane-explicit");
         assert_eq!(captured.output.as_deref(), Some("command output"));
+        assert_eq!(
+            captured.agent_session_id.as_deref(),
+            Some("agent-session-resumed")
+        );
         assert_eq!(channel.requests.load(Ordering::Relaxed), 1);
         let params = channel.params.lock().unwrap().clone().unwrap();
         assert_eq!(params["session_id"], "pane-explicit");
@@ -1076,6 +1113,26 @@ pub(super) mod tests {
         assert_eq!(captured.pane["session_id"], "pane-explicit");
         assert!(captured.output.is_none());
         assert_eq!(channel.requests.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn pane_context_omits_non_resumable_agent_session_ids() {
+        for agent_session_id in ["", "pane:synthetic", "sidekick-internal"] {
+            let mut response = pane_context_response();
+            response["agent_session_id"] = serde_json::json!(agent_session_id);
+            let channel = Arc::new(RecordingPaneContextChannel {
+                requests: AtomicUsize::new(0),
+                params: Mutex::new(None),
+                error: None,
+                response: Some(response),
+            });
+            let mgr = ShellManager::new().with_wt_channel(channel);
+
+            let captured = capture_pane_context(&mgr, None, 0, 4000)
+                .await
+                .expect("pane context remains valid without a resumable agent session");
+            assert!(captured.agent_session_id.is_none());
+        }
     }
 
     #[tokio::test]
@@ -1112,6 +1169,10 @@ pub(super) mod tests {
                     );
                     assert_eq!(resolved.terminal_output.as_deref(), Some("command output"));
                     assert_eq!(
+                        resolved.agent_session_id.as_deref(),
+                        Some("agent-session-resumed")
+                    );
+                    assert_eq!(
                         resolved.resolved_fix_pane.as_deref(),
                         explicit_source.is_none().then_some("pane-explicit")
                     );
@@ -1123,6 +1184,7 @@ pub(super) mod tests {
                     let context: serde_json::Value =
                         serde_json::from_str(&resolved.planner_terminal_context.unwrap()).unwrap();
                     assert_eq!(context["activeTarget"], "pane-explicit");
+                    assert_eq!(context["agent_session_id"], "agent-session-resumed");
                     assert_eq!(context["buffer"], "command output");
                 }
             }
@@ -1462,6 +1524,7 @@ pub(super) mod tests {
         assert_eq!(v["cwd"], "C:\\workspace");
         // The mock returns metadata-only context, so `buffer` is null.
         assert!(v["buffer"].is_null());
+        assert!(v.get("agent_session_id").is_none());
         // pid is our own test process → shell resolves to the test binary exe.
         if cfg!(windows) {
             assert!(
@@ -1530,6 +1593,7 @@ pub(super) mod tests {
             shell_exe: None,
             terminal_output: None,
             planner_terminal_context: None,
+            agent_session_id: None,
             command_resolver_invocation: None,
         }
     }
@@ -1677,6 +1741,7 @@ pub(super) mod tests {
                 context_pane: Some(&pane),
                 shell_exe: Some("pwsh.exe"),
                 terminal_output: Some(output),
+                agent_session_id: Some("agent-session-resumed"),
                 command_resolver_invocation: Some(&invocation),
                 ..req_planner(&mgr, true)
             };
@@ -1714,6 +1779,9 @@ pub(super) mod tests {
                 assert!(sections[0].body.contains("indeterminate"));
                 assert!(sections[0].body.contains("unsupported"));
                 assert!(sections[0].body.contains(r"C:\\failing-pane"));
+                assert!(sections[1]
+                    .body
+                    .contains(r#""agent_session_id":"agent-session-resumed""#));
                 assert_eq!(sections[2].body, format!("```\n{output}\n```"));
                 assert!(
                     probes.attempts().is_empty(),

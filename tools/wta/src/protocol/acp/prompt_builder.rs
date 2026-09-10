@@ -113,6 +113,7 @@ pub(crate) async fn build_prompt_text(
         shell_exe: resolved_context.shell_exe.as_deref(),
         terminal_output: resolved_context.terminal_output.as_deref(),
         planner_terminal_context: resolved_context.planner_terminal_context.as_deref(),
+        agent_session_id: resolved_context.agent_session_id.as_deref(),
         command_resolver_invocation: resolved_context.command_resolver_invocation.as_ref(),
     };
     for provider in prompt_context::default_providers() {

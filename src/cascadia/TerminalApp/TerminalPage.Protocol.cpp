@@ -261,6 +261,15 @@ namespace winrt::TerminalApp::implementation
         paneInfo.Columns = termControl.ViewWidth();
         result.Pane = paneInfo;
 
+        if (const auto binding = _paneAgentSessions.find(sessionId);
+            binding != _paneAgentSessions.end() &&
+            !binding->second.sessionId.empty() &&
+            !binding->second.sessionId.starts_with(L"pane:") &&
+            !binding->second.sessionId.starts_with(L"sidekick-"))
+        {
+            result.AgentSessionId = binding->second.sessionId;
+        }
+
         if (maxLines == 0 || maxCharacters == 0)
         {
             result.OutputSource = L"metadata_only";
