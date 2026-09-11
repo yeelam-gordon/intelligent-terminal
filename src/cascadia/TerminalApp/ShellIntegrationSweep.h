@@ -198,20 +198,14 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
     };
 
     inline void LogWslInstallDiagnostic(std::wstring_view commandline, std::string_view event) noexcept
+    try
     {
-#if defined(_DEBUG)
-        try
-        {
-            _agentPaneLog("[ShellIntegration][debug][WSL] install event=" + std::string{ event } +
-                          " pid=" + std::to_string(GetCurrentProcessId()) +
-                          " commandline=" + winrt::to_string(winrt::hstring{ commandline }));
-        }
-        CATCH_LOG()
-#else
-        (void)commandline;
-        (void)event;
-#endif
+        _agentPaneLog("[ShellIntegration][debug][WSL] install event=" + std::string{ event } +
+                      " pid=" + std::to_string(GetCurrentProcessId()) +
+                      " commandline=" + winrt::to_string(winrt::hstring{ commandline }),
+                      AgentPaneLogLevel::Debug);
     }
+    CATCH_LOG()
 
     // Run the install sweep using the provided snapshot. Touches only
     // shells the user has a profile for; touches each distinct WSL commandline

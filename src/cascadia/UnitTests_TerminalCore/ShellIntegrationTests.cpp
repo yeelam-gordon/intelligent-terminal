@@ -2251,17 +2251,10 @@ void ShellIntegrationTests::Wsl_Install_DiagnosticObserver_TracksDecision()
     VERIFY_IS_TRUE(noChangeResult.alreadyInstalled);
     VERIFY_IS_FALSE(failedResult.success);
     VERIFY_IS_TRUE(threw);
-#if defined(_DEBUG)
     VerifyWslInstallObserverEvents(completedCommandline, startIndex, { "attempt-started", "completed", "skip-already-attempted" });
     VerifyWslInstallObserverEvents(noChangeCommandline, startIndex, { "attempt-started", "nochange" });
     VerifyWslInstallObserverEvents(failedCommandline, startIndex, { "attempt-started", "failed" });
     VerifyWslInstallObserverEvents(thrownCommandline, startIndex, { "attempt-started", "thrown" });
-#else
-    VerifyWslInstallObserverEvents(completedCommandline, startIndex, {});
-    VerifyWslInstallObserverEvents(noChangeCommandline, startIndex, {});
-    VerifyWslInstallObserverEvents(failedCommandline, startIndex, {});
-    VerifyWslInstallObserverEvents(thrownCommandline, startIndex, {});
-#endif
 }
 
 // ───────────────────────────────────────────────────────────────────

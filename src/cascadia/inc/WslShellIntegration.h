@@ -33,11 +33,7 @@
 
 namespace Microsoft::Terminal::ShellIntegration::Wsl
 {
-#if defined(_DEBUG)
     using InstallDiagnosticObserver = void (*)(std::wstring_view launchCommandline, std::string_view event) noexcept;
-#else
-    using InstallDiagnosticObserver = void (*)(std::wstring_view, std::string_view) noexcept;
-#endif
 
     namespace details
     {
@@ -589,16 +585,10 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
                                             std::wstring_view launchCommandline,
                                             std::string_view event) noexcept
         {
-#if defined(_DEBUG)
             if (observer)
             {
                 observer(launchCommandline, event);
             }
-#else
-            (void)observer;
-            (void)launchCommandline;
-            (void)event;
-#endif
         }
     }
 
