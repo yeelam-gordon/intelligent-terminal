@@ -695,9 +695,10 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
     // `C:\Windows\system32\wsl.exe --distribution-id {GUID}`,
     // `wsl.exe -d Ubuntu`, or `C:\Windows\System32\bash.exe`).
     //
-    // Synchronous — call from a background thread. The first call for each
-    // commandline can block up to 30s on a cold-start; subsequent calls
-    // return immediately from the cache.
+    // Synchronous — call from a background thread. Each exact commandline gets
+    // one attempt per process, which can block up to 30s on a cold-start.
+    // Repeated calls return without waiting or retrying, even if the first
+    // attempt is still running or failed; they never reach the identity probe.
     template<typename InstallFn>
     inline InstallResult Install(std::wstring_view launchCommandline,
                                  InstallFn&& install,
