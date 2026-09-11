@@ -2052,6 +2052,11 @@ void ShellIntegrationTests::Wsl_Install_DuplicateCommandlineSkipsWhileInFlight()
     } };
     std::thread secondCaller;
     const auto joinThreads = wil::scope_exit([&]() noexcept {
+        {
+            std::lock_guard lock{ releaseMutex };
+            releaseFirst = true;
+        }
+        releaseCv.notify_all();
         if (firstCaller.joinable())
         {
             firstCaller.join();
