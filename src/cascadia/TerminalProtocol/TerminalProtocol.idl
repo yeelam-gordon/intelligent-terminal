@@ -67,7 +67,6 @@ namespace Microsoft.Terminal.Protocol
         Int32 LineCount;
         Boolean Truncated;
         Boolean HasMarks;
-        String AgentSessionId;
     };
 
     struct ProcessStatus

@@ -290,10 +290,6 @@ static Json::Value _toJson(const Protocol::PaneContext& context)
     v["line_count"] = context.LineCount;
     v["truncated"] = static_cast<bool>(context.Truncated);
     v["has_marks"] = static_cast<bool>(context.HasMarks);
-    if (!context.AgentSessionId.empty())
-    {
-        v["agent_session_id"] = winrt::to_string(context.AgentSessionId);
-    }
     return v;
 }
 

@@ -639,27 +639,13 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_NOT_EQUAL(winrt::guid{}, sessionId);
         });
 
-        winrt::Windows::Foundation::IAsyncOperation<winrt::Microsoft::Terminal::Protocol::PaneContext> operation{ nullptr };
-        TestOnUIThread([&]() {
-            operation = projectedPage.GetProtocolPaneContext(sessionId, true, 0, 100);
-        });
-        VERIFY_IS_TRUE(operation.get().AgentSessionId.empty());
-
-        TestOnUIThread([&]() {
-            auto& binding = page->_paneAgentSessions[sessionId];
-            binding.sessionId = L"agent-session-resumed";
-            binding.agent = L"copilot";
-            binding.resumeCommandline = L"copilot --resume agent-session-resumed";
-        });
-
         for (const auto explicitSource : { true, false })
         {
+            winrt::Windows::Foundation::IAsyncOperation<winrt::Microsoft::Terminal::Protocol::PaneContext> operation{ nullptr };
             TestOnUIThread([&]() {
                 operation = projectedPage.GetProtocolPaneContext(explicitSource ? sessionId : winrt::guid{}, explicitSource, 0, 100);
             });
-            const auto context = operation.get();
-            VERIFY_ARE_EQUAL(sessionId, context.Pane.SessionId);
-            VERIFY_ARE_EQUAL(L"agent-session-resumed", context.AgentSessionId);
+            VERIFY_ARE_EQUAL(sessionId, operation.get().Pane.SessionId);
 
             // Bypass COM's argument validation to make both bounded readers reject
             // their zero-line budget. A read failure must not become "pane not found".

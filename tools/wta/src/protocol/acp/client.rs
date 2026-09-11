@@ -5786,6 +5786,7 @@ async fn dispatch_prompt_body(
             &shell_mgr_task,
             wt_connected,
             prompt.pane_context.as_ref(),
+            Some(&conn_task),
         )
         .await;
         let _ = event_tx_task.send(AppEvent::PromptTemplateLoaded { name });
