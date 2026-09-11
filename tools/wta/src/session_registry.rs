@@ -283,9 +283,24 @@ pub const INTELLTERM_METHOD_SESSIONS_LIST: &str = "_intellterm.wta/sessions/list
 /// the authoritative tab → helper → session route.
 pub const INTELLTERM_METHOD_CLOSE_TAB_SESSION: &str = "_intellterm.wta/session/close_tab";
 
+/// ExtRequest method for resolving the live ACP session currently bound to a
+/// WT source pane. Master answers from its in-memory registry only.
+pub const INTELLTERM_METHOD_SOURCE_PANE_SESSION_BY_PANE: &str = "_intellterm.wta/session/by_pane";
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct CloseTabSessionParams {
     pub tab_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SourcePaneSessionByPaneParams {
+    pub pane_session_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SourcePaneSessionByPaneResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<acp::schema::v1::SessionId>,
 }
 
 /// Wire payload for [`INTELLTERM_METHOD_SESSION_REMOVED`].
@@ -372,10 +387,45 @@ pub fn build_close_tab_session_request(tab_id: &str) -> acp::schema::v1::ExtRequ
     acp::schema::v1::ExtRequest::new(INTELLTERM_METHOD_CLOSE_TAB_SESSION, Arc::from(raw))
 }
 
+pub fn build_source_pane_session_by_pane_request(
+    pane_session_id: &str,
+) -> acp::schema::v1::ExtRequest {
+    let json = serde_json::to_string(&SourcePaneSessionByPaneParams {
+        pane_session_id: pane_session_id.to_string(),
+    })
+    .expect("SourcePaneSessionByPaneParams is trivially serializable");
+    let raw = serde_json::value::RawValue::from_string(json)
+        .expect("serde_json::to_string always produces valid JSON");
+    acp::schema::v1::ExtRequest::new(
+        INTELLTERM_METHOD_SOURCE_PANE_SESSION_BY_PANE,
+        Arc::from(raw),
+    )
+}
+
 pub fn parse_close_tab_session_params(
     raw: &serde_json::value::RawValue,
 ) -> Result<CloseTabSessionParams, serde_json::Error> {
     serde_json::from_str::<CloseTabSessionParams>(raw.get())
+}
+
+pub fn parse_source_pane_session_by_pane_params(
+    raw: &serde_json::value::RawValue,
+) -> Result<SourcePaneSessionByPaneParams, serde_json::Error> {
+    serde_json::from_str::<SourcePaneSessionByPaneParams>(raw.get())
+}
+
+pub fn build_source_pane_session_by_pane_response(
+    session_id: Option<acp::schema::v1::SessionId>,
+) -> Box<serde_json::value::RawValue> {
+    let response = SourcePaneSessionByPaneResponse { session_id };
+    serde_json::value::to_raw_value(&response)
+        .expect("SourcePaneSessionByPaneResponse serialization is infallible")
+}
+
+pub fn parse_source_pane_session_by_pane_response(
+    raw: &serde_json::value::RawValue,
+) -> Result<SourcePaneSessionByPaneResponse, serde_json::Error> {
+    serde_json::from_str::<SourcePaneSessionByPaneResponse>(raw.get())
 }
 
 pub fn parse_sessions_list_params(
@@ -514,6 +564,9 @@ pub enum WtaExtRequest {
     /// destroyed stable tab id, regardless of which surviving helper observed
     /// the terminal event.
     CloseTabSession(CloseTabSessionParams),
+    /// `_intellterm.wta/session/by_pane` — read-only source pane → live ACP
+    /// session lookup from the master's current registry binding.
+    SourcePaneSessionByPane(SourcePaneSessionByPaneParams),
     /// Not one of ours (or a future agent-native extension); forward it
     /// verbatim to the agent CLI so unknown extension methods still work.
     ForwardToAgent(acp::schema::v1::ExtRequest),
@@ -567,6 +620,11 @@ pub fn parse_ext_request(req: acp::schema::v1::ExtRequest) -> WtaExtRequest {
         decode!(SessionFocus, parse_session_focus_params)
     } else if ext_method_matches(&req.method, INTELLTERM_METHOD_CLOSE_TAB_SESSION) {
         decode!(CloseTabSession, parse_close_tab_session_params)
+    } else if ext_method_matches(&req.method, INTELLTERM_METHOD_SOURCE_PANE_SESSION_BY_PANE) {
+        decode!(
+            SourcePaneSessionByPane,
+            parse_source_pane_session_by_pane_params
+        )
     } else {
         WtaExtRequest::ForwardToAgent(req)
     }
@@ -1187,6 +1245,11 @@ pub trait SessionRegistry: Send + Sync {
     /// session isn't alive (or hasn't been mirrored yet on the helper side).
     async fn lookup(&self, sid: &acp::schema::v1::SessionId) -> Option<SessionInfo>;
 
+    /// Resolve the currently active live session bound to `pane_session_id`.
+    /// Historical / ended rows and synthetic pane-derived session ids are
+    /// intentionally omitted.
+    async fn lookup_active_by_pane(&self, pane_session_id: &str) -> Option<SessionInfo>;
+
     /// Snapshot the full set. Order is unspecified — callers that need a
     /// stable order should sort by `session_id` themselves. The clone is
     /// cheap because `SessionInfo` is small (`Arc<str>` for the id).
@@ -1392,6 +1455,13 @@ impl SessionRegistry for InMemoryRegistry {
         guard.sessions.get(sid).cloned()
     }
 
+    async fn lookup_active_by_pane(&self, pane_session_id: &str) -> Option<SessionInfo> {
+        let guard = self.inner.lock().await;
+        let sid = guard.active_by_pane.get(&pane_key(pane_session_id))?;
+        let info = guard.sessions.get(sid)?;
+        active_source_pane_session(info).then(|| info.clone())
+    }
+
     async fn snapshot(&self) -> Vec<SessionInfo> {
         let guard = self.inner.lock().await;
         guard.sessions.values().cloned().collect()
@@ -1497,6 +1567,16 @@ fn now_ms() -> u64 {
 
 fn pane_key(pane_session_id: &str) -> String {
     crate::agent_sessions::pane_key(pane_session_id)
+}
+
+fn active_source_pane_session(info: &SessionInfo) -> bool {
+    !matches!(
+        info.status,
+        Some(AgentStatus::Ended | AgentStatus::Historical)
+    ) && {
+        let id = info.session_id.0.as_ref();
+        !id.trim().is_empty() && !id.starts_with("pane:") && !id.starts_with("sidekick-")
+    }
 }
 
 fn upsert_locked(state: &mut RegistryState, info: SessionInfo) {
@@ -2026,6 +2106,49 @@ mod tests {
             .lookup(&acp::schema::v1::SessionId::new("missing".to_string()))
             .await
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn lookup_active_by_pane_normalizes_guid_and_tracks_current_binding() {
+        let reg = InMemoryRegistry::new();
+        let mut first = info("sess-first", Some("{ABCDEFAB-1234-5678-9ABC-DEFABCDEFABC}"));
+        first.status = Some(AgentStatus::Idle);
+        reg.upsert(first).await;
+        let mut second = info("sess-second", Some("abcdefab-1234-5678-9abc-defabcdefabc"));
+        second.status = Some(AgentStatus::Working);
+        reg.upsert(second.clone()).await;
+
+        let found = reg
+            .lookup_active_by_pane("{ABCDEFAB-1234-5678-9ABC-DEFABCDEFABC}")
+            .await
+            .expect("normalized pane key should resolve current owner");
+        assert_eq!(found.session_id, second.session_id);
+    }
+
+    #[tokio::test]
+    async fn lookup_active_by_pane_omits_missing_ended_historical_and_synthetic() {
+        let reg = InMemoryRegistry::new();
+        assert!(reg.lookup_active_by_pane("missing-pane").await.is_none());
+
+        let mut ended = info("ended", Some("pane-ended"));
+        ended.status = Some(AgentStatus::Ended);
+        reg.upsert(ended).await;
+        assert!(reg.lookup_active_by_pane("pane-ended").await.is_none());
+
+        let mut historical = info("historical", Some("pane-historical"));
+        historical.status = Some(AgentStatus::Historical);
+        reg.upsert(historical).await;
+        assert!(reg.lookup_active_by_pane("pane-historical").await.is_none());
+
+        for sid in ["", "pane:synthetic", "sidekick-internal"] {
+            let mut synthetic = info(sid, Some(&format!("pane-{sid}")));
+            synthetic.status = Some(AgentStatus::Idle);
+            reg.upsert(synthetic).await;
+            assert!(reg
+                .lookup_active_by_pane(&format!("pane-{sid}"))
+                .await
+                .is_none());
+        }
     }
 
     #[tokio::test]
@@ -3667,6 +3790,19 @@ mod tests {
         assert_eq!(parsed.sid, sid);
     }
 
+    #[test]
+    fn source_pane_session_by_pane_request_round_trips() {
+        let req = build_source_pane_session_by_pane_request("{PANE-GUID}");
+        assert_eq!(&*req.method, INTELLTERM_METHOD_SOURCE_PANE_SESSION_BY_PANE);
+        let parsed = parse_source_pane_session_by_pane_params(&req.params).unwrap();
+        assert_eq!(parsed.pane_session_id, "{PANE-GUID}");
+
+        let sid = acp::schema::v1::SessionId::new("agent-session");
+        let raw = build_source_pane_session_by_pane_response(Some(sid.clone()));
+        let response = parse_source_pane_session_by_pane_response(&raw).unwrap();
+        assert_eq!(response.session_id, Some(sid));
+    }
+
     // ─── focus_session ──────────────────────────────────────────────
 
     #[test]
@@ -3754,6 +3890,10 @@ mod tests {
             parse_ext_request(build_session_focus_request(&sid)),
             WtaExtRequest::SessionFocus(_)
         ));
+        assert!(matches!(
+            parse_ext_request(build_source_pane_session_by_pane_request("pane")),
+            WtaExtRequest::SourcePaneSessionByPane(_)
+        ));
     }
 
     /// Regression: ACP 1.0 delivers the method name with the leading `_`
@@ -3790,6 +3930,12 @@ mod tests {
         assert!(matches!(
             parse_ext_request(strip_leading_underscore(build_session_focus_request(&sid))),
             WtaExtRequest::SessionFocus(_)
+        ));
+        assert!(matches!(
+            parse_ext_request(strip_leading_underscore(
+                build_source_pane_session_by_pane_request("pane")
+            )),
+            WtaExtRequest::SourcePaneSessionByPane(_)
         ));
     }
 
