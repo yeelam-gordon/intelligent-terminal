@@ -197,16 +197,21 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
         std::vector<std::pair<std::wstring, SI::InstallResult>> wsl;
     };
 
-#if defined(_DEBUG)
     inline void LogWslInstallDiagnostic(std::wstring_view commandline, std::string_view event) noexcept
-    try
     {
-        _agentPaneLog("[ShellIntegration][debug][WSL] install event=" + std::string{ event } +
-                      " pid=" + std::to_string(GetCurrentProcessId()) +
-                      " commandline=" + winrt::to_string(winrt::hstring{ commandline }));
-    }
-    CATCH_LOG()
+#if defined(_DEBUG)
+        try
+        {
+            _agentPaneLog("[ShellIntegration][debug][WSL] install event=" + std::string{ event } +
+                          " pid=" + std::to_string(GetCurrentProcessId()) +
+                          " commandline=" + winrt::to_string(winrt::hstring{ commandline }));
+        }
+        CATCH_LOG()
+#else
+        (void)commandline;
+        (void)event;
 #endif
+    }
 
     // Run the install sweep using the provided snapshot. Touches only
     // shells the user has a profile for; touches each distinct WSL commandline
@@ -280,11 +285,7 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
             r.wsl.reserve(wslCommandlines.size());
             for (const auto& cmd : wslCommandlines)
             {
-#if defined(_DEBUG)
                 const auto res = SI::Wsl::Install(cmd, &LogWslInstallDiagnostic);
-#else
-                const auto res = SI::InstallWslBash(cmd);
-#endif
                 auto name = SI::Wsl::ProbedDistroName(cmd);
                 r.wsl.emplace_back(name.empty() ? cmd : std::move(name), res);
             }
@@ -386,11 +387,7 @@ namespace winrt::TerminalApp::implementation::ShellIntegrationSweep
                 }
                 return SI::Wsl::details::InstallShellIntegration(selectedCommandline);
             };
-#if defined(_DEBUG)
             return SI::Wsl::Install(commandline, performInstall, &LogWslInstallDiagnostic);
-#else
-            return SI::Wsl::Install(commandline, performInstall, nullptr);
-#endif
         };
 
         pane->WalkTree([&](const std::shared_ptr<PaneType>& leaf) noexcept {

@@ -726,7 +726,6 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
 
         details::NotifyInstallDiagnostic(diagnosticObserver, launchCommandline, "attempt-started");
 
-#if defined(_DEBUG)
         try
         {
             const auto result = install(launchCommandline);
@@ -738,10 +737,6 @@ namespace Microsoft::Terminal::ShellIntegration::Wsl
             details::NotifyInstallDiagnostic(diagnosticObserver, launchCommandline, "thrown");
             throw;
         }
-#else
-        (void)diagnosticObserver;
-        return install(launchCommandline);
-#endif
     }
 
     namespace details
