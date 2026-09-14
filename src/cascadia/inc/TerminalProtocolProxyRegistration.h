@@ -50,21 +50,19 @@ namespace Microsoft::Terminal::Protocol
         class ProxyRegistration
         {
         public:
-            [[nodiscard]] HRESULT LoadAndRegister() noexcept
+            [[nodiscard]] HRESULT Register(HMODULE module) noexcept
             try
             {
+                RETURN_HR_IF(E_INVALIDARG, !module);
                 std::lock_guard lock{ _mutex };
                 if (_cookie)
                 {
                     return S_OK;
                 }
 
-                const auto expectedPath = GetExecutableLocalProxyPath();
-                auto module = LoadAndVerifyProxyDll(expectedPath);
-
-                const auto getProxyDllInfo = reinterpret_cast<GetProxyDllInfo>(GetProcAddress(module.get(), "GetProxyDllInfo"));
+                const auto getProxyDllInfo = reinterpret_cast<GetProxyDllInfo>(GetProcAddress(module, "GetProxyDllInfo"));
                 RETURN_LAST_ERROR_IF_NULL(getProxyDllInfo);
-                const auto dllGetClassObject = reinterpret_cast<DllGetClassObject>(GetProcAddress(module.get(), "DllGetClassObject"));
+                const auto dllGetClassObject = reinterpret_cast<DllGetClassObject>(GetProcAddress(module, "DllGetClassObject"));
                 RETURN_LAST_ERROR_IF_NULL(dllGetClassObject);
 
                 const tagProxyFileInfo** proxyFileList = nullptr;
@@ -80,7 +78,7 @@ namespace Microsoft::Terminal::Protocol
                 HMODULE pinnedModule = nullptr;
                 RETURN_IF_WIN32_BOOL_FALSE(GetModuleHandleExW(
                     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-                    reinterpret_cast<LPCWSTR>(module.get()),
+                    reinterpret_cast<LPCWSTR>(module),
                     &pinnedModule));
 
                 DWORD cookie = 0;
@@ -131,9 +129,22 @@ namespace Microsoft::Terminal::Protocol
         }
     }
 
-    [[nodiscard]] inline HRESULT LoadAndRegisterLocalProxyDll() noexcept
+    // Returns the verified executable-adjacent DLL without changing COM registration.
+    // On failure the output handle is empty.
+    [[nodiscard]] inline HRESULT LoadAndVerifyLocalProxyDll(wil::unique_hmodule& proxyDll) noexcept
+    try
     {
-        return details::ProxyRegistrationInstance().LoadAndRegister();
+        proxyDll.reset();
+        proxyDll = details::LoadAndVerifyProxyDll(details::GetExecutableLocalProxyPath());
+        return S_OK;
+    }
+    CATCH_RETURN()
+
+    // COM retains this DLL's factory and IID mappings process-locally for later
+    // marshaling. Pin the DLL so existing proxies survive factory revocation.
+    [[nodiscard]] inline HRESULT RegisterProcessLocalProxyFactory(const wil::unique_hmodule& proxyDll) noexcept
+    {
+        return details::ProxyRegistrationInstance().Register(proxyDll.get());
     }
 
     [[nodiscard]] inline HRESULT UnregisterTerminalProtocolProxy() noexcept

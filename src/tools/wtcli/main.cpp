@@ -102,11 +102,17 @@ static winrt::com_ptr<ITerminalProtocol> ConnectToTerminal(bool* outAuthenticate
         return nullptr;
     }
 
-    auto hr = Microsoft::Terminal::Protocol::LoadAndRegisterLocalProxyDll();
+    wil::unique_hmodule proxyDll;
+    auto hr = Microsoft::Terminal::Protocol::LoadAndVerifyLocalProxyDll(proxyDll);
+    if (SUCCEEDED(hr))
+    {
+        // Set the process-local proxy factory used by activation and callbacks.
+        hr = Microsoft::Terminal::Protocol::RegisterProcessLocalProxyFactory(proxyDll);
+    }
     if (FAILED(hr))
     {
         if (!quiet)
-            fprintf(stderr, "[wtcli] Failed to register protocol proxy: 0x%08X\n", static_cast<uint32_t>(hr));
+            fprintf(stderr, "[wtcli] Failed to load or register protocol proxy: 0x%08X\n", static_cast<uint32_t>(hr));
         return nullptr;
     }
 

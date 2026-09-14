@@ -60,7 +60,13 @@ try
     g_comMtaThread = std::thread([&ready, &regHr]() {
         auto coInit = wil::CoInitializeEx(COINIT_MULTITHREADED);
 
-        regHr = Microsoft::Terminal::Protocol::LoadAndRegisterLocalProxyDll();
+        wil::unique_hmodule proxyDll;
+        regHr = Microsoft::Terminal::Protocol::LoadAndVerifyLocalProxyDll(proxyDll);
+        if (SUCCEEDED(regHr))
+        {
+            // Set COM's proxy factory, not the terminal server factory below.
+            regHr = Microsoft::Terminal::Protocol::RegisterProcessLocalProxyFactory(proxyDll);
+        }
         if (SUCCEEDED(regHr))
         {
             // Classic-COM class factory (WRL) — marshaled via the OpenConsoleProxy
