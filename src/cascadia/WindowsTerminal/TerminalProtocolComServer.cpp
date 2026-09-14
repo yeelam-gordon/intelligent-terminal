@@ -94,6 +94,11 @@ try
     });
 
     ready.wait();
+    if (FAILED(regHr))
+    {
+        g_comMtaStop.SetEvent();
+        g_comMtaThread.join();
+    }
     RETURN_IF_FAILED(regHr);
     return S_OK;
 }
