@@ -4,53 +4,130 @@
 #pragma once
 
 #include <objbase.h>
+#include <objidl.h>
+#include "ITerminalProtocol.h"
+
+#include <mutex>
+#include <string>
+
+#include <wil/stl.h>
+#include <wil/win32_helpers.h>
+#include <wil/resource.h>
+#include <wil/result.h>
+#include <wrl/client.h>
+
+struct tagProxyFileInfo;
 
 namespace Microsoft::Terminal::Protocol
 {
     namespace details
     {
-        inline constexpr IID TerminalProtocolIid{ 0x9C7E2A14, 0x3B5D, 0x4F8A, { 0xA2, 0xC9, 0x1E, 0x4F, 0x6B, 0x8D, 0x0A, 0x3C } };
-        inline constexpr IID TerminalProtocolEventSinkIid{ 0x3D8F4B26, 0x5C7E, 0x4A9B, { 0xB1, 0xD0, 0x2F, 0x5A, 0x7C, 0x9E, 0x1B, 0x4D } };
+        using GetProxyDllInfo = void(WINAPI*)(const tagProxyFileInfo***, const CLSID**);
+        using DllGetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, void**);
 
-#if defined(WT_BRANDING_RELEASE)
-        inline constexpr CLSID OpenConsoleProxyClsid{ 0xBA251D6A, 0x94D2, 0x4523, { 0xAA, 0xA0, 0x94, 0x77, 0xEE, 0x21, 0x76, 0x6E } };
-#elif defined(WT_BRANDING_PREVIEW)
-        inline constexpr CLSID OpenConsoleProxyClsid{ 0x1833E661, 0xCC81, 0x4DD0, { 0x87, 0xC6, 0xC2, 0xF7, 0x4B, 0xD3, 0x9E, 0xFA } };
-#elif defined(WT_BRANDING_CANARY)
-        inline constexpr CLSID OpenConsoleProxyClsid{ 0x1D1852F4, 0xADAD, 0x42B6, { 0x9A, 0x43, 0x94, 0x37, 0xAA, 0xAD, 0x77, 0x17 } };
-#else
-        inline constexpr CLSID OpenConsoleProxyClsid{ 0xDEC4804D, 0x56D1, 0x4F73, { 0x9F, 0xBE, 0x68, 0x28, 0xE7, 0xC8, 0x5C, 0x56 } };
-#endif
-
-        [[nodiscard]] inline HRESULT RegisterAndVerifyProxy(const IID& interfaceId) noexcept
+        class ProxyRegistration
         {
-            auto hr = CoRegisterPSClsid(interfaceId, OpenConsoleProxyClsid);
-            if (FAILED(hr))
+        public:
+            [[nodiscard]] HRESULT Register() noexcept
+            try
             {
+                std::lock_guard lock{ _mutex };
+                if (_cookie)
+                {
+                    return S_OK;
+                }
+
+                auto proxyPath = wil::GetModuleFileNameW<std::wstring>(nullptr);
+                const auto filenameOffset = proxyPath.find_last_of(L"\\/");
+                RETURN_HR_IF(E_UNEXPECTED, filenameOffset == std::wstring::npos);
+                proxyPath.resize(filenameOffset + 1);
+                proxyPath.append(L"OpenConsoleProxy.dll");
+
+                wil::unique_hmodule module{ LoadLibraryExW(proxyPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32) };
+                RETURN_LAST_ERROR_IF_NULL(module);
+
+                // LoadLibrary can reuse a same-named module that is already present
+                // in the process. Verify that it did not defeat path isolation.
+                const auto loadedPath = wil::GetModuleFileNameW<std::wstring>(module.get());
+                RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_INVALID_DLL),
+                             CompareStringOrdinal(proxyPath.c_str(), -1, loadedPath.c_str(), -1, TRUE) != CSTR_EQUAL);
+
+                const auto getProxyDllInfo = reinterpret_cast<GetProxyDllInfo>(GetProcAddress(module.get(), "GetProxyDllInfo"));
+                RETURN_LAST_ERROR_IF_NULL(getProxyDllInfo);
+                const auto dllGetClassObject = reinterpret_cast<DllGetClassObject>(GetProcAddress(module.get(), "DllGetClassObject"));
+                RETURN_LAST_ERROR_IF_NULL(dllGetClassObject);
+
+                const tagProxyFileInfo** proxyFileList = nullptr;
+                const CLSID* proxyClsid = nullptr;
+                getProxyDllInfo(&proxyFileList, &proxyClsid);
+                RETURN_HR_IF(E_UNEXPECTED, !proxyFileList || !proxyClsid);
+
+                Microsoft::WRL::ComPtr<IPSFactoryBuffer> factory;
+                RETURN_IF_FAILED(dllGetClassObject(*proxyClsid, IID_PPV_ARGS(factory.GetAddressOf())));
+
+                // Revoking the factory does not destroy outstanding COM proxies.
+                // Keep their code loaded until process exit, including after shutdown.
+                HMODULE pinnedModule = nullptr;
+                RETURN_IF_WIN32_BOOL_FALSE(GetModuleHandleExW(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                    reinterpret_cast<LPCWSTR>(module.get()),
+                    &pinnedModule));
+
+                DWORD cookie = 0;
+                RETURN_IF_FAILED(CoRegisterClassObject(
+                    *proxyClsid,
+                    factory.Get(),
+                    CLSCTX_INPROC_SERVER,
+                    REGCLS_MULTIPLEUSE,
+                    &cookie));
+
+                auto revokeOnFailure = wil::scope_exit([&]() noexcept {
+                    LOG_IF_FAILED(CoRevokeClassObject(cookie));
+                });
+                RETURN_IF_FAILED(CoRegisterPSClsid(__uuidof(ITerminalProtocol), *proxyClsid));
+                RETURN_IF_FAILED(CoRegisterPSClsid(__uuidof(ITerminalProtocolEventSink), *proxyClsid));
+
+                _cookie = cookie;
+                revokeOnFailure.release();
+                return S_OK;
+            }
+            CATCH_RETURN()
+
+            [[nodiscard]] HRESULT Unregister() noexcept
+            {
+                std::lock_guard lock{ _mutex };
+                if (!_cookie)
+                {
+                    return S_OK;
+                }
+
+                const auto hr = CoRevokeClassObject(_cookie);
+                if (SUCCEEDED(hr))
+                {
+                    _cookie = 0;
+                }
                 return hr;
             }
 
-            CLSID registeredClsid{};
-            hr = CoGetPSClsid(interfaceId, &registeredClsid);
-            if (FAILED(hr))
-            {
-                return hr;
-            }
+        private:
+            std::mutex _mutex;
+            DWORD _cookie = 0;
+        };
 
-            return InlineIsEqualGUID(registeredClsid, OpenConsoleProxyClsid) ? S_OK : E_UNEXPECTED;
+        inline ProxyRegistration& ProxyRegistrationInstance() noexcept
+        {
+            static ProxyRegistration registration;
+            return registration;
         }
     }
 
-    // The package manifest resolves this branding-specific CLSID to the
-    // package-local proxy DLL. These IID mappings are process-local.
     [[nodiscard]] inline HRESULT RegisterTerminalProtocolProxy() noexcept
     {
-        const auto protocolRegistration = details::RegisterAndVerifyProxy(details::TerminalProtocolIid);
-        if (FAILED(protocolRegistration))
-        {
-            return protocolRegistration;
-        }
+        return details::ProxyRegistrationInstance().Register();
+    }
 
-        return details::RegisterAndVerifyProxy(details::TerminalProtocolEventSinkIid);
+    [[nodiscard]] inline HRESULT UnregisterTerminalProtocolProxy() noexcept
+    {
+        return details::ProxyRegistrationInstance().Unregister();
     }
 }

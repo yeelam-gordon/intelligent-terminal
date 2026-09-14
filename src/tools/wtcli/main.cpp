@@ -6,7 +6,6 @@
 
 #include "Formatting.h"
 #include "wtcli_functions.h"
-#include "../../cascadia/inc/TerminalProtocolProxyRegistration.h"
 #include "../../cascadia/TerminalProtocol/ProtocolParsing.h"
 
 // Classic-COM Terminal protocol. Generated from
@@ -15,6 +14,7 @@
 // proxy/stub (NOT WinRT MBM), so activation/marshaling never hits the combase
 // WinRT activation catalog.
 #include "ITerminalProtocol.h"
+#include "../../cascadia/inc/TerminalProtocolProxyRegistration.h"
 
 #include <CLI/CLI.hpp>
 
@@ -385,6 +385,9 @@ static HRESULT SupportsCapability(ITerminalProtocol* server, const std::string_v
 int wmain(int argc, wchar_t** argv)
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    const auto unregisterProxy = wil::scope_exit([]() noexcept {
+        LOG_IF_FAILED(Microsoft::Terminal::Protocol::UnregisterTerminalProtocolProxy());
+    });
 
     CLI::App app{ "wtcli - Windows Terminal CLI" };
     app.require_subcommand(0, 1);

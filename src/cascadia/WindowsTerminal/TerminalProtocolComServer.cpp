@@ -90,6 +90,7 @@ try
 
         // Keep this MTA thread alive so the COM registration stays active.
         WaitForSingleObject(g_comMtaStop.get(), INFINITE);
+        LOG_IF_FAILED(Microsoft::Terminal::Protocol::UnregisterTerminalProtocolProxy());
     });
 
     ready.wait();
