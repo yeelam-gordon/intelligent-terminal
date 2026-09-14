@@ -25,10 +25,32 @@ namespace Microsoft::Terminal::Protocol
         using GetProxyDllInfo = void(WINAPI*)(const tagProxyFileInfo***, const CLSID**);
         using DllGetClassObject = HRESULT(STDAPICALLTYPE*)(REFCLSID, REFIID, void**);
 
+        [[nodiscard]] inline std::wstring GetExecutableLocalProxyPath()
+        {
+            auto executablePath = wil::GetModuleFileNameW<std::wstring>(nullptr);
+            const auto filenameOffset = executablePath.find_last_of(L"\\/");
+            THROW_HR_IF(E_UNEXPECTED, filenameOffset == std::wstring::npos);
+            executablePath.resize(filenameOffset + 1);
+            executablePath.append(L"OpenConsoleProxy.dll");
+            return executablePath;
+        }
+
+        [[nodiscard]] inline wil::unique_hmodule LoadAndVerifyProxyDll(const std::wstring& expectedPath)
+        {
+            wil::unique_hmodule module{ LoadLibraryExW(expectedPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32) };
+            THROW_LAST_ERROR_IF_NULL(module);
+
+            // Check the returned module, not just the path we asked Windows to load.
+            const auto actualLoadedPath = wil::GetModuleFileNameW<std::wstring>(module.get());
+            THROW_HR_IF(HRESULT_FROM_WIN32(ERROR_INVALID_DLL),
+                        CompareStringOrdinal(expectedPath.c_str(), -1, actualLoadedPath.c_str(), -1, TRUE) != CSTR_EQUAL);
+            return module;
+        }
+
         class ProxyRegistration
         {
         public:
-            [[nodiscard]] HRESULT Register() noexcept
+            [[nodiscard]] HRESULT LoadAndRegister() noexcept
             try
             {
                 std::lock_guard lock{ _mutex };
@@ -37,20 +59,8 @@ namespace Microsoft::Terminal::Protocol
                     return S_OK;
                 }
 
-                auto proxyPath = wil::GetModuleFileNameW<std::wstring>(nullptr);
-                const auto filenameOffset = proxyPath.find_last_of(L"\\/");
-                RETURN_HR_IF(E_UNEXPECTED, filenameOffset == std::wstring::npos);
-                proxyPath.resize(filenameOffset + 1);
-                proxyPath.append(L"OpenConsoleProxy.dll");
-
-                wil::unique_hmodule module{ LoadLibraryExW(proxyPath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32) };
-                RETURN_LAST_ERROR_IF_NULL(module);
-
-                // LoadLibrary can reuse a same-named module that is already present
-                // in the process. Verify that it did not defeat path isolation.
-                const auto loadedPath = wil::GetModuleFileNameW<std::wstring>(module.get());
-                RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_INVALID_DLL),
-                             CompareStringOrdinal(proxyPath.c_str(), -1, loadedPath.c_str(), -1, TRUE) != CSTR_EQUAL);
+                const auto expectedPath = GetExecutableLocalProxyPath();
+                auto module = LoadAndVerifyProxyDll(expectedPath);
 
                 const auto getProxyDllInfo = reinterpret_cast<GetProxyDllInfo>(GetProcAddress(module.get(), "GetProxyDllInfo"));
                 RETURN_LAST_ERROR_IF_NULL(getProxyDllInfo);
@@ -121,9 +131,9 @@ namespace Microsoft::Terminal::Protocol
         }
     }
 
-    [[nodiscard]] inline HRESULT RegisterTerminalProtocolProxy() noexcept
+    [[nodiscard]] inline HRESULT LoadAndRegisterLocalProxyDll() noexcept
     {
-        return details::ProxyRegistrationInstance().Register();
+        return details::ProxyRegistrationInstance().LoadAndRegister();
     }
 
     [[nodiscard]] inline HRESULT UnregisterTerminalProtocolProxy() noexcept

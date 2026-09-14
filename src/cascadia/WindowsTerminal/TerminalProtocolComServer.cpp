@@ -60,7 +60,7 @@ try
     g_comMtaThread = std::thread([&ready, &regHr]() {
         auto coInit = wil::CoInitializeEx(COINIT_MULTITHREADED);
 
-        regHr = Microsoft::Terminal::Protocol::RegisterTerminalProtocolProxy();
+        regHr = Microsoft::Terminal::Protocol::LoadAndRegisterLocalProxyDll();
         if (SUCCEEDED(regHr))
         {
             // Classic-COM class factory (WRL) — marshaled via the OpenConsoleProxy

@@ -102,7 +102,7 @@ static winrt::com_ptr<ITerminalProtocol> ConnectToTerminal(bool* outAuthenticate
         return nullptr;
     }
 
-    auto hr = Microsoft::Terminal::Protocol::RegisterTerminalProtocolProxy();
+    auto hr = Microsoft::Terminal::Protocol::LoadAndRegisterLocalProxyDll();
     if (FAILED(hr))
     {
         if (!quiet)
