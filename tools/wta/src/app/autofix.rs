@@ -33,9 +33,8 @@ pub struct TabAutofixState {
     /// `AutofixContext.generation` at submit time; chunks whose
     /// snapshot diverges are dropped as stale.
     pub generation: u64,
-    /// Last bottom-bar state we emitted (or would have emitted, if the
-    /// tab wasn't active). Used to re-emit on tab_changed so the bar
-    /// shows the right state when the user comes back to this tab.
+    /// Stored bottom-bar state, projected on updates and tab_changed.
+    /// A Detected invitation is hidden while its matching failure is queued.
     pub bar_snapshot: AutofixBarSnapshot,
     /// PaneID where the most recent D-synchronous state set happened
     /// (Detected or Pending — both fire ~1ms before PowerShell emits the
@@ -78,10 +77,23 @@ pub enum AutofixBarSnapshot {
     },
 }
 
-fn autofix_pane_matches(tab: &TabSession, pane_id: &str) -> (bool, bool) {
+fn queued_autofix_failure_matches(tab: &TabSession, pane_id: &str, summary: &str) -> bool {
+    tab.pending_inputs.iter().any(|input| {
+        input.autofix.as_ref().is_some_and(|metadata| {
+            metadata.text_kind == crate::protocol::acp::client::AutofixTextKind::FailureSummary
+        }) && input.autofix_target_pane() == Some(pane_id)
+            && input.text == summary
+    })
+}
+
+fn autofix_pane_matches(tab: &TabSession, pane_id: &str) -> (bool, bool, bool) {
     let turn_matches = tab.turn.prompt().is_some_and(|prompt| {
         prompt.autofix.is_some() && prompt.context.target_pane_id() == Some(pane_id)
     });
+    let pending_matches = tab
+        .pending_inputs
+        .iter()
+        .any(|input| input.autofix_target_pane() == Some(pane_id));
     let snapshot_matches = match &tab.autofix.bar_snapshot {
         AutofixBarSnapshot::Detected {
             pane_id: source, ..
@@ -97,7 +109,7 @@ fn autofix_pane_matches(tab: &TabSession, pane_id: &str) -> (bool, bool) {
     let state_matches = tab.autofix.pane_id.as_deref() == Some(pane_id)
         || tab.autofix.suggested_pane_id.as_deref() == Some(pane_id)
         || snapshot_matches;
-    (turn_matches, state_matches)
+    (turn_matches, pending_matches, state_matches)
 }
 
 impl App {
@@ -175,86 +187,42 @@ impl App {
             return;
         }
 
-        if self.prompt_reconfiguration_pending_for_tab(&target_tab_id) {
+        let tab = self.tab_mut(&target_tab_id);
+        let (turn_matches, _, _) = autofix_pane_matches(tab, &notification.pane_id);
+        let turn_matches = turn_matches
+            && matches!(
+                &tab.turn,
+                TurnState::Submitted(_) | TurnState::Streaming { .. }
+            );
+        if turn_matches {
             tracing::info!(
                 target: "autofix",
+                pane_id = %notification.pane_id,
                 tab_id = %target_tab_id,
-                "skipping autofix while provider-native Yolo reconciliation is pending",
+                "autofix re-trigger same pane while pending — re-emit only",
+            );
+            if !forced {
+                self.tab_mut(&target_tab_id).autofix.trigger_echo_pane =
+                    Some(notification.pane_id.clone());
+            }
+            self.emit_autofix_state_pending(
+                &target_tab_id,
+                &notification.pane_id,
+                &notification.summary,
+            );
+            return;
+        }
+        if queued_autofix_failure_matches(tab, &notification.pane_id, &notification.summary) {
+            tracing::info!(
+                target: "autofix",
+                pane_id = %notification.pane_id,
+                tab_id = %target_tab_id,
+                "autofix re-trigger already queued — ignoring duplicate",
             );
             return;
         }
 
-        // Latest event always wins — but only if we can actually act on it.
-        // The ACP transport single-flights at the tab level, so if the
-        // target tab already has a prompt in flight, submitting another
-        // one results in `tab.turn = Submitted(new)` + ACP `AgentBusy`
-        // rejection — the buffer and the wire diverge, and old chunks
-        // corrupt the new turn's state. Defer instead.
-        let (same_pane, already_busy, armed_pane_dbg) = {
-            let tab = self.tab_mut(&target_tab_id);
-            let same = tab.autofix.pane_id.as_deref() == Some(notification.pane_id.as_str());
-            let busy = !tab.turn.is_idle()
-                && !matches!(
-                    tab.turn,
-                    TurnState::Surfaced {
-                        end_pending: false,
-                        ..
-                    }
-                );
-            (same, busy, tab.autofix.pane_id.clone())
-        };
-
-        if already_busy {
-            if same_pane {
-                // Same pane re-trigger: refresh the bar's summary text but
-                // don't re-submit — the agent is already working on it.
-                tracing::info!(
-                    target: "autofix",
-                    pane_id = %notification.pane_id,
-                    tab_id = %target_tab_id,
-                    "autofix re-trigger same pane while pending — re-emit only",
-                );
-                // This branch is only reached on a fresh D event (the
-                // dispatcher routes vt_sequence here); arm the echo gate.
-                self.tab_mut(&target_tab_id).autofix.trigger_echo_pane =
-                    Some(notification.pane_id.clone());
-                self.emit_autofix_state_pending(
-                    &target_tab_id,
-                    &notification.pane_id,
-                    &notification.summary,
-                );
-            } else {
-                // Different pane while busy: drop. The user can Esc the
-                // current autofix to free the slot if they want this one.
-                tracing::info!(
-                    target: "autofix",
-                    pane_id = %notification.pane_id,
-                    tab_id = %target_tab_id,
-                    armed_pane = ?armed_pane_dbg,
-                    "skipping autofix: previous turn still in-flight",
-                );
-            }
-            return;
-        }
-
-        // For all other cases (different pane, or Armed state, or Idle):
-        // bump the target tab's generation to stale any in-flight response,
-        // then submit a new autofix turn via the state machine.
-        let new_gen = {
-            let tab = self.tab_mut(&target_tab_id);
-            tab.autofix.generation = tab.autofix.generation.wrapping_add(1);
-            // A new analysis supersedes any leftover suggestion. The C++ side
-            // will swap to Pending on the new pending event below; emitting an
-            // explicit cleared first would create a flicker.
-            tab.autofix.suggested_pane_id = None;
-            tab.autofix.generation
-        };
-
-        // Route through the target tab's ACP session. `tab_id` carries the
-        // failing tab's StableId so the ACP layer's `tab_to_session` map
-        // routes (or lazy-creates) to the right session even when the
-        // failing tab isn't currently focused. `source_pane_id` points at
-        // the failing pane so the agent can read its buffer.
+        let generation = self.reserve_autofix_generation(&target_tab_id);
         let pane_context = PaneContext {
             pane_id: self.pane_id.clone(),
             tab_id: Some(target_tab_id.clone()),
@@ -262,58 +230,45 @@ impl App {
             cwd: None,
             source_pane_id: Some(notification.pane_id.clone()),
         };
-
-        // Store the failing pane ID on the target tab so the Esc dismiss
-        // path can find it (legacy; the new state machine carries it via
-        // AutofixContext), together with the analysis-start timestamp.
-        {
-            let tab = self.tab_mut(&target_tab_id);
-            tab.autofix.pane_id = Some(notification.pane_id.clone());
-            tab.autofix.armed_at = Some(std::time::Instant::now());
-        }
-
-        let prompt =
-            PromptSubmission::new_autofix_failure(notification.summary.clone(), Some(pane_context))
-                .with_byok(self.current_model_is_byok())
-                .with_agent_id(self.current_agent_id.clone());
-        let submitted = SubmittedPrompt {
-            id: prompt.id,
-            text: prompt.text.clone(),
-            submitted_at_unix_s: prompt.submitted_at_unix_s,
-            context: TurnContext::with_target_pane(notification.pane_id.clone()),
-            autofix: Some(AutofixContext {
-                generation: new_gen,
-            }),
-        };
-        // Install the turn on the target tab — bypasses session_to_tab
-        // lookup so a tab with no ACP session yet still gets the prompt
-        // queued correctly (the ACP layer creates the session lazily when
-        // it processes the prompt).
-        self.turn_submit_prompt_for_tab_with_cancellation(
+        let result = self.gate_input(
             &target_tab_id,
-            submitted,
-            prompt.cancellation_token(),
+            InputEnvelope {
+                text: notification.summary.clone(),
+                display_text: notification.summary.clone(),
+                images: Vec::new(),
+                pane_context,
+                turn_context: TurnContext::with_target_pane(notification.pane_id.clone()),
+                agent_command: false,
+                autofix: Some(AutofixInputMetadata {
+                    text_kind: crate::protocol::acp::client::AutofixTextKind::FailureSummary,
+                    context: AutofixContext { generation },
+                    arm_trigger_echo: !forced,
+                }),
+                is_byok: self.current_model_is_byok(),
+                agent_id: self.current_agent_id.clone(),
+            },
         );
-        tracing::info!(target: "autofix", pane_id = %notification.pane_id, tab_id = %target_tab_id, generation = new_gen, "sending auto-fix prompt");
-        let _ = self.prompt_tx.send(prompt);
-
-        // Light up the bottom-bar diagnostic icon in "Pending" state — the
-        // user knows something went wrong even before the agent responds.
-        // Arm the echo gate ONLY for D-driven entries (forced=false).
-        // The `execute_from_detected` path (forced=true) fires this on a
-        // stable prompt — no echo A is in flight, and arming would eat
-        // the user's first Enter as a fake echo. Bug repro: typo →
-        // Detected pill → click pill → Pending → Armed → press Enter
-        // (consumed as echo) → press Enter again (finally dismisses).
-        if !forced {
-            self.tab_mut(&target_tab_id).autofix.trigger_echo_pane =
-                Some(notification.pane_id.clone());
+        if result == InputGateResult::Full {
+            tracing::warn!(
+                target: "autofix",
+                pane_id = %notification.pane_id,
+                tab_id = %target_tab_id,
+                "dropping auto-fix because the input queue is full",
+            );
+        } else {
+            if result == InputGateResult::Queued {
+                let snapshot = self.tab_mut(&target_tab_id).autofix.bar_snapshot.clone();
+                self.set_bar_snapshot(&target_tab_id, snapshot);
+            }
+            tracing::info!(
+                target: "autofix",
+                pane_id = %notification.pane_id,
+                tab_id = %target_tab_id,
+                generation,
+                queued = result == InputGateResult::Queued,
+                "accepted auto-fix prompt",
+            );
         }
-        self.emit_autofix_state_pending(
-            &target_tab_id,
-            &notification.pane_id,
-            &notification.summary,
-        );
     }
 
     // ── autofix_state signalling ───────────────────────────────────────────
@@ -541,8 +496,9 @@ impl App {
     pub(super) fn handle_autofix_pane_closed(&mut self, event_tab_id: Option<&str>, pane_id: &str) {
         let target_tab_id = event_tab_id.map(str::to_string).or_else(|| {
             self.tab_sessions.iter().find_map(|(tab_id, tab)| {
-                let (turn_matches, state_matches) = autofix_pane_matches(tab, pane_id);
-                (turn_matches || state_matches).then(|| tab_id.clone())
+                let (turn_matches, pending_matches, state_matches) =
+                    autofix_pane_matches(tab, pane_id);
+                (turn_matches || pending_matches || state_matches).then(|| tab_id.clone())
             })
         });
         let Some(target_tab_id) = target_tab_id else {
@@ -551,7 +507,10 @@ impl App {
         let Some(tab) = self.tab_sessions.get(&target_tab_id) else {
             return;
         };
-        let (turn_matches, state_matches) = autofix_pane_matches(tab, pane_id);
+        let (turn_matches, _, state_matches) = autofix_pane_matches(tab, pane_id);
+        self.tab_mut(&target_tab_id)
+            .pending_inputs
+            .retain(|input| input.autofix_target_pane() != Some(pane_id));
 
         if turn_matches {
             self.request_turn_cancel_for_tab(&target_tab_id);
@@ -585,10 +544,27 @@ impl App {
 
     /// Store a fresh bar snapshot on the target tab and, if that tab is
     /// currently active, forward it to WT so the bottom bar updates.
-    pub(super) fn set_bar_snapshot(&mut self, target_tab_id: &str, snapshot: AutofixBarSnapshot) {
-        self.tab_mut(target_tab_id).autofix.bar_snapshot = snapshot.clone();
+    pub(super) fn set_bar_snapshot(
+        &mut self,
+        target_tab_id: &str,
+        mut snapshot: AutofixBarSnapshot,
+    ) {
+        let tab = self.tab_mut(target_tab_id);
+        if let AutofixBarSnapshot::Detected {
+            pane_id, summary, ..
+        } = &snapshot
+        {
+            if queued_autofix_failure_matches(tab, pane_id, summary) {
+                // Acceptance consumes this invitation, even if the queued fix is removed.
+                snapshot = AutofixBarSnapshot::Idle;
+            }
+        }
+        tab.autofix.bar_snapshot = snapshot;
         if target_tab_id == self.active_tab_key() {
-            send_bar_event(&snapshot, Some(target_tab_id));
+            send_bar_event(
+                &self.current_tab().autofix.bar_snapshot,
+                Some(target_tab_id),
+            );
         }
     }
 }
