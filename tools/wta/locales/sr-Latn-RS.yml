@@ -73,7 +73,7 @@ chat.tool_kind.other: "Alat"
 input.placeholder.connected: "Pitajte bilo šta, / za komande.."  # {Locked="/"}
 input.placeholder.connecting: "povezivanje..."
 input.placeholder.disconnected: "prekinuta veza"
-input.queue.status: "U redu [%{count}]: %{items}"
+input.queue.status: "Na čekanju [%{count}]: %{items}"
 input.queue.status_full: "Red je pun [%{count}/%{capacity}]: %{items}"
 input.queue.hint_with_draft: "Enter stavlja nacrt u red · Esc prvo briše nacrt"
 input.queue.hint_without_draft: "Esc uklanja najnoviji unos u redu"

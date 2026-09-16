@@ -1106,17 +1106,48 @@ fn automatic_autofix_dedupes_by_pane_and_pane_close_removes_pending() {
     enter_text(&mut app, "active");
     prompt_rx.try_recv().unwrap();
 
+    app.source_session_id = Some("pane-a".into());
+    enter_text(&mut app, "/fix pane-a failed");
     app.maybe_trigger_autofix(&failure_notification("pane-a", DEFAULT_TAB_ID));
+    app.source_session_id = Some("pane-b".into());
+    enter_text(&mut app, "/fix pane-b failed");
     app.maybe_trigger_autofix(&failure_notification("pane-b", DEFAULT_TAB_ID));
     app.maybe_trigger_autofix(&failure_notification("pane-a", DEFAULT_TAB_ID));
-    assert_eq!(app.current_tab().pending_inputs.len(), 2);
+    let mut next_failure = failure_notification("pane-a", DEFAULT_TAB_ID);
+    next_failure.summary = "pane-a failed again".into();
+    app.maybe_trigger_autofix(&next_failure);
+    app.maybe_trigger_autofix(&next_failure);
+    assert_eq!(
+        queued_texts(&app, DEFAULT_TAB_ID),
+        [
+            "pane-a failed",
+            "pane-a failed",
+            "pane-b failed",
+            "pane-b failed",
+            "pane-a failed again"
+        ]
+    );
+    assert_eq!(
+        app.current_tab()
+            .pending_inputs
+            .iter()
+            .map(|input| input.autofix.as_ref().unwrap().text_kind)
+            .collect::<Vec<_>>(),
+        [
+            crate::protocol::acp::client::AutofixTextKind::UserRequest,
+            crate::protocol::acp::client::AutofixTextKind::FailureSummary,
+            crate::protocol::acp::client::AutofixTextKind::UserRequest,
+            crate::protocol::acp::client::AutofixTextKind::FailureSummary,
+            crate::protocol::acp::client::AutofixTextKind::FailureSummary
+        ]
+    );
     assert_eq!(
         app.current_tab()
             .pending_inputs
             .iter()
             .filter_map(InputEnvelope::autofix_target_pane)
             .collect::<Vec<_>>(),
-        ["pane-a", "pane-b"]
+        ["pane-a", "pane-a", "pane-b", "pane-b", "pane-a"]
     );
     assert!(app.current_tab().autofix.pane_id.is_none());
 
@@ -1127,9 +1158,57 @@ fn automatic_autofix_dedupes_by_pane_and_pane_close_removes_pending() {
             .iter()
             .filter_map(InputEnvelope::autofix_target_pane)
             .collect::<Vec<_>>(),
-        ["pane-b"]
+        ["pane-b", "pane-b"]
+    );
+    assert_eq!(
+        queued_texts(&app, DEFAULT_TAB_ID),
+        ["pane-b failed", "pane-b failed"]
     );
     assert!(app.current_tab().turn.is_in_flight());
+    assert!(prompt_rx.try_recv().is_err());
+}
+
+#[test]
+fn queued_same_pane_failures_dispatch_distinct_summaries_in_fifo_order() {
+    let (mut app, mut prompt_rx) = test_app_with_prompt_rx();
+    bind_tab(&mut app, DEFAULT_TAB_ID, "session-1");
+    let mut event_rx = install_app_event_queue(&mut app);
+    app.autofix_enabled = true;
+    enter_text(&mut app, "active");
+    prompt_rx.try_recv().unwrap();
+
+    for summary in [
+        "first failure",
+        "second failure",
+        "first failure",
+        "second failure",
+    ] {
+        let mut failure = failure_notification("pane-a", DEFAULT_TAB_ID);
+        failure.summary = summary.into();
+        app.maybe_trigger_autofix(&failure);
+    }
+    assert_eq!(
+        queued_texts(&app, DEFAULT_TAB_ID),
+        ["first failure", "second failure"]
+    );
+    for summary in ["first failure", "second failure"] {
+        assert!(prompt_rx.try_recv().is_err());
+        app.handle_event(AppEvent::AgentMessageEnd {
+            session_id: "session-1".into(),
+        });
+        handle_scheduled_drain(&mut app, &mut event_rx, "session-1");
+        let prompt = prompt_rx.try_recv().unwrap();
+        assert_eq!(prompt.text, summary);
+        assert_eq!(
+            prompt.pane_context.unwrap().source_pane_id.as_deref(),
+            Some("pane-a")
+        );
+        assert_eq!(
+            prompt.autofix_text_kind,
+            Some(crate::protocol::acp::client::AutofixTextKind::FailureSummary)
+        );
+    }
+    assert!(app.current_tab().pending_inputs.is_empty());
 }
 
 #[test]

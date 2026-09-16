@@ -77,6 +77,15 @@ pub enum AutofixBarSnapshot {
     },
 }
 
+fn queued_autofix_failure_matches(tab: &TabSession, pane_id: &str, summary: &str) -> bool {
+    tab.pending_inputs.iter().any(|input| {
+        input.autofix.as_ref().is_some_and(|metadata| {
+            metadata.text_kind == crate::protocol::acp::client::AutofixTextKind::FailureSummary
+        }) && input.autofix_target_pane() == Some(pane_id)
+            && input.text == summary
+    })
+}
+
 fn autofix_pane_matches(tab: &TabSession, pane_id: &str) -> (bool, bool, bool) {
     let turn_matches = tab.turn.prompt().is_some_and(|prompt| {
         prompt.autofix.is_some() && prompt.context.target_pane_id() == Some(pane_id)
@@ -179,7 +188,7 @@ impl App {
         }
 
         let tab = self.tab_mut(&target_tab_id);
-        let (turn_matches, pending_matches, _) = autofix_pane_matches(tab, &notification.pane_id);
+        let (turn_matches, _, _) = autofix_pane_matches(tab, &notification.pane_id);
         let turn_matches = turn_matches
             && matches!(
                 &tab.turn,
@@ -203,7 +212,7 @@ impl App {
             );
             return;
         }
-        if pending_matches {
+        if queued_autofix_failure_matches(tab, &notification.pane_id, &notification.summary) {
             tracing::info!(
                 target: "autofix",
                 pane_id = %notification.pane_id,
@@ -545,13 +554,7 @@ impl App {
             pane_id, summary, ..
         } = &snapshot
         {
-            if tab.pending_inputs.iter().any(|input| {
-                input.autofix.as_ref().is_some_and(|metadata| {
-                    metadata.text_kind
-                        == crate::protocol::acp::client::AutofixTextKind::FailureSummary
-                }) && input.autofix_target_pane() == Some(pane_id.as_str())
-                    && input.text == *summary
-            }) {
+            if queued_autofix_failure_matches(tab, pane_id, summary) {
                 // Acceptance consumes this invitation, even if the queued fix is removed.
                 snapshot = AutofixBarSnapshot::Idle;
             }

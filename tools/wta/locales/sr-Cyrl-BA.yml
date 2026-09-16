@@ -73,7 +73,7 @@ chat.tool_kind.other: "Алат"
 input.placeholder.connected: "Питајте било шта, / за команде.."  # {Locked="/"}
 input.placeholder.connecting: "повезивање..."
 input.placeholder.disconnected: "прекинута веза"
-input.queue.status: "У реду [%{count}]: %{items}"
+input.queue.status: "На чекању [%{count}]: %{items}"
 input.queue.status_full: "Ред је пун [%{count}/%{capacity}]: %{items}"
 input.queue.hint_with_draft: "Enter ставља нацрт у ред · Esc прво брише нацрт"
 input.queue.hint_without_draft: "Esc уклања најновији унос у реду"
