@@ -12915,6 +12915,14 @@ fn queued_input_status_renders_and_tracks_escape_then_drain() {
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     }
     assert_eq!(prompt_rx.try_recv().expect("A dispatch").text, "A");
+    app.current_tab_mut().insert_input_str("   ");
+    let whitespace_draft = render_to_text(&mut app, 96, 12);
+    assert!(whitespace_draft.contains("Queued [2]: B • C"));
+    assert!(!whitespace_draft.contains("Enter queues draft"));
+    assert!(!whitespace_draft.contains("Esc removes newest queued input"));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.current_tab().pending_inputs.len(), 2);
+    assert!(prompt_rx.try_recv().is_err());
     app.current_tab_mut().insert_input_str("draft");
 
     let queued = render_to_text(&mut app, 96, 12);

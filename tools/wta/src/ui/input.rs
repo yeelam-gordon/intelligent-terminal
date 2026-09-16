@@ -550,6 +550,7 @@ fn queue_status_hint(app: &App, queue: &PendingInputQueueSnapshot<'_>) -> Option
     let has_draft = !tab.input.is_empty() || !tab.attachments.is_empty();
     if has_draft {
         let enter_queues_draft = !queue.is_full
+            && (!tab.input.trim().is_empty() || !tab.attachments.is_empty())
             && app.state == ConnectionState::Connected
             && tab.input_has_nav_focus()
             && app.command_popup_state().is_none()
