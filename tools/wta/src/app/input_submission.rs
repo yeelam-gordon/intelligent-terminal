@@ -126,6 +126,9 @@ impl App {
                     .then(|| (tab.chat_scroll.offset, tab.chat_reading_position))
             })
         });
+        if let Some((summary, pane_id)) = failure_autofix {
+            self.emit_autofix_state_pending(tab_id, &pane_id, &summary);
+        }
         self.turn_submit_prompt_for_tab_with_cancellation(
             tab_id,
             submitted,
@@ -137,9 +140,5 @@ impl App {
             tab.chat_reading_position = reading_position;
         }
         let _ = self.prompt_tx.send(prompt);
-
-        if let Some((summary, pane_id)) = failure_autofix {
-            self.emit_autofix_state_pending(tab_id, &pane_id, &summary);
-        }
     }
 }

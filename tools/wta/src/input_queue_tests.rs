@@ -78,6 +78,284 @@ fn queued_texts(app: &App, tab_id: &str) -> Vec<String> {
         .collect()
 }
 
+fn take_bar_payloads() -> Vec<serde_json::Value> {
+    crate::wt_protocol_events::take_test_published_events()
+        .into_iter()
+        .map(|event| serde_json::from_str::<serde_json::Value>(&event).unwrap())
+        .filter(|event| event["method"] == "autofix_state")
+        .map(|event| event["params"].clone())
+        .collect()
+}
+
+#[test]
+fn queued_invitation_hides_restores_on_escape_and_becomes_pending_only_on_dispatch() {
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let (mut app, mut prompt_rx) = test_app_with_prompt_rx();
+    bind_tab(&mut app, DEFAULT_TAB_ID, "session-1");
+    let mut event_rx = install_app_event_queue(&mut app);
+    app.autofix_enabled = false;
+    enter_text(&mut app, "active");
+    let active = prompt_rx.try_recv().unwrap();
+    take_bar_payloads();
+
+    app.maybe_trigger_autofix(&failure_notification("pane-a", DEFAULT_TAB_ID));
+    let detected = serde_json::json!({
+        "state": "detected", "tab_id": DEFAULT_TAB_ID, "pane_id": "pane-a",
+        "summary": "pane-a failed", "hotkey_hint": "Ctrl+Alt+."
+    });
+    let hidden = serde_json::json!({"state": "cleared", "tab_id": DEFAULT_TAB_ID});
+    assert_eq!(take_bar_payloads(), [detected.clone()]);
+
+    app.handle_autofix_execute_from_detected("pane-a", Some(DEFAULT_TAB_ID));
+    assert_eq!(take_bar_payloads(), [hidden.clone()]);
+    assert_eq!(queued_texts(&app, DEFAULT_TAB_ID), ["pane-a failed"]);
+    assert!(matches!(
+        &app.current_tab().autofix.bar_snapshot,
+        AutofixBarSnapshot::Detected { pane_id, summary, .. }
+            if pane_id == "pane-a" && summary == "pane-a failed"
+    ));
+    assert_eq!(app.current_tab().turn.prompt_id(), Some(active.id));
+    assert!(prompt_rx.try_recv().is_err());
+
+    app.current_tab_mut().insert_input_str("draft");
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(take_bar_payloads().is_empty());
+    assert_eq!(app.current_tab().pending_inputs.len(), 1);
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(take_bar_payloads(), [detected]);
+    assert!(app.current_tab().pending_inputs.is_empty());
+    assert_eq!(app.current_tab().turn.prompt_id(), Some(active.id));
+
+    app.handle_autofix_execute_from_detected("pane-a", Some(DEFAULT_TAB_ID));
+    assert_eq!(take_bar_payloads(), [hidden]);
+    app.handle_event(AppEvent::AgentMessageEnd {
+        session_id: "session-1".into(),
+    });
+    assert!(take_bar_payloads()
+        .iter()
+        .all(|payload| payload["state"] == "cleared"));
+    assert!(prompt_rx.try_recv().is_err());
+    handle_scheduled_drain(&mut app, &mut event_rx, "session-1");
+    let pending = serde_json::json!({
+        "state": "pending", "tab_id": DEFAULT_TAB_ID,
+        "pane_id": "pane-a", "summary": "pane-a failed"
+    });
+    assert_eq!(
+        take_bar_payloads(),
+        [pending.clone(), pending],
+        "dispatch and turn projection must both emit Pending, never revive the invitation"
+    );
+    assert_eq!(
+        prompt_rx.try_recv().unwrap().autofix_text_kind,
+        Some(crate::protocol::acp::client::AutofixTextKind::FailureSummary)
+    );
+}
+
+#[test]
+fn queued_invitation_full_queue_keeps_detected_payload() {
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let mut app = test_app();
+    bind_tab(&mut app, DEFAULT_TAB_ID, "session-1");
+    app.autofix_enabled = false;
+    enter_text(&mut app, "active");
+    for index in 0..INPUT_QUEUE_CAPACITY {
+        enter_text(&mut app, &format!("queued {index}"));
+    }
+    take_bar_payloads();
+    app.maybe_trigger_autofix(&failure_notification("pane-a", DEFAULT_TAB_ID));
+    let detected = take_bar_payloads();
+    assert_eq!(detected.len(), 1);
+    assert_eq!(detected[0]["state"], "detected");
+    let queue_before = queued_texts(&app, DEFAULT_TAB_ID);
+
+    app.handle_autofix_execute_from_detected("pane-a", Some(DEFAULT_TAB_ID));
+
+    assert!(take_bar_payloads().is_empty());
+    assert_eq!(queued_texts(&app, DEFAULT_TAB_ID), queue_before);
+    app.project_active_tab_state();
+    assert_eq!(take_bar_payloads(), detected);
+}
+
+#[test]
+fn queued_invitation_preserves_newer_other_pane_and_non_detected_payloads() {
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    for snapshot in [
+        AutofixBarSnapshot::Detected {
+            pane_id: "pane-a".into(),
+            summary: "newer failure".into(),
+            hotkey_hint: "Ctrl+Alt+.".into(),
+        },
+        AutofixBarSnapshot::Detected {
+            pane_id: "pane-b".into(),
+            summary: "pane-a failed".into(),
+            hotkey_hint: "Ctrl+Alt+.".into(),
+        },
+        AutofixBarSnapshot::Pending {
+            pane_id: "pane-a".into(),
+            summary: "pane-a failed".into(),
+        },
+        AutofixBarSnapshot::Review {
+            pane_id: "pane-a".into(),
+            hotkey_hint: "Ctrl+Alt+.".into(),
+        },
+        AutofixBarSnapshot::Idle,
+    ] {
+        let mut app = test_app();
+        bind_tab(&mut app, DEFAULT_TAB_ID, "session-1");
+        enter_text(&mut app, "active");
+        take_bar_payloads();
+        app.set_bar_snapshot(DEFAULT_TAB_ID, snapshot.clone());
+        let expected = take_bar_payloads();
+        assert_eq!(expected.len(), 1);
+
+        app.trigger_autofix_inner(&failure_notification("pane-a", DEFAULT_TAB_ID), true);
+        assert_eq!(take_bar_payloads(), expected);
+        assert_eq!(queued_texts(&app, DEFAULT_TAB_ID), ["pane-a failed"]);
+        app.set_bar_snapshot(DEFAULT_TAB_ID, snapshot);
+        assert_eq!(take_bar_payloads(), expected);
+        app.project_active_tab_state();
+        assert_eq!(take_bar_payloads(), expected);
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(take_bar_payloads(), expected);
+        assert!(app.current_tab().pending_inputs.is_empty());
+    }
+}
+
+#[test]
+fn queued_invitation_manual_fix_and_plain_text_do_not_hide_matching_failure() {
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let mut app = test_app();
+    bind_tab(&mut app, DEFAULT_TAB_ID, "session-1");
+    app.autofix_enabled = false;
+    app.source_session_id = Some("pane-a".into());
+    enter_text(&mut app, "active");
+    enter_text(&mut app, "/fix pane-a failed");
+    enter_text(&mut app, "pane-a failed");
+    assert_eq!(
+        app.current_tab().pending_inputs[0].autofix_target_pane(),
+        Some("pane-a")
+    );
+    assert_eq!(
+        app.current_tab().pending_inputs[0]
+            .autofix
+            .as_ref()
+            .unwrap()
+            .text_kind,
+        crate::protocol::acp::client::AutofixTextKind::UserRequest
+    );
+    assert!(app.current_tab().pending_inputs[1].autofix.is_none());
+    take_bar_payloads();
+
+    app.maybe_trigger_autofix(&failure_notification("pane-a", DEFAULT_TAB_ID));
+    let detected = take_bar_payloads();
+    assert_eq!(detected.len(), 1);
+    assert_eq!(detected[0]["state"], "detected");
+    app.project_active_tab_state();
+    assert_eq!(take_bar_payloads(), detected);
+}
+
+#[test]
+fn queued_invitation_tab_switch_and_snapshot_updates_use_same_projection() {
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let mut app = test_app();
+    bind_tab(&mut app, "tab-a", "session-a");
+    enter_text(&mut app, "active");
+    bind_tab(&mut app, "tab-b", "session-b");
+    take_bar_payloads();
+    app.emit_autofix_state_detected("tab-b", "pane-b", "pane-b failed");
+    let visible_b = take_bar_payloads();
+    assert_eq!(visible_b.len(), 1);
+    assert_eq!(visible_b[0]["tab_id"], "tab-b");
+
+    app.emit_autofix_state_detected("tab-a", "pane-a", "pane-a failed");
+    app.trigger_autofix_inner(&failure_notification("pane-a", "tab-a"), true);
+    assert!(
+        take_bar_payloads().is_empty(),
+        "background acceptance must not change the bar"
+    );
+    app.project_active_tab_state();
+    assert_eq!(take_bar_payloads(), visible_b);
+
+    app.switch_tab_session("tab-a".into());
+    let hidden = serde_json::json!({"state": "cleared", "tab_id": "tab-a"});
+    assert_eq!(take_bar_payloads(), [hidden.clone()]);
+    app.emit_autofix_state_detected("tab-a", "pane-a", "pane-a failed");
+    assert_eq!(take_bar_payloads(), [hidden.clone()]);
+    app.switch_tab_session("tab-b".into());
+    assert_eq!(take_bar_payloads(), visible_b);
+    app.project_tab_state("tab-a");
+    assert!(take_bar_payloads().is_empty());
+    app.switch_tab_session("tab-a".into());
+    assert_eq!(take_bar_payloads(), [hidden]);
+
+    app.emit_autofix_state_cleared("tab-a");
+    take_bar_payloads();
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert_eq!(
+        take_bar_payloads(),
+        [serde_json::json!({"state": "cleared", "tab_id": "tab-a"})],
+        "a dismissed invitation must not return when its queued input is removed"
+    );
+}
+
+#[test]
+fn queued_invitation_removal_preserves_other_tab_pending_and_review() {
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    for snapshot_b in [
+        AutofixBarSnapshot::Pending {
+            pane_id: "pane-b".into(),
+            summary: "pane-b failed".into(),
+        },
+        AutofixBarSnapshot::Review {
+            pane_id: "pane-b".into(),
+            hotkey_hint: "Ctrl+Alt+.".into(),
+        },
+    ] {
+        let mut app = test_app();
+        bind_tab(&mut app, "tab-b", "session-b");
+        app.set_bar_snapshot("tab-b", snapshot_b);
+        let expected_b = take_bar_payloads();
+        assert_eq!(expected_b.len(), 1);
+        assert_eq!(expected_b[0]["tab_id"], "tab-b");
+        assert_eq!(expected_b[0]["pane_id"], "pane-b");
+
+        bind_tab(&mut app, "tab-a", "session-a");
+        enter_text(&mut app, "active");
+        take_bar_payloads();
+        app.emit_autofix_state_detected("tab-a", "pane-a", "pane-a failed");
+        let expected_a = take_bar_payloads();
+        assert_eq!(
+            expected_a,
+            [serde_json::json!({
+                "state": "detected", "tab_id": "tab-a", "pane_id": "pane-a",
+                "summary": "pane-a failed", "hotkey_hint": "Ctrl+Alt+."
+            })]
+        );
+        app.handle_autofix_execute_from_detected("pane-a", Some("tab-a"));
+        let hidden_a = serde_json::json!({"state": "cleared", "tab_id": "tab-a"});
+        assert_eq!(take_bar_payloads(), [hidden_a.clone()]);
+        assert_eq!(queued_texts(&app, "tab-a"), ["pane-a failed"]);
+        assert!(app.tab_sessions["tab-b"].pending_inputs.is_empty());
+
+        app.switch_tab_session("tab-b".into());
+        assert_eq!(take_bar_payloads(), expected_b);
+        app.project_tab_state("tab-a");
+        assert!(take_bar_payloads().is_empty());
+        app.switch_tab_session("tab-a".into());
+        assert_eq!(take_bar_payloads(), [hidden_a]);
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(take_bar_payloads(), expected_a);
+        assert!(app.tab_sessions["tab-a"].pending_inputs.is_empty());
+        app.project_tab_state("tab-b");
+        assert!(take_bar_payloads().is_empty());
+        app.switch_tab_session("tab-b".into());
+        assert_eq!(take_bar_payloads(), expected_b);
+        app.switch_tab_session("tab-a".into());
+        assert_eq!(take_bar_payloads(), expected_a);
+    }
+}
+
 fn actionable_recommendation() -> crate::coordinator::RecommendationSet {
     crate::coordinator::RecommendationSet {
         recommended_choice: Some(0),

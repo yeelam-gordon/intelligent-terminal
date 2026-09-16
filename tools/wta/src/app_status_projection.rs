@@ -187,7 +187,7 @@ impl App {
         // active tab), so only re-emit when we're projecting the active
         // tab. A non-active mutation does not change the visible bar.
         if target_tab == self.active_tab_key() {
-            send_bar_event(&tab.autofix.bar_snapshot, Some(target_tab));
+            send_bar_event(projected_bar_snapshot(tab), Some(target_tab));
         }
     }
 }

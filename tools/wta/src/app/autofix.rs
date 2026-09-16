@@ -33,9 +33,8 @@ pub struct TabAutofixState {
     /// `AutofixContext.generation` at submit time; chunks whose
     /// snapshot diverges are dropped as stale.
     pub generation: u64,
-    /// Last bottom-bar state we emitted (or would have emitted, if the
-    /// tab wasn't active). Used to re-emit on tab_changed so the bar
-    /// shows the right state when the user comes back to this tab.
+    /// Stored bottom-bar state, projected on updates and tab_changed.
+    /// A Detected invitation is hidden while its matching failure is queued.
     pub bar_snapshot: AutofixBarSnapshot,
     /// PaneID where the most recent D-synchronous state set happened
     /// (Detected or Pending — both fire ~1ms before PowerShell emits the
@@ -102,6 +101,25 @@ fn autofix_pane_matches(tab: &TabSession, pane_id: &str) -> (bool, bool, bool) {
         || tab.autofix.suggested_pane_id.as_deref() == Some(pane_id)
         || snapshot_matches;
     (turn_matches, pending_matches, state_matches)
+}
+
+pub(super) fn projected_bar_snapshot(tab: &TabSession) -> &AutofixBarSnapshot {
+    let snapshot = &tab.autofix.bar_snapshot;
+    if let AutofixBarSnapshot::Detected {
+        pane_id, summary, ..
+    } = snapshot
+    {
+        if tab.pending_inputs.iter().any(|input| {
+            input.autofix.as_ref().is_some_and(|metadata| {
+                metadata.text_kind == crate::protocol::acp::client::AutofixTextKind::FailureSummary
+            }) && input.autofix_target_pane() == Some(pane_id.as_str())
+                && input.text == *summary
+        }) {
+            // Keep the invitation stored so removing the queued input can restore it.
+            return &AutofixBarSnapshot::Idle;
+        }
+    }
+    snapshot
 }
 
 impl App {
@@ -248,6 +266,9 @@ impl App {
                 "dropping auto-fix because the input queue is full",
             );
         } else {
+            if result == InputGateResult::Queued {
+                self.project_tab_state(&target_tab_id);
+            }
             tracing::info!(
                 target: "autofix",
                 pane_id = %notification.pane_id,
@@ -533,9 +554,12 @@ impl App {
     /// Store a fresh bar snapshot on the target tab and, if that tab is
     /// currently active, forward it to WT so the bottom bar updates.
     pub(super) fn set_bar_snapshot(&mut self, target_tab_id: &str, snapshot: AutofixBarSnapshot) {
-        self.tab_mut(target_tab_id).autofix.bar_snapshot = snapshot.clone();
+        self.tab_mut(target_tab_id).autofix.bar_snapshot = snapshot;
         if target_tab_id == self.active_tab_key() {
-            send_bar_event(&snapshot, Some(target_tab_id));
+            send_bar_event(
+                projected_bar_snapshot(self.current_tab()),
+                Some(target_tab_id),
+            );
         }
     }
 }
