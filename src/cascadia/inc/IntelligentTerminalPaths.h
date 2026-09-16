@@ -19,12 +19,66 @@
 #include <appmodel.h>
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
 
 namespace IntelligentTerminal
 {
+    inline std::filesystem::path _EnvironmentPath(const wchar_t* name)
+    {
+        const auto required = GetEnvironmentVariableW(name, nullptr, 0);
+        if (required == 0)
+        {
+            return std::filesystem::path{};
+        }
+
+        std::wstring value(required, L'\0');
+        const auto copied = GetEnvironmentVariableW(name, value.data(), required);
+        if (copied == 0 || copied >= required)
+        {
+            return std::filesystem::path{};
+        }
+
+        value.resize(copied);
+        return std::filesystem::path{ std::move(value) };
+    }
+
+    inline std::filesystem::path _PerUserRoot()
+    {
+        auto base = _EnvironmentPath(L"LOCALAPPDATA");
+        if (base.empty())
+        {
+            base = _EnvironmentPath(L"APPDATA");
+        }
+        if (base.empty())
+        {
+            std::error_code error;
+            base = std::filesystem::temp_directory_path(error);
+            if (error)
+            {
+                return {};
+            }
+        }
+        return base;
+    }
+
+    inline std::optional<std::wstring> _PackageFamilyName()
+    {
+        UINT32 length = 0;
+        if (GetCurrentPackageFamilyName(&length, nullptr) == ERROR_INSUFFICIENT_BUFFER && length != 0)
+        {
+            std::wstring family(length, L'\0');
+            if (GetCurrentPackageFamilyName(&length, family.data()) == ERROR_SUCCESS)
+            {
+                family.resize(::wcslen(family.c_str()));
+                return family;
+            }
+        }
+        return std::nullopt;
+    }
+
     // Resolve the WTA log directory:
     //
     //   * Packaged:   %LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalCache\Local\IntelligentTerminal\logs
@@ -36,29 +90,7 @@ namespace IntelligentTerminal
     // `%LOCALAPPDATA%` is unavailable.
     inline std::filesystem::path LogDir()
     {
-        const auto environmentPath = [](const wchar_t* name) {
-            const auto required = GetEnvironmentVariableW(name, nullptr, 0);
-            if (required == 0)
-            {
-                return std::filesystem::path{};
-            }
-
-            std::wstring value(required, L'\0');
-            const auto copied = GetEnvironmentVariableW(name, value.data(), required);
-            if (copied == 0 || copied >= required)
-            {
-                return std::filesystem::path{};
-            }
-
-            value.resize(copied);
-            return std::filesystem::path{ std::move(value) };
-        };
-
-        auto base = environmentPath(L"LOCALAPPDATA");
-        if (base.empty())
-        {
-            base = environmentPath(L"APPDATA");
-        }
+        auto base = _PerUserRoot();
         if (base.empty())
         {
             std::error_code error;
@@ -73,17 +105,44 @@ namespace IntelligentTerminal
         // Two-call pattern: query the family-name length first. A packaged
         // process returns ERROR_INSUFFICIENT_BUFFER and fills `length`; an
         // unpackaged one returns APPMODEL_ERROR_NO_PACKAGE.
-        UINT32 length = 0;
-        if (GetCurrentPackageFamilyName(&length, nullptr) == ERROR_INSUFFICIENT_BUFFER && length != 0)
+        if (const auto family = _PackageFamilyName())
         {
-            std::wstring family(length, L'\0');
-            if (GetCurrentPackageFamilyName(&length, family.data()) == ERROR_SUCCESS)
-            {
-                family.resize(::wcslen(family.c_str())); // drop trailing NUL(s)
-                return base / L"Packages" / family / L"LocalCache" / L"Local" / L"IntelligentTerminal" / L"logs";
-            }
+            return base / L"Packages" / *family / L"LocalCache" / L"Local" / L"IntelligentTerminal" / L"logs";
         }
         return base / L"IntelligentTerminal" / L"logs";
+    }
+
+    // Resolve the per-user persistent state directory:
+    //
+    //   * Packaged:   %LOCALAPPDATA%\Packages\<PackageFamilyName>\LocalState\IntelligentTerminal
+    //   * Unpackaged: %LOCALAPPDATA%\IntelligentTerminal
+    //
+    // This mirrors the Terminal package's LocalState root but keeps
+    // Intelligent Terminal's session-host records under a dedicated
+    // subdirectory so CLI-side helpers and the packaged app can rendezvous
+    // without guessing a path.
+    inline std::filesystem::path StateDir()
+    {
+        const auto base = _PerUserRoot();
+        if (base.empty())
+        {
+            return {};
+        }
+        if (const auto family = _PackageFamilyName())
+        {
+            return base / L"Packages" / *family / L"LocalState" / L"IntelligentTerminal";
+        }
+        return base / L"IntelligentTerminal";
+    }
+
+    inline std::filesystem::path PersistentSessionHostDir()
+    {
+        auto state = StateDir();
+        if (state.empty())
+        {
+            return {};
+        }
+        return state / L"persistent-session-hosts";
     }
 
     // The current process's package version as `"Major.Minor.Build.Revision"`

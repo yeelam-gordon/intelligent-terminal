@@ -40,18 +40,18 @@ import "unknwn.idl";
     // ── Meta ──
     // Compatibility handshake. COM activation is the trust boundary; this call
     // does not gate any protocol method.
-    HRESULT Authenticate([in] BSTR token, [out, retval] BSTR* resultJson);
-    HRESULT GetCapabilities([out, retval] BSTR* json);
+    HRESULT Authenticate([in] BSTR token, [out, retval] BSTR * resultJson);
+    HRESULT GetCapabilities([out, retval] BSTR * json);
 
     // ── Queries (complex results as JSON) ──
-    HRESULT GetActivePane([out, retval] BSTR* json);
-    HRESULT ListWindows([out, retval] BSTR* json);
+    HRESULT GetActivePane([out, retval] BSTR * json);
+    HRESULT ListWindows([out, retval] BSTR * json);
     HRESULT ListTabs([in] unsigned hyper windowIdFilter, [out, retval] BSTR* json);
     HRESULT ListPanes([in] unsigned hyper windowIdFilter, [in] unsigned long tabIdFilter, [out, retval] BSTR* json);
     HRESULT ReadPaneOutput([in] GUID sessionId, [in] BSTR source, [in] long maxLines, [out, retval] BSTR* json);
-    HRESULT GetProcessStatus([in] GUID sessionId, [out, retval] BSTR* json);
-    HRESULT GetSessionVariable([in] GUID sessionId, [in] BSTR name, [out, retval] BSTR* json);
-    HRESULT GetSettings([out, retval] BSTR* json);
+    HRESULT GetProcessStatus([in] GUID sessionId, [out, retval] BSTR * json);
+    HRESULT GetSessionVariable([in] GUID sessionId, [in] BSTR name, [out, retval] BSTR * json);
+    HRESULT GetSettings([out, retval] BSTR * json);
 
     // ── Mutations ──
     HRESULT CreateTab([in] unsigned hyper windowId,
@@ -73,13 +73,17 @@ import "unknwn.idl";
     HRESULT SendInput([in] GUID sessionId, [in] BSTR text);
     HRESULT FocusPane([in] GUID sessionId);
     HRESULT SetSessionVariable([in] GUID sessionId, [in] BSTR name, [in] BSTR value);
+    HRESULT MarkPersistentSession([in] GUID sessionId, [in] BSTR name);
+    HRESULT ListPersistentSessions([out, retval] BSTR * json);
+    HRESULT InspectPersistentSession([in] GUID sessionId, [out, retval] BSTR * json);
+    HRESULT PreparePersistentSessionAttach([in] GUID sessionId, [out, retval] BSTR * json);
 
     // ── Events ──
-    HRESULT Subscribe([in] ITerminalProtocolEventSink* sink);
+    HRESULT Subscribe([in] ITerminalProtocolEventSink * sink);
     HRESULT Unsubscribe();
     HRESULT SendEvent([in] BSTR eventJson);
 
-    // Appended in protocol 2.3. Existing methods must never be reordered.
+    // Appended in protocol 2.3 and later. Existing methods must never be reordered.
     HRESULT GetPaneContext([in] GUID sourceSessionId,
                            [in] boolean hasExplicitSource,
                            [in] long maxLines,

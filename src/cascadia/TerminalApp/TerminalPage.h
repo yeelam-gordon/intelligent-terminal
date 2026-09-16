@@ -261,6 +261,10 @@ namespace winrt::TerminalApp::implementation
         Windows::Foundation::IAsyncOperation<bool> CloseProtocolPane(winrt::guid sessionId);
         Windows::Foundation::IAsyncOperation<bool> SendProtocolInput(winrt::guid sessionId, hstring text);
         Windows::Foundation::IAsyncOperation<bool> FocusProtocolPane(winrt::guid sessionId);
+        Windows::Foundation::IAsyncOperation<bool> MarkPersistentProtocolSession(winrt::guid sessionId, hstring name);
+        Windows::Foundation::IAsyncOperation<hstring> ListPersistentProtocolSessions();
+        Windows::Foundation::IAsyncOperation<hstring> InspectPersistentProtocolSession(winrt::guid sessionId);
+        Windows::Foundation::IAsyncOperation<hstring> PreparePersistentProtocolSessionAttach(winrt::guid sessionId);
         void OnAutofixStateChanged(hstring eventJson);
         void OnAgentStatusChanged(hstring eventJson);
         void OnAgentAvailabilityChanged(hstring eventJson);
@@ -1200,8 +1204,7 @@ namespace winrt::TerminalApp::implementation
                           const winrt::com_ptr<Tab>& sourceTab,
                           const std::shared_ptr<Pane>& sourcePane,
                           const std::optional<winrt::Windows::Foundation::Point>& dragPoint = std::nullopt);
-        bool _AttachTransferredContent(TerminalPage& source, const winrt::com_ptr<Tab>& sourceTab, const std::shared_ptr<Pane>& sourcePane,
-                                       Windows::Foundation::Collections::IVector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions, uint32_t tabIndex);
+        bool _AttachTransferredContent(TerminalPage& source, const winrt::com_ptr<Tab>& sourceTab, const std::shared_ptr<Pane>& sourcePane, Windows::Foundation::Collections::IVector<Microsoft::Terminal::Settings::Model::ActionAndArgs> actions, uint32_t tabIndex);
         struct ReceivingContentTransfer
         {
             winrt::com_ptr<Tab> sourceTab;

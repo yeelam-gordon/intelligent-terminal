@@ -94,3 +94,43 @@ void FormatCreatedPaneHuman(const Json::Value& result)
 {
     printf("Created pane (session %s)\n", result["session_id"].asString().c_str());
 }
+
+void FormatPersistentSessionsHuman(const Json::Value& sessions)
+{
+    if (!sessions.isArray() || sessions.empty())
+    {
+        printf("No persistent sessions found.\n");
+        return;
+    }
+
+    printf("%-8s %-38s %-20s %-9s %-10s %-8s %s\n", "DESKTOP", "SESSION_ID", "NAME", "STATE", "ATTACH", "PID", "TITLE");
+    for (const auto& session : sessions)
+    {
+        printf("%-8u %-38s %-20s %-9s %-10s %-8u %s\n",
+               session["desktop_session_id"].asUInt(),
+               session["session_id"].asString().c_str(),
+               session["name"].isString() ? session["name"].asString().c_str() : "",
+               session["state"].isString() ? session["state"].asString().c_str() : "",
+               session["attach_state"].isString() ? session["attach_state"].asString().c_str() : "",
+               session["pid"].isUInt() ? session["pid"].asUInt() : 0,
+               session["title"].isString() ? session["title"].asString().c_str() : "");
+    }
+}
+
+void FormatPersistentSessionHuman(const Json::Value& session)
+{
+    printf("Session ID:        %s\n", session["session_id"].asString().c_str());
+    printf("Name:              %s\n", session["name"].isString() ? session["name"].asString().c_str() : "");
+    printf("Desktop session:   %u\n", session["desktop_session_id"].asUInt());
+    printf("Window ID:         %llu\n", static_cast<unsigned long long>(session["window_id"].asUInt64()));
+    printf("Tab ID:            %u\n", session["tab_id"].asUInt());
+    printf("State:             %s\n", session["state"].isString() ? session["state"].asString().c_str() : "");
+    printf("Attach state:      %s\n", session["attach_state"].isString() ? session["attach_state"].asString().c_str() : "");
+    printf("PID:               %u\n", session["pid"].isUInt() ? session["pid"].asUInt() : 0);
+    printf("Title:             %s\n", session["title"].isString() ? session["title"].asString().c_str() : "");
+    printf("CWD:               %s\n", session["cwd"].isString() ? session["cwd"].asString().c_str() : "");
+    if (session["has_exit_code"].asBool())
+    {
+        printf("Exit code:         %d\n", session["exit_code"].asInt());
+    }
+}

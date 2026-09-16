@@ -6,8 +6,7 @@ import "Remoting.idl";
 
 namespace TerminalApp
 {
-    [default_interface] runtimeclass ContentManager
-    {
+    [default_interface] runtimeclass ContentManager {
         Microsoft.Terminal.Control.ControlInteractivity CreateCore(Microsoft.Terminal.Control.IControlSettings settings,
                                                                    Microsoft.Terminal.Control.IControlAppearance unfocusedAppearance,
                                                                    Microsoft.Terminal.TerminalConnection.ITerminalConnection connection);
@@ -16,20 +15,17 @@ namespace TerminalApp
         void Detach(Microsoft.Terminal.Control.TermControl control);
     }
 
-    [default_interface] runtimeclass RenameWindowRequestedArgs
+        [default_interface] runtimeclass RenameWindowRequestedArgs
     {
         String ProposedName { get; };
     };
-    [default_interface] runtimeclass OpenWindowRequestedArgs
-    {
+    [default_interface] runtimeclass OpenWindowRequestedArgs {
         String Name { get; };
     };
-    [default_interface] runtimeclass SummonWindowByIdRequestedArgs
-    {
+    [default_interface] runtimeclass SummonWindowByIdRequestedArgs {
         UInt64 WindowId { get; };
     };
-    [default_interface] runtimeclass RequestMoveContentArgs
-    {
+    [default_interface] runtimeclass RequestMoveContentArgs {
         String Window { get; };
         String Content { get; };
         UInt32 TabIndex { get; };
@@ -49,8 +45,16 @@ namespace TerminalApp
         String WindowNameForDisplay { get; };
         String WindowIdForDisplay { get; };
 
-        String VirtualWorkingDirectory { get; set; };
-        String VirtualEnvVars { get; set; };
+        String VirtualWorkingDirectory
+        {
+            get;
+            set;
+        };
+        String VirtualEnvVars
+        {
+            get;
+            set;
+        };
         Boolean IsQuakeWindow();
     };
 
@@ -61,16 +65,15 @@ namespace TerminalApp
 
     // ── Protocol structs moved to Microsoft.Terminal.Protocol.TerminalProtocol.idl ──
 
-    [default_interface] runtimeclass WindowListEntry
-    {
+    [default_interface] runtimeclass WindowListEntry {
         WindowListEntry();
         UInt64 Id;
         String Name;
     }
 
-    // Raised by TerminalPage when it needs the list of open windows.
-    // The handler (AppHost) fills Entries synchronously.
-    [default_interface] runtimeclass WindowListRequest
+        // Raised by TerminalPage when it needs the list of open windows.
+        // The handler (AppHost) fills Entries synchronously.
+        [default_interface] runtimeclass WindowListRequest
     {
         Windows.Foundation.Collections.IVector<WindowListEntry> Entries { get; };
     }
@@ -101,7 +104,7 @@ namespace TerminalApp
         void ShowKeyboardServiceWarning();
         String KeyboardServiceDisabledText { get; };
 
-        TaskbarState TaskbarState{ get; };
+        TaskbarState TaskbarState { get; };
 
         Windows.UI.Xaml.Media.Brush TitlebarBrush { get; };
         void WindowActivated(Boolean activated);
@@ -123,7 +126,7 @@ namespace TerminalApp
 
         event Windows.Foundation.TypedEventHandler<Object, Object> OpenSystemMenu;
         event Windows.Foundation.TypedEventHandler<Object, Microsoft.Terminal.Control.ShowWindowArgs> ShowWindowChanged;
-        event Windows.Foundation.TypedEventHandler<Object, Windows.Foundation.Collections.IVectorView<Microsoft.Terminal.Settings.Model.SettingsLoadWarnings> > ShowLoadWarningsDialog;
+        event Windows.Foundation.TypedEventHandler<Object, Windows.Foundation.Collections.IVectorView<Microsoft.Terminal.Settings.Model.SettingsLoadWarnings>> ShowLoadWarningsDialog;
 
         event Windows.Foundation.TypedEventHandler<Object, RequestMoveContentArgs> RequestMoveContent;
         event Windows.Foundation.TypedEventHandler<Object, RequestReceiveContentArgs> RequestReceiveContent;
@@ -142,8 +145,8 @@ namespace TerminalApp
         UInt32 TabCount { get; };
         Windows.Foundation.IReference<UInt32> FocusedTabIndex { get; };
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.PaneInfo> GetProtocolActivePane();
-        Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.TabInfo> > GetProtocolTabs();
-        Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.PaneInfo> > GetProtocolPanes(UInt32 tabIdFilter);
+        Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.TabInfo>> GetProtocolTabs();
+        Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.PaneInfo>> GetProtocolPanes(UInt32 tabIdFilter);
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.PaneOutput> ReadProtocolPaneOutput(Guid sessionId, String source, Int32 maxLines);
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.PaneContext> GetProtocolPaneContext(Guid sourceSessionId, Boolean hasExplicitSource, Int32 maxLines, Int32 maxCharacters);
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.ProcessStatus> GetProtocolProcessStatus(Guid sessionId);
@@ -154,6 +157,10 @@ namespace TerminalApp
         Windows.Foundation.IAsyncOperation<Boolean> CloseProtocolPane(Guid sessionId);
         Windows.Foundation.IAsyncOperation<Boolean> SendProtocolInput(Guid sessionId, String text);
         Windows.Foundation.IAsyncOperation<Boolean> FocusProtocolPane(Guid sessionId);
+        Windows.Foundation.IAsyncOperation<Boolean> MarkPersistentProtocolSession(Guid sessionId, String name);
+        Windows.Foundation.IAsyncOperation<String> ListPersistentProtocolSessions();
+        Windows.Foundation.IAsyncOperation<String> InspectPersistentProtocolSession(Guid sessionId);
+        Windows.Foundation.IAsyncOperation<String> PreparePersistentProtocolSessionAttach(Guid sessionId);
         event Windows.Foundation.TypedEventHandler<Object, String> ProtocolVtSequenceReceived;
 
         // Inbound event from WTA carrying {method:"autofix_state",params:{state,pane_id,...}}

@@ -519,8 +519,9 @@ try
     // ITerminalProtocol method is gated on this call.
     Json::Value v;
     v["authenticated"] = true;
-    // 2.3 — GetPaneContext resolves and captures bounded pane context in one call.
-    v["protocol_version"] = "2.3";
+    // 2.4 — persistent reconnectable sessions add attach negotiation through
+    // the login-session host while preserving the existing COM trust boundary.
+    v["protocol_version"] = "2.4";
     *resultJson = _bstrFromJson(v);
     return S_OK;
 }
@@ -549,6 +550,10 @@ try
         "send_input",
         "focus_pane",
         "set_session_variable",
+        "mark_persistent_session",
+        "list_persistent_sessions",
+        "inspect_persistent_session",
+        "prepare_persistent_session_attach",
         "subscribe",
         "unsubscribe",
         "send_event",
@@ -1097,6 +1102,141 @@ try
     }
 
     return E_FAIL;
+}
+CATCH_RETURN()
+
+STDMETHODIMP TerminalProtocolComServer::MarkPersistentSession(GUID sessionId, BSTR name)
+try
+{
+    RETURN_HR_IF(E_NOT_VALID_STATE, !s_emperor);
+    RETURN_HR_IF(E_INVALIDARG, winrt::guid{ sessionId } == winrt::guid{});
+
+    for (const auto& host : s_emperor->GetWindows())
+    {
+        const auto page = _getPage(host.get());
+        if (!page)
+        {
+            continue;
+        }
+
+        if (page.MarkPersistentProtocolSession(winrt::guid{ sessionId }, _hstr(name)).get())
+        {
+            return S_OK;
+        }
+    }
+
+    return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+}
+CATCH_RETURN()
+
+STDMETHODIMP TerminalProtocolComServer::ListPersistentSessions(BSTR* json)
+try
+{
+    RETURN_HR_IF_NULL(E_POINTER, json);
+    *json = nullptr;
+    RETURN_HR_IF(E_NOT_VALID_STATE, !s_emperor);
+
+    Json::Value sessions{ Json::arrayValue };
+    for (const auto& host : s_emperor->GetWindows())
+    {
+        const auto page = _getPage(host.get());
+        if (!page)
+        {
+            continue;
+        }
+
+        const auto serialized = winrt::to_string(page.ListPersistentProtocolSessions().get());
+        Json::Value perWindow;
+        RETURN_HR_IF(E_UNEXPECTED, !_parseJson(serialized, perWindow) || !perWindow.isArray());
+        const auto windowId = host->Logic().WindowProperties().WindowId();
+        for (const auto& session : perWindow)
+        {
+            auto decorated = session;
+            decorated["window_id"] = static_cast<Json::UInt64>(windowId);
+            sessions.append(std::move(decorated));
+        }
+    }
+
+    *json = _bstrFromJson(sessions);
+    return S_OK;
+}
+CATCH_RETURN()
+
+STDMETHODIMP TerminalProtocolComServer::InspectPersistentSession(GUID sessionId, BSTR* json)
+try
+{
+    RETURN_HR_IF_NULL(E_POINTER, json);
+    *json = nullptr;
+    RETURN_HR_IF(E_NOT_VALID_STATE, !s_emperor);
+    RETURN_HR_IF(E_INVALIDARG, winrt::guid{ sessionId } == winrt::guid{});
+
+    for (const auto& host : s_emperor->GetWindows())
+    {
+        const auto page = _getPage(host.get());
+        if (!page)
+        {
+            continue;
+        }
+
+        try
+        {
+            const auto serialized = winrt::to_string(page.InspectPersistentProtocolSession(winrt::guid{ sessionId }).get());
+            Json::Value session;
+            RETURN_HR_IF(E_UNEXPECTED, !_parseJson(serialized, session) || !session.isObject());
+            session["window_id"] = static_cast<Json::UInt64>(host->Logic().WindowProperties().WindowId());
+            *json = _bstrFromJson(session);
+            return S_OK;
+        }
+        catch (...)
+        {
+            const auto hr = wil::ResultFromCaughtException();
+            if (hr != HRESULT_FROM_WIN32(ERROR_NOT_FOUND))
+            {
+                THROW_HR(hr);
+            }
+        }
+    }
+
+    return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+}
+CATCH_RETURN()
+
+STDMETHODIMP TerminalProtocolComServer::PreparePersistentSessionAttach(GUID sessionId, BSTR* json)
+try
+{
+    RETURN_HR_IF_NULL(E_POINTER, json);
+    *json = nullptr;
+    RETURN_HR_IF(E_NOT_VALID_STATE, !s_emperor);
+    RETURN_HR_IF(E_INVALIDARG, winrt::guid{ sessionId } == winrt::guid{});
+
+    for (const auto& host : s_emperor->GetWindows())
+    {
+        const auto page = _getPage(host.get());
+        if (!page)
+        {
+            continue;
+        }
+
+        try
+        {
+            const auto serialized = winrt::to_string(page.PreparePersistentProtocolSessionAttach(winrt::guid{ sessionId }).get());
+            Json::Value session;
+            RETURN_HR_IF(E_UNEXPECTED, !_parseJson(serialized, session) || !session.isObject());
+            session["window_id"] = static_cast<Json::UInt64>(host->Logic().WindowProperties().WindowId());
+            *json = _bstrFromJson(session);
+            return S_OK;
+        }
+        catch (...)
+        {
+            const auto hr = wil::ResultFromCaughtException();
+            if (hr != HRESULT_FROM_WIN32(ERROR_NOT_FOUND))
+            {
+                THROW_HR(hr);
+            }
+        }
+    }
+
+    return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
 }
 CATCH_RETURN()
 

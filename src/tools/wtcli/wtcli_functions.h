@@ -9,13 +9,19 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <iterator>
+#include <limits>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <sstream>
 #include <vector>
 
 #include <Windows.h>
+#include <sddl.h>
 #include <json/json.h>
+#include <wil/resource.h>
 
 namespace wtcli
 {
@@ -96,7 +102,6 @@ namespace wtcli
         }
         return result;
     }
-
 
     // Build the standard JSON envelope the COM server expects for an
     // `agent_event`. The caller provides the event name, an optional JSON
@@ -527,5 +532,285 @@ namespace wtcli
         }
 
         return true;
+    }
+
+    // ── Session Execution Auto-Routing ──
+
+    enum class SessionRoute
+    {
+        Direct,
+        Relay
+    };
+
+    struct PersistentSessionHostDiscoveryRecord
+    {
+        uint32_t desktopSessionId{ 0 };
+        uint32_t pid{ 0 };
+        std::string pipeName;
+        std::string ownerSid;
+        std::string generation;
+        std::string instanceId;
+    };
+
+    enum class PersistentSessionHostSelectionStatus
+    {
+        Selected,
+        NotFound,
+        Ambiguous,
+    };
+
+    struct PersistentSessionHostSelectionResult
+    {
+        PersistentSessionHostSelectionStatus status{ PersistentSessionHostSelectionStatus::NotFound };
+        size_t selectedIndex{ (std::numeric_limits<size_t>::max)() };
+        size_t eligibleCount{ 0 };
+    };
+
+    struct SessionRouteContext
+    {
+        uint32_t currentSessionId{ 0 };
+        std::optional<uint32_t> targetDesktopSession{};
+        bool hasDirectConnectionCapability{ false };
+        bool canActivateBrandedServerDirectly{ false };
+    };
+
+    struct SessionRouteDecision
+    {
+        SessionRoute route{ SessionRoute::Relay };
+        std::string explanation;
+    };
+
+    inline bool EqualsCaseInsensitiveAscii(const std::string_view left, const std::string_view right)
+    {
+        return left.size() == right.size() &&
+               std::equal(left.begin(), left.end(), right.begin(), [](const unsigned char a, const unsigned char b) {
+                   return std::tolower(a) == std::tolower(b);
+               });
+    }
+
+    inline bool IsCanonicalGuidString(const std::string_view value)
+    {
+        constexpr size_t guidLength = 36;
+        if (value.size() != guidLength)
+        {
+            return false;
+        }
+
+        for (size_t index = 0; index < value.size(); ++index)
+        {
+            const auto ch = static_cast<unsigned char>(value[index]);
+            const auto separator = index == 8 || index == 13 || index == 18 || index == 23;
+            if (separator)
+            {
+                if (ch != '-')
+                {
+                    return false;
+                }
+                continue;
+            }
+
+            if (!std::isxdigit(ch))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    inline bool IsValidSidString(const std::string_view value)
+    {
+        if (value.empty())
+        {
+            return false;
+        }
+
+        const int wideLength = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
+        if (wideLength <= 0)
+        {
+            return false;
+        }
+
+        std::wstring wide(static_cast<size_t>(wideLength), L'\0');
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), wide.data(), wideLength) != wideLength)
+        {
+            return false;
+        }
+
+        PSID sid = nullptr;
+        const auto freeSid = wil::scope_exit([&]() noexcept {
+            if (sid)
+            {
+                LocalFree(sid);
+            }
+        });
+
+        return ConvertStringSidToSidW(wide.c_str(), &sid) != FALSE && IsValidSid(sid) != FALSE;
+    }
+
+    inline bool TryParsePersistentSessionHostPipeName(const std::string_view pipeName,
+                                                      const uint32_t expectedDesktopSessionId,
+                                                      const std::string_view expectedGeneration)
+    {
+        constexpr std::string_view prefix{ R"(\\.\pipe\IntelligentTerminal.SessionHost.)" };
+        if (pipeName.size() <= prefix.size() ||
+            pipeName.compare(0, prefix.size(), prefix) != 0 ||
+            !IsCanonicalGuidString(expectedGeneration))
+        {
+            return false;
+        }
+
+        const auto suffix = pipeName.substr(prefix.size());
+        const auto separator = suffix.find('.');
+        if (separator == std::string_view::npos || separator == 0 || separator == suffix.size() - 1)
+        {
+            return false;
+        }
+
+        if (suffix.find_first_of("\\/", separator + 1) != std::string_view::npos ||
+            suffix.find('.', separator + 1) != std::string_view::npos)
+        {
+            return false;
+        }
+
+        const auto sessionPart = suffix.substr(0, separator);
+        uint32_t parsedSessionId = 0;
+        const auto parseResult = std::from_chars(sessionPart.data(), sessionPart.data() + sessionPart.size(), parsedSessionId);
+        if (parseResult.ec != std::errc{} ||
+            parseResult.ptr != sessionPart.data() + sessionPart.size() ||
+            parsedSessionId != expectedDesktopSessionId)
+        {
+            return false;
+        }
+
+        const auto generationPart = suffix.substr(separator + 1);
+        return EqualsCaseInsensitiveAscii(generationPart, expectedGeneration);
+    }
+
+    inline bool ShouldProbeDirectConnection(const SessionRouteContext& context) noexcept
+    {
+        if (context.currentSessionId == 0 || !context.canActivateBrandedServerDirectly)
+        {
+            return false;
+        }
+
+        return !context.targetDesktopSession.has_value() ||
+               context.targetDesktopSession.value() == context.currentSessionId;
+    }
+
+    inline SessionRouteDecision ClassifySessionRoute(const SessionRouteContext& context)
+    {
+        SessionRouteDecision decision;
+
+        // If a target desktop session is explicitly requested and differs from the current session
+        if (context.targetDesktopSession.has_value() &&
+            context.targetDesktopSession.value() != context.currentSessionId)
+        {
+            decision.route = SessionRoute::Relay;
+            decision.explanation = "Target desktop session " + std::to_string(context.targetDesktopSession.value()) +
+                                   " requested; routing through session host relay.";
+            return decision;
+        }
+
+        // If direct connection is available in the current session context
+        if (context.hasDirectConnectionCapability)
+        {
+            decision.route = SessionRoute::Direct;
+            decision.explanation = "Direct Intelligent Terminal connection available in current desktop session; executing directly via COM.";
+            return decision;
+        }
+
+        // Direct connection unavailable or running in Session 0 / non-interactive context
+        decision.route = SessionRoute::Relay;
+        if (context.currentSessionId == 0)
+        {
+            decision.route = SessionRoute::Relay;
+            decision.explanation = "Running in non-interactive / Session 0 context; routing through session host relay.";
+        }
+        else if (!context.canActivateBrandedServerDirectly)
+        {
+            decision.route = SessionRoute::Relay;
+            decision.explanation = "Current process is not running on an interactive desktop; routing through session host relay.";
+        }
+        else
+        {
+            decision.route = SessionRoute::Relay;
+            decision.explanation = "Direct Terminal COM connection unavailable in current session; routing through session host relay.";
+        }
+
+        return decision;
+    }
+
+    inline bool TryParsePersistentSessionHostDiscoveryRecord(const Json::Value& root, PersistentSessionHostDiscoveryRecord& record)
+    {
+        if (!root.isObject() ||
+            !root["desktop_session_id"].isUInt() ||
+            !root["pipe_name"].isString() ||
+            root["pipe_name"].asString().empty() ||
+            !root["owner_sid"].isString() ||
+            root["owner_sid"].asString().empty() ||
+            !root["generation"].isString() ||
+            !root["instance_id"].isString())
+        {
+            return false;
+        }
+
+        record.desktopSessionId = root["desktop_session_id"].asUInt();
+        record.pid = root["pid"].isUInt() ? root["pid"].asUInt() : 0;
+        record.pipeName = root["pipe_name"].asString();
+        record.ownerSid = root["owner_sid"].asString();
+        record.generation = root["generation"].asString();
+        record.instanceId = root["instance_id"].asString();
+
+        return IsValidSidString(record.ownerSid) &&
+               IsCanonicalGuidString(record.generation) &&
+               IsCanonicalGuidString(record.instanceId) &&
+               TryParsePersistentSessionHostPipeName(record.pipeName, record.desktopSessionId, record.generation);
+    }
+
+    inline PersistentSessionHostSelectionResult SelectPersistentSessionHost(const std::vector<PersistentSessionHostDiscoveryRecord>& candidates,
+                                                                            const std::string_view currentUserSid,
+                                                                            const std::optional<uint32_t> desiredSession)
+    {
+        PersistentSessionHostSelectionResult result;
+        std::optional<size_t> selectedIndex;
+
+        for (size_t index = 0; index < candidates.size(); ++index)
+        {
+            const auto& candidate = candidates[index];
+            if (!EqualsCaseInsensitiveAscii(candidate.ownerSid, currentUserSid))
+            {
+                continue;
+            }
+
+            if (desiredSession.has_value() && candidate.desktopSessionId != desiredSession.value())
+            {
+                continue;
+            }
+
+            ++result.eligibleCount;
+            if (selectedIndex.has_value())
+            {
+                result.status = PersistentSessionHostSelectionStatus::Ambiguous;
+                result.selectedIndex = (std::numeric_limits<size_t>::max)();
+                continue;
+            }
+
+            selectedIndex = index;
+            result.status = PersistentSessionHostSelectionStatus::Selected;
+            result.selectedIndex = index;
+        }
+
+        if (result.status == PersistentSessionHostSelectionStatus::Selected)
+        {
+            return result;
+        }
+
+        if (result.status == PersistentSessionHostSelectionStatus::Ambiguous)
+        {
+            return result;
+        }
+
+        return result;
     }
 }

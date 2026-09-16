@@ -16,6 +16,7 @@
 #include "TerminalPage.h"
 #include "SharedWta.h"
 #include "AgentPaneLog.h"
+#include "../TerminalConnection/ConptyConnection.h"
 #include "../../types/inc/utils.hpp"
 #include "../TerminalSettingsAppAdapterLib/TerminalSettings.h"
 
@@ -123,12 +124,104 @@ namespace winrt::TerminalApp::implementation
         return info;
     }
 
+    static winrt::Microsoft::Terminal::TerminalConnection::implementation::ConptyConnection* _getConptyConnectionImpl(const std::shared_ptr<Pane>& pane)
+    {
+        if (!pane)
+        {
+            return nullptr;
+        }
+        if (const auto termControl = pane->GetTerminalControl())
+        {
+            if (const auto connection = termControl.Connection())
+            {
+                if (const auto conpty = connection.try_as<ConptyConnection>())
+                {
+                    return winrt::get_self<winrt::Microsoft::Terminal::TerminalConnection::implementation::ConptyConnection>(conpty);
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    static std::string _persistentWriterStateString(const winrt::Microsoft::Terminal::TerminalConnection::implementation::PersistentSessionWriterState state)
+    {
+        using State = winrt::Microsoft::Terminal::TerminalConnection::implementation::PersistentSessionWriterState;
+        switch (state)
+        {
+        case State::Pending:
+            return "pending";
+        case State::Attached:
+            return "attached";
+        default:
+            return "available";
+        }
+    }
+
+    static Json::Value _persistentSessionJson(const std::shared_ptr<Pane>& pane, const uint32_t tabId)
+    {
+        Json::Value session;
+        auto paneInfo = _getProtocolPaneInfo(pane);
+        paneInfo.SessionId = _getSessionIdFromPane(pane);
+        paneInfo.TabId = tabId;
+        const auto termControl = pane->GetTerminalControl();
+        if (termControl)
+        {
+            paneInfo.Rows = termControl.ViewHeight();
+            paneInfo.Columns = termControl.ViewWidth();
+        }
+
+        session["session_id"] = winrt::to_string(winrt::hstring{ ::Microsoft::Console::Utils::GuidToPlainString(paneInfo.SessionId) });
+        session["name"] = "";
+        session["tab_id"] = tabId;
+        session["title"] = winrt::to_string(paneInfo.Title);
+        session["profile"] = winrt::to_string(paneInfo.Profile);
+        session["cwd"] = winrt::to_string(paneInfo.Cwd);
+        session["shell"] = winrt::to_string(paneInfo.Shell);
+        session["shell_version"] = winrt::to_string(paneInfo.ShellVersion);
+        session["rows"] = paneInfo.Rows;
+        session["columns"] = paneInfo.Columns;
+
+        if (const auto conpty = _getConptyConnectionImpl(pane))
+        {
+            session["name"] = winrt::to_string(winrt::hstring{ conpty->PersistentSessionName() });
+            const auto writerState = conpty->PersistentWriterState();
+            session["attach_state"] = _persistentWriterStateString(writerState);
+            session["is_attached"] = writerState == winrt::Microsoft::Terminal::TerminalConnection::implementation::PersistentSessionWriterState::Attached;
+
+            const auto handle = reinterpret_cast<HANDLE>(conpty->RootProcessHandle());
+            if (termControl && termControl.ConnectionState() == ConnectionState::Connected)
+            {
+                session["state"] = "running";
+                if (handle)
+                {
+                    session["pid"] = static_cast<Json::UInt>(GetProcessId(handle));
+                }
+            }
+            else
+            {
+                session["state"] = "exited";
+                if (handle)
+                {
+                    session["pid"] = static_cast<Json::UInt>(GetProcessId(handle));
+                    DWORD exitCode = 0;
+                    if (GetExitCodeProcess(handle, &exitCode) && exitCode != STILL_ACTIVE)
+                    {
+                        session["has_exit_code"] = true;
+                        session["exit_code"] = static_cast<int>(exitCode);
+                    }
+                }
+            }
+        }
+        return session;
+    }
+
     uint32_t TerminalPage::TabCount() const
     {
         return [this]() -> IAsyncOperation<uint32_t> {
             co_await wil::resume_foreground(Dispatcher());
             co_return NumberOfTabs();
-        }().get();
+        }()
+                               .get();
     }
 
     Windows::Foundation::IReference<uint32_t> TerminalPage::FocusedTabIndex() const
@@ -141,7 +234,8 @@ namespace winrt::TerminalApp::implementation
                 co_return Windows::Foundation::IReference<uint32_t>(idx.value());
             }
             co_return nullptr;
-        }().get();
+        }()
+                               .get();
     }
 
     // ============================================================================
@@ -186,9 +280,7 @@ namespace winrt::TerminalApp::implementation
         co_await winrt::resume_background();
 
         const auto utf8 = winrt::to_string(text);
-        const auto bounded = lastCommand
-            ? ProtocolParsing::BuildBoundedCommand(utf8, maxLines, maxCharacters)
-            : ProtocolParsing::BuildBoundedBufferTail(utf8, maxLines, maxCharacters);
+        const auto bounded = lastCommand ? ProtocolParsing::BuildBoundedCommand(utf8, maxLines, maxCharacters) : ProtocolParsing::BuildBoundedBufferTail(utf8, maxLines, maxCharacters);
         Protocol::PaneContext result{};
         result.Content = winrt::to_hstring(bounded.content);
         result.LineCount = bounded.lineCount;
@@ -273,9 +365,7 @@ namespace winrt::TerminalApp::implementation
         if (const auto tabImpl = _GetTabImpl(_tabs.GetAt(targetTabIndex)))
         {
             const auto activePane = tabImpl->GetActivePane();
-            paneInfo.IsActive = activePane && activePane->IsAgentPane()
-                ? targetPane->IsSourceOfAgentPane()
-                : activePane == targetPane;
+            paneInfo.IsActive = activePane && activePane->IsAgentPane() ? targetPane->IsSourceOfAgentPane() : activePane == targetPane;
         }
 
         const auto termControl = targetPane->GetTerminalControl();
@@ -409,9 +499,7 @@ namespace winrt::TerminalApp::implementation
                 auto info = _getProtocolPaneInfo(pane);
                 info.SessionId = sid;
                 info.TabId = tabIdx;
-                info.IsActive = activeIsAgent
-                    ? pane->IsSourceOfAgentPane()
-                    : (activePane == pane);
+                info.IsActive = activeIsAgent ? pane->IsSourceOfAgentPane() : (activePane == pane);
 
                 if (const auto termControl = pane->GetTerminalControl())
                 {
@@ -524,9 +612,7 @@ namespace winrt::TerminalApp::implementation
 
         if (sourceRoute == ProtocolParsing::PaneOutputSource::Screen)
         {
-            const auto startIdx = lines.size() > static_cast<size_t>(viewHeight)
-                                      ? lines.size() - viewHeight
-                                      : 0;
+            const auto startIdx = lines.size() > static_cast<size_t>(viewHeight) ? lines.size() - viewHeight : 0;
 
             std::string content;
             int lineCount = 0;
@@ -1005,6 +1091,155 @@ namespace winrt::TerminalApp::implementation
         }
 
         co_return false;
+    }
+
+    IAsyncOperation<bool> TerminalPage::MarkPersistentProtocolSession(winrt::guid sessionId, hstring name)
+    {
+        auto strong = get_strong();
+        co_await wil::resume_foreground(Dispatcher());
+
+        const auto requestedName = winrt::to_string(name);
+        if (!requestedName.empty())
+        {
+            for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
+            {
+                const auto tabImpl = _GetTabImpl(_tabs.GetAt(tabIdx));
+                const auto rootPane = tabImpl ? tabImpl->GetRootPane() : nullptr;
+                if (!rootPane)
+                {
+                    continue;
+                }
+
+                const auto duplicate = rootPane->WalkTree([&](const auto& pane) -> bool {
+                    if (_getSessionIdFromPane(pane) == sessionId)
+                    {
+                        return false;
+                    }
+                    if (const auto conpty = _getConptyConnectionImpl(pane))
+                    {
+                        return conpty->IsPersistentSession() &&
+                               til::equals_insensitive_ascii(winrt::to_string(winrt::hstring{ conpty->PersistentSessionName() }), requestedName);
+                    }
+                    return false;
+                });
+                THROW_HR_IF(HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS), duplicate);
+            }
+        }
+
+        for (const auto& tab : _tabs)
+        {
+            const auto tabImpl = _GetTabImpl(tab);
+            const auto rootPane = tabImpl ? tabImpl->GetRootPane() : nullptr;
+            if (!rootPane)
+            {
+                continue;
+            }
+
+            if (const auto foundPane = rootPane->FindPaneBySessionId(sessionId))
+            {
+                if (const auto conpty = _getConptyConnectionImpl(foundPane))
+                {
+                    conpty->MarkPersistentSession(std::wstring_view{ name });
+                    co_return true;
+                }
+                co_return false;
+            }
+        }
+
+        co_return false;
+    }
+
+    IAsyncOperation<hstring> TerminalPage::ListPersistentProtocolSessions()
+    {
+        auto strong = get_strong();
+        co_await wil::resume_foreground(Dispatcher());
+
+        Json::Value sessions{ Json::arrayValue };
+        for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
+        {
+            const auto tabImpl = _GetTabImpl(_tabs.GetAt(tabIdx));
+            const auto rootPane = tabImpl ? tabImpl->GetRootPane() : nullptr;
+            if (!rootPane)
+            {
+                continue;
+            }
+
+            rootPane->WalkTree([&](const auto& pane) {
+                if (const auto conpty = _getConptyConnectionImpl(pane))
+                {
+                    if (conpty->IsPersistentSession())
+                    {
+                        sessions.append(_persistentSessionJson(pane, tabIdx));
+                    }
+                }
+            });
+        }
+
+        Json::StreamWriterBuilder builder;
+        builder["indentation"] = "";
+        co_return winrt::to_hstring(Json::writeString(builder, sessions));
+    }
+
+    IAsyncOperation<hstring> TerminalPage::InspectPersistentProtocolSession(winrt::guid sessionId)
+    {
+        auto strong = get_strong();
+        co_await wil::resume_foreground(Dispatcher());
+
+        for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
+        {
+            const auto tabImpl = _GetTabImpl(_tabs.GetAt(tabIdx));
+            const auto rootPane = tabImpl ? tabImpl->GetRootPane() : nullptr;
+            if (!rootPane)
+            {
+                continue;
+            }
+
+            if (const auto foundPane = rootPane->FindPaneBySessionId(sessionId))
+            {
+                const auto conpty = _getConptyConnectionImpl(foundPane);
+                THROW_HR_IF(HRESULT_FROM_WIN32(ERROR_NOT_FOUND), !conpty || !conpty->IsPersistentSession());
+
+                Json::StreamWriterBuilder builder;
+                builder["indentation"] = "";
+                co_return winrt::to_hstring(Json::writeString(builder, _persistentSessionJson(foundPane, tabIdx)));
+            }
+        }
+
+        THROW_HR(HRESULT_FROM_WIN32(ERROR_NOT_FOUND));
+    }
+
+    IAsyncOperation<hstring> TerminalPage::PreparePersistentProtocolSessionAttach(winrt::guid sessionId)
+    {
+        auto strong = get_strong();
+        co_await wil::resume_foreground(Dispatcher());
+
+        for (uint32_t tabIdx = 0; tabIdx < _tabs.Size(); ++tabIdx)
+        {
+            const auto tabImpl = _GetTabImpl(_tabs.GetAt(tabIdx));
+            const auto rootPane = tabImpl ? tabImpl->GetRootPane() : nullptr;
+            if (!rootPane)
+            {
+                continue;
+            }
+
+            if (const auto foundPane = rootPane->FindPaneBySessionId(sessionId))
+            {
+                const auto conpty = _getConptyConnectionImpl(foundPane);
+                THROW_HR_IF(HRESULT_FROM_WIN32(ERROR_NOT_FOUND), !conpty || !conpty->IsPersistentSession());
+
+                const auto attach = conpty->PreparePersistentSessionAttach();
+                Json::Value response = _persistentSessionJson(foundPane, tabIdx);
+                response["pipe_name"] = winrt::to_string(winrt::hstring{ attach.PipeName });
+                response["attach_token"] = winrt::to_string(winrt::hstring{ attach.AttachToken });
+                response["attach_state"] = _persistentWriterStateString(attach.WriterState);
+
+                Json::StreamWriterBuilder builder;
+                builder["indentation"] = "";
+                co_return winrt::to_hstring(Json::writeString(builder, response));
+            }
+        }
+
+        THROW_HR(HRESULT_FROM_WIN32(ERROR_NOT_FOUND));
     }
 
 }

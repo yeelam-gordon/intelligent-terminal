@@ -23,6 +23,36 @@ repository actually shells out to that subcommand today (not whether the
 subcommand is reachable). External callers (third-party agents, ad-hoc
 scripts) are not counted.
 
+### Persistent reconnectable sessions
+
+`wtcli session ...` commands automatically adapt to the caller's execution context:
+
+- **Auto-routing:** When executed within the same interactive desktop session as Intelligent Terminal (or when direct COM connection via `WT_COM_CLSID` or branded CLSID is available), session verbs (`create`, `list`, `inspect`, `attach`, `kill`) execute the direct COM/attach path locally and do **not** require running `wtcli session host`.
+- **Session 0 / Non-interactive delegation:** When invoked from Session 0 or headless contexts (such as an SSH session without direct COM access), `wtcli` discovers and routes control requests through the resident `wtcli session host` relay in the target desktop session.
+- **Guarded activation:** Ordinary session verbs never fall back to branded COM activation from Session 0 or other non-interactive contexts. They only use the branded CLSID when the caller itself is on an interactive desktop session; otherwise they require a relay host.
+- **Byte path separation:** The relay handles control-plane commands and returns the attachment pipe metadata; `attach` streams bytes directly to the Terminal attachment pipe without routing raw I/O through the session host.
+- **`wtcli session host`** is the resident per-user login helper. Run it in the interactive desktop session **after the user logs on** (or register it via Startup / Task Scheduler) for headless / Session 0 remote connectivity. It connects through `WT_COM_CLSID` when present, otherwise the build's branded Terminal protocol CLSID.
+- Discovery is per-user and per desktop session. Auto-selection only succeeds when exactly one eligible host for the current user SID exists. If the same user has multiple interactive Windows sessions, pass `--desktop-session <id>`. Explicit `--desktop-session` selection is honored.
+- Relay failures distinguish missing hosts, ambiguous hosts, stale endpoints, and access-denied cases on stderr; successful commands stay quiet unless the subcommand itself prints output.
+- Availability starts only after interactive logon. Rebooting or exiting Intelligent Terminal ends the ability to reconnect. This MVP does **not** include a broker/service and does not support pre-logon or cross-user access.
+- `attach` forwards raw VT bytes over a second local pipe while the GUI-backed
+  tab/pane remains the owner of the ConPTY, shell, scrollback, and process
+  lifetime. Detaching or an SSH disconnect closes only the attachment, not the
+  pane. `kill` explicitly closes the pane.
+- The attach path is best-effort through double ConPTY. Ordinary PowerShell /
+  PSReadLine interaction, Unicode, cursor movement, and common TUIs should
+  work, but the background GUI view may not exactly mirror a remote size change
+  until the pane is shown locally again.
+
+| Command | What it does | Example |
+|---------|--------------|---------|
+| `session host` | Run the resident per-user control host in the current interactive desktop session. | `wtcli session host` |
+| `session create` | Create a background, persistent, reconnectable tab session in the current or explicitly selected desktop session. | `wtcli session create --name build -c "pwsh"` |
+| `session list` | List persistent sessions from the current desktop session or from a selected relay host. | `wtcli session list --desktop-session 3` |
+| `session inspect` | Show one persistent session's state, attach status, and metadata from the current or selected desktop session. | `wtcli session inspect build --desktop-session 3` |
+| `session attach` | Bind the caller's stdin/stdout to a persistent session without taking over its lifetime; relayed control still returns a direct Terminal data pipe. | `wtcli session attach build --desktop-session 3` |
+| `session kill` | Close the persistent session's backing pane explicitly in the current or selected desktop session. | `wtcli session kill build --desktop-session 3` |
+
 | Command | Alias | What it does | Example | Used in repo |
 |---------|-------|--------------|---------|--------------|
 | `list-windows` | `lsw` | List all Terminal windows. | `wtcli --json list-windows` | ✅ `cli_channel.rs` (`list_windows`) |

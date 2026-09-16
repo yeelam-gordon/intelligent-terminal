@@ -10,11 +10,31 @@
 #include <til/env.h>
 #include <til/ticket_lock.h>
 
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+
 namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
 {
+    enum class PersistentSessionWriterState
+    {
+        Available,
+        Pending,
+        Attached,
+    };
+
+    struct PersistentSessionAttachInfo
+    {
+        std::wstring PipeName;
+        std::wstring AttachToken;
+        PersistentSessionWriterState WriterState{ PersistentSessionWriterState::Available };
+    };
+
     struct ConptyConnection : ConptyConnectionT<ConptyConnection>, BaseTerminalConnection<ConptyConnection>
     {
         explicit ConptyConnection();
+        ~ConptyConnection() noexcept;
         void Initialize(const Windows::Foundation::Collections::ValueSet& settings);
         void InitializeFromHandoff(HANDLE* in, HANDLE* out, HANDLE signal, HANDLE reference, HANDLE server, HANDLE client, const TERMINAL_STARTUP_INFO* startupInfo);
 
@@ -31,6 +51,13 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
 
         void ReparentWindow(const uint64_t newParent);
         uint64_t RootProcessHandle() noexcept;
+
+        void MarkPersistentSession(std::wstring_view name);
+        bool IsPersistentSession() const noexcept;
+        std::wstring PersistentSessionName() const;
+        PersistentSessionWriterState PersistentWriterState() const noexcept;
+        PersistentSessionAttachInfo PreparePersistentSessionAttach();
+        bool WriteInputRaw(std::string_view data) noexcept;
 
         winrt::hstring Commandline() const;
         winrt::hstring StartingTitle() const;
@@ -55,6 +82,9 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         til::event<TerminalOutputHandler> TerminalOutput;
 
     private:
+        struct PersistentSessionAttachTransport;
+        using RawOutputHandler = std::function<void(std::string_view)>;
+
         static void closePseudoConsoleAsync(HPCON hPC) noexcept;
         static HRESULT NewHandoff(HANDLE* in, HANDLE* out, HANDLE signal, HANDLE reference, HANDLE server, HANDLE client, const TERMINAL_STARTUP_INFO* startupInfo) noexcept;
         static winrt::hstring _commandlineFromProcess(HANDLE process);
@@ -63,6 +93,12 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         void _indicateExitWithStatus(unsigned int status) noexcept;
         static std::wstring _formatStatus(uint32_t status);
         void _LastConPtyClientDisconnected() noexcept;
+        uint64_t _registerRawOutputHandler(RawOutputHandler handler);
+        void _unregisterRawOutputHandler(uint64_t token) noexcept;
+        void _notifyRawOutput(std::string_view data);
+        void _notifyPersistentAttachExit(uint32_t exitCode, bool hasExitCode) noexcept;
+        void _closePersistentAttach() noexcept;
+        bool _writePipeBytes(std::string_view data) noexcept;
 
         til::CoordType _rows = 120;
         til::CoordType _cols = 30;
@@ -102,7 +138,18 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
 
         } _startupInfo{};
 
+        mutable std::mutex _persistentSessionMutex;
+        bool _persistentSessionEnabled{ false };
+        std::wstring _persistentSessionName;
+        std::shared_ptr<PersistentSessionAttachTransport> _persistentAttach;
+
+        std::mutex _rawOutputMutex;
+        std::unordered_map<uint64_t, RawOutputHandler> _rawOutputHandlers;
+        uint64_t _nextRawOutputHandlerToken{ 1 };
+
         DWORD _OutputThread();
+
+        friend struct PersistentSessionAttachTransport;
     };
 }
 

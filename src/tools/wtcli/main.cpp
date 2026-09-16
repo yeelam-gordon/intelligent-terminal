@@ -6,7 +6,10 @@
 
 #include "Formatting.h"
 #include "wtcli_functions.h"
+#include "../../cascadia/inc/IntelligentTerminalPaths.h"
+#include "../../cascadia/TerminalProtocol/PersistentSessionProtocol.h"
 #include "../../cascadia/TerminalProtocol/ProtocolParsing.h"
+#include "../../cascadia/TerminalProtocol/TerminalProtocolGuids.h"
 
 // Classic-COM Terminal protocol. Generated from
 // src/host/proxy/ITerminalProtocol.idl; found via the OpenConsoleProxy IntDir
@@ -20,15 +23,23 @@
 #include <wil/resource.h>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <fcntl.h>
 #include <io.h>
 #include <iostream>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -74,48 +85,30 @@ struct EventSink : ITerminalProtocolEventSink
 
 // ── Helpers ──
 
-static winrt::com_ptr<ITerminalProtocol> ConnectToTerminal(bool* outAuthenticated = nullptr,
-                                                           std::string* outVersion = nullptr,
-                                                           bool skipAuthenticate = false,
-                                                           bool quiet = false,
-                                                           bool requireProtocolVersion = false)
+static winrt::com_ptr<ITerminalProtocol> AuthenticateConnectedTerminal(winrt::com_ptr<ITerminalProtocol> server,
+                                                                       bool* outAuthenticated = nullptr,
+                                                                       std::string* outVersion = nullptr,
+                                                                       bool skipAuthenticate = false,
+                                                                       bool quiet = false,
+                                                                       bool requireProtocolVersion = false)
 {
     if (outAuthenticated)
         *outAuthenticated = false;
     if (outVersion)
         outVersion->clear();
 
-    wchar_t clsid[128]{};
-    if (!GetEnvironmentVariableW(L"WT_COM_CLSID", clsid, ARRAYSIZE(clsid)))
+    if (!server)
     {
-        if (!quiet)
-            fprintf(stderr, "[wtcli] WT_COM_CLSID not set. Must run inside an Intelligent Terminal pane.\n");
         return nullptr;
     }
 
-    CLSID cls{};
-    if (FAILED(CLSIDFromString(clsid, &cls)))
-    {
-        if (!quiet)
-            fprintf(stderr, "[wtcli] Invalid CLSID: %ls\n", clsid);
-        return nullptr;
-    }
-
-    winrt::com_ptr<ITerminalProtocol> server;
-    auto hr = CoCreateInstance(cls, nullptr, CLSCTX_LOCAL_SERVER, __uuidof(ITerminalProtocol), server.put_void());
-    if (FAILED(hr))
-    {
-        if (!quiet)
-            fprintf(stderr, "[wtcli] Connection failed: 0x%08X\n", static_cast<uint32_t>(hr));
-        return nullptr;
-    }
     if (skipAuthenticate)
     {
         return server;
     }
 
     BSTR rawAuth = nullptr;
-    hr = server->Authenticate(nullptr, &rawAuth);
+    auto hr = server->Authenticate(nullptr, &rawAuth);
     bool parsed = false;
     bool authenticated = false;
     std::string version;
@@ -166,6 +159,103 @@ static winrt::com_ptr<ITerminalProtocol> ConnectToTerminal(bool* outAuthenticate
     return server;
 }
 
+static winrt::com_ptr<ITerminalProtocol> ConnectToTerminalByClsid(const std::wstring_view clsidValue,
+                                                                  bool* outAuthenticated = nullptr,
+                                                                  std::string* outVersion = nullptr,
+                                                                  bool skipAuthenticate = false,
+                                                                  bool quiet = false,
+                                                                  bool requireProtocolVersion = false)
+{
+    CLSID cls{};
+    if (FAILED(CLSIDFromString(clsidValue.data(), &cls)))
+    {
+        if (!quiet)
+            fprintf(stderr, "[wtcli] Invalid CLSID: %ls\n", clsidValue.data());
+        return nullptr;
+    }
+
+    winrt::com_ptr<ITerminalProtocol> server;
+    const auto hr = CoCreateInstance(cls, nullptr, CLSCTX_LOCAL_SERVER, __uuidof(ITerminalProtocol), server.put_void());
+    if (FAILED(hr))
+    {
+        if (!quiet)
+            fprintf(stderr, "[wtcli] Connection failed: 0x%08X\n", static_cast<uint32_t>(hr));
+        return nullptr;
+    }
+    return AuthenticateConnectedTerminal(std::move(server), outAuthenticated, outVersion, skipAuthenticate, quiet, requireProtocolVersion);
+}
+
+static winrt::com_ptr<ITerminalProtocol> ConnectToTerminal(bool* outAuthenticated = nullptr,
+                                                           std::string* outVersion = nullptr,
+                                                           bool skipAuthenticate = false,
+                                                           bool quiet = false,
+                                                           bool requireProtocolVersion = false)
+{
+    wchar_t clsid[128]{};
+    if (!GetEnvironmentVariableW(L"WT_COM_CLSID", clsid, ARRAYSIZE(clsid)))
+    {
+        if (!quiet)
+            fprintf(stderr, "[wtcli] WT_COM_CLSID not set. Must run inside an Intelligent Terminal pane.\n");
+        return nullptr;
+    }
+    return ConnectToTerminalByClsid(clsid, outAuthenticated, outVersion, skipAuthenticate, quiet, requireProtocolVersion);
+}
+
+static DWORD CurrentProcessSessionId() noexcept
+{
+    DWORD sessionId = 0;
+    ProcessIdToSessionId(GetCurrentProcessId(), &sessionId);
+    return sessionId;
+}
+
+static bool IsCurrentProcessInteractiveDesktop() noexcept
+{
+    if (CurrentProcessSessionId() == 0)
+    {
+        return false;
+    }
+
+    // GetProcessWindowStation returns a borrowed handle owned by the process.
+    const auto windowStation = GetProcessWindowStation();
+    if (!windowStation)
+    {
+        return false;
+    }
+
+    USEROBJECTFLAGS flags{};
+    if (!GetUserObjectInformationW(windowStation, UOI_FLAGS, &flags, sizeof(flags), nullptr) ||
+        (flags.dwFlags & WSF_VISIBLE) == 0)
+    {
+        return false;
+    }
+
+    wil::unique_hdesk inputDesktop{ OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS) };
+    return inputDesktop.is_valid();
+}
+
+static winrt::com_ptr<ITerminalProtocol> ConnectToTerminalForSessionHost(bool* outAuthenticated = nullptr,
+                                                                         std::string* outVersion = nullptr,
+                                                                         bool skipAuthenticate = false,
+                                                                         bool quiet = false,
+                                                                         bool requireProtocolVersion = false,
+                                                                         bool allowBrandedFallbackActivation = true)
+{
+    wchar_t clsid[128]{};
+    if (GetEnvironmentVariableW(L"WT_COM_CLSID", clsid, ARRAYSIZE(clsid)))
+    {
+        return ConnectToTerminalByClsid(clsid, outAuthenticated, outVersion, skipAuthenticate, quiet, requireProtocolVersion);
+    }
+    if (!allowBrandedFallbackActivation)
+    {
+        if (!quiet)
+        {
+            fprintf(stderr, "[wtcli] WT_COM_CLSID is unavailable in this context; direct persistent-session control requires an interactive desktop session.\n");
+        }
+        return nullptr;
+    }
+    return ConnectToTerminalByClsid(winrt::to_hstring(__CLSID_TerminalProtocolServer).c_str(), outAuthenticated, outVersion, skipAuthenticate, quiet, requireProtocolVersion);
+}
+
 // Call a method that returns a JSON BSTR; parse into `out`. Returns the HRESULT.
 template<typename F>
 static HRESULT CallJson(F&& call, Json::Value& out)
@@ -203,6 +293,23 @@ static std::string GuidToString(const GUID& g)
     if (ws.size() > 2 && ws.front() == L'{' && ws.back() == L'}')
         ws = ws.substr(1, ws.size() - 2);
     return winrt::to_string(winrt::hstring{ ws });
+}
+
+static std::wstring GuidToWideString(const GUID& g)
+{
+    wchar_t buf[40]{};
+    StringFromGUID2(g, buf, ARRAYSIZE(buf));
+    std::wstring ws(buf);
+    if (ws.size() > 2 && ws.front() == L'{' && ws.back() == L'}')
+        ws = ws.substr(1, ws.size() - 2);
+    return ws;
+}
+
+static std::wstring CreateGuidString()
+{
+    GUID guid{};
+    THROW_IF_FAILED(CoCreateGuid(&guid));
+    return GuidToWideString(guid);
 }
 
 static GUID GuidFromString(const std::string& target, bool quiet = false)
@@ -354,6 +461,894 @@ static HRESULT SupportsCapability(ITerminalProtocol* server, const std::string_v
     }
 }
 
+namespace SessionWire = Microsoft::Terminal::PersistentSession;
+
+namespace PersistentSessions
+{
+    constexpr std::wstring_view HostPipePrefix{ L"\\\\.\\pipe\\IntelligentTerminal.SessionHost." };
+
+    struct HostRecord
+    {
+        DWORD desktopSessionId{};
+        DWORD pid{};
+        std::wstring pipeName;
+        std::wstring ownerSid;
+        std::wstring generation;
+        std::wstring instanceId;
+        std::filesystem::path discoveryPath;
+    };
+
+    struct ConsoleModeGuard
+    {
+        HANDLE handle{ INVALID_HANDLE_VALUE };
+        DWORD originalMode{};
+        bool active{ false };
+
+        ~ConsoleModeGuard()
+        {
+            if (active)
+            {
+                SetConsoleMode(handle, originalMode);
+            }
+        }
+    };
+
+    static std::string JsonString(const Json::Value& value)
+    {
+        Json::StreamWriterBuilder builder;
+        builder["indentation"] = "";
+        return Json::writeString(builder, value);
+    }
+
+    static bool ParseJsonString(const std::string& text, Json::Value& value)
+    {
+        Json::CharReaderBuilder builder;
+        std::string errors;
+        std::istringstream stream(text);
+        return Json::parseFromStream(builder, stream, &value, &errors);
+    }
+
+    static std::string AsciiLower(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](const unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        return value;
+    }
+
+    static std::string ReadUtf8File(const std::filesystem::path& path)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+        {
+            return {};
+        }
+        return { std::istreambuf_iterator<char>{ file }, std::istreambuf_iterator<char>{} };
+    }
+
+    static void WriteUtf8FileAtomic(const std::filesystem::path& path, const std::string_view content)
+    {
+        auto tempPath = path;
+        tempPath += L".tmp";
+
+        {
+            std::ofstream file(tempPath, std::ios::binary | std::ios::trunc);
+            if (!file)
+            {
+                THROW_HR(E_FAIL);
+            }
+            file.write(content.data(), static_cast<std::streamsize>(content.size()));
+            file.close();
+            THROW_HR_IF(E_FAIL, !file.good());
+        }
+
+        std::error_code ec;
+        std::filesystem::rename(tempPath, path, ec);
+        if (ec)
+        {
+            std::filesystem::remove(path, ec);
+            ec.clear();
+            std::filesystem::rename(tempPath, path, ec);
+            THROW_HR_IF(HRESULT_FROM_WIN32(ec.value()), ec);
+        }
+    }
+
+    static std::filesystem::path DiscoveryDirectory()
+    {
+        return IntelligentTerminal::PersistentSessionHostDir();
+    }
+
+    static std::filesystem::path DiscoveryPathForSession(const DWORD desktopSessionId)
+    {
+        return DiscoveryDirectory() / (L"desktop-session-" + std::to_wstring(desktopSessionId) + L".json");
+    }
+
+    static bool LoadHostRecord(const std::filesystem::path& path, HostRecord& record)
+    {
+        const auto text = ReadUtf8File(path);
+        if (text.empty())
+        {
+            return false;
+        }
+
+        Json::Value root;
+        wtcli::PersistentSessionHostDiscoveryRecord parsed;
+        if (!ParseJsonString(text, root) || !wtcli::TryParsePersistentSessionHostDiscoveryRecord(root, parsed))
+        {
+            return false;
+        }
+        record.desktopSessionId = static_cast<DWORD>(parsed.desktopSessionId);
+        record.pid = static_cast<DWORD>(parsed.pid);
+        record.pipeName = winrt::to_hstring(parsed.pipeName).c_str();
+        record.ownerSid = winrt::to_hstring(parsed.ownerSid).c_str();
+        record.generation = winrt::to_hstring(parsed.generation).c_str();
+        record.instanceId = winrt::to_hstring(parsed.instanceId).c_str();
+        record.discoveryPath = path;
+        return true;
+    }
+
+    static void WriteDiscoveryRecord(const HostRecord& record)
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(record.discoveryPath.parent_path(), ec);
+
+        Json::Value root;
+        root["desktop_session_id"] = static_cast<Json::UInt>(record.desktopSessionId);
+        root["pid"] = static_cast<Json::UInt>(record.pid);
+        root["pipe_name"] = winrt::to_string(winrt::hstring{ record.pipeName });
+        root["owner_sid"] = winrt::to_string(winrt::hstring{ record.ownerSid });
+        root["generation"] = winrt::to_string(winrt::hstring{ record.generation });
+        root["instance_id"] = winrt::to_string(winrt::hstring{ record.instanceId });
+        WriteUtf8FileAtomic(record.discoveryPath, JsonString(root));
+    }
+
+    static void RemoveDiscoveryRecordIfMatches(const HostRecord& record)
+    {
+        HostRecord current;
+        if (!LoadHostRecord(record.discoveryPath, current))
+        {
+            return;
+        }
+        if (current.generation == record.generation && current.pipeName == record.pipeName)
+        {
+            std::error_code ec;
+            std::filesystem::remove(record.discoveryPath, ec);
+        }
+    }
+
+    static std::string CurrentUserSidUtf8()
+    {
+        return winrt::to_string(winrt::hstring{ SessionWire::CurrentUserSidString() });
+    }
+
+    static bool HostMatchesCurrentUser(const HostRecord& record, const std::string_view userSid)
+    {
+        return wtcli::EqualsCaseInsensitiveAscii(winrt::to_string(winrt::hstring{ record.ownerSid }), userSid);
+    }
+
+    static bool IsHostRecordDefinitelyStale(const HostRecord& record)
+    {
+        if (record.pid == 0)
+        {
+            return false;
+        }
+
+        wil::unique_handle process{ OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, record.pid) };
+        if (!process)
+        {
+            return GetLastError() == ERROR_INVALID_PARAMETER;
+        }
+
+        DWORD sessionId = 0;
+        if (ProcessIdToSessionId(record.pid, &sessionId) && sessionId != record.desktopSessionId)
+        {
+            return true;
+        }
+
+        return WaitForSingleObject(process.get(), 0) == WAIT_OBJECT_0;
+    }
+
+    static std::vector<HostRecord> DiscoverHosts()
+    {
+        std::vector<HostRecord> records;
+        std::error_code ec;
+        const auto dir = DiscoveryDirectory();
+        if (!std::filesystem::exists(dir, ec))
+        {
+            return records;
+        }
+
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
+        {
+            if (ec || !entry.is_regular_file())
+            {
+                continue;
+            }
+            HostRecord record;
+            if (LoadHostRecord(entry.path(), record))
+            {
+                if (IsHostRecordDefinitelyStale(record))
+                {
+                    std::filesystem::remove(entry.path(), ec);
+                    ec.clear();
+                    continue;
+                }
+                records.push_back(std::move(record));
+            }
+        }
+        return records;
+    }
+
+    static std::vector<HostRecord> DiscoverHostsForCurrentUser(const std::string_view userSid)
+    {
+        std::vector<HostRecord> records;
+        for (auto& record : DiscoverHosts())
+        {
+            if (HostMatchesCurrentUser(record, userSid))
+            {
+                records.push_back(std::move(record));
+            }
+        }
+        return records;
+    }
+
+    static bool TryConfigureConsoleMode(const HANDLE handle, const DWORD newMode, ConsoleModeGuard& guard)
+    {
+        if (handle == INVALID_HANDLE_VALUE)
+        {
+            return false;
+        }
+        DWORD mode = 0;
+        if (!GetConsoleMode(handle, &mode))
+        {
+            return false;
+        }
+        guard.handle = handle;
+        guard.originalMode = mode;
+        guard.active = SetConsoleMode(handle, newMode) != FALSE;
+        return guard.active;
+    }
+
+    static std::optional<SessionWire::ResizePayload> QueryConsoleSize()
+    {
+        CONSOLE_SCREEN_BUFFER_INFO info{};
+        if (!GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info))
+        {
+            return std::nullopt;
+        }
+        const auto columns = info.srWindow.Right - info.srWindow.Left + 1;
+        const auto rows = info.srWindow.Bottom - info.srWindow.Top + 1;
+        if (rows <= 0 || columns <= 0)
+        {
+            return std::nullopt;
+        }
+        return SessionWire::ResizePayload{
+            .rows = static_cast<uint32_t>(rows),
+            .columns = static_cast<uint32_t>(columns),
+        };
+    }
+
+    static std::string HResultMessage(const HRESULT hr)
+    {
+        switch (hr)
+        {
+        case HRESULT_FROM_WIN32(ERROR_NOT_FOUND):
+            return "No matching persistent session was found.";
+        case HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS):
+            return "A persistent session with that name already exists.";
+        case HRESULT_FROM_WIN32(ERROR_PIPE_BUSY):
+            return "That persistent session already has an active writer attached.";
+        case HRESULT_FROM_WIN32(ERROR_INVALID_STATE):
+            return "That persistent session is no longer running.";
+        case HRESULT_FROM_WIN32(ERROR_DUP_NAME):
+            return "Multiple persistent sessions matched that name; use the session ID.";
+        default:
+            return "The request failed.";
+        }
+    }
+
+    static std::string AttachStreamFailureMessage(const HRESULT hr)
+    {
+        switch (hr)
+        {
+        case HRESULT_FROM_WIN32(ERROR_BROKEN_PIPE):
+        case HRESULT_FROM_WIN32(ERROR_PIPE_NOT_CONNECTED):
+        case HRESULT_FROM_WIN32(ERROR_BAD_PIPE):
+        case HRESULT_FROM_WIN32(ERROR_NO_DATA):
+            return "The persistent-session attachment disconnected unexpectedly.";
+        default:
+            return "The persistent-session attachment ended unexpectedly.";
+        }
+    }
+
+    static bool IsStaleHostTransportError(const HRESULT hr) noexcept
+    {
+        switch (hr)
+        {
+        case HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND):
+        case HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND):
+        case HRESULT_FROM_WIN32(ERROR_BAD_PIPE):
+        case HRESULT_FROM_WIN32(ERROR_PIPE_NOT_CONNECTED):
+        case HRESULT_FROM_WIN32(ERROR_BROKEN_PIPE):
+        case HRESULT_FROM_WIN32(ERROR_NO_DATA):
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    static HRESULT SendControlRequest(const HostRecord& host, const Json::Value& request, Json::Value& response)
+    {
+        auto openPipe = [&]() -> wil::unique_hfile {
+            return wil::unique_hfile{
+                CreateFileW(host.pipeName.c_str(),
+                            GENERIC_READ | GENERIC_WRITE,
+                            0,
+                            nullptr,
+                            OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL,
+                            nullptr)
+            };
+        };
+
+        auto pipe = openPipe();
+        if (!pipe && GetLastError() == ERROR_PIPE_BUSY)
+        {
+            if (!WaitNamedPipeW(host.pipeName.c_str(), 2000))
+            {
+                return HRESULT_FROM_WIN32(GetLastError());
+            }
+            pipe = openPipe();
+        }
+
+        if (!pipe)
+        {
+            const auto hr = HRESULT_FROM_WIN32(GetLastError());
+            if (IsStaleHostTransportError(hr))
+            {
+                RemoveDiscoveryRecordIfMatches(host);
+            }
+            return hr;
+        }
+
+        HRESULT hr = SessionWire::WriteHello(pipe.get(), "client");
+        if (FAILED(hr))
+        {
+            if (IsStaleHostTransportError(hr))
+            {
+                RemoveDiscoveryRecordIfMatches(host);
+            }
+            return hr;
+        }
+        Json::Value hello;
+        hr = SessionWire::ReadAndValidateHello(pipe.get(), "host", hello);
+        if (FAILED(hr))
+        {
+            if (IsStaleHostTransportError(hr))
+            {
+                RemoveDiscoveryRecordIfMatches(host);
+            }
+            return hr;
+        }
+        hr = SessionWire::WriteJsonFrame(pipe.get(), SessionWire::MessageType::Request, request);
+        if (FAILED(hr))
+        {
+            if (IsStaleHostTransportError(hr))
+            {
+                RemoveDiscoveryRecordIfMatches(host);
+            }
+            return hr;
+        }
+
+        SessionWire::Frame frame;
+        hr = SessionWire::ReadFrame(pipe.get(), frame);
+        if (FAILED(hr))
+        {
+            if (IsStaleHostTransportError(hr))
+            {
+                RemoveDiscoveryRecordIfMatches(host);
+            }
+            return hr;
+        }
+        if (frame.type == SessionWire::MessageType::Error)
+        {
+            Json::Value error;
+            RETURN_IF_FAILED(SessionWire::ParseJsonPayload(frame.payload, error));
+            if (error["hr"].isInt())
+            {
+                return error["hr"].asInt();
+            }
+            return E_FAIL;
+        }
+        RETURN_HR_IF(E_UNEXPECTED, frame.type != SessionWire::MessageType::Response);
+        return SessionWire::ParseJsonPayload(frame.payload, response);
+    }
+
+    static HRESULT ResolveHost(const std::optional<uint32_t> desiredSession, const std::string_view userSid, HostRecord& host)
+    {
+        auto hosts = DiscoverHosts();
+        std::vector<wtcli::PersistentSessionHostDiscoveryRecord> candidates;
+        candidates.reserve(hosts.size());
+        for (const auto& candidate : hosts)
+        {
+            candidates.push_back(wtcli::PersistentSessionHostDiscoveryRecord{
+                .desktopSessionId = candidate.desktopSessionId,
+                .pid = candidate.pid,
+                .pipeName = winrt::to_string(winrt::hstring{ candidate.pipeName }),
+                .ownerSid = winrt::to_string(winrt::hstring{ candidate.ownerSid }),
+                .generation = winrt::to_string(winrt::hstring{ candidate.generation }),
+                .instanceId = winrt::to_string(winrt::hstring{ candidate.instanceId }),
+            });
+        }
+
+        const auto selection = wtcli::SelectPersistentSessionHost(candidates, userSid, desiredSession);
+        if (selection.status == wtcli::PersistentSessionHostSelectionStatus::Selected)
+        {
+            host = hosts[selection.selectedIndex];
+            return S_OK;
+        }
+
+        return selection.status == wtcli::PersistentSessionHostSelectionStatus::Ambiguous ?
+                   HRESULT_FROM_WIN32(ERROR_MORE_DATA) :
+                   HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    }
+
+    static HRESULT AddHostMetadata(const HostRecord& host, Json::Value& response)
+    {
+        if (response.isArray())
+        {
+            for (auto& session : response)
+            {
+                session["desktop_session_id"] = static_cast<Json::UInt>(host.desktopSessionId);
+                session["host_generation"] = winrt::to_string(winrt::hstring{ host.generation });
+            }
+        }
+        else if (response.isObject())
+        {
+            response["desktop_session_id"] = static_cast<Json::UInt>(host.desktopSessionId);
+            response["host_generation"] = winrt::to_string(winrt::hstring{ host.generation });
+        }
+        return S_OK;
+    }
+
+    static HRESULT ResolvePersistentSessionByTarget(ITerminalProtocol* server, const std::string& target, GUID& sessionId, Json::Value* sessionOut = nullptr)
+    {
+        Json::Value sessions;
+        RETURN_IF_FAILED(CallJson([&](BSTR* json) { return server->ListPersistentSessions(json); }, sessions));
+        RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_NOT_FOUND), !sessions.isArray());
+
+        const auto lowerTarget = AsciiLower(target);
+        std::optional<Json::Value> nameMatch;
+        for (const auto& session : sessions)
+        {
+            if (!session.isObject() || !session["session_id"].isString())
+            {
+                continue;
+            }
+
+            const auto sessionIdText = session["session_id"].asString();
+            const auto name = session["name"].isString() ? session["name"].asString() : std::string{};
+            if (AsciiLower(sessionIdText) == lowerTarget)
+            {
+                sessionId = GuidFromString(sessionIdText, true);
+                RETURN_HR_IF(E_INVALIDARG, InlineIsEqualGUID(sessionId, GUID{}));
+                if (sessionOut)
+                {
+                    *sessionOut = session;
+                }
+                return S_OK;
+            }
+
+            if (!name.empty() && AsciiLower(name) == lowerTarget)
+            {
+                RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_DUP_NAME), nameMatch.has_value());
+                nameMatch = session;
+            }
+        }
+
+        if (nameMatch.has_value())
+        {
+            sessionId = GuidFromString((*nameMatch)["session_id"].asString(), true);
+            RETURN_HR_IF(E_INVALIDARG, InlineIsEqualGUID(sessionId, GUID{}));
+            if (sessionOut)
+            {
+                *sessionOut = *nameMatch;
+            }
+            return S_OK;
+        }
+        return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    }
+
+    static HRESULT HandleControlRequest(const Json::Value& request,
+                                        Json::Value& response,
+                                        const bool skipAuthenticate,
+                                        const bool allowBrandedFallbackActivation)
+    {
+        RETURN_HR_IF(E_INVALIDARG, !request.isObject() || !request["command"].isString());
+
+        auto server = ConnectToTerminalForSessionHost(nullptr, nullptr, skipAuthenticate, true, false, allowBrandedFallbackActivation);
+        RETURN_HR_IF(E_FAIL, !server);
+
+        const auto command = request["command"].asString();
+        if (command == "list")
+        {
+            return CallJson([&](BSTR* json) { return server->ListPersistentSessions(json); }, response);
+        }
+        if (command == "create")
+        {
+            wil::unique_bstr profile{ Bstr(request["profile"].isString() ? request["profile"].asString() : std::string{}) };
+            wil::unique_bstr commandline{ Bstr(request["commandline"].isString() ? request["commandline"].asString() : std::string{}) };
+            wil::unique_bstr title{ Bstr(request["title"].isString() ? request["title"].asString() : std::string{}) };
+            wil::unique_bstr cwd{ Bstr(request["cwd"].isString() ? request["cwd"].asString() : std::string{}) };
+            const auto requestedName = request["name"].isString() ? request["name"].asString() : std::string{};
+
+            if (!requestedName.empty())
+            {
+                GUID existingSessionId{};
+                const auto existingHr = ResolvePersistentSessionByTarget(server.get(), requestedName, existingSessionId);
+                RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS), SUCCEEDED(existingHr) || existingHr == HRESULT_FROM_WIN32(ERROR_DUP_NAME));
+                RETURN_IF_FAILED(existingHr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) ? S_OK : existingHr);
+            }
+
+            Json::Value created;
+            RETURN_IF_FAILED(CallJson([&](BSTR* json) {
+                return server->CreateTab(0, profile.get(), commandline.get(), title.get(), cwd.get(), false, true, json);
+            },
+                                      created));
+
+            const auto sessionIdText = created["session_id"].asString();
+            const auto sessionId = GuidFromString(sessionIdText, true);
+            RETURN_HR_IF(E_FAIL, InlineIsEqualGUID(sessionId, GUID{}));
+
+            wil::unique_bstr name{ Bstr(requestedName) };
+            const auto markHr = server->MarkPersistentSession(sessionId, name.get());
+            if (FAILED(markHr))
+            {
+                (void)server->ClosePane(sessionId);
+                return markHr;
+            }
+            return CallJson([&](BSTR* json) { return server->InspectPersistentSession(sessionId, json); }, response);
+        }
+        if (!request["target"].isString())
+        {
+            return E_INVALIDARG;
+        }
+
+        GUID sessionId{};
+        Json::Value session;
+        RETURN_IF_FAILED(ResolvePersistentSessionByTarget(server.get(), request["target"].asString(), sessionId, &session));
+        if (command == "inspect")
+        {
+            return CallJson([&](BSTR* json) { return server->InspectPersistentSession(sessionId, json); }, response);
+        }
+        if (command == "kill")
+        {
+            RETURN_IF_FAILED(server->ClosePane(sessionId));
+            response["ok"] = true;
+            response["session_id"] = session["session_id"].asString();
+            return S_OK;
+        }
+        if (command == "attach")
+        {
+            return CallJson([&](BSTR* json) { return server->PreparePersistentSessionAttach(sessionId, json); }, response);
+        }
+        return E_INVALIDARG;
+    }
+
+    static int RunSessionHost(const bool jsonMode)
+    {
+        const auto desktopSessionId = CurrentProcessSessionId();
+        if (desktopSessionId == 0 || !IsCurrentProcessInteractiveDesktop())
+        {
+            fprintf(stderr, "[wtcli] session host must run in an interactive user session after logon.\n");
+            return 1;
+        }
+
+        HostRecord record;
+        record.desktopSessionId = desktopSessionId;
+        record.pid = GetCurrentProcessId();
+        record.ownerSid = SessionWire::CurrentUserSidString();
+        record.generation = CreateGuidString();
+        record.instanceId = CreateGuidString();
+        record.pipeName = std::wstring{ HostPipePrefix } + std::to_wstring(desktopSessionId) + L"." + record.generation;
+        record.discoveryPath = DiscoveryPathForSession(desktopSessionId);
+
+        if (!ConnectToTerminalForSessionHost(nullptr, nullptr, false, false, false, true))
+        {
+            fprintf(stderr, "[wtcli] session host could not connect to Intelligent Terminal in desktop session %lu.\n", static_cast<unsigned long>(desktopSessionId));
+            return 1;
+        }
+
+        auto security = SessionWire::CreateUserAndSystemPipeSecurity();
+        wil::unique_hfile listener{
+            CreateNamedPipeW(record.pipeName.c_str(),
+                             PIPE_ACCESS_DUPLEX,
+                             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                             1,
+                             SessionWire::MaxControlPayloadBytes,
+                             SessionWire::MaxControlPayloadBytes,
+                             0,
+                             security.get())
+        };
+        if (!listener)
+        {
+            fprintf(stderr, "[wtcli] session host pipe creation failed: 0x%08X\n", HRESULT_FROM_WIN32(GetLastError()));
+            return 1;
+        }
+
+        WriteDiscoveryRecord(record);
+        const auto cleanup = wil::scope_exit([&]() noexcept {
+            RemoveDiscoveryRecordIfMatches(record);
+        });
+
+        if (jsonMode)
+        {
+            Json::Value info;
+            info["desktop_session_id"] = static_cast<Json::UInt>(desktopSessionId);
+            info["pipe_name"] = winrt::to_string(winrt::hstring{ record.pipeName });
+            info["generation"] = winrt::to_string(winrt::hstring{ record.generation });
+            PrintJson(info);
+        }
+        else
+        {
+            printf("Persistent session host listening for desktop session %lu.\n", static_cast<unsigned long>(desktopSessionId));
+        }
+
+        for (;;)
+        {
+            const auto connected = ConnectNamedPipe(listener.get(), nullptr);
+            if (!connected && GetLastError() != ERROR_PIPE_CONNECTED)
+            {
+                fprintf(stderr, "[wtcli] session host connection failed: 0x%08X\n", HRESULT_FROM_WIN32(GetLastError()));
+                return 1;
+            }
+
+            auto disconnect = wil::scope_exit([&]() noexcept {
+                FlushFileBuffers(listener.get());
+                DisconnectNamedPipe(listener.get());
+            });
+
+            Json::Value hello;
+            auto hr = SessionWire::ReadAndValidateHello(listener.get(), "client", hello);
+            if (FAILED(hr) || FAILED(hr = SessionWire::WriteHello(listener.get(), "host")))
+            {
+                continue;
+            }
+
+            Json::Value request;
+            if (FAILED(SessionWire::ReadJsonFrame(listener.get(), SessionWire::MessageType::Request, request)))
+            {
+                continue;
+            }
+
+            Json::Value response;
+            hr = HandleControlRequest(request, response, false, true);
+            if (SUCCEEDED(hr))
+            {
+                (void)SessionWire::WriteJsonFrame(listener.get(), SessionWire::MessageType::Response, response);
+            }
+            else
+            {
+                Json::Value error;
+                error["hr"] = static_cast<int32_t>(hr);
+                error["message"] = HResultMessage(hr);
+                (void)SessionWire::WriteJsonFrame(listener.get(), SessionWire::MessageType::Error, error);
+            }
+        }
+    }
+
+    static HRESULT SendAttachRequest(const Json::Value& attachInfo, std::optional<SessionWire::ResizePayload> initialSize, wil::unique_hfile& pipe)
+    {
+        const auto pipeName = winrt::to_hstring(attachInfo["pipe_name"].asString());
+        pipe.reset(CreateFileW(pipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+        if (!pipe)
+        {
+            return HRESULT_FROM_WIN32(GetLastError());
+        }
+
+        RETURN_IF_FAILED(SessionWire::WriteHello(pipe.get(), "client"));
+        Json::Value hello;
+        RETURN_IF_FAILED(SessionWire::ReadAndValidateHello(pipe.get(), "terminal", hello));
+
+        Json::Value request;
+        request["command"] = "attach";
+        request["token"] = attachInfo["attach_token"].asString();
+        if (initialSize.has_value())
+        {
+            request["rows"] = initialSize->rows;
+            request["columns"] = initialSize->columns;
+        }
+        RETURN_IF_FAILED(SessionWire::WriteJsonFrame(pipe.get(), SessionWire::MessageType::Request, request));
+
+        SessionWire::Frame frame;
+        RETURN_IF_FAILED(SessionWire::ReadFrame(pipe.get(), frame));
+        if (frame.type == SessionWire::MessageType::Error)
+        {
+            Json::Value error;
+            RETURN_IF_FAILED(SessionWire::ParseJsonPayload(frame.payload, error));
+            return error["hr"].isInt() ? error["hr"].asInt() : E_FAIL;
+        }
+        RETURN_HR_IF(E_UNEXPECTED, frame.type != SessionWire::MessageType::Response);
+        return S_OK;
+    }
+
+    static int RunAttachClient(const Json::Value& attachInfo)
+    {
+        wil::unique_hfile pipe;
+        auto initialSize = QueryConsoleSize();
+        if (!initialSize.has_value() && attachInfo["rows"].isUInt() && attachInfo["columns"].isUInt())
+        {
+            initialSize = SessionWire::ResizePayload{
+                .rows = attachInfo["rows"].asUInt(),
+                .columns = attachInfo["columns"].asUInt(),
+            };
+        }
+
+        auto hr = SendAttachRequest(attachInfo, initialSize, pipe);
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "[wtcli] session attach failed: %s (0x%08X)\n", HResultMessage(hr).c_str(), static_cast<uint32_t>(hr));
+            return 1;
+        }
+
+        (void)_setmode(_fileno(stdin), _O_BINARY);
+        (void)_setmode(_fileno(stdout), _O_BINARY);
+
+        ConsoleModeGuard inputGuard;
+        ConsoleModeGuard outputGuard;
+        {
+            const auto in = GetStdHandle(STD_INPUT_HANDLE);
+            DWORD mode = 0;
+            if (GetConsoleMode(in, &mode))
+            {
+                const auto raw = (mode | ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT) &
+                                 ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+                (void)TryConfigureConsoleMode(in, raw, inputGuard);
+            }
+        }
+        {
+            const auto out = GetStdHandle(STD_OUTPUT_HANDLE);
+            DWORD mode = 0;
+            if (GetConsoleMode(out, &mode))
+            {
+                const auto vt = mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+                (void)TryConfigureConsoleMode(out, vt, outputGuard);
+            }
+        }
+
+        std::mutex writeMutex;
+        std::atomic<bool> stop{ false };
+        std::atomic<bool> detachSent{ false };
+
+        auto writeFrame = [&](const SessionWire::MessageType type, const std::span<const uint8_t> payload) -> bool {
+            std::lock_guard lock{ writeMutex };
+            return SUCCEEDED(SessionWire::WriteFrame(pipe.get(), type, payload));
+        };
+
+        std::thread inputThread([&]() {
+            std::array<uint8_t, SessionWire::MaxDataPayloadBytes> buffer{};
+            bool shouldDetach = false;
+            for (;;)
+            {
+                if (stop.load())
+                {
+                    return;
+                }
+
+                DWORD read = 0;
+                if (!ReadFile(GetStdHandle(STD_INPUT_HANDLE), buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr))
+                {
+                    shouldDetach = true;
+                    break;
+                }
+                if (read == 0)
+                {
+                    shouldDetach = true;
+                    break;
+                }
+                if (!writeFrame(SessionWire::MessageType::Data, std::span<const uint8_t>{ buffer.data(), read }))
+                {
+                    break;
+                }
+            }
+
+            stop = true;
+            if (shouldDetach)
+            {
+                detachSent = true;
+                (void)writeFrame(SessionWire::MessageType::Detach, {});
+            }
+        });
+
+        std::thread resizeThread([&]() {
+            auto lastSize = QueryConsoleSize();
+            while (!stop.load())
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                const auto current = QueryConsoleSize();
+                if (current.has_value() && (!lastSize.has_value() || current->rows != lastSize->rows || current->columns != lastSize->columns))
+                {
+                    std::lock_guard lock{ writeMutex };
+                    (void)SessionWire::WriteResizeFrame(pipe.get(), current->rows, current->columns);
+                    lastSize = current;
+                }
+            }
+        });
+
+        int result = 0;
+        bool sawTerminalResult = false;
+        for (;;)
+        {
+            SessionWire::Frame frame;
+            hr = SessionWire::ReadFrame(pipe.get(), frame);
+            if (FAILED(hr))
+            {
+                break;
+            }
+
+            switch (frame.type)
+            {
+            case SessionWire::MessageType::Data:
+            {
+                DWORD written = 0;
+                if (!WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), frame.payload.data(), static_cast<DWORD>(frame.payload.size()), &written, nullptr))
+                {
+                    stop = true;
+                }
+                break;
+            }
+            case SessionWire::MessageType::Exit:
+            {
+                Json::Value exit;
+                if (SUCCEEDED(SessionWire::ParseJsonPayload(frame.payload, exit)) && exit["has_exit_code"].asBool())
+                {
+                    result = exit["exit_code"].asInt();
+                }
+                sawTerminalResult = true;
+                stop = true;
+                goto done;
+            }
+            case SessionWire::MessageType::Error:
+            {
+                Json::Value error;
+                if (SUCCEEDED(SessionWire::ParseJsonPayload(frame.payload, error)))
+                {
+                    fprintf(stderr, "[wtcli] session attach failed: %s\n", error["message"].asString().c_str());
+                }
+                result = 1;
+                sawTerminalResult = true;
+                stop = true;
+                goto done;
+            }
+            default:
+                break;
+            }
+        }
+
+        if (!detachSent.load() && !sawTerminalResult)
+        {
+            fprintf(stderr,
+                    "[wtcli] session attach failed: %s (0x%08X)\n",
+                    AttachStreamFailureMessage(hr).c_str(),
+                    static_cast<uint32_t>(hr));
+            result = 1;
+        }
+
+    done:
+        stop = true;
+        CancelSynchronousIo(inputThread.native_handle());
+        if (inputThread.joinable())
+        {
+            inputThread.join();
+        }
+        if (resizeThread.joinable())
+        {
+            resizeThread.join();
+        }
+        return result;
+    }
+}
+
 // ── Main ──
 
 // `wmain` — deliberately NOT `main`. Almost every string this tool forwards to
@@ -393,14 +1388,244 @@ int wmain(int argc, wchar_t** argv)
         return server;
     };
 
+    const auto currentUserSid = PersistentSessions::CurrentUserSidUtf8();
+
+    auto printSessionHostSelectionError = [&](const HRESULT hr, const std::optional<uint32_t> desktopSession) {
+        if (hr == HRESULT_FROM_WIN32(ERROR_MORE_DATA))
+        {
+            fprintf(stderr, "[wtcli] Multiple eligible interactive session hosts are available for this user. Re-run with --desktop-session <id>.\n");
+            for (const auto& host : PersistentSessions::DiscoverHostsForCurrentUser(currentUserSid))
+            {
+                fprintf(stderr, "  desktop session %lu\n", static_cast<unsigned long>(host.desktopSessionId));
+            }
+            return;
+        }
+
+        if (desktopSession.has_value())
+        {
+            fprintf(stderr,
+                    "[wtcli] No session host was found for desktop session %u. Log on interactively to that session and run 'wtcli session host'.\n",
+                    desktopSession.value());
+        }
+        else
+        {
+            fprintf(stderr, "[wtcli] No session host was found. Log on interactively and run 'wtcli session host'.\n");
+        }
+    };
+
+    auto printSessionRelayFailure = [&](const PersistentSessions::HostRecord& host, const HRESULT hr) {
+        if (hr == HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED))
+        {
+            fprintf(stderr,
+                    "[wtcli] Persistent-session relay route to desktop session %lu was denied access. Ensure 'wtcli session host' is running as the same user.\n",
+                    static_cast<unsigned long>(host.desktopSessionId));
+            return;
+        }
+
+        if (hr == HRESULT_FROM_WIN32(ERROR_PIPE_BUSY))
+        {
+            fprintf(stderr,
+                    "[wtcli] Persistent-session relay route to desktop session %lu is busy handling another control request. Retry the command.\n",
+                    static_cast<unsigned long>(host.desktopSessionId));
+            return;
+        }
+
+        if (PersistentSessions::IsStaleHostTransportError(hr))
+        {
+            fprintf(stderr,
+                    "[wtcli] Persistent-session relay route to desktop session %lu found a stale host endpoint. Restart 'wtcli session host' in that interactive session.\n",
+                    static_cast<unsigned long>(host.desktopSessionId));
+            return;
+        }
+
+        fprintf(stderr,
+                "[wtcli] Persistent-session relay route to desktop session %lu failed: %s (0x%08X)\n",
+                static_cast<unsigned long>(host.desktopSessionId),
+                PersistentSessions::HResultMessage(hr).c_str(),
+                static_cast<uint32_t>(hr));
+    };
+
+    auto executeSessionControl = [&](const Json::Value& request, const std::optional<uint32_t> desktopSession, Json::Value& response) -> bool {
+        const auto currentSessionId = CurrentProcessSessionId();
+        const auto canActivateBrandedServerDirectly = IsCurrentProcessInteractiveDesktop();
+
+        wtcli::SessionRouteContext routeContext{
+            .currentSessionId = currentSessionId,
+            .targetDesktopSession = desktopSession,
+            .canActivateBrandedServerDirectly = canActivateBrandedServerDirectly,
+        };
+
+        if (wtcli::ShouldProbeDirectConnection(routeContext))
+        {
+            auto directServer = ConnectToTerminalForSessionHost(
+                nullptr,
+                nullptr,
+                skipAuthenticate,
+                true,
+                false,
+                canActivateBrandedServerDirectly);
+            routeContext.hasDirectConnectionCapability = directServer != nullptr;
+        }
+
+        const auto decision = wtcli::ClassifySessionRoute(routeContext);
+
+        if (decision.route == wtcli::SessionRoute::Direct)
+        {
+            const auto hr = PersistentSessions::HandleControlRequest(
+                request,
+                response,
+                skipAuthenticate,
+                canActivateBrandedServerDirectly);
+            if (FAILED(hr))
+            {
+                fprintf(stderr, "[wtcli] Persistent-session direct route failed: %s (0x%08X)\n", PersistentSessions::HResultMessage(hr).c_str(), static_cast<uint32_t>(hr));
+                exitCode = 1;
+                return false;
+            }
+            return true;
+        }
+
+        PersistentSessions::HostRecord host;
+        const auto resolveHr = PersistentSessions::ResolveHost(desktopSession, currentUserSid, host);
+        if (FAILED(resolveHr))
+        {
+            printSessionHostSelectionError(resolveHr, desktopSession);
+            exitCode = 1;
+            return false;
+        }
+
+        const auto hr = PersistentSessions::SendControlRequest(host, request, response);
+        if (FAILED(hr))
+        {
+            printSessionRelayFailure(host, hr);
+            exitCode = 1;
+            return false;
+        }
+
+        PersistentSessions::AddHostMetadata(host, response);
+        return true;
+    };
+
+    std::optional<uint32_t> sessionCreateDesktop;
+    std::optional<uint32_t> sessionListDesktop;
+    std::optional<uint32_t> sessionInspectDesktop;
+    std::optional<uint32_t> sessionAttachDesktop;
+    std::optional<uint32_t> sessionKillDesktop;
+    std::string sessionCreateName;
+    std::string sessionCreateCommand;
+    std::string sessionCreateCwd;
+    std::string sessionCreateProfile;
+    std::string sessionCreateTitle;
+    std::string sessionInspectTarget;
+    std::string sessionAttachTarget;
+    std::string sessionKillTarget;
+
+    auto* sessionCmd = app.add_subcommand("session", "Persistent reconnectable session commands with direct interactive routing and relay fallback");
+    sessionCmd->require_subcommand(1);
+
+    auto* sessionHostCmd = sessionCmd->add_subcommand("host", "Run the per-user persistent-session host for noninteractive relay routing");
+    sessionHostCmd->callback([&]() {
+        exitCode = PersistentSessions::RunSessionHost(jsonMode);
+    });
+
+    auto* sessionCreateCmd = sessionCmd->add_subcommand("create", "Create a persistent reconnectable session in the current or selected desktop session");
+    sessionCreateCmd->add_option("--desktop-session", sessionCreateDesktop, "Target interactive desktop session ID when routing through a session host");
+    sessionCreateCmd->add_option("--name", sessionCreateName, "Persistent session name");
+    sessionCreateCmd->add_option("-c,--command", sessionCreateCommand, "Command to run");
+    sessionCreateCmd->add_option("-d,--cwd", sessionCreateCwd, "Starting directory");
+    sessionCreateCmd->add_option("-p,--profile", sessionCreateProfile, "Profile");
+    sessionCreateCmd->add_option("--title", sessionCreateTitle, "Tab title");
+    sessionCreateCmd->callback([&]() {
+        Json::Value request;
+        request["command"] = "create";
+        request["name"] = sessionCreateName;
+        request["commandline"] = sessionCreateCommand;
+        request["cwd"] = sessionCreateCwd;
+        request["profile"] = sessionCreateProfile;
+        request["title"] = sessionCreateTitle;
+
+        Json::Value response;
+        if (!executeSessionControl(request, sessionCreateDesktop, response))
+            return;
+        if (jsonMode)
+            PrintJson(response);
+        else
+            FormatPersistentSessionHuman(response);
+    });
+
+    auto* sessionListCmd = sessionCmd->add_subcommand("list", "List persistent reconnectable sessions from the current or selected desktop session");
+    sessionListCmd->add_option("--desktop-session", sessionListDesktop, "Target interactive desktop session ID when multiple session hosts exist");
+    sessionListCmd->callback([&]() {
+        Json::Value request;
+        request["command"] = "list";
+        Json::Value response;
+        if (!executeSessionControl(request, sessionListDesktop, response))
+            return;
+        if (jsonMode)
+            PrintJson(response);
+        else
+            FormatPersistentSessionsHuman(response);
+    });
+
+    auto* sessionInspectCmd = sessionCmd->add_subcommand("inspect", "Inspect one persistent reconnectable session from the current or selected desktop session");
+    sessionInspectCmd->add_option("target", sessionInspectTarget, "Persistent session ID or name")->required();
+    sessionInspectCmd->add_option("--desktop-session", sessionInspectDesktop, "Target interactive desktop session ID when multiple session hosts exist");
+    sessionInspectCmd->callback([&]() {
+        Json::Value request;
+        request["command"] = "inspect";
+        request["target"] = sessionInspectTarget;
+        Json::Value response;
+        if (!executeSessionControl(request, sessionInspectDesktop, response))
+            return;
+        if (jsonMode)
+            PrintJson(response);
+        else
+            FormatPersistentSessionHuman(response);
+    });
+
+    auto* sessionAttachCmd = sessionCmd->add_subcommand("attach", "Attach stdin/stdout to a persistent reconnectable session from the current or selected desktop session");
+    sessionAttachCmd->add_option("target", sessionAttachTarget, "Persistent session ID or name")->required();
+    sessionAttachCmd->add_option("--desktop-session", sessionAttachDesktop, "Target interactive desktop session ID when multiple session hosts exist");
+    sessionAttachCmd->callback([&]() {
+        Json::Value request;
+        request["command"] = "attach";
+        request["target"] = sessionAttachTarget;
+        Json::Value response;
+        if (!executeSessionControl(request, sessionAttachDesktop, response))
+            return;
+        exitCode = PersistentSessions::RunAttachClient(response);
+    });
+
+    auto* sessionKillCmd = sessionCmd->add_subcommand("kill", "Kill a persistent reconnectable session from the current or selected desktop session");
+    sessionKillCmd->add_option("target", sessionKillTarget, "Persistent session ID or name")->required();
+    sessionKillCmd->add_option("--desktop-session", sessionKillDesktop, "Target interactive desktop session ID when multiple session hosts exist");
+    sessionKillCmd->callback([&]() {
+        Json::Value request;
+        request["command"] = "kill";
+        request["target"] = sessionKillTarget;
+        Json::Value response;
+        if (!executeSessionControl(request, sessionKillDesktop, response))
+            return;
+        if (jsonMode)
+            PrintJson(response);
+        else
+            printf("Session %s closed.\n", response["session_id"].asString().c_str());
+    });
+
     // ── list-windows ──
     auto* listWindowsCmd = app.add_subcommand("list-windows", "List all windows")->alias("lsw");
     listWindowsCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         Json::Value windows;
         auto hr = CallJson([&](BSTR* j) { return server->ListWindows(j); }, windows);
-        if (FAILED(hr)) { fprintf(stderr, "ListWindows failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "ListWindows failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
         {
             Json::Value arr(Json::objectValue);
@@ -419,7 +1644,8 @@ int wmain(int argc, wchar_t** argv)
     listTabsCmd->add_option("-w,--window-id", listTabsWindowId, "Window ID");
     listTabsCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         uint64_t wid = 0;
         if (listTabsWindowId.empty())
         {
@@ -441,7 +1667,12 @@ int wmain(int argc, wchar_t** argv)
         }
         Json::Value tabs;
         auto hr = CallJson([&](BSTR* j) { return server->ListTabs(wid, j); }, tabs);
-        if (FAILED(hr)) { fprintf(stderr, "ListTabs failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "ListTabs failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
         {
             Json::Value arr(Json::objectValue);
@@ -461,7 +1692,8 @@ int wmain(int argc, wchar_t** argv)
     listPanesCmd->add_option("-w,--window-id", listPanesWindowId, "Window ID");
     listPanesCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         uint64_t wid = 0;
         if (!listPanesWindowId.empty() && !TryParseU64(listPanesWindowId, wid))
         {
@@ -503,7 +1735,12 @@ int wmain(int argc, wchar_t** argv)
         }
         Json::Value panes;
         auto hr = CallJson([&](BSTR* j) { return server->ListPanes(wid, tid, j); }, panes);
-        if (FAILED(hr)) { fprintf(stderr, "ListPanes failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "ListPanes failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
         {
             Json::Value arr(Json::objectValue);
@@ -520,7 +1757,8 @@ int wmain(int argc, wchar_t** argv)
     auto* getSettingsCmd = app.add_subcommand("get-settings", "Read the current Terminal settings");
     getSettingsCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         Json::Value settings;
         const auto hr = CallJson([&](BSTR* j) { return server->GetSettings(j); }, settings);
         if (FAILED(hr))
@@ -536,10 +1774,16 @@ int wmain(int argc, wchar_t** argv)
     auto* activePaneCmd = app.add_subcommand("active-pane", "Show the currently active pane");
     activePaneCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         Json::Value info;
         auto hr = CallJson([&](BSTR* j) { return server->GetActivePane(j); }, info);
-        if (FAILED(hr)) { fprintf(stderr, "GetActivePane failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "GetActivePane failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
             PrintJson(info);
         else
@@ -553,16 +1797,21 @@ int wmain(int argc, wchar_t** argv)
     auto* capturePaneCmd = app.add_subcommand("capture-pane", "Capture pane output")->alias("capturep");
     capturePaneCmd->add_option("-t,--target", capturePaneTarget, "Session ID (GUID)");
     capturePaneCmd->add_option("-l,--max-lines", captureMaxLines, "Max lines");
-    capturePaneCmd->add_flag("--last-prompt", captureLastPrompt,
-        "Only return the most recent completed shell prompt (command + output, requires OSC 133 shell integration)");
+    capturePaneCmd->add_flag("--last-prompt", captureLastPrompt, "Only return the most recent completed shell prompt (command + output, requires OSC 133 shell integration)");
     capturePaneCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         auto sessionId = ResolveSessionId(server.get(), capturePaneTarget);
         wil::unique_bstr src{ Bstr(captureLastPrompt ? "last_prompt" : "scrollback") };
         Json::Value output;
         auto hr = CallJson([&](BSTR* j) { return server->ReadPaneOutput(sessionId, src.get(), captureMaxLines, j); }, output);
-        if (FAILED(hr)) { fprintf(stderr, "ReadPaneOutput failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "ReadPaneOutput failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
             PrintJson(output);
         else
@@ -655,7 +1904,8 @@ int wmain(int argc, wchar_t** argv)
                 paneContextMaxLines,
                 paneContextMaxCharacters,
                 json);
-        }, context);
+        },
+                                 context);
         if (FAILED(hr))
         {
             fprintf(stderr, "GetPaneContext failed: 0x%08X\n", static_cast<uint32_t>(hr));
@@ -679,11 +1929,17 @@ int wmain(int argc, wchar_t** argv)
     paneStatusCmd->add_option("-t,--target", paneStatusTarget, "Session ID (GUID)");
     paneStatusCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         auto sessionId = ResolveSessionId(server.get(), paneStatusTarget);
         Json::Value status;
         auto hr = CallJson([&](BSTR* j) { return server->GetProcessStatus(sessionId, j); }, status);
-        if (FAILED(hr)) { fprintf(stderr, "GetProcessStatus failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "GetProcessStatus failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
             PrintJson(status);
         else
@@ -699,13 +1955,20 @@ int wmain(int argc, wchar_t** argv)
     newTabCmd->add_option("-p,--profile", newTabProfile, "Profile");
     newTabCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         wil::unique_bstr profile{ Bstr(newTabProfile) }, command{ Bstr(newTabCommand) }, title{ Bstr(newTabTitle) }, cwd{ Bstr(newTabCwd) };
         Json::Value result;
         auto hr = CallJson([&](BSTR* j) {
             return server->CreateTab(0, profile.get(), command.get(), title.get(), cwd.get(), false, true, j);
-        }, result);
-        if (FAILED(hr)) { fprintf(stderr, "CreateTab failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        },
+                           result);
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "CreateTab failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
             PrintJson(result);
         else
@@ -726,7 +1989,8 @@ int wmain(int argc, wchar_t** argv)
     splitPaneCmd->add_option("-p,--profile", splitPaneProfile, "Profile");
     splitPaneCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         auto sessionId = ResolveSessionId(server.get(), splitPaneTarget);
         std::string dir;
         if (!splitPaneDirection.empty())
@@ -741,8 +2005,14 @@ int wmain(int argc, wchar_t** argv)
         Json::Value result;
         auto hr = CallJson([&](BSTR* j) {
             return server->SplitPane(sessionId, dirB.get(), static_cast<float>(splitSize), profile.get(), command.get(), true, j);
-        }, result);
-        if (FAILED(hr)) { fprintf(stderr, "SplitPane failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        },
+                           result);
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "SplitPane failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
             PrintJson(result);
         else
@@ -755,10 +2025,16 @@ int wmain(int argc, wchar_t** argv)
     killPaneCmd->add_option("-t,--target", killPaneTarget, "Session ID (GUID)");
     killPaneCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         auto sessionId = ResolveSessionId(server.get(), killPaneTarget);
         auto hr = server->ClosePane(sessionId);
-        if (FAILED(hr)) { fprintf(stderr, "ClosePane failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "ClosePane failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
         {
             Json::Value v;
@@ -778,21 +2054,24 @@ int wmain(int argc, wchar_t** argv)
     bool sendKeysRaw = false;
     auto* sendKeysCmd = app.add_subcommand("send-keys", "Send keys to a pane")->alias("send");
     sendKeysCmd->add_option("-t,--target", sendKeysTarget, "Session ID (GUID)");
-    sendKeysCmd->add_flag("--raw", sendKeysRaw,
-                          "Treat the payload as literal UTF-8 text — skip tmux-style "
-                          "token translation (Enter/Tab/Escape/BSpace/C-x). Use this when "
-                          "forwarding arbitrary agent-supplied text.");
+    sendKeysCmd->add_flag("--raw", sendKeysRaw, "Treat the payload as literal UTF-8 text — skip tmux-style "
+                                                "token translation (Enter/Tab/Escape/BSpace/C-x). Use this when "
+                                                "forwarding arbitrary agent-supplied text.");
     sendKeysCmd->add_option("keys", sendKeysArgs, "Keys to send")->required();
     sendKeysCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         auto sessionId = ResolveSessionId(server.get(), sendKeysTarget);
-        auto text = sendKeysRaw
-            ? wtcli::JoinAsUtf16(sendKeysArgs)
-            : wtcli::TranslateKeys(sendKeysArgs);
+        auto text = sendKeysRaw ? wtcli::JoinAsUtf16(sendKeysArgs) : wtcli::TranslateKeys(sendKeysArgs);
         wil::unique_bstr textB{ SysAllocString(text.c_str()) };
         auto hr = server->SendInput(sessionId, textB.get());
-        if (FAILED(hr)) { fprintf(stderr, "SendInput failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "SendInput failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
         {
             Json::Value v;
@@ -808,10 +2087,16 @@ int wmain(int argc, wchar_t** argv)
     focusPaneCmd->add_option("-t,--target", focusPaneTarget, "Session ID (GUID)");
     focusPaneCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         auto sessionId = ResolveSessionId(server.get(), focusPaneTarget);
         auto hr = server->FocusPane(sessionId);
-        if (FAILED(hr)) { fprintf(stderr, "FocusPane failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; return; }
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "FocusPane failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+            return;
+        }
         if (jsonMode)
         {
             Json::Value v;
@@ -830,7 +2115,11 @@ int wmain(int argc, wchar_t** argv)
     testPipeCmd->callback([&]() {
         printf("Connecting to Windows Terminal...\n");
         auto server = connect();
-        if (!server) { fprintf(stderr, "Connection failed.\n"); return; }
+        if (!server)
+        {
+            fprintf(stderr, "Connection failed.\n");
+            return;
+        }
         printf(skipAuthenticate ? "Connected without compatibility handshake!\n\n" : "Connected and authenticated!\n\n");
 
         Json::Value windows;
@@ -919,7 +2208,8 @@ int wmain(int argc, wchar_t** argv)
     waitForCmd->add_option("--timeout", waitTimeout, "Timeout (seconds, 0=forever)");
     waitForCmd->callback([&]() {
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         auto sessionId = ResolveSessionId(server.get(), waitForTarget);
         auto start = std::chrono::steady_clock::now();
 
@@ -980,15 +2270,18 @@ int wmain(int argc, wchar_t** argv)
 
         if (setEnvShell == "powershell" || setEnvShell == "pwsh")
         {
-            if (!cl.empty()) printf("$env:WT_COM_CLSID = '%s'\n", cl.c_str());
+            if (!cl.empty())
+                printf("$env:WT_COM_CLSID = '%s'\n", cl.c_str());
         }
         else if (setEnvShell == "bash" || setEnvShell == "sh" || setEnvShell == "zsh")
         {
-            if (!cl.empty()) printf("export WT_COM_CLSID='%s'\n", cl.c_str());
+            if (!cl.empty())
+                printf("export WT_COM_CLSID='%s'\n", cl.c_str());
         }
         else if (setEnvShell == "cmd")
         {
-            if (!cl.empty()) printf("set WT_COM_CLSID=%s\n", cl.c_str());
+            if (!cl.empty())
+                printf("set WT_COM_CLSID=%s\n", cl.c_str());
         }
     });
 
@@ -1031,10 +2324,15 @@ int wmain(int argc, wchar_t** argv)
             return;
         }
         auto server = connect();
-        if (!server) return;
+        if (!server)
+            return;
         wil::unique_bstr evt{ Bstr(publishJson) };
         auto hr = server->SendEvent(evt.get());
-        if (FAILED(hr)) { fprintf(stderr, "publish failed: 0x%08X\n", static_cast<uint32_t>(hr)); exitCode = 1; }
+        if (FAILED(hr))
+        {
+            fprintf(stderr, "publish failed: 0x%08X\n", static_cast<uint32_t>(hr));
+            exitCode = 1;
+        }
     });
 
     // ── send-event ──
@@ -1200,7 +2498,8 @@ int wmain(int argc, wchar_t** argv)
         SetConsoleCtrlHandler([](DWORD) -> BOOL {
             SetEvent(s_stopEvent);
             return TRUE;
-        }, TRUE);
+        },
+                              TRUE);
 
         if (!jsonMode)
             fprintf(stderr, "Listening for events... (Ctrl-C to stop)\n");

@@ -10,8 +10,12 @@
 #include "CTerminalHandoff.h"
 #include "../../types/inc/utils.hpp"
 #include "../inc/IntelligentTerminalPaths.h"
+#include "../TerminalProtocol/PersistentSessionProtocol.h"
 
 #include "ConptyConnection.g.cpp"
+
+#include <condition_variable>
+#include <deque>
 
 using namespace ::Microsoft::Console;
 
@@ -28,6 +32,590 @@ using namespace ::Microsoft::Console;
 
 namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
 {
+    namespace SessionWire = ::Microsoft::Terminal::PersistentSession;
+
+    namespace
+    {
+        constexpr std::wstring_view PersistentAttachPipePrefix{ L"\\\\.\\pipe\\IntelligentTerminal.PersistentSession." };
+        constexpr auto StalePendingAttachTimeout = std::chrono::seconds{ 30 };
+        constexpr size_t PersistentAttachMaxBufferedOutputBytes = 4 * SessionWire::MaxDataPayloadBytes;
+
+        bool _CancelThreadIo(std::thread& thread) noexcept
+        {
+            if (!thread.joinable())
+            {
+                return false;
+            }
+            return CancelSynchronousIo(thread.native_handle()) != FALSE;
+        }
+    }
+
+    struct ConptyConnection::PersistentSessionAttachTransport : std::enable_shared_from_this<PersistentSessionAttachTransport>
+    {
+        PersistentSessionAttachTransport(ConptyConnection& owner, std::wstring pipeName, std::wstring attachToken) :
+            _owner{ owner },
+            _pipeName{ std::move(pipeName) },
+            _attachToken{ std::move(attachToken) }
+        {
+            auto security = SessionWire::CreateUserAndSystemPipeSecurity();
+            _pipe.reset(CreateNamedPipeW(
+                _pipeName.c_str(),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                1,
+                SessionWire::MaxDataPayloadBytes,
+                SessionWire::MaxDataPayloadBytes,
+                0,
+                security.get()));
+            THROW_LAST_ERROR_IF(!_pipe);
+        }
+
+        ~PersistentSessionAttachTransport() noexcept
+        {
+            Close();
+        }
+
+        void Start()
+        {
+            auto self = shared_from_this();
+            _reader = std::thread([self]() {
+                self->_run();
+            });
+        }
+
+        void Close() noexcept
+        try
+        {
+            bool alreadyClosing = false;
+            {
+                std::lock_guard lock{ _mutex };
+                alreadyClosing = _closeRequested;
+                _closeRequested = true;
+            }
+
+            if (alreadyClosing)
+            {
+                if (_reader.joinable() && _reader.get_id() != std::this_thread::get_id())
+                {
+                    _reader.join();
+                }
+                if (_writer.joinable() && _writer.get_id() != std::this_thread::get_id())
+                {
+                    _writer.join();
+                }
+                return;
+            }
+
+            _outboundCv.notify_all();
+
+            if (_pipe)
+            {
+                LOG_LAST_ERROR_IF(!DisconnectNamedPipe(_pipe.get()) && GetLastError() != ERROR_PIPE_NOT_CONNECTED);
+                LOG_LAST_ERROR_IF(!CancelIoEx(_pipe.get(), nullptr) && GetLastError() != ERROR_NOT_FOUND);
+            }
+
+            (void)_CancelThreadIo(_reader);
+            (void)_CancelThreadIo(_writer);
+
+            if (_reader.joinable())
+            {
+                _reader.join();
+            }
+            if (_writer.joinable())
+            {
+                _writer.join();
+            }
+
+            if (_rawOutputToken != 0)
+            {
+                _owner._unregisterRawOutputHandler(_rawOutputToken);
+                _rawOutputToken = 0;
+            }
+
+            _pipe.reset();
+            {
+                std::lock_guard lock{ _mutex };
+                _closed = true;
+                _clientConnected = false;
+            }
+        }
+        CATCH_LOG()
+
+        PersistentSessionWriterState State() const noexcept
+        {
+            std::lock_guard lock{ _mutex };
+            if (_closed)
+            {
+                return PersistentSessionWriterState::Available;
+            }
+            return _clientConnected ? PersistentSessionWriterState::Attached : PersistentSessionWriterState::Pending;
+        }
+
+        bool IsClosed() const noexcept
+        {
+            std::lock_guard lock{ _mutex };
+            return _closed;
+        }
+
+        bool CanRecycle(const std::chrono::steady_clock::time_point now) const noexcept
+        {
+            std::lock_guard lock{ _mutex };
+            return _closed || (!_clientConnected && now - _createdAt >= StalePendingAttachTimeout);
+        }
+
+        bool IsPendingFresh(const std::chrono::steady_clock::time_point now) const noexcept
+        {
+            std::lock_guard lock{ _mutex };
+            return !_closed && !_clientConnected && now - _createdAt < StalePendingAttachTimeout;
+        }
+
+        const std::wstring& PipeName() const noexcept
+        {
+            return _pipeName;
+        }
+
+        const std::wstring& AttachToken() const noexcept
+        {
+            return _attachToken;
+        }
+
+        void QueueOutput(std::string_view data)
+        {
+            if (data.empty())
+            {
+                return;
+            }
+
+            size_t offset = 0;
+            while (offset < data.size())
+            {
+                const auto chunk = std::min<size_t>(SessionWire::MaxDataPayloadBytes, data.size() - offset);
+                SessionWire::Frame frame;
+                frame.type = SessionWire::MessageType::Data;
+                frame.payload.assign(data.begin() + gsl::narrow_cast<ptrdiff_t>(offset),
+                                     data.begin() + gsl::narrow_cast<ptrdiff_t>(offset + chunk));
+                if (!_tryQueueDataFrame(std::move(frame)))
+                {
+                    return;
+                }
+                offset += chunk;
+            }
+        }
+
+        void NotifyExit(const uint32_t exitCode, const bool hasExitCode) noexcept
+        try
+        {
+            Json::Value exit;
+            exit["has_exit_code"] = hasExitCode;
+            if (hasExitCode)
+            {
+                exit["exit_code"] = static_cast<Json::UInt>(exitCode);
+            }
+            _queueTerminalFrame(_makeJsonFrame(SessionWire::MessageType::Exit, exit), true);
+        }
+        CATCH_LOG()
+
+        void NotifySessionClosed() noexcept
+        try
+        {
+            bool closePendingAttach = false;
+            {
+                std::lock_guard lock{ _mutex };
+                if (_closed || _terminalFrameQueued)
+                {
+                    return;
+                }
+
+                if (!_clientConnected)
+                {
+                    _closeRequested = true;
+                    closePendingAttach = true;
+                }
+            }
+
+            if (closePendingAttach)
+            {
+                if (_pipe)
+                {
+                    LOG_LAST_ERROR_IF(!DisconnectNamedPipe(_pipe.get()) && GetLastError() != ERROR_PIPE_NOT_CONNECTED);
+                    LOG_LAST_ERROR_IF(!CancelIoEx(_pipe.get(), nullptr) && GetLastError() != ERROR_NOT_FOUND);
+                }
+                (void)_CancelThreadIo(_reader);
+                (void)_CancelThreadIo(_writer);
+                _outboundCv.notify_all();
+                return;
+            }
+
+            NotifyExit(0, false);
+        }
+        CATCH_LOG()
+
+    private:
+        struct QueuedFrame
+        {
+            SessionWire::Frame Frame;
+            bool DisconnectAfterWrite{ false };
+        };
+
+        static QueuedFrame _makeJsonFrame(const SessionWire::MessageType type, const Json::Value& payload)
+        {
+            Json::StreamWriterBuilder builder;
+            builder["indentation"] = "";
+            const auto json = Json::writeString(builder, payload);
+            THROW_HR_IF(E_INVALIDARG, json.size() > SessionWire::MaxControlPayloadBytes);
+
+            SessionWire::Frame frame;
+            frame.type = type;
+            frame.payload.assign(json.begin(), json.end());
+            return QueuedFrame{
+                .Frame = std::move(frame),
+            };
+        }
+
+        bool _tryQueueDataFrame(SessionWire::Frame frame)
+        {
+            bool notify = false;
+            bool overflow = false;
+            {
+                std::lock_guard lock{ _mutex };
+                if (_closeRequested || _closed || _terminalFrameQueued)
+                {
+                    return false;
+                }
+
+                const auto nextBufferedBytes = _bufferedOutputBytes + frame.payload.size();
+                if (nextBufferedBytes > PersistentAttachMaxBufferedOutputBytes)
+                {
+                    overflow = true;
+                }
+                else
+                {
+                    _bufferedOutputBytes = nextBufferedBytes;
+                    _outbound.emplace_back(QueuedFrame{
+                        .Frame = std::move(frame),
+                    });
+                    notify = true;
+                }
+            }
+
+            if (overflow)
+            {
+                _failAttachment("output_overflow", "Persistent-session output exceeded the attachment buffer. The attach client was disconnected without stopping the terminal session.");
+                return false;
+            }
+
+            if (notify)
+            {
+                _outboundCv.notify_one();
+            }
+            return true;
+        }
+
+        void _queueTerminalFrame(QueuedFrame frame, const bool disconnectAfterWrite)
+        {
+            bool notify = false;
+            {
+                std::lock_guard lock{ _mutex };
+                if (_closed || _terminalFrameQueued)
+                {
+                    return;
+                }
+
+                _closeRequested = true;
+                _terminalFrameQueued = true;
+                frame.DisconnectAfterWrite = disconnectAfterWrite;
+                _outbound.emplace_back(std::move(frame));
+                notify = true;
+            }
+
+            if (notify)
+            {
+                _outboundCv.notify_one();
+            }
+        }
+
+        void _failAttachment(const std::string_view code, const std::string_view message) noexcept
+        try
+        {
+            Json::Value error;
+            error["code"] = std::string{ code };
+            error["message"] = std::string{ message };
+
+            bool notify = false;
+            {
+                std::lock_guard lock{ _mutex };
+                if (_closed || _terminalFrameQueued)
+                {
+                    return;
+                }
+
+                _closeRequested = true;
+                _terminalFrameQueued = true;
+                _outbound.clear();
+                _bufferedOutputBytes = 0;
+                auto frame = _makeJsonFrame(SessionWire::MessageType::Error, error);
+                frame.DisconnectAfterWrite = true;
+                _outbound.emplace_back(std::move(frame));
+                notify = true;
+            }
+
+            if (notify)
+            {
+                _outboundCv.notify_one();
+            }
+        }
+        catch (...)
+        {
+            LOG_CAUGHT_EXCEPTION();
+            Close();
+        }
+
+        void _sendError(const std::string_view code, const std::string_view message) noexcept
+        try
+        {
+            Json::Value error;
+            error["code"] = std::string{ code };
+            error["message"] = std::string{ message };
+            (void)SessionWire::WriteJsonFrame(_pipe.get(), SessionWire::MessageType::Error, error);
+        }
+        CATCH_LOG()
+
+        void _run()
+        {
+            const auto cleanup = wil::scope_exit([this]() noexcept {
+                if (_rawOutputToken != 0)
+                {
+                    _owner._unregisterRawOutputHandler(_rawOutputToken);
+                    _rawOutputToken = 0;
+                }
+
+                {
+                    std::lock_guard lock{ _mutex };
+                    _closeRequested = true;
+                }
+                _outboundCv.notify_all();
+
+                if (_pipe)
+                {
+                    LOG_LAST_ERROR_IF(!DisconnectNamedPipe(_pipe.get()) && GetLastError() != ERROR_PIPE_NOT_CONNECTED);
+                    LOG_LAST_ERROR_IF(!CancelIoEx(_pipe.get(), nullptr) && GetLastError() != ERROR_NOT_FOUND);
+                }
+
+                if (_writer.joinable())
+                {
+                    (void)_CancelThreadIo(_writer);
+                    _writer.join();
+                }
+
+                std::lock_guard lock{ _mutex };
+                _clientConnected = false;
+                _bufferedOutputBytes = 0;
+                _outbound.clear();
+                _closed = true;
+            });
+
+            if (!ConnectNamedPipe(_pipe.get(), nullptr))
+            {
+                const auto gle = GetLastError();
+                if (gle != ERROR_PIPE_CONNECTED)
+                {
+                    return;
+                }
+            }
+
+            Json::Value hello;
+            if (FAILED(SessionWire::ReadAndValidateHello(_pipe.get(), "client", hello)))
+            {
+                _sendError("bad_hello", "Persistent-session client hello was missing or invalid.");
+                return;
+            }
+            if (FAILED(SessionWire::WriteHello(_pipe.get(), "terminal")))
+            {
+                return;
+            }
+
+            Json::Value request;
+            if (FAILED(SessionWire::ReadJsonFrame(_pipe.get(), SessionWire::MessageType::Request, request)) ||
+                !request.isObject() ||
+                !request["command"].isString() ||
+                request["command"].asString() != "attach" ||
+                !request["token"].isString() ||
+                request["token"].asString() != winrt::to_string(winrt::hstring{ _attachToken }))
+            {
+                _sendError("bad_attach_request", "Persistent-session attach request was invalid or stale.");
+                return;
+            }
+
+            if (!_owner._isConnected())
+            {
+                _sendError("session_not_running", "The persistent session process has already exited.");
+                return;
+            }
+
+            if (request["rows"].isUInt() && request["columns"].isUInt())
+            {
+                try
+                {
+                    _owner.Resize(request["rows"].asUInt(), request["columns"].asUInt());
+                }
+                catch (...)
+                {
+                    _sendError("resize_failed", "The persistent session could not accept the initial size.");
+                    return;
+                }
+            }
+
+            const auto weakSelf = weak_from_this();
+            _rawOutputToken = _owner._registerRawOutputHandler([weakSelf](std::string_view data) {
+                if (const auto self = weakSelf.lock())
+                {
+                    self->QueueOutput(data);
+                }
+            });
+
+            Json::Value response;
+            response["ok"] = true;
+            response["session_id"] = winrt::to_string(winrt::hstring{ Utils::GuidToPlainString(_owner.SessionId()) });
+            if (FAILED(SessionWire::WriteJsonFrame(_pipe.get(), SessionWire::MessageType::Response, response)))
+            {
+                return;
+            }
+
+            {
+                std::lock_guard lock{ _mutex };
+                _clientConnected = true;
+            }
+
+            _writer = std::thread([self = shared_from_this()]() {
+                self->_writerLoop();
+            });
+
+            for (;;)
+            {
+                SessionWire::Frame frame;
+                const auto hr = SessionWire::ReadFrame(_pipe.get(), frame);
+                if (FAILED(hr))
+                {
+                    return;
+                }
+
+                switch (frame.type)
+                {
+                case SessionWire::MessageType::Data:
+                {
+                    if (frame.payload.size() > SessionWire::MaxDataPayloadBytes)
+                    {
+                        _sendError("data_too_large", "Persistent-session input frame exceeded the maximum payload size.");
+                        return;
+                    }
+                    if (!_owner.WriteInputRaw(std::string_view{
+                            reinterpret_cast<const char*>(frame.payload.data()),
+                            frame.payload.size() }))
+                    {
+                        _sendError("write_failed", "The persistent session is no longer accepting input.");
+                        return;
+                    }
+                    break;
+                }
+                case SessionWire::MessageType::Resize:
+                {
+                    SessionWire::ResizePayload resize{};
+                    if (FAILED(SessionWire::ParseResizePayload(frame.payload, resize)))
+                    {
+                        _sendError("bad_resize", "Persistent-session resize frame was malformed.");
+                        return;
+                    }
+                    try
+                    {
+                        _owner.Resize(resize.rows, resize.columns);
+                    }
+                    catch (...)
+                    {
+                        _sendError("resize_failed", "The persistent session resize request failed.");
+                        return;
+                    }
+                    break;
+                }
+                case SessionWire::MessageType::Detach:
+                    return;
+                default:
+                    _sendError("unexpected_frame", "Persistent-session client sent an unexpected message type.");
+                    return;
+                }
+            }
+        }
+
+        void _writerLoop()
+        {
+            try
+            {
+                for (;;)
+                {
+                    QueuedFrame queuedFrame;
+                    {
+                        std::unique_lock lock{ _mutex };
+                        _outboundCv.wait(lock, [this]() noexcept {
+                            return _closeRequested || !_outbound.empty();
+                        });
+
+                        if (_outbound.empty())
+                        {
+                            return;
+                        }
+
+                        queuedFrame = std::move(_outbound.front());
+                        _outbound.pop_front();
+                        if (queuedFrame.Frame.type == SessionWire::MessageType::Data)
+                        {
+                            _bufferedOutputBytes -= queuedFrame.Frame.payload.size();
+                        }
+                    }
+
+                    if (FAILED(SessionWire::WriteFrame(_pipe.get(), queuedFrame.Frame.type, queuedFrame.Frame.payload)))
+                    {
+                        return;
+                    }
+
+                    if (queuedFrame.DisconnectAfterWrite)
+                    {
+                        if (_pipe)
+                        {
+                            LOG_LAST_ERROR_IF(!FlushFileBuffers(_pipe.get()) &&
+                                              GetLastError() != ERROR_BROKEN_PIPE &&
+                                              GetLastError() != ERROR_NO_DATA);
+                            LOG_LAST_ERROR_IF(!DisconnectNamedPipe(_pipe.get()) && GetLastError() != ERROR_PIPE_NOT_CONNECTED);
+                            LOG_LAST_ERROR_IF(!CancelIoEx(_pipe.get(), nullptr) && GetLastError() != ERROR_NOT_FOUND);
+                        }
+                        return;
+                    }
+                }
+            }
+            catch (...)
+            {
+                LOG_CAUGHT_EXCEPTION();
+            }
+        }
+
+        ConptyConnection& _owner;
+        const std::wstring _pipeName;
+        const std::wstring _attachToken;
+        const std::chrono::steady_clock::time_point _createdAt{ std::chrono::steady_clock::now() };
+
+        wil::unique_hfile _pipe;
+        std::thread _reader;
+        std::thread _writer;
+        uint64_t _rawOutputToken{ 0 };
+
+        mutable std::mutex _mutex;
+        std::condition_variable _outboundCv;
+        std::deque<QueuedFrame> _outbound;
+        size_t _bufferedOutputBytes{ 0 };
+        bool _clientConnected{ false };
+        bool _closeRequested{ false };
+        bool _closed{ false };
+        bool _terminalFrameQueued{ false };
+    };
+
     // Function Description:
     // - launches the client application attached to the new pseudoconsole
     void ConptyConnection::_LaunchAttachedClient()
@@ -259,6 +847,11 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
     {
         THROW_LAST_ERROR_IF(!_writeOverlappedEvent);
         _writeOverlapped.hEvent = _writeOverlappedEvent.get();
+    }
+
+    ConptyConnection::~ConptyConnection() noexcept
+    {
+        _closePersistentAttach();
     }
 
     // Function Description:
@@ -607,8 +1200,180 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         // thus caused the tab to close, even though the CLI app is still running.
         _transitionToState(exitCode == 0 || exitCode == STILL_ACTIVE ? ConnectionState::Closed : ConnectionState::Failed);
         _indicateExitWithStatus(exitCode);
+        _notifyPersistentAttachExit(exitCode, exitCode != STILL_ACTIVE);
     }
     CATCH_LOG()
+
+    void ConptyConnection::MarkPersistentSession(const std::wstring_view name)
+    {
+        std::lock_guard lock{ _persistentSessionMutex };
+        _persistentSessionEnabled = true;
+        _persistentSessionName.assign(name);
+    }
+
+    bool ConptyConnection::IsPersistentSession() const noexcept
+    {
+        std::lock_guard lock{ _persistentSessionMutex };
+        return _persistentSessionEnabled;
+    }
+
+    std::wstring ConptyConnection::PersistentSessionName() const
+    {
+        std::lock_guard lock{ _persistentSessionMutex };
+        return _persistentSessionName;
+    }
+
+    PersistentSessionWriterState ConptyConnection::PersistentWriterState() const noexcept
+    {
+        std::lock_guard lock{ _persistentSessionMutex };
+        if (!_persistentAttach)
+        {
+            return PersistentSessionWriterState::Available;
+        }
+        return _persistentAttach->State();
+    }
+
+    PersistentSessionAttachInfo ConptyConnection::PreparePersistentSessionAttach()
+    {
+        THROW_HR_IF(HRESULT_FROM_WIN32(ERROR_NOT_FOUND), !IsPersistentSession());
+        THROW_HR_IF(HRESULT_FROM_WIN32(ERROR_INVALID_STATE), !_isConnected());
+
+        std::shared_ptr<PersistentSessionAttachTransport> staleTransport;
+        PersistentSessionAttachInfo info;
+        {
+            std::lock_guard lock{ _persistentSessionMutex };
+            if (_persistentAttach)
+            {
+                const auto now = std::chrono::steady_clock::now();
+                if (_persistentAttach->CanRecycle(now))
+                {
+                    staleTransport = std::move(_persistentAttach);
+                }
+                else
+                {
+                    THROW_HR(HRESULT_FROM_WIN32(ERROR_PIPE_BUSY));
+                }
+            }
+
+            const auto attachToken = Utils::GuidToPlainString(Utils::CreateGuid());
+            const auto pipeName = std::wstring{ PersistentAttachPipePrefix } +
+                                  Utils::GuidToPlainString(_sessionId) +
+                                  L"." +
+                                  attachToken;
+
+            _persistentAttach = std::make_shared<PersistentSessionAttachTransport>(*this, pipeName, attachToken);
+            info.PipeName = _persistentAttach->PipeName();
+            info.AttachToken = _persistentAttach->AttachToken();
+            info.WriterState = _persistentAttach->State();
+        }
+
+        if (staleTransport)
+        {
+            staleTransport->Close();
+        }
+
+        _persistentAttach->Start();
+        return info;
+    }
+
+    uint64_t ConptyConnection::_registerRawOutputHandler(RawOutputHandler handler)
+    {
+        std::lock_guard lock{ _rawOutputMutex };
+        const auto token = _nextRawOutputHandlerToken++;
+        _rawOutputHandlers.emplace(token, std::move(handler));
+        return token;
+    }
+
+    void ConptyConnection::_unregisterRawOutputHandler(const uint64_t token) noexcept
+    {
+        std::lock_guard lock{ _rawOutputMutex };
+        _rawOutputHandlers.erase(token);
+    }
+
+    void ConptyConnection::_notifyRawOutput(const std::string_view data)
+    {
+        std::vector<RawOutputHandler> handlers;
+        {
+            std::lock_guard lock{ _rawOutputMutex };
+            handlers.reserve(_rawOutputHandlers.size());
+            for (const auto& [_, handler] : _rawOutputHandlers)
+            {
+                handlers.push_back(handler);
+            }
+        }
+
+        for (const auto& handler : handlers)
+        {
+            handler(data);
+        }
+    }
+
+    void ConptyConnection::_notifyPersistentAttachExit(const uint32_t exitCode, const bool hasExitCode) noexcept
+    {
+        std::shared_ptr<PersistentSessionAttachTransport> attach;
+        {
+            std::lock_guard lock{ _persistentSessionMutex };
+            attach = _persistentAttach;
+        }
+        if (attach)
+        {
+            attach->NotifyExit(exitCode, hasExitCode);
+        }
+    }
+
+    void ConptyConnection::_closePersistentAttach() noexcept
+    {
+        std::shared_ptr<PersistentSessionAttachTransport> attach;
+        {
+            std::lock_guard lock{ _persistentSessionMutex };
+            attach = std::move(_persistentAttach);
+        }
+        if (attach)
+        {
+            attach->Close();
+        }
+    }
+
+    bool ConptyConnection::_writePipeBytes(const std::string_view data) noexcept
+    {
+        if (!_isConnected() || data.empty())
+        {
+            return false;
+        }
+
+        std::lock_guard guard{ _writeLock };
+
+        if (_writePending)
+        {
+            _writePending = false;
+
+            DWORD read;
+            if (!GetOverlappedResult(_pipe.get(), &_writeOverlapped, &read, TRUE))
+            {
+                LOG_LAST_ERROR();
+                _hPC.reset();
+                return false;
+            }
+        }
+
+        _writeBuffer.assign(data.begin(), data.end());
+        if (!WriteFile(_pipe.get(), _writeBuffer.data(), gsl::narrow_cast<DWORD>(_writeBuffer.length()), nullptr, &_writeOverlapped))
+        {
+            switch (const auto gle = GetLastError())
+            {
+            case ERROR_BROKEN_PIPE:
+                _hPC.reset();
+                return false;
+            case ERROR_IO_PENDING:
+                _writePending = true;
+                return true;
+            default:
+                LOG_WIN32(gle);
+                return false;
+            }
+        }
+        return true;
+    }
 
     void ConptyConnection::WriteInput(const winrt::array_view<const char16_t> buffer)
     {
@@ -619,44 +1384,17 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             return;
         }
 
-        // Ensure a linear and predictable write order, even across multiple threads.
-        // A ticket lock is the perfect fit for this as it acts as first-come-first-serve.
-        std::lock_guard guard{ _writeLock };
-
-        if (_writePending)
-        {
-            _writePending = false;
-
-            DWORD read;
-            if (!GetOverlappedResult(_pipe.get(), &_writeOverlapped, &read, TRUE))
-            {
-                // Not much we can do when the wait fails. This will kill the connection.
-                LOG_LAST_ERROR();
-                _hPC.reset();
-                return;
-            }
-        }
-
-        if (FAILED_LOG(til::u16u8(data, _writeBuffer)))
+        std::string utf8;
+        if (FAILED_LOG(til::u16u8(data, utf8)))
         {
             return;
         }
+        (void)_writePipeBytes(utf8);
+    }
 
-        if (!WriteFile(_pipe.get(), _writeBuffer.data(), gsl::narrow_cast<DWORD>(_writeBuffer.length()), nullptr, &_writeOverlapped))
-        {
-            switch (const auto gle = GetLastError())
-            {
-            case ERROR_BROKEN_PIPE:
-                _hPC.reset();
-                break;
-            case ERROR_IO_PENDING:
-                _writePending = true;
-                break;
-            default:
-                LOG_WIN32(gle);
-                break;
-            }
-        }
+    bool ConptyConnection::WriteInputRaw(const std::string_view data) noexcept
+    {
+        return _writePipeBytes(data);
     }
 
     void ConptyConnection::Resize(uint32_t rows, uint32_t columns)
@@ -727,6 +1465,17 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
     void ConptyConnection::Close() noexcept
     try
     {
+        {
+            std::shared_ptr<PersistentSessionAttachTransport> attach;
+            {
+                std::lock_guard lock{ _persistentSessionMutex };
+                attach = _persistentAttach;
+            }
+            if (attach)
+            {
+                attach->NotifySessionClosed();
+            }
+        }
         _transitionToState(ConnectionState::Closing);
 
         // This will signal ConPTY to send out a CTRL_CLOSE_EVENT to all attached clients.
@@ -755,6 +1504,8 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         _hOutputThread.reset();
         _piClient.reset();
         _pipe.reset();
+
+        _closePersistentAttach();
 
         // The output thread should have already transitioned us to Closed.
         // This exists just in case there was no output thread.
@@ -893,6 +1644,8 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                 TraceLoggingGuid(_sessionId, "session"),
                 TraceLoggingLevel(WINEVENT_LEVEL_VERBOSE),
                 TraceLoggingKeyword(TIL_KEYWORD_TRACE));
+
+            _notifyRawOutput({ &buffer[0], gsl::narrow_cast<size_t>(read) });
 
             // If we hit a parsing error, eat it. It's bad utf-8, we can't do anything with it.
             FAILED_LOG(til::u8u16({ &buffer[0], gsl::narrow_cast<size_t>(read) }, wstr, u8State));
