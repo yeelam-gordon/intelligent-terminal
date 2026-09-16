@@ -647,6 +647,62 @@ fn slash_restart_resets_connection_and_clears_sessions() {
 }
 
 #[test]
+fn slash_fix_while_disconnected_preserves_draft_without_admission() {
+    for state in [
+        ConnectionState::Connecting("connecting".into()),
+        ConnectionState::Disconnected,
+        ConnectionState::Failed("failed".into()),
+    ] {
+        for config_pending in [false, true] {
+            let mut app = test_app();
+            let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+            app.prompt_tx = prompt_tx;
+            app.state = state.clone();
+            let tab = app.current_tab_mut();
+            tab.native_yolo_config_pending = config_pending;
+            tab.autofix.generation = 42;
+            tab.insert_input_str("/fix inspect ");
+            let image = crate::clipboard_image::PastedImage {
+                data_base64: "QQ==".into(),
+                mime_type: "image/png".into(),
+                label: "diagram.png".into(),
+            };
+            tab.insert_image_attachment(image.clone());
+            let input_before = tab.input.clone();
+            let cursor_before = tab.cursor_pos;
+            let ranges_before = tab.attachments.token_ranges().collect::<Vec<_>>();
+            assert_eq!(
+                app.prompt_reconfiguration_pending_for_tab(DEFAULT_TAB_ID),
+                config_pending
+            );
+
+            run_slash(&mut app, "fix");
+
+            let tab = app.current_tab();
+            assert!(
+                matches!(
+                    prompt_rx.try_recv(),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+                ),
+                "no prompt expected for {state:?}, config_pending={config_pending}"
+            );
+            assert!(tab.pending_inputs.is_empty());
+            assert!(tab.turn.is_idle());
+            assert_eq!(tab.autofix.generation, 42);
+            assert_eq!(tab.input, input_before);
+            assert_eq!(tab.cursor_pos, cursor_before);
+            assert_eq!(tab.attachments.images().collect::<Vec<_>>(), vec![&image]);
+            assert_eq!(
+                tab.attachments.token_ranges().collect::<Vec<_>>(),
+                ranges_before
+            );
+            assert_eq!(tab.native_yolo_config_pending, config_pending);
+            assert_eq!(app.state, state);
+        }
+    }
+}
+
+#[test]
 fn slash_fix_when_idle_submits_autofix_turn() {
     let mut app = test_app();
     app.state = ConnectionState::Connected;

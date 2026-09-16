@@ -5953,6 +5953,13 @@ impl App {
     /// into the agent pane surfaces its result there directly.
     ///
     fn cmd_fix(&mut self, _in_flight: bool, hint: String) {
+        if self.state != ConnectionState::Connected {
+            tracing::debug!(
+                target: "slash_cmd",
+                "not submitting /fix while disconnected; preserving draft"
+            );
+            return;
+        }
         let target_tab_id = self
             .tab_id
             .clone()

@@ -17029,6 +17029,7 @@ fn fix_target_pane_is_late_bound_by_prompt_id() {
 #[test]
 fn manual_fix_uses_the_helpers_captured_source_target() {
     let mut app = test_app();
+    app.state = ConnectionState::Connected;
     app.source_session_id = Some("captured-source-pane".into());
 
     app.cmd_fix(false, String::new());
