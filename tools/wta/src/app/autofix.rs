@@ -103,25 +103,6 @@ fn autofix_pane_matches(tab: &TabSession, pane_id: &str) -> (bool, bool, bool) {
     (turn_matches, pending_matches, state_matches)
 }
 
-pub(super) fn projected_bar_snapshot(tab: &TabSession) -> &AutofixBarSnapshot {
-    let snapshot = &tab.autofix.bar_snapshot;
-    if let AutofixBarSnapshot::Detected {
-        pane_id, summary, ..
-    } = snapshot
-    {
-        if tab.pending_inputs.iter().any(|input| {
-            input.autofix.as_ref().is_some_and(|metadata| {
-                metadata.text_kind == crate::protocol::acp::client::AutofixTextKind::FailureSummary
-            }) && input.autofix_target_pane() == Some(pane_id.as_str())
-                && input.text == *summary
-        }) {
-            // Keep the invitation stored so removing the queued input can restore it.
-            return &AutofixBarSnapshot::Idle;
-        }
-    }
-    snapshot
-}
-
 impl App {
     /// Auto-fix: when a command fails in another pane, ask the coordinator
     /// agent to suggest a fix. The user confirms before execution.
@@ -267,7 +248,8 @@ impl App {
             );
         } else {
             if result == InputGateResult::Queued {
-                self.project_tab_state(&target_tab_id);
+                let snapshot = self.tab_mut(&target_tab_id).autofix.bar_snapshot.clone();
+                self.set_bar_snapshot(&target_tab_id, snapshot);
             }
             tracing::info!(
                 target: "autofix",
@@ -553,11 +535,31 @@ impl App {
 
     /// Store a fresh bar snapshot on the target tab and, if that tab is
     /// currently active, forward it to WT so the bottom bar updates.
-    pub(super) fn set_bar_snapshot(&mut self, target_tab_id: &str, snapshot: AutofixBarSnapshot) {
-        self.tab_mut(target_tab_id).autofix.bar_snapshot = snapshot;
+    pub(super) fn set_bar_snapshot(
+        &mut self,
+        target_tab_id: &str,
+        mut snapshot: AutofixBarSnapshot,
+    ) {
+        let tab = self.tab_mut(target_tab_id);
+        if let AutofixBarSnapshot::Detected {
+            pane_id, summary, ..
+        } = &snapshot
+        {
+            if tab.pending_inputs.iter().any(|input| {
+                input.autofix.as_ref().is_some_and(|metadata| {
+                    metadata.text_kind
+                        == crate::protocol::acp::client::AutofixTextKind::FailureSummary
+                }) && input.autofix_target_pane() == Some(pane_id.as_str())
+                    && input.text == *summary
+            }) {
+                // Acceptance consumes this invitation, even if the queued fix is removed.
+                snapshot = AutofixBarSnapshot::Idle;
+            }
+        }
+        tab.autofix.bar_snapshot = snapshot;
         if target_tab_id == self.active_tab_key() {
             send_bar_event(
-                projected_bar_snapshot(self.current_tab()),
+                &self.current_tab().autofix.bar_snapshot,
                 Some(target_tab_id),
             );
         }

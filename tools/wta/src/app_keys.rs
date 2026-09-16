@@ -782,7 +782,6 @@ impl App {
             }
             KeyCode::Esc if !self.current_tab().pending_inputs.is_empty() => {
                 self.current_tab_mut().pending_inputs.pop_back();
-                self.project_active_tab_state();
             }
             KeyCode::Esc
                 if self.current_tab().turn.recommendations().is_some()

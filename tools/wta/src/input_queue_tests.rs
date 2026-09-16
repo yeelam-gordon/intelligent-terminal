@@ -88,7 +88,7 @@ fn take_bar_payloads() -> Vec<serde_json::Value> {
 }
 
 #[test]
-fn queued_invitation_hides_restores_on_escape_and_becomes_pending_only_on_dispatch() {
+fn queued_invitation_consumed_on_escape_and_new_fix_pending_only_on_dispatch() {
     let _capture = crate::wt_protocol_events::capture_test_published_events();
     let (mut app, mut prompt_rx) = test_app_with_prompt_rx();
     bind_tab(&mut app, DEFAULT_TAB_ID, "session-1");
@@ -111,8 +111,7 @@ fn queued_invitation_hides_restores_on_escape_and_becomes_pending_only_on_dispat
     assert_eq!(queued_texts(&app, DEFAULT_TAB_ID), ["pane-a failed"]);
     assert!(matches!(
         &app.current_tab().autofix.bar_snapshot,
-        AutofixBarSnapshot::Detected { pane_id, summary, .. }
-            if pane_id == "pane-a" && summary == "pane-a failed"
+        AutofixBarSnapshot::Idle
     ));
     assert_eq!(app.current_tab().turn.prompt_id(), Some(active.id));
     assert!(prompt_rx.try_recv().is_err());
@@ -122,12 +121,44 @@ fn queued_invitation_hides_restores_on_escape_and_becomes_pending_only_on_dispat
     assert!(take_bar_payloads().is_empty());
     assert_eq!(app.current_tab().pending_inputs.len(), 1);
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(take_bar_payloads(), [detected]);
+    assert!(take_bar_payloads().is_empty());
     assert!(app.current_tab().pending_inputs.is_empty());
     assert_eq!(app.current_tab().turn.prompt_id(), Some(active.id));
 
+    app.switch_tab_session("other-tab".into());
+    take_bar_payloads();
+    app.switch_tab_session(DEFAULT_TAB_ID.into());
+    assert_eq!(take_bar_payloads(), [hidden.clone()]);
+    app.handle_event(AppEvent::AgentMessageEnd {
+        session_id: "session-1".into(),
+    });
+    assert!(event_rx.try_recv().is_err(), "empty queue needs no drain");
+    app.handle_event(AppEvent::DrainInputQueue {
+        tab_id: DEFAULT_TAB_ID.into(),
+    });
+    assert!(
+        prompt_rx.try_recv().is_err(),
+        "removed fix must never dispatch"
+    );
+    assert!(app.current_tab().turn.accepts_new_prompt());
+    app.project_active_tab_state();
+    assert!(take_bar_payloads()
+        .iter()
+        .all(|payload| payload["state"] == "cleared"));
+
+    enter_text(&mut app, "next active");
+    prompt_rx.try_recv().unwrap();
+    take_bar_payloads();
+    let mut new_failure = failure_notification("pane-a", DEFAULT_TAB_ID);
+    new_failure.summary = "new failure".into();
+    app.maybe_trigger_autofix(&new_failure);
+    let new_detected = take_bar_payloads();
+    assert_eq!(new_detected.len(), 1);
+    assert_eq!(new_detected[0]["state"], "detected");
+    assert_eq!(new_detected[0]["summary"], "new failure");
     app.handle_autofix_execute_from_detected("pane-a", Some(DEFAULT_TAB_ID));
     assert_eq!(take_bar_payloads(), [hidden]);
+    assert!(prompt_rx.try_recv().is_err());
     app.handle_event(AppEvent::AgentMessageEnd {
         session_id: "session-1".into(),
     });
@@ -138,7 +169,7 @@ fn queued_invitation_hides_restores_on_escape_and_becomes_pending_only_on_dispat
     handle_scheduled_drain(&mut app, &mut event_rx, "session-1");
     let pending = serde_json::json!({
         "state": "pending", "tab_id": DEFAULT_TAB_ID,
-        "pane_id": "pane-a", "summary": "pane-a failed"
+        "pane_id": "pane-a", "summary": "new failure"
     });
     assert_eq!(
         take_bar_payloads(),
@@ -172,6 +203,10 @@ fn queued_invitation_full_queue_keeps_detected_payload() {
 
     assert!(take_bar_payloads().is_empty());
     assert_eq!(queued_texts(&app, DEFAULT_TAB_ID), queue_before);
+    assert!(matches!(
+        app.current_tab().autofix.bar_snapshot,
+        AutofixBarSnapshot::Detected { .. }
+    ));
     app.project_active_tab_state();
     assert_eq!(take_bar_payloads(), detected);
 }
@@ -216,6 +251,8 @@ fn queued_invitation_preserves_newer_other_pane_and_non_detected_payloads() {
         app.project_active_tab_state();
         assert_eq!(take_bar_payloads(), expected);
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(take_bar_payloads().is_empty());
+        app.project_active_tab_state();
         assert_eq!(take_bar_payloads(), expected);
         assert!(app.current_tab().pending_inputs.is_empty());
     }
@@ -252,10 +289,14 @@ fn queued_invitation_manual_fix_and_plain_text_do_not_hide_matching_failure() {
     assert_eq!(detected[0]["state"], "detected");
     app.project_active_tab_state();
     assert_eq!(take_bar_payloads(), detected);
+    assert!(matches!(
+        app.current_tab().autofix.bar_snapshot,
+        AutofixBarSnapshot::Detected { .. }
+    ));
 }
 
 #[test]
-fn queued_invitation_tab_switch_and_snapshot_updates_use_same_projection() {
+fn queued_invitation_tab_switch_and_repeated_updates_stay_consumed_after_removal() {
     let _capture = crate::wt_protocol_events::capture_test_published_events();
     let mut app = test_app();
     bind_tab(&mut app, "tab-a", "session-a");
@@ -286,16 +327,15 @@ fn queued_invitation_tab_switch_and_snapshot_updates_use_same_projection() {
     app.project_tab_state("tab-a");
     assert!(take_bar_payloads().is_empty());
     app.switch_tab_session("tab-a".into());
-    assert_eq!(take_bar_payloads(), [hidden]);
+    assert_eq!(take_bar_payloads(), [hidden.clone()]);
 
-    app.emit_autofix_state_cleared("tab-a");
-    take_bar_payloads();
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(
-        take_bar_payloads(),
-        [serde_json::json!({"state": "cleared", "tab_id": "tab-a"})],
-        "a dismissed invitation must not return when its queued input is removed"
-    );
+    assert!(take_bar_payloads().is_empty());
+    app.switch_tab_session("tab-b".into());
+    assert_eq!(take_bar_payloads(), visible_b);
+    app.switch_tab_session("tab-a".into());
+    assert_eq!(take_bar_payloads(), [hidden]);
+    assert!(app.current_tab().pending_inputs.is_empty());
 }
 
 #[test]
@@ -342,17 +382,17 @@ fn queued_invitation_removal_preserves_other_tab_pending_and_review() {
         app.project_tab_state("tab-a");
         assert!(take_bar_payloads().is_empty());
         app.switch_tab_session("tab-a".into());
-        assert_eq!(take_bar_payloads(), [hidden_a]);
+        assert_eq!(take_bar_payloads(), [hidden_a.clone()]);
 
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-        assert_eq!(take_bar_payloads(), expected_a);
+        assert!(take_bar_payloads().is_empty());
         assert!(app.tab_sessions["tab-a"].pending_inputs.is_empty());
         app.project_tab_state("tab-b");
         assert!(take_bar_payloads().is_empty());
         app.switch_tab_session("tab-b".into());
         assert_eq!(take_bar_payloads(), expected_b);
         app.switch_tab_session("tab-a".into());
-        assert_eq!(take_bar_payloads(), expected_a);
+        assert_eq!(take_bar_payloads(), [hidden_a]);
     }
 }
 

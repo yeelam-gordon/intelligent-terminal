@@ -51,9 +51,10 @@ are not evidence that a command is missing. The prompt directs agents to propose
 obvious typos in familiar commands (such as `gti status` -> `git status`) without
 lookup, while using local evidence for unfamiliar commands or ambiguous corrections.
 
-Accepting a detected failure's Fix invitation hides it while the request is queued;
-analysis starts only on dispatch, and Esc removal restores the invitation if still
-applicable (a full queue leaves it visible).
+Accepting a detected failure's Fix invitation consumes it when the fix is queued.
+Analysis starts only on dispatch; Esc removes the queued fix without restoring
+the invitation or starting analysis. A full queue leaves the invitation visible,
+and a new failure after removal can show a new invitation.
 
 The packaged app registers `wta.exe` as an App Execution Alias. Before spawning
 the host agent, WTA puts the current package family's alias directory first on
