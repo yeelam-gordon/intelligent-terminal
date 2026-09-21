@@ -264,9 +264,10 @@ base `${{ github.event.inputs.comparison_base_sha }}` and immutable head
 `${{ github.event.inputs.expected_head_sha }}`.
 
 Review every applicable changed trust boundary. Only a HIGH/high-confidence
-finding with strong repository evidence, a minimal allowlisted patch, passing
-applicable validation against the final patch, and independent review `PASS`
-may be marked `fixed`.
+finding with strong repository evidence, a minimal patch to an existing
+`tools/wta/src/**/*.rs` file, passing applicable validation against the final
+patch, and independent review `PASS` may be marked `fixed`. All other repairs
+remain blocked with guidance.
 
 For a proposed repair, invoke the registered `ghaw-pr-security-reviewer` after the
 final validation. Give it the comparison base, immutable original head, exact

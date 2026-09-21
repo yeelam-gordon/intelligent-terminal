@@ -265,6 +265,18 @@ test('rejects patch paths without a matching fixed finding', () => {
   assert.throws(() => validateReport(candidate, current), /has no fixed finding/);
 });
 
+test('automatic repairs are limited to WTA Rust source', () => {
+  const current = repairScope();
+  const candidate = {
+    ...report(),
+    scopeSha256: current.scopeSha256,
+    mode: 'repair',
+    findings: [],
+    patch: [{ path: 'src/cascadia/TerminalApp/TerminalPage.cpp', summary: 'Not eligible for automatic repair.' }],
+  };
+  assert.throws(() => validateReport(candidate, current), /automatic-fix allowlist/);
+});
+
 test('rejects fixed HIGH, stale SHA, malformed output, and publication overflow', () => {
   const high = report({
     findings: [{

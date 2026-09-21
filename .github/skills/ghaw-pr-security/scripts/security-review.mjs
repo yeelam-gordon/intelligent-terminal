@@ -298,8 +298,7 @@ export function validateReport(report, scope) {
   const patch = report.patch.map((item, index) => {
     if (!item || typeof item !== 'object') fail(`patch item ${index + 1} is invalid`);
     const path = normalizePath(item.path, `patch item ${index + 1} path`);
-    if (!/^(?:src\/|tools\/wta\/src\/|test\/)/.test(path) ||
-        /(?:^|\/)(?:Cargo\.(?:toml|lock)|cgmanifest\.json)$/.test(path)) {
+    if (!/^tools\/wta\/src\/.*\.rs$/.test(path)) {
       fail(`patch item ${index + 1} is outside the automatic-fix allowlist`);
     }
     return { path, summary: text(item.summary, `patch item ${index + 1} summary`, 300) };

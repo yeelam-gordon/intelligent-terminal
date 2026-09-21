@@ -25,8 +25,9 @@ review reasoning and the structured report.
   dependencies, mutate repository files, invoke another agent, or publish
   anything except the caller's one guidance output.
 - In `repair` mode, the caller has already checked out an authorized same-repo
-  immutable head. Edit only a minimal HIGH/high-confidence fix and directly
-  related tests within the caller's allowlist.
+  immutable head. Edit only a minimal HIGH/high-confidence fix in an existing
+  `tools/wta/src/**/*.rs` file. C++, workflow, dependency, test-only, new-file,
+  mode-changing, symlink, and submodule repairs remain blocked for guidance.
 - Use only caller-approved read commands for repository inspection. Write only
   the caller-selected report path.
 - Do not expose credentials, bearer capabilities, pane output, prompts, typed
