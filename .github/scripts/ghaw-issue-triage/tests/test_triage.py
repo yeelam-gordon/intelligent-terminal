@@ -790,9 +790,11 @@ class TriageTests(unittest.TestCase):
             Path(__file__).parents[3] / "skills" / "ghaw-issue-triage" / "SKILL.md"
         ).read_text(encoding="utf-8")
         self.assertIn("imports:\n  - .github/agents/issue-triage.agent.md", workflow)
+        self.assertIn("skills:\n  - .github/skills/ghaw-issue-triage", workflow)
         self.assertIn("/tmp/gh-aw/agent/issue-context.md", workflow)
-        self.assertIn(".github/skills/ghaw-issue-triage/SKILL.md", agent)
+        self.assertIn("installed `ghaw-issue-triage` skill", agent)
         self.assertIn("tools: ['execute']", agent)
+        self.assertIn("user-invocable: false", agent)
         self.assertIn('"cat /tmp/gh-aw/agent/issue-context.md"', workflow)
         self.assertNotIn("tools: ['agent'", agent)
         self.assertNotIn("delegate", agent.lower())
