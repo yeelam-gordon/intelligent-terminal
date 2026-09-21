@@ -83,6 +83,7 @@ jobs:
           EXPECTED_BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
           COMPARISON_BASE_SHA: ${{ github.event.inputs.comparison_base_sha }}
           HEAD_REPO: ${{ github.event.inputs.head_repo }}
+          TARGET_REPOSITORY: ${{ github.event.inputs.repo }}
           REPOSITORY: ${{ github.repository }}
           TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
           GH_TOKEN: ${{ github.token }}
@@ -93,6 +94,7 @@ jobs:
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$COMPARISON_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [ "$TRUSTED_WORKFLOW_SHA" = "$EXPECTED_BASE_SHA" ]
+          [ "$TARGET_REPOSITORY" = "$REPOSITORY" ]
           [ "$HEAD_REPO" = "$REPOSITORY" ]
           current_head="$(gh api "/repos/$REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)"
           current_head_repo="$(gh api "/repos/$REPOSITORY/pulls/$PR_NUMBER" --jq .head.repo.full_name)"
@@ -150,7 +152,7 @@ post-steps:
       EXPECTED_HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
       COMPARISON_BASE_SHA: ${{ github.event.inputs.comparison_base_sha }}
       PR_NUMBER: ${{ github.event.inputs.pr_number }}
-      REPOSITORY: ${{ github.event.inputs.repo }}
+      REPOSITORY: ${{ github.repository }}
       TRUSTED_SHA: ${{ github.workflow_sha }}
     run: |
       set -euo pipefail
