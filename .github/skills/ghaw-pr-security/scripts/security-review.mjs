@@ -2,7 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, copyFileSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -374,8 +374,8 @@ export function stageRepairFiles(report, sourceRoot, targetRoot) {
       report.patch.length < 1 || report.patch.length > 20) {
     fail('repair staging requires 1 to 20 reported patch entries');
   }
-  const sourceBase = resolve(sourceRoot);
-  const targetBase = resolve(targetRoot);
+  const sourceBase = realpathSync(resolve(sourceRoot));
+  const targetBase = realpathSync(resolve(targetRoot));
   const seen = new Set();
   for (const [index, item] of report.patch.entries()) {
     const path = normalizePath(item?.path, `patch item ${index + 1} path`);
@@ -387,6 +387,9 @@ export function stageRepairFiles(report, sourceRoot, targetRoot) {
     const target = resolve(targetBase, path);
     if (!source.startsWith(`${sourceBase}${sep}`) || !target.startsWith(`${targetBase}${sep}`)) {
       fail(`patch item ${index + 1} escapes its workspace`);
+    }
+    if (realpathSync(source) !== source || realpathSync(target) !== target) {
+      fail(`patch item ${index + 1} traverses a symlink or reparse-point ancestor`);
     }
     const sourceStat = lstatSync(source);
     const targetStat = lstatSync(target);

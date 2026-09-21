@@ -190,7 +190,25 @@ test('trusted repair staging rejects symlinks and mode changes', () => {
   writeFileSync(join(source, 'link-target'), 'unsafe\n');
   unlinkSync(join(source, relative));
   symlinkSync(join(source, 'link-target'), join(source, relative));
-  assert.throws(() => stageRepairFiles(candidate, source, target), /regular tracked file/);
+  assert.throws(() => stageRepairFiles(candidate, source, target), /symlink|regular tracked file/);
+});
+
+test('trusted repair staging rejects symlinked source ancestors', () => {
+  const root = join(tmpdir(), `ghaw-security-parent-${process.pid}-${Date.now()}`);
+  const source = join(root, 'source');
+  const target = join(root, 'target');
+  const outside = join(root, 'outside');
+  const relative = 'tools/wta/src/master/mod.rs';
+  mkdirSync(source, { recursive: true });
+  mkdirSync(join(target, 'tools/wta/src/master'), { recursive: true });
+  mkdirSync(join(outside, 'wta/src/master'), { recursive: true });
+  writeFileSync(join(outside, 'wta/src/master/mod.rs'), 'outside\n');
+  writeFileSync(join(target, relative), 'base\n');
+  symlinkSync(outside, join(source, 'tools'), 'junction');
+  assert.throws(
+    () => stageRepairFiles({ patch: [{ path: relative }] }, source, target),
+    /symlink or reparse-point ancestor/,
+  );
 });
 
 test('rejects a fixed finding without applicable validation or independent PASS', () => {
