@@ -72,7 +72,8 @@ pub fn render_hint(frame: &mut Frame, area: Rect) {
     let hint = Paragraph::new(Line::from(Span::styled(
         t!("recommendations.nav_hint").into_owned(),
         theme::DIM,
-    )));
+    )))
+    .alignment(crate::rtl::text_alignment());
     frame.render_widget(hint, area);
 }
 
@@ -111,10 +112,12 @@ fn render_card(
         CardBodyKind::Code => theme::CARD_CODE,
         CardBodyKind::Description => theme::CARD_DESCRIPTION,
     };
+    let body_alignment = body_alignment(body_kind, crate::rtl::text_alignment());
     let content_inner = card::inset_horizontal(content_area, 2);
     if content_inner.width > 0 {
         let content = Paragraph::new(command_text)
             .style(body_style)
+            .alignment(body_alignment)
             .wrap(Wrap { trim: false });
         frame.render_widget(content, content_inner);
     }
@@ -130,9 +133,17 @@ fn render_card(
     }
 }
 
+#[derive(Clone, Copy)]
 enum CardBodyKind {
     Code,
     Description,
+}
+
+fn body_alignment(body_kind: CardBodyKind, prose_alignment: Alignment) -> Alignment {
+    match body_kind {
+        CardBodyKind::Code => Alignment::Left,
+        CardBodyKind::Description => prose_alignment,
+    }
 }
 
 fn extract_card_content(
@@ -213,4 +224,21 @@ fn extract_card_content(
         vec![t!("recommendations.button_execute").into_owned()],
         CardBodyKind::Description,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recommendation_body_alignment_preserves_code_direction() {
+        assert_eq!(
+            body_alignment(CardBodyKind::Description, Alignment::Right),
+            Alignment::Right
+        );
+        assert_eq!(
+            body_alignment(CardBodyKind::Code, Alignment::Right),
+            Alignment::Left
+        );
+    }
 }

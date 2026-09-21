@@ -160,13 +160,17 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let paragraph = Paragraph::new(lines)
         .block(inner)
+        .alignment(crate::rtl::text_alignment())
         .wrap(Wrap { trim: false })
         .scroll((scroll as u16, 0));
 
     frame.render_widget(paragraph, chat_area);
 
     if let (Some(line), Some(act_area)) = (activity_line, activity_area) {
-        frame.render_widget(Paragraph::new(line), act_area);
+        frame.render_widget(
+            Paragraph::new(line).alignment(crate::rtl::text_alignment()),
+            act_area,
+        );
     }
 
     // Update the scroll bound only when the build saw all of history;

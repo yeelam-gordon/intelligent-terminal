@@ -15,6 +15,7 @@ mod logging;
 mod osc52;
 mod protocol;
 mod runtime_paths;
+mod rtl;
 mod pane_context;
 mod shell;
 mod theme;
@@ -455,6 +456,7 @@ async fn main() -> Result<()> {
     let locale = cli.language.clone()
         .or_else(|| sys_locale::get_locale())
         .unwrap_or_else(|| "en-US".to_string());
+    rtl::initialize_text_direction(&locale);
     rust_i18n::set_locale(&normalize_locale(&locale));
 
     // Legacy flags first (backward compat)
