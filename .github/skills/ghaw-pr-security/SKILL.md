@@ -153,9 +153,11 @@ and check names accepted by the trusted validator. Mark unavailable checks
 mode. In repair mode, `fixed` is valid only for HIGH/high-confidence findings
 with strong evidence, at least one applicable passing validation check, no
 failed/blocked check, a matching patch entry, and independent review PASS.
-Every passing check must name the immutable `headSha`; non-scope checks must
-use exact `local command:` evidence from the current immutable workspace.
-External run URLs are context only and cannot authorize automatic repair.
+Every passing check must name the immutable `headSha`. Agent-reported command
+results are advisory: before authorizing a repair, the trusted post-step removes
+non-scope pass claims and adds only validation it executed against the final
+patch. External run URLs are context only and cannot authorize automatic
+repair.
 
 ## Publication constraint
 

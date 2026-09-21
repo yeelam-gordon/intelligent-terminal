@@ -346,8 +346,33 @@ export function validateQueuedOutput(report, queuedOutput) {
   }
 }
 
-function escapeCell(value) {
-  return value.replace(/[<>]/g, '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+export function attestChecks(report, headSha, wtaTestsPassed) {
+  if (!SHA.test(headSha) || report.headSha !== headSha) {
+    fail('trusted validation attestation does not match the immutable head');
+  }
+  const checks = report.checks
+    .filter(check => check.name === 'deterministic-scope' || check.status !== 'pass')
+    .map(check => check.name === 'deterministic-scope'
+      ? check
+      : { ...check, status: check.status });
+  if (wtaTestsPassed) {
+    const existing = checks.findIndex(check => check.name === 'wta-tests');
+    const attested = {
+      name: 'wta-tests',
+      status: 'pass',
+      headSha,
+      evidence: 'trusted post-step: cargo test --manifest-path tools/wta/Cargo.toml (exit 0) against the final patch',
+    };
+    if (existing >= 0) checks[existing] = attested;
+    else checks.push(attested);
+  }
+  return { ...report, checks };
+}
+
+function escapeMarkdown(value) {
+  return value
+    .replace(/\r?\n/g, ' ')
+    .replace(/[\\`*_{}[\]()#+\-.!|<>:/@~]/g, '\\$&');
 }
 
 export function renderReport(report) {
@@ -357,7 +382,7 @@ export function renderReport(report) {
   const lines = [
     '## Intelligent Terminal security review',
     '',
-    escapeCell(report.summary),
+    escapeMarkdown(report.summary),
     '',
     `- Source/head: \`${report.baseSha.slice(0, 12)}\` / \`${report.headSha.slice(0, 12)}\``,
     `- HIGH (must fix/block): **${highs.length}**`,
@@ -367,7 +392,7 @@ export function renderReport(report) {
     '',
     '| Check | Status | Evidence |',
     '| --- | --- | --- |',
-    ...report.checks.map(check => `| ${check.name} | **${check.status}** | ${escapeCell(check.evidence)} |`),
+    ...report.checks.map(check => `| ${check.name} | **${check.status}** | ${escapeMarkdown(check.evidence)} |`),
   ];
   for (const [title, findings] of [['Fixed', fixed], ['Must fix / blocking', highs], ['Consider', mediumLow]]) {
     lines.push('', `### ${title}`);
@@ -382,17 +407,17 @@ export function renderReport(report) {
         '',
         `\`${finding.file}:${finding.startLine}-${finding.endLine}\` · \`${finding.category}\` · \`${finding.rule}\``,
         '',
-        `**Observed:** ${escapeCell(finding.observed)}`,
+        `**Observed:** ${escapeMarkdown(finding.observed)}`,
         '',
-        `**Expected:** ${escapeCell(finding.expected)}`,
+        `**Expected:** ${escapeMarkdown(finding.expected)}`,
         '',
-        `**Impact:** ${escapeCell(finding.impact)}`,
+        `**Impact:** ${escapeMarkdown(finding.impact)}`,
         '',
-        `**Proposed fix:** ${escapeCell(finding.proposedFix)}`,
+        `**Proposed fix:** ${escapeMarkdown(finding.proposedFix)}`,
         '',
-        `**Validation:** ${escapeCell(finding.validation)}`,
+        `**Validation:** ${escapeMarkdown(finding.validation)}`,
         '',
-        `**Disposition:** ${finding.fixDisposition.state} — ${escapeCell(finding.fixDisposition.reason)}`,
+        `**Disposition:** ${finding.fixDisposition.state} — ${escapeMarkdown(finding.fixDisposition.reason)}`,
       );
     }
   }
@@ -438,6 +463,12 @@ function main() {
     writeFileSync(option('--status'), report.findings.some(finding => finding.severity === 'high' && finding.fixDisposition.state !== 'fixed') ? 'blocking\n' : 'pass\n', { flag: 'wx' });
     return;
   }
+  if (command === 'attest') {
+    const report = JSON.parse(readFileSync(option('--report'), 'utf8'));
+    const attested = attestChecks(report, option('--head'), process.argv.includes('--wta-tests-passed'));
+    writeFileSync(option('--output'), `${JSON.stringify(attested, null, 2)}\n`, { flag: 'wx' });
+    return;
+  }
   if (command === 'validate-output') {
     const report = JSON.parse(readFileSync(option('--validated'), 'utf8'));
     validateQueuedOutput(report, JSON.parse(readFileSync(option('--agent-output'), 'utf8')));
@@ -453,7 +484,7 @@ function main() {
     }
     return;
   }
-  fail('expected scope, validate, or enforce command');
+  fail('expected scope, attest, validate, validate-output, or enforce command');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

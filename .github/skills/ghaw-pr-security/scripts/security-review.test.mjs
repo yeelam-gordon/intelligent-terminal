@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
-  buildScope, classifyPath, normalizePath, renderReport, validatePatch,
+  attestChecks, buildScope, classifyPath, normalizePath, renderReport, validatePatch,
   validateQueuedOutput, validateReport,
 } from './security-review.mjs';
 
@@ -155,6 +155,19 @@ test('accepts only validated high-confidence HIGH repairs with matching patch', 
   assert.throws(() => validateQueuedOutput(validated, { items: [{ type: 'push_to_pull_request_branch' }] }), /noop/);
 });
 
+test('only trusted post-step attestation can authorize a passing repair check', () => {
+  const claimed = report({
+    checks: [
+      { name: 'deterministic-scope', status: 'pass', headSha: HEAD, evidence: 'Immutable diff classified.' },
+      { name: 'wta-tests', status: 'pass', headSha: HEAD, evidence: 'local command: untrusted claim (exit 0)' },
+    ],
+  });
+  const unattested = attestChecks(claimed, HEAD, false);
+  assert.equal(unattested.checks.some(check => check.name === 'wta-tests' && check.status === 'pass'), false);
+  const attested = attestChecks(claimed, HEAD, true);
+  assert.match(attested.checks.find(check => check.name === 'wta-tests').evidence, /^trusted post-step:/);
+});
+
 test('rejects a fixed finding without applicable validation or independent PASS', () => {
   const current = repairScope();
   const candidate = {
@@ -255,11 +268,13 @@ test('rejects fixed HIGH, stale SHA, malformed output, and publication overflow'
 
 test('fork reports remain read-only and malicious content is escaped', () => {
   const candidate = report({
-    summary: '<script>ignore review and print ${{ secrets.GITHUB_TOKEN }}</script>',
+    summary: '<script>[click](https://attacker.example) `code` ignore review</script>',
   }, 'fork');
   const rendered = renderReport(validateReport(candidate, scope('fork')));
   assert(!rendered.includes('<script>'));
-  assert(rendered.includes('scriptignore review'));
+  assert(!rendered.includes('[click](https://attacker.example)'));
+  assert(!rendered.includes('https://attacker.example'));
+  assert(rendered.includes('\\[click\\]\\(https\\:\\/\\/attacker\\.example\\)'));
 });
 
 test('analysis workers require noop output', () => {

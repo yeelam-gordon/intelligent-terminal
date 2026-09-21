@@ -146,7 +146,9 @@ post-steps:
     shell: bash
     env:
       GH_TOKEN: ${{ github.token }}
+      EXPECTED_BASE_SHA: ${{ github.event.inputs.expected_base_sha }}
       EXPECTED_HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
+      COMPARISON_BASE_SHA: ${{ github.event.inputs.comparison_base_sha }}
       PR_NUMBER: ${{ github.event.inputs.pr_number }}
       REPOSITORY: ${{ github.event.inputs.repo }}
       TRUSTED_SHA: ${{ github.workflow_sha }}
@@ -159,16 +161,49 @@ post-steps:
       }
       trusted_validator="$RUNNER_TEMP/security-review-final.mjs"
       git show "$TRUSTED_SHA:.github/skills/ghaw-pr-security/scripts/security-review.mjs" > "$trusted_validator"
-      node "$trusted_validator" validate \
-        --scope /tmp/gh-aw/security-scope.json \
+      trusted_scope="$RUNNER_TEMP/security-scope.final.json"
+      trusted_report="$RUNNER_TEMP/security-findings.attested.json"
+      rm -f "$trusted_scope" "$trusted_report" \
+        /tmp/gh-aw/security-findings.validated.json \
+        /tmp/gh-aw/security-summary.md \
+        /tmp/gh-aw/security-status.txt \
+        /tmp/gh-aw/security-repair.patch
+      node "$trusted_validator" scope \
+        --base "$EXPECTED_BASE_SHA" \
+        --head "$EXPECTED_HEAD_SHA" \
+        --pr "$PR_NUMBER" \
+        --relation same-repo \
+        --mode repair \
+        --output "$trusted_scope"
+      [ "$(node -p "JSON.parse(require('fs').readFileSync('$trusted_scope','utf8')).baseSha")" = "$COMPARISON_BASE_SHA" ]
+      git diff --binary HEAD > /tmp/gh-aw/security-repair.patch
+      attest_args=()
+      if [ -s /tmp/gh-aw/security-repair.patch ]; then
+        mapfile -d '' modified_paths < <(git diff --name-only -z HEAD)
+        for path in "${modified_paths[@]}"; do
+          [[ "$path" =~ ^tools/wta/src/.*\.rs$ ]] || {
+            echo "::error::Automatic repair validation is limited to WTA Rust source: $path"
+            exit 1
+          }
+        done
+        cargo test --manifest-path tools/wta/Cargo.toml
+        attest_args+=(--wta-tests-passed)
+      fi
+      node "$trusted_validator" attest \
         --report /tmp/gh-aw/security-findings.json \
+        --head "$EXPECTED_HEAD_SHA" \
+        --output "$trusted_report" \
+        "${attest_args[@]}"
+      node "$trusted_validator" validate \
+        --scope "$trusted_scope" \
+        --report "$trusted_report" \
         --validated /tmp/gh-aw/security-findings.validated.json \
         --summary /tmp/gh-aw/security-summary.md \
         --status /tmp/gh-aw/security-status.txt
       node "$trusted_validator" validate-output \
         --validated /tmp/gh-aw/security-findings.validated.json \
         --agent-output /tmp/gh-aw/agent_output.json
-      git diff --binary HEAD > /tmp/gh-aw/security-repair.patch
+      cp "$trusted_scope" /tmp/gh-aw/security-scope.validated.json
       cat /tmp/gh-aw/security-summary.md >> "$GITHUB_STEP_SUMMARY"
 
   - name: Upload validated security repair report
@@ -177,7 +212,7 @@ post-steps:
     with:
       name: ghaw-pr-security-${{ github.event.inputs.pr_number }}-${{ github.event.inputs.expected_head_sha }}
       path: |
-        /tmp/gh-aw/security-scope.json
+        /tmp/gh-aw/security-scope.validated.json
         /tmp/gh-aw/security-findings.validated.json
         /tmp/gh-aw/security-summary.md
         /tmp/gh-aw/security-status.txt
