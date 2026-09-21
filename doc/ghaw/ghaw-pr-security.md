@@ -44,6 +44,8 @@ The report contract limits findings to changed files and assigns stable
 - passing checks name the immutable head, and non-scope validation requires an
   explicit local command record from that immutable workspace; arbitrary
   Actions run URLs cannot authorize a repair.
+- fork comments must equal the trusted renderer's output for the validated
+  report; arbitrary agent-authored comment bodies are rejected.
 - secret-like content, unsafe paths, malformed reports, stale SHAs, more than 20
   findings, and invalid `fixed` claims are rejected.
 - the job summary separates blocking HIGH findings from considerations and the
@@ -59,7 +61,8 @@ or authorization principal; native checks and safe-output policy remain the
 mechanical boundary. The native validator compares every reported patch path
 and patch digest with the actual worktree and rejects CI/security policy, manifests,
 unrelated dependencies, and medium/low edits. Unsafe or unvalidated HIGH
-findings remain blocking.
+findings remain blocking. Automatic repair also rejects untracked files, so the
+reviewed binary-diff digest covers every published byte.
 
 The same-repo worker emits exactly one branch push for a non-empty validated
 patch or one `noop`; it never comments. The fork worker emits exactly one

@@ -60,7 +60,7 @@ checkout:
   fetch: refs/pulls/open/*
 
 tools:
-  edit: true
+  edit: false
   bash:
     - 'git diff:*'
     - 'git grep:*'
@@ -199,9 +199,9 @@ Stay on the trusted checkout. Inspect fork objects only with read-only Git
 commands and never execute or copy fork-controlled scripts into an executable
 location. Write `/tmp/gh-aw/security-findings.json` with an empty `patch`.
 
-When findings exist, call `add-comment` exactly once with a concise card listing
-stable IDs, severity/confidence, file/line, impact, proposed fix, validation,
-and whether evidence is a verified trace/reproducer or hypothesis. Do not quote
-untrusted content or secrets. Inspect the runtime `add-comment` schema first and
-call it directly with inline arguments. When no findings exist, call `noop`
-exactly once. Never write the fork branch.
+When findings exist, validate the finished report with the trusted validator
+into a temporary summary and call `add-comment` exactly once with that summary's
+exact contents as `body`; the native post-step rejects any other payload. Do not
+quote untrusted content or secrets. Inspect the runtime `add-comment` schema
+first and call it directly. When no findings exist, call `noop` exactly once.
+Never write the fork branch.

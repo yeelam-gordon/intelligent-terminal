@@ -346,6 +346,9 @@ export function validateQueuedOutput(report, queuedOutput) {
   if (types.some(type => !allowed.has(type)) || types.length !== 1 || types[0] !== expected) {
     fail(`${report.mode} mode requires exactly one ${expected} output`);
   }
+  if (expected === 'add_comment' && queuedOutput.items[0].body !== renderReport(report)) {
+    fail('fork guidance comment must exactly match the trusted rendered report');
+  }
 }
 
 function escapeCell(value) {
@@ -429,8 +432,11 @@ function main() {
     if (scope.mode === 'repair') {
       const modified = git(['diff', '--name-only', '-z', 'HEAD']).split('\0').filter(Boolean);
       const untracked = git(['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean);
+      if (untracked.length > 0) {
+        fail(`automatic repair cannot include untracked files: ${untracked.join(', ')}`);
+      }
       const patchText = git(['diff', '--binary', 'HEAD']);
-      validatePatch(report, [...modified, ...untracked], patchText);
+      validatePatch(report, modified, patchText);
     }
     writeFileSync(option('--validated'), `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx' });
     writeFileSync(option('--summary'), renderReport(report), { flag: 'wx' });

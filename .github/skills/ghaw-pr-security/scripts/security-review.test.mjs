@@ -227,6 +227,33 @@ test('fork guidance requires comment for findings and noop for no findings', () 
   assert.throws(() => validateQueuedOutput(noFindings, { items: [{ type: 'add_comment' }] }), /noop/);
 });
 
+test('fork guidance comment must equal the trusted renderer', () => {
+  const candidate = validateReport(report({
+    findings: [{
+      rule: 'diagnostic-metadata-overcollection',
+      severity: 'medium',
+      confidence: 'high',
+      category: 'secret-handling',
+      file: 'tools/wta/src/logging.rs',
+      startLine: 10,
+      endLine: 12,
+      observed: 'The changed diagnostic records complete provider configuration.',
+      expected: 'Log only non-sensitive identifiers.',
+      impact: 'Diagnostics can expose sensitive configuration.',
+      evidence: [{ kind: 'source-trace', reference: 'tools/wta/src/logging.rs:10-12', detail: 'The full structure reaches tracing.' }],
+      proposedFix: 'Record a bounded identifier instead.',
+      validation: 'Add a redaction test and run the focused WTA test.',
+      fixDisposition: { state: 'advice-only', reason: 'Medium findings are not automatically fixed.' },
+    }],
+  }, 'fork'), scope('fork'));
+  const body = renderReport(candidate);
+  validateQueuedOutput(candidate, { items: [{ type: 'add_comment', body }], errors: [] });
+  assert.throws(
+    () => validateQueuedOutput(candidate, { items: [{ type: 'add_comment', body: 'arbitrary' }], errors: [] }),
+    /exactly match/,
+  );
+});
+
 test('rejects secret-like diagnostic evidence and unsupported passing checks', () => {
   assert.throws(() => validateReport(report({
     checks: [
