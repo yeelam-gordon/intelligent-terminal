@@ -419,6 +419,19 @@ export function stageRepairFiles(report, sourceRoot, targetRoot) {
   return [...seen].sort();
 }
 
+export function validateRepairScope(scope) {
+  if (!scope || scope.mode !== 'repair' || !Array.isArray(scope.changedFiles) ||
+      scope.changedFiles.length === 0) {
+    fail('automatic repair requires a non-empty trusted repair scope');
+  }
+  const ineligible = scope.changedFiles
+    .map(file => normalizePath(file?.path, 'repair scope path'))
+    .filter(path => !/^tools\/wta\/src\/.*\.rs$/.test(path));
+  if (ineligible.length > 0) {
+    fail(`automatic repair scope contains non-WTA-source paths: ${ineligible.join(', ')}`);
+  }
+}
+
 function escapeMarkdown(value) {
   return value
     .replace(/\r?\n/g, ' ')
@@ -524,6 +537,10 @@ function main() {
     stageRepairFiles(report, option('--source'), option('--target'));
     return;
   }
+  if (command === 'validate-repair-scope') {
+    validateRepairScope(JSON.parse(readFileSync(option('--scope'), 'utf8')));
+    return;
+  }
   if (command === 'validate-output') {
     const report = JSON.parse(readFileSync(option('--validated'), 'utf8'));
     validateQueuedOutput(report, JSON.parse(readFileSync(option('--agent-output'), 'utf8')));
@@ -539,7 +556,7 @@ function main() {
     }
     return;
   }
-  fail('expected scope, stage-repair, attest, validate, validate-output, or enforce command');
+  fail('expected scope, validate-repair-scope, stage-repair, attest, validate, validate-output, or enforce command');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

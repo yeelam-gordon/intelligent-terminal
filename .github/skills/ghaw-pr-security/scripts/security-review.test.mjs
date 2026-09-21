@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import {
   attestChecks, buildScope, classifyPath, normalizePath, renderReport, validatePatch,
-  validateQueuedOutput, validateReport, stageRepairFiles,
+  validateQueuedOutput, validateReport, stageRepairFiles, validateRepairScope,
 } from './security-review.mjs';
 
 const BASE = '1'.repeat(40);
@@ -297,6 +297,13 @@ test('automatic repairs are limited to WTA Rust source', () => {
     patch: [{ path: 'src/cascadia/TerminalApp/TerminalPage.cpp', summary: 'Not eligible for automatic repair.' }],
   };
   assert.throws(() => validateReport(candidate, current), /automatic-fix allowlist/);
+  validateRepairScope(repairScope());
+  const mixedScope = repairScope();
+  mixedScope.changedFiles.push({ status: 'M', path: '.github/workflows/build.yml', domains: ['workflow-credentials'] });
+  assert.throws(
+    () => validateRepairScope(mixedScope),
+    /non-WTA-source paths/,
+  );
 });
 
 test('rejects fixed HIGH, stale SHA, malformed output, and publication overflow', () => {

@@ -73,10 +73,12 @@ checkout of the immutable head, recomputes scope from the dispatch SHAs, copies
 only reported regular non-executable WTA source files without mode changes,
 removes agent-authored passing validation claims, and runs the fixed WTA test
 command in a pinned disposable Rust container with the reconstructed workspace
-mounted read-only and no GitHub credential passed. The native validator compares
-every reported patch path and patch digest with this trusted worktree and rejects
-symlinks, submodules, mode changes, CI/security policy, manifests, unrelated
-dependencies, and medium/low edits.
+mounted read-only, no network, and no GitHub credential passed. Dependencies
+are fetched in a separate container from the trusted base; automatic repair is
+blocked unless the complete PR diff contains only existing WTA Rust source.
+The native validator compares every reported patch path and patch digest with
+this trusted worktree and rejects symlinks, submodules, mode changes,
+CI/security policy, manifests, unrelated dependencies, and medium/low edits.
 Unsafe or unvalidated HIGH findings remain blocking. Automatic repair also
 rejects untracked files, so the reviewed binary-diff digest covers every
 published byte.

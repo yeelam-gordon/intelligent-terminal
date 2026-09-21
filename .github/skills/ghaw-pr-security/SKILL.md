@@ -159,8 +159,10 @@ results are advisory: before authorizing a repair, the trusted post-step creates
 a fresh immutable checkout, copies only reported regular non-executable WTA
 source files without mode changes, removes non-scope pass claims, and adds only
 validation executed in a pinned disposable container with the reconstructed
-workspace mounted read-only and no GitHub credential passed. External run URLs
-are context only and cannot authorize automatic repair.
+workspace mounted read-only, no network, and no GitHub credential passed.
+Dependencies are fetched separately from the trusted base, and repair is
+blocked unless the complete PR diff is existing WTA Rust source. External run
+URLs are context only and cannot authorize automatic repair.
 
 ## Publication constraint
 

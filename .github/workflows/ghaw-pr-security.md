@@ -212,19 +212,31 @@ post-steps:
       attest_args=()
       patch_count="$(node -p "JSON.parse(require('fs').readFileSync('/tmp/gh-aw/security-findings.json','utf8')).patch.length")"
       if [ "$patch_count" -gt 0 ]; then
+        node "$trusted_validator" validate-repair-scope --scope "$trusted_scope"
         node "$trusted_validator" stage-repair \
           --report /tmp/gh-aw/security-findings.json \
           --source "$source_workspace" \
           --target "$trusted_workspace"
+        dependency_workspace="$RUNNER_TEMP/security-dependency-workspace"
+        cargo_home="$RUNNER_TEMP/security-cargo-home"
         cargo_target="$RUNNER_TEMP/security-cargo-target"
-        mkdir "$cargo_target"
+        mkdir "$dependency_workspace" "$cargo_home" "$cargo_target"
+        git worktree add --quiet --detach "$dependency_workspace" "$EXPECTED_BASE_SHA"
         docker run --rm --network bridge \
+          --volume "${dependency_workspace}:/workspace:ro" \
+          --volume "${cargo_home}:/usr/local/cargo:rw" \
+          --workdir /workspace \
+          rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f \
+          cargo fetch --locked --manifest-path tools/wta/Cargo.toml
+        docker run --rm --network none \
           --volume "${trusted_workspace}:/workspace:ro" \
+          --volume "${cargo_home}:/usr/local/cargo:rw" \
           --volume "${cargo_target}:/target:rw" \
           --workdir /workspace \
           --env CARGO_TARGET_DIR=/target \
+          --env CARGO_NET_OFFLINE=true \
           rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f \
-          cargo test --manifest-path tools/wta/Cargo.toml
+          cargo test --locked --offline --manifest-path tools/wta/Cargo.toml
         attest_args+=(--wta-tests-passed)
       fi
       node "$trusted_validator" attest \
