@@ -370,7 +370,7 @@ export function attestChecks(report, headSha, wtaTestsPassed) {
       name: 'wta-tests',
       status: 'pass',
       headSha,
-      evidence: 'trusted post-step: cargo test --manifest-path tools/wta/Cargo.toml (exit 0) against the final patch',
+      evidence: 'trusted isolated container: cargo test --manifest-path tools/wta/Cargo.toml (exit 0) against the final patch',
     };
     if (existing >= 0) checks[existing] = attested;
     else checks.push(attested);

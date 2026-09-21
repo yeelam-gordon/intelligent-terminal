@@ -214,7 +214,15 @@ post-steps:
           --report /tmp/gh-aw/security-findings.json \
           --source "$source_workspace" \
           --target "$trusted_workspace"
-        cargo test --manifest-path tools/wta/Cargo.toml
+        cargo_target="$RUNNER_TEMP/security-cargo-target"
+        mkdir "$cargo_target"
+        docker run --rm --network bridge \
+          --volume "${trusted_workspace}:/workspace:ro" \
+          --volume "${cargo_target}:/target:rw" \
+          --workdir /workspace \
+          --env CARGO_TARGET_DIR=/target \
+          rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f \
+          cargo test --manifest-path tools/wta/Cargo.toml
         attest_args+=(--wta-tests-passed)
       fi
       node "$trusted_validator" attest \

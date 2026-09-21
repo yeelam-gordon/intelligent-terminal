@@ -173,7 +173,7 @@ test('only trusted post-step attestation can authorize a passing repair check', 
   const unattested = attestChecks(claimed, HEAD, false);
   assert.equal(unattested.checks.some(check => check.name === 'wta-tests' && check.status === 'pass'), false);
   const attested = attestChecks(claimed, HEAD, true);
-  assert.match(attested.checks.find(check => check.name === 'wta-tests').evidence, /^trusted post-step:/);
+  assert.match(attested.checks.find(check => check.name === 'wta-tests').evidence, /^trusted isolated container:/);
 });
 
 test('trusted repair staging rejects symlinks and mode changes', () => {

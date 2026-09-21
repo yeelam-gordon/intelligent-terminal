@@ -158,8 +158,9 @@ Every passing check must name the immutable `headSha`. Agent-reported command
 results are advisory: before authorizing a repair, the trusted post-step creates
 a fresh immutable checkout, copies only reported regular non-executable WTA
 source files without mode changes, removes non-scope pass claims, and adds only
-validation it executed against that reconstructed final patch. External run
-URLs are context only and cannot authorize automatic repair.
+validation executed in a pinned disposable container with the reconstructed
+workspace mounted read-only and no GitHub credential passed. External run URLs
+are context only and cannot authorize automatic repair.
 
 ## Publication constraint
 

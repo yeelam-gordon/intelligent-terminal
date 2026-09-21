@@ -73,10 +73,11 @@ mechanical boundary. After inference, the trusted post-step creates a fresh
 checkout of the immutable head, recomputes scope from the dispatch SHAs, copies
 only reported regular non-executable WTA source files without mode changes,
 removes agent-authored passing validation claims, and runs the fixed WTA test
-command against the reconstructed final repair. The native validator compares
-every reported patch path and patch digest with this trusted worktree and
-rejects symlinks, submodules, mode changes, CI/security policy, manifests,
-unrelated dependencies, and medium/low edits.
+command in a pinned disposable Rust container with the reconstructed workspace
+mounted read-only and no GitHub credential passed. The native validator compares
+every reported patch path and patch digest with this trusted worktree and rejects
+symlinks, submodules, mode changes, CI/security policy, manifests, unrelated
+dependencies, and medium/low edits.
 Unsafe or unvalidated HIGH findings remain blocking. Automatic repair also
 rejects untracked files, so the reviewed binary-diff digest covers every
 published byte.
