@@ -75,7 +75,9 @@ removes agent-authored passing validation claims, and runs the fixed WTA test
 command in a pinned disposable Rust container with the reconstructed workspace
 mounted read-only, no network, and no GitHub credential passed. Dependencies
 are fetched in a separate container from the trusted base; automatic repair is
-blocked unless the complete PR diff contains only existing WTA Rust source.
+blocked unless every complete-PR diff entry has Git status `M` and targets
+existing WTA Rust source. Additions, copies, deletions, renames, and type changes
+remain guidance-only.
 The native validator compares every reported patch path and patch digest with
 this trusted worktree and rejects symlinks, submodules, mode changes,
 CI/security policy, manifests, unrelated dependencies, and medium/low edits.

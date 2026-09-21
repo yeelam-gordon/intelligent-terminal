@@ -161,8 +161,10 @@ source files without mode changes, removes non-scope pass claims, and adds only
 validation executed in a pinned disposable container with the reconstructed
 workspace mounted read-only, no network, and no GitHub credential passed.
 Dependencies are fetched separately from the trusted base, and repair is
-blocked unless the complete PR diff is existing WTA Rust source. External run
-URLs are context only and cannot authorize automatic repair.
+blocked unless every complete-PR diff entry has Git status `M` and targets
+existing WTA Rust source. Additions, copies, deletions, renames, and type changes
+are never automatically repaired. External run URLs are context only and cannot
+authorize automatic repair.
 
 ## Publication constraint
 

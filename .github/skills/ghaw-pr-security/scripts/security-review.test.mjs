@@ -36,6 +36,18 @@ function repairScope() {
   );
 }
 
+function repairScopeWithStatus(status) {
+  return buildScope(
+    BASE,
+    HEAD,
+    17,
+    'same-repo',
+    `${status}\0tools/wta/src/master/mod.rs\0`,
+    BASE,
+    'repair',
+  );
+}
+
 function report(overrides = {}, relation = 'same-repo') {
   const current = scope(relation);
   return {
@@ -174,6 +186,28 @@ test('only trusted post-step attestation can authorize a passing repair check', 
   assert.equal(unattested.checks.some(check => check.name === 'wta-tests' && check.status === 'pass'), false);
   const attested = attestChecks(claimed, HEAD, true);
   assert.match(attested.checks.find(check => check.name === 'wta-tests').evidence, /^trusted isolated container:/);
+});
+
+test('automatic repair accepts only modifications to existing WTA Rust source', () => {
+  assert.doesNotThrow(() => validateRepairScope(repairScopeWithStatus('M')));
+  for (const status of ['A', 'D', 'T']) {
+    assert.throws(
+      () => validateRepairScope(repairScopeWithStatus(status)),
+      new RegExp(`${status}:tools/wta/src/master/mod.rs`),
+    );
+  }
+  assert.throws(
+    () => validateRepairScope(buildScope(
+      BASE,
+      HEAD,
+      17,
+      'same-repo',
+      'R100\0tools/wta/src/old.rs\0tools/wta/src/master/mod.rs\0',
+      BASE,
+      'repair',
+    )),
+    /R100:tools\/wta\/src\/master\/mod.rs/,
+  );
 });
 
 test('trusted repair staging rejects symlinks and mode changes', () => {

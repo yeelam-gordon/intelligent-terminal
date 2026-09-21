@@ -425,10 +425,14 @@ export function validateRepairScope(scope) {
     fail('automatic repair requires a non-empty trusted repair scope');
   }
   const ineligible = scope.changedFiles
-    .map(file => normalizePath(file?.path, 'repair scope path'))
-    .filter(path => !/^tools\/wta\/src\/.*\.rs$/.test(path));
+    .map(file => ({
+      path: normalizePath(file?.path, 'repair scope path'),
+      status: file?.status,
+    }))
+    .filter(file => file.status !== 'M' || !/^tools\/wta\/src\/.*\.rs$/.test(file.path))
+    .map(file => `${file.status ?? 'missing'}:${file.path}`);
   if (ineligible.length > 0) {
-    fail(`automatic repair scope contains non-WTA-source paths: ${ineligible.join(', ')}`);
+    fail(`automatic repair scope contains non-WTA-source paths or non-modification entries: ${ineligible.join(', ')}`);
   }
 }
 
