@@ -143,6 +143,11 @@ steps:
         --output /tmp/gh-aw/security-scope.json
       [ "$(node -p "JSON.parse(require('fs').readFileSync('/tmp/gh-aw/security-scope.json','utf8')).baseSha")" = "$COMPARISON_BASE_SHA" ]
 
+pre-agent-steps:
+  - name: Enforce credential-free agent checkout
+    shell: bash
+    run: bash "${RUNNER_TEMP}/gh-aw/actions/clean_git_credentials.sh"
+
 post-steps:
   - name: Reject stale or malformed repair output
     shell: bash

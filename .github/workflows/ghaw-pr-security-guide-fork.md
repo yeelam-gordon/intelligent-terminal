@@ -55,7 +55,6 @@ checkout:
   repository: ${{ github.repository }}
   ref: ${{ github.workflow_sha }}
   fetch-depth: 0
-  fetch: refs/pulls/open/*
 
 tools:
   edit: false
@@ -119,6 +118,19 @@ safe-outputs:
     create-issue: false
 
 steps:
+  - name: Fetch immutable fork head
+    shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.inputs.pr_number }}
+      EXPECTED_HEAD_SHA: ${{ github.event.inputs.expected_head_sha }}
+    run: |
+      set -euo pipefail
+      header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+      git -c "http.extraheader=Authorization: Basic ${header}" fetch --quiet --no-tags origin \
+        "+refs/pull/${PR_NUMBER}/head:refs/gh-aw/security-target"
+      [ "$(git rev-parse refs/gh-aw/security-target)" = "$EXPECTED_HEAD_SHA" ]
+
   - name: Prepare immutable fork review scope
     shell: bash
     env:
@@ -140,6 +152,11 @@ steps:
         --mode guide \
         --output /tmp/gh-aw/security-scope.json
       [ "$(node -p "JSON.parse(require('fs').readFileSync('/tmp/gh-aw/security-scope.json','utf8')).baseSha")" = "$COMPARISON_BASE_SHA" ]
+
+pre-agent-steps:
+  - name: Enforce credential-free agent checkout
+    shell: bash
+    run: bash "${RUNNER_TEMP}/gh-aw/actions/clean_git_credentials.sh"
 
 post-steps:
   - name: Reject stale or malformed fork guidance

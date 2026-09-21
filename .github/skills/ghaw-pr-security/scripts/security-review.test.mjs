@@ -59,8 +59,12 @@ function report(overrides = {}, relation = 'same-repo') {
 }
 
 test('classifies project trust boundaries', () => {
-  assert.deepEqual(classifyPath('tools/wta/src/master/mod.rs'), ['session-routing', 'wta-rust']);
+  assert.deepEqual(classifyPath('tools/wta/src/master/mod.rs'), ['session-routing', 'wta', 'wta-rust']);
   assert(classifyPath('src/cascadia/TerminalProtocol/TerminalProtocol.idl').includes('com-protocol'));
+  assert(classifyPath('src/cascadia/TerminalSettingsEditor/Settings.xaml').includes('product-source'));
+  assert(classifyPath('src/cascadia/TerminalApp/TerminalApp.vcxproj').includes('product-source'));
+  assert(classifyPath('test/e2e/tests/Feature.Agent.Tests.ps1').includes('product-tests'));
+  assert(classifyPath('tools/wta/prompts/terminal-agent.md').includes('wta'));
   assert(classifyPath('.github/workflows/review.yml').includes('workflow-credentials'));
   assert(classifyPath('.github/skills/reviewer/SKILL.md').includes('workflow-credentials'));
 });

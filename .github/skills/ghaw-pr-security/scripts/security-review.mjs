@@ -56,6 +56,15 @@ export function normalizePath(value, name = 'path') {
 
 export function classifyPath(path) {
   const domains = new Set();
+  if (/^src\//.test(path)) {
+    domains.add('product-source');
+  }
+  if (/^test\//.test(path)) {
+    domains.add('product-tests');
+  }
+  if (/^tools\/wta\//.test(path)) {
+    domains.add('wta');
+  }
   if (/^src\/.*\.(?:cpp|c|h|hpp|idl)$/.test(path)) {
     domains.add('cpp-memory');
   }
