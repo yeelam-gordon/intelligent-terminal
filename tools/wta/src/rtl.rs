@@ -79,22 +79,37 @@ pub fn text_alignment_for_locale(locale: &str) -> Alignment {
     }
 }
 
+static UI_IS_RTL: OnceLock<bool> = OnceLock::new();
+
+/// Captures the direction of the user-selected or OS locale before
+/// translation fallback maps it to one of WTA's available locales.
+pub fn initialize_text_direction(locale: &str) {
+    UI_IS_RTL.get_or_init(|| is_rtl_locale(locale));
+}
+
 /// Returns the default UI text alignment for RTL locales — right when
-/// the current `rust_i18n` locale is RTL, left otherwise. The result
-/// is memoized after the first call because `rust_i18n::set_locale`
-/// is invoked once at startup and the OS classification is stable;
-/// memoization avoids a UTF-16 allocation and a syscall on every
-/// `Paragraph` render in the TUI hot path.
+/// the original user-selected or OS locale is RTL, left otherwise.
+/// Tests that do not initialize the process-wide direction continue
+/// to follow the current `rust_i18n` locale.
 pub fn text_alignment() -> Alignment {
-    static CACHED: OnceLock<Alignment> = OnceLock::new();
-    *CACHED.get_or_init(|| text_alignment_for_locale(&rust_i18n::locale()))
+    if UI_IS_RTL
+        .get()
+        .copied()
+        .unwrap_or_else(|| is_rtl_locale(&rust_i18n::locale()))
+    {
+        Alignment::Right
+    } else {
+        Alignment::Left
+    }
 }
 
 /// Thin convenience wrapper for call sites that need the boolean
-/// without pulling in `ratatui` types. Not memoized — only used in
-/// non-hot paths.
+/// without pulling in `ratatui` types.
 pub fn is_current_locale_rtl() -> bool {
-    is_rtl_locale(&rust_i18n::locale())
+    UI_IS_RTL
+        .get()
+        .copied()
+        .unwrap_or_else(|| is_rtl_locale(&rust_i18n::locale()))
 }
 
 #[cfg(test)]
