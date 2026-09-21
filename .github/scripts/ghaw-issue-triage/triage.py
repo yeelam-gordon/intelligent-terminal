@@ -31,6 +31,14 @@ MAX_ARCHIVE_ENTRIES = 1500
 MAX_UNCOMPRESSED_BYTES = 48 * 1024 * 1024
 MAX_ENTRY_BYTES = 4 * 1024 * 1024
 MAX_EXTRACTED_CHARS = 14000
+DEFAULT_MUTABLE_LABEL_PREFIXES = (
+    "Issue-",
+    "Needs-",
+    "Area-",
+    "Agent-",
+    "Severity-",
+)
+DEFAULT_MUTABLE_LABELS = {"No-Recent-Activity"}
 ATTACHMENT_PATTERN = re.compile(
     r"https://github\.com/user-attachments/(?:files|assets)/[A-Za-z0-9_./-]+\.zip"
     r"(?:\?[^\s)>\]]*)?",
@@ -192,8 +200,8 @@ def redact(value):
     text = str(value or "").replace("\x00", "")
     substitutions = (
         (
-            r"""(?i)(["'](?:token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)["']\s*:\s*")([^"\\]*(?:\\.[^"\\]*)*)(")""",
-            r"\1<redacted>\3",
+            r"""(?i)(["'](?:token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)["']\s*:\s*)(["'])(.*?)(\2)""",
+            r"\1\2<redacted>\4",
         ),
         (r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{20,}", "Bearer " + "<redacted>"),
         (
@@ -415,7 +423,8 @@ def existing_hash(comments):
     return None
 
 
-def input_hash(issue, comments):
+def input_hash(issue, comments, managed_labels=None):
+    mutable_labels = set(managed_labels or ())
     payload = {
         "number": issue.get("number"),
         "title": issue.get("title") or "",
@@ -423,10 +432,17 @@ def input_hash(issue, comments):
         "labels": sorted(
             item.get("name", "") if isinstance(item, dict) else str(item)
             for item in issue.get("labels", [])
-        ),
-        "assignees": sorted(
-            item.get("login", "") if isinstance(item, dict) else str(item)
-            for item in issue.get("assignees", [])
+            if (
+                item.get("name", "") if isinstance(item, dict) else str(item)
+            ) not in mutable_labels
+            and not (
+                (
+                    item.get("name", "") if isinstance(item, dict) else str(item)
+                ).startswith(DEFAULT_MUTABLE_LABEL_PREFIXES)
+                or (
+                    item.get("name", "") if isinstance(item, dict) else str(item)
+                ) in DEFAULT_MUTABLE_LABELS
+            )
         ),
         "author_comments": comments,
     }
@@ -457,7 +473,7 @@ def collect_evidence(event, api, config, force=False, downloader=download_attach
     comments = api.comments(issue["number"])
     author = issue.get("user", {}).get("login")
     selected_comments = author_comments(comments, author)
-    digest = input_hash(issue, selected_comments)
+    digest = input_hash(issue, selected_comments, config["managed_labels"])
     if not force and not meaningful_trigger(event, author):
         return None, "No meaningful issue-author evidence changed."
     canonical = (
@@ -666,6 +682,11 @@ def verify(item, evidence, config):
         raise TriageError("Exactly one matching issue type label is required")
 
     area_label = item.get("area_label")
+    area_labels = sorted(label for label in labels if label.startswith("Area-"))
+    if len(area_labels) > 1:
+        raise TriageError("At most one Area-* label may be selected")
+    if area_labels != ([] if area_label == "None" else [area_label]):
+        raise TriageError("Area-* label must be equal to the selected area or be absent")
     if area_label != "None" and area_label not in evidence["area_candidates"]:
         raise TriageError("area_label is outside deterministic candidates")
     if area_label != "None" and area_label not in labels:
@@ -684,14 +705,21 @@ def verify(item, evidence, config):
         raise TriageError("REQUEST_AUTHOR requires a specific request")
     if disposition == "MAINTAINER_REVIEW" and author_request not in {"", "None"}:
         raise TriageError("MAINTAINER_REVIEW cannot ask the author for more work")
-    if kind != "BUG" and re.search(r"\b(?:log|diagnostic|zip)\b", author_request, re.I):
-        raise TriageError("Non-bugs must not receive diagnostic-log requests")
-
     effective_diagnostics_requirement = (
         evidence.get("bug_diagnostics_requirement", evidence["diagnostics_requirement"])
         if kind == "BUG"
         else "NOT_APPLICABLE"
     )
+    diagnostic_request = bool(
+        re.search(r"\b(?:logs?|diagnostic(?:s)?|zip)\b", author_request, re.I)
+    )
+    if diagnostic_request and effective_diagnostics_requirement != "REQUIRED":
+        if kind != "BUG":
+            raise TriageError(
+                "Non-bugs must not receive diagnostic-log requests; "
+                "author diagnostic requests require REQUIRED diagnostics"
+            )
+        raise TriageError("Author diagnostic requests require REQUIRED diagnostics")
     diagnostics_missing = (
         effective_diagnostics_requirement == "REQUIRED"
         and evidence["diagnostics_status"] != "SUFFICIENT"

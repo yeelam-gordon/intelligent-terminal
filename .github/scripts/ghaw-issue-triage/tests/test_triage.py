@@ -182,17 +182,45 @@ class TriageTests(unittest.TestCase):
         jwt = ".".join(("eyJ" + ("c" * 10), "d" * 12, "e" * 12))
         value = (
             '{"token": "quoted-secret", "password":"another-secret"} '
+            "{'token': 'single-secret', 'password':'single-password'} "
             f"{scheme} {bearer} {pat} {jwt} ordinary text"
         )
         redacted = TRIAGE.redact(value)
         self.assertNotIn("quoted-secret", redacted)
         self.assertNotIn("another-secret", redacted)
+        self.assertNotIn("single-secret", redacted)
+        self.assertNotIn("single-password", redacted)
         self.assertNotIn(bearer, redacted)
         self.assertNotIn(pat, redacted)
         self.assertNotIn(jwt, redacted)
         self.assertIn("ordinary text", redacted)
         self.assertIn(scheme + " <redacted>", redacted)
         self.assertEqual(TRIAGE.redact(scheme + " status"), scheme + " status")
+
+    def test_input_hash_ignores_workflow_managed_labels_and_assignees(self):
+        original = issue("Please add a feature", ["Issue-Feature", "external-label"])
+        original["assignees"] = [{"login": "reporter"}]
+        changed = copy.deepcopy(original)
+        changed["labels"] = [
+            {"name": "Issue-Bug"},
+            {"name": "Needs-Triage"},
+            {"name": "Needs-Attention"},
+            {"name": "No-Recent-Activity"},
+            {"name": "external-label"},
+        ]
+        changed["assignees"] = [{"login": "configured-owner"}]
+        self.assertEqual(
+            TRIAGE.input_hash(
+                original,
+                [],
+                CONFIG["managed_labels"],
+            ),
+            TRIAGE.input_hash(
+                changed,
+                [],
+                CONFIG["managed_labels"],
+            ),
+        )
 
     def test_issue_title_is_redacted_before_compaction(self):
         evidence = self.collect(
@@ -371,6 +399,44 @@ class TriageTests(unittest.TestCase):
         with self.assertRaisesRegex(TRIAGE.TriageError, "Exactly one"):
             TRIAGE.verify(item, evidence, CONFIG)
 
+    def test_verifier_requires_selected_area_to_be_the_only_area_label(self):
+        evidence = self.collect(
+            "The agent pane layout is clipped.",
+            ["Issue-Bug"],
+            title="Agent pane visual defect",
+        )
+        item = base_item(
+            evidence,
+            labels_json='["Issue-Bug","Area-AgentPane","Area-Terminal"]',
+        )
+        with self.assertRaisesRegex(TRIAGE.TriageError, "At most one Area"):
+            TRIAGE.verify(item, evidence, CONFIG)
+
+        item = base_item(
+            evidence,
+            area_label="None",
+            area_confidence="NONE",
+            labels_json='["Issue-Bug","Area-AgentPane"]',
+        )
+        with self.assertRaisesRegex(TRIAGE.TriageError, "equal to the selected area"):
+            TRIAGE.verify(item, evidence, CONFIG)
+
+    def test_optional_bug_diagnostics_cannot_be_requested_from_author(self):
+        evidence = self.collect(
+            "### Steps to reproduce\n1. Open settings\n"
+            "### Actual Behavior\nThe spacing is incorrect.",
+            ["Issue-Bug"],
+            title="Settings spacing is incorrect",
+        )
+        self.assertEqual(evidence["bug_diagnostics_requirement"], "OPTIONAL")
+        item = base_item(
+            evidence,
+            disposition="REQUEST_AUTHOR",
+            author_request=f"Please attach logs from {TRIAGE.LOG_GUIDE}.",
+        )
+        with self.assertRaisesRegex(TRIAGE.TriageError, "require REQUIRED"):
+            TRIAGE.verify(item, evidence, CONFIG)
+
     def test_repeated_canonical_hash_skips_processing(self):
         item = issue("Please add a feature", ["Issue-Feature"])
         selected = []
@@ -427,6 +493,17 @@ class TriageTests(unittest.TestCase):
             {"action": "opened", "issue": item}, FakeApi(item), CONFIG
         )
         self.assertIsNone(evidence)
+
+    def test_short_author_comment_is_not_a_meaningful_trigger(self):
+        item = issue("Please add a feature", ["Issue-Feature"])
+        event = {
+            "action": "created",
+            "issue": item,
+            "comment": {"user": {"login": "reporter"}, "body": "ok"},
+        }
+        evidence, reason = TRIAGE.collect_evidence(event, FakeApi(item), CONFIG)
+        self.assertIsNone(evidence)
+        self.assertIn("meaningful", reason)
 
     def test_unconfigured_and_ineligible_assignees_are_rejected(self):
         evidence = self.collect("Please add a feature", ["Issue-Feature"])
@@ -591,6 +668,10 @@ class TriageTests(unittest.TestCase):
         self.assertIn("github.event.comment.user.login == github.event.issue.user.login", workflow)
         self.assertIn("assertFresh(current)", workflow)
         self.assertIn("managed.has(label) && !desired.has(label)", workflow)
+        self.assertIn("ref: ${{ github.workflow_sha }}", workflow)
+        self.assertIn("if: steps.prepare.outputs.should_process != 'true'", workflow)
+        self.assertIn("exit 1", workflow)
+        self.assertNotIn('bash:\n', workflow)
         self.assertIn("updateComment", workflow)
         self.assertIn("createComment", workflow)
         self.assertIn("throw new Error('Configured assignee is no longer eligible.')", workflow)

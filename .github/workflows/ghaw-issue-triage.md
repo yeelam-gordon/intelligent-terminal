@@ -34,11 +34,8 @@ permissions:
   issues: read
   copilot-requests: write
 
-tools:
-  bash:
-    - "python:*"
-  edit: false
-  github: false
+checkout:
+  ref: ${{ github.workflow_sha }}
 
 steps:
   - name: Prepare bounded issue evidence
@@ -52,6 +49,13 @@ steps:
       --config .github/scripts/ghaw-issue-triage/config.json
       --context /tmp/gh-aw/issue-context.md
       --evidence /tmp/gh-aw/issue-evidence.json
+
+pre-agent-steps:
+  - name: Gate agent on deterministic preprocessing
+    if: steps.prepare.outputs.should_process != 'true'
+    run: |
+      echo "Deterministic preprocessing skipped agent execution."
+      exit 1
 
 safe-outputs:
   report-failure-as-issue: false
