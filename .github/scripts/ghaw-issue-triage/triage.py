@@ -605,17 +605,22 @@ def prepare(args):
 def load_agent_item(path):
     with open(path, encoding="utf-8") as stream:
         output = json.load(stream)
+    if not isinstance(output, dict):
+        raise TriageError("Agent output must be a JSON object")
+    errors = output.get("errors", [])
+    if not isinstance(errors, list):
+        raise TriageError("Agent output errors must be an array")
+    if errors:
+        raise TriageError("Agent output contains errors")
     items = output.get("items")
-    if not isinstance(items, list):
-        raise TriageError("Agent output does not contain an items array")
-    matches = [
-        item
-        for item in items
-        if isinstance(item, dict) and item.get("type") == "publish_issue_triage"
-    ]
-    if len(matches) != 1:
+    if (
+        not isinstance(items, list)
+        or len(items) != 1
+        or not isinstance(items[0], dict)
+        or items[0].get("type") != "publish_issue_triage"
+    ):
         raise TriageError("Agent output must contain exactly one publish_issue_triage item")
-    return matches[0]
+    return items[0]
 
 
 def parse_json_list(item, field):

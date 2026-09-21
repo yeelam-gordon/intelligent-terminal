@@ -616,6 +616,29 @@ class TriageTests(unittest.TestCase):
         with self.assertRaisesRegex(TRIAGE.TriageError, "fresh evidence"):
             TRIAGE.verify(item, evidence, CONFIG)
 
+    def test_agent_output_requires_only_one_item_without_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "output.json"
+            target = {"type": "publish_issue_triage", "input_sha256": "hash"}
+
+            for output, message in (
+                (
+                    {"items": [target, {"type": "noop"}]},
+                    "exactly one",
+                ),
+                (
+                    {"items": [target], "errors": ["validation failed"]},
+                    "contains errors",
+                ),
+            ):
+                with self.subTest(output=output):
+                    path.write_text(json.dumps(output), encoding="utf-8")
+                    with self.assertRaisesRegex(TRIAGE.TriageError, message):
+                        TRIAGE.load_agent_item(path)
+
+            path.write_text(json.dumps({"items": [target], "errors": []}), encoding="utf-8")
+            self.assertEqual(TRIAGE.load_agent_item(path), target)
+
     def test_unavailable_api_fails_instead_of_publishing(self):
         item = issue("Please add a feature", ["Issue-Feature"])
         with self.assertRaisesRegex(TRIAGE.TriageError, "API unavailable"):
