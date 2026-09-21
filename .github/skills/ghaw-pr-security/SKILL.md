@@ -160,14 +160,16 @@ External run URLs are context only and cannot authorize automatic repair.
 ## Publication constraint
 
 gh-aw PR safe output cannot combine branch commit/push and PR comment output in
-one worker. Use separate same-repository repair and fork/read-only guidance
-workers, like the existing localization controller:
+one worker, and generated safe-output jobs are not ordered after native
+post-validation. Both analysis workers therefore emit exactly one `noop`. The
+trusted controller publishes only after a successful worker and validated
+artifact:
 
-- repair with a patch: exactly one branch-push output and no comment;
-- repair without a patch: exactly one `noop`;
-- guide with findings: exactly one idempotent guidance comment and no branch
-  write;
-- guide without findings: exactly one `noop`.
+- same-repository repair: index-only commit based on the reviewed head and a
+  non-force fast-forward push, which fails atomically if the branch raced;
+- fork guidance: one idempotent comment containing only the trusted rendered
+  report;
+- no patch/findings: no publication.
 
 ## Local validation
 

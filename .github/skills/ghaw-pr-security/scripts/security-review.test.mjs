@@ -151,8 +151,8 @@ test('accepts only validated high-confidence HIGH repairs with matching patch', 
   };
   const validated = validateReport(candidate, current);
   validatePatch(validated, ['tools/wta/src/master/mod.rs'], PATCH_TEXT);
-  validateQueuedOutput(validated, { items: [{ type: 'push_to_pull_request_branch' }], errors: [] });
-  assert.throws(() => validateQueuedOutput(validated, { items: [{ type: 'add_comment' }] }), /push_to_pull_request_branch/);
+  validateQueuedOutput(validated, { items: [{ type: 'noop' }], errors: [] });
+  assert.throws(() => validateQueuedOutput(validated, { items: [{ type: 'push_to_pull_request_branch' }] }), /noop/);
 });
 
 test('rejects a fixed finding without applicable validation or independent PASS', () => {
@@ -184,6 +184,47 @@ test('rejects a fixed finding without applicable validation or independent PASS'
     patch: [{ path: 'tools/wta/src/master/mod.rs', summary: 'Restore lookup.' }],
   };
   assert.throws(() => validateReport(candidate, current), /applicable passing validation/);
+});
+
+test('rejects patch paths without a matching fixed finding', () => {
+  const current = repairScope();
+  const candidate = {
+    ...report(),
+    scopeSha256: current.scopeSha256,
+    mode: 'repair',
+    checks: [
+      { name: 'deterministic-scope', status: 'pass', headSha: HEAD, evidence: 'Immutable diff classified.' },
+      { name: 'wta-tests', status: 'pass', headSha: HEAD, evidence: 'local command: cargo test focused-security-test (exit 0)' },
+    ],
+    review: {
+      status: 'pass',
+      reviewer: 'ghaw-pr-security-reviewer',
+      headSha: HEAD,
+      patchSha256: PATCH_SHA256,
+      evidence: 'Independent final-patch review returned PASS.',
+    },
+    findings: [{
+      rule: 'session-route-target-binding',
+      severity: 'high',
+      confidence: 'high',
+      category: 'session-routing',
+      file: 'tools/wta/src/master/mod.rs',
+      startLine: 20,
+      endLine: 24,
+      observed: 'Changed routing bypasses owner binding.',
+      expected: 'Preserve owner binding.',
+      impact: 'Wrong-pane mutation.',
+      evidence: [{ kind: 'source-trace', reference: 'tools/wta/src/master/mod.rs:20', detail: 'Unbound route.' }],
+      proposedFix: 'Restore lookup.',
+      validation: 'Focused wrong-session test passed.',
+      fixDisposition: { state: 'fixed', reason: 'Minimal source patch and focused regression test passed.' },
+    }],
+    patch: [
+      { path: 'tools/wta/src/master/mod.rs', summary: 'Restore owner-bound lookup.' },
+      { path: 'tools/wta/src/logging.rs', summary: 'Unrelated extra edit.' },
+    ],
+  };
+  assert.throws(() => validateReport(candidate, current), /has no fixed finding/);
 });
 
 test('rejects fixed HIGH, stale SHA, malformed output, and publication overflow', () => {
@@ -221,13 +262,13 @@ test('fork reports remain read-only and malicious content is escaped', () => {
   assert(rendered.includes('scriptignore review'));
 });
 
-test('fork guidance requires comment for findings and noop for no findings', () => {
+test('analysis workers require noop output', () => {
   const noFindings = validateReport(report({}, 'fork'), scope('fork'));
   validateQueuedOutput(noFindings, { items: [{ type: 'noop' }], errors: [] });
   assert.throws(() => validateQueuedOutput(noFindings, { items: [{ type: 'add_comment' }] }), /noop/);
 });
 
-test('fork guidance comment must equal the trusted renderer', () => {
+test('fork findings remain noop until trusted controller publication', () => {
   const candidate = validateReport(report({
     findings: [{
       rule: 'diagnostic-metadata-overcollection',
@@ -246,12 +287,8 @@ test('fork guidance comment must equal the trusted renderer', () => {
       fixDisposition: { state: 'advice-only', reason: 'Medium findings are not automatically fixed.' },
     }],
   }, 'fork'), scope('fork'));
-  const body = renderReport(candidate);
-  validateQueuedOutput(candidate, { items: [{ type: 'add_comment', body }], errors: [] });
-  assert.throws(
-    () => validateQueuedOutput(candidate, { items: [{ type: 'add_comment', body: 'arbitrary' }], errors: [] }),
-    /exactly match/,
-  );
+  validateQueuedOutput(candidate, { items: [{ type: 'noop' }], errors: [] });
+  assert.throws(() => validateQueuedOutput(candidate, { items: [{ type: 'add_comment' }] }), /noop/);
 });
 
 test('rejects secret-like diagnostic evidence and unsupported passing checks', () => {

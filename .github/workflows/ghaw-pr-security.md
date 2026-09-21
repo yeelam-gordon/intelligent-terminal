@@ -105,17 +105,7 @@ jobs:
     needs: [prepare]
 
 safe-outputs:
-  github-token: ${{ secrets.GITHUB_TOKEN }}
-  push-to-pull-request-branch:
-    base-branch: ${{ github.event.inputs.expected_head_sha }}
-    github-token-for-extra-empty-commit: "${{ '' }}"
-    allowed-files:
-      - 'src/**'
-      - 'tools/wta/src/**'
-      - 'test/**'
-    protected-files: blocked
-    if-no-changes: error
-    fallback-as-pull-request: false
+  noop:
 
 steps:
   - name: Prepare immutable repair scope
@@ -167,6 +157,7 @@ post-steps:
       node "$trusted_validator" validate-output \
         --validated /tmp/gh-aw/security-findings.validated.json \
         --agent-output /tmp/gh-aw/agent_output.json
+      git diff --binary HEAD > /tmp/gh-aw/security-repair.patch
       cat /tmp/gh-aw/security-summary.md >> "$GITHUB_STEP_SUMMARY"
 
   - name: Upload validated security repair report
@@ -179,6 +170,7 @@ post-steps:
         /tmp/gh-aw/security-findings.validated.json
         /tmp/gh-aw/security-summary.md
         /tmp/gh-aw/security-status.txt
+        /tmp/gh-aw/security-repair.patch
       if-no-files-found: error
       retention-days: 14
 
@@ -213,16 +205,12 @@ finding, final diff, SHA-256 of `git diff --binary HEAD`, and command/exit
 evidence. Record that exact digest and immutable head in the review result. Do
 not publish if it does not return explicit `PASS` for both.
 
-Write `/tmp/gh-aw/security-findings.json` exactly as the skill specifies.
-List every modified path in `patch`. For a validated non-empty patch, call
-`push-to-pull-request-branch` exactly once after inspecting its runtime schema.
-Set its branch to `${{ github.event.inputs.head_ref }}`; the controller has
-already verified that branch belongs to this repository and currently resolves
-to the immutable head.
-Use a focused commit message ending with `[security-expert]`. With no patch,
-call `noop` exactly once. Never add a PR comment: gh-aw PR output cannot combine
-comment and commit in this worker. Remaining HIGH findings stay blocking with a
-concrete reason.
+Write `/tmp/gh-aw/security-findings.json` exactly as the skill specifies and
+list every modified path in `patch`. Call `noop` exactly once whether or not a
+validated patch exists. Never publish code or add a PR comment: the trusted
+controller consumes the validated artifact and performs the mutually exclusive
+fast-forward repair or guidance-comment operation. Remaining HIGH findings stay
+blocking with a concrete reason.
 
 ## agent: `ghaw-pr-security-reviewer`
 {{#runtime-import .github/agents/ghaw-pr-security-reviewer.agent.md}}

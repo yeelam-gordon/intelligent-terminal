@@ -12,12 +12,16 @@ as Git objects, resolves the merge base, classifies scope, and dispatches one
 detached worker:
 
 - Same-repository: `ghaw-pr-security.md` checks out the immutable head and may
-  push one validated automatic repair.
+  produce one validated automatic-repair artifact.
 - Fork: `ghaw-pr-security-guide-fork.md` stays on the trusted workflow revision,
-  inspects immutable fork objects read-only, and may post one guidance comment.
+  inspects immutable fork objects read-only, and may produce one validated
+  guidance artifact.
 
-This split follows the existing localization controller because gh-aw PR safe
-output cannot combine a branch commit and a PR comment in one worker.
+Both workers expose only non-mutating `noop` safe output because generated
+gh-aw publication jobs are not ordered after native post-validation. After a
+successful worker, the trusted controller performs the mutually exclusive
+operation: an index-only, non-force fast-forward repair push for same-repository
+PRs, or an idempotent trusted-renderer guidance comment for fork PRs.
 
 Before inference, the trusted script validates the immutable observed-base/head
 commits, resolves their merge base, normalizes changed paths, classifies
@@ -64,11 +68,12 @@ unrelated dependencies, and medium/low edits. Unsafe or unvalidated HIGH
 findings remain blocking. Automatic repair also rejects untracked files, so the
 reviewed binary-diff digest covers every published byte.
 
-The same-repo worker emits exactly one branch push for a non-empty validated
-patch or one `noop`; it never comments. The fork worker emits exactly one
-idempotent comment when findings exist or one `noop`; it never writes code.
-The controller downloads the validated card and fails the public check when
-unfixed HIGH findings remain.
+Both workers emit exactly one `noop`; they never publish. The controller
+downloads the validated card and exact binary patch. It publishes a
+same-repository repair only as a commit whose parent is the reviewed head and
+uses a non-force push, so a concurrent branch update fails atomically. For a
+fork finding it publishes only the trusted rendered summary. It fails the
+public check when unfixed HIGH findings remain.
 
 ## Repository-specific coverage
 

@@ -104,10 +104,7 @@ jobs:
     needs: [prepare]
 
 safe-outputs:
-  add-comment:
-    target: '${{ github.event.inputs.pr_number }}'
-    max: 1
-    hide-older-comments: true
+  noop:
 
 steps:
   - name: Prepare immutable fork review scope
@@ -199,9 +196,6 @@ Stay on the trusted checkout. Inspect fork objects only with read-only Git
 commands and never execute or copy fork-controlled scripts into an executable
 location. Write `/tmp/gh-aw/security-findings.json` with an empty `patch`.
 
-When findings exist, validate the finished report with the trusted validator
-into a temporary summary and call `add-comment` exactly once with that summary's
-exact contents as `body`; the native post-step rejects any other payload. Do not
-quote untrusted content or secrets. Inspect the runtime `add-comment` schema
-first and call it directly. When no findings exist, call `noop` exactly once.
-Never write the fork branch.
+Call `noop` exactly once whether or not findings exist. Never publish or write
+the fork branch. The trusted controller alone publishes the validated rendered
+summary when findings exist.

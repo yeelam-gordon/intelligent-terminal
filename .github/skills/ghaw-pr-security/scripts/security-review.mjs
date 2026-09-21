@@ -312,6 +312,10 @@ export function validateReport(report, scope) {
   for (const finding of fixed) {
     if (!patchPaths.has(finding.file)) fail(`fixed finding ${finding.id} has no patch entry for its source file`);
   }
+  const fixedPaths = new Set(fixed.map(finding => finding.file));
+  for (const item of patch) {
+    if (!fixedPaths.has(item.path)) fail(`patch path ${item.path} has no fixed finding`);
+  }
   return { ...report, summary, checks, review, findings, patch };
 }
 
@@ -337,17 +341,8 @@ export function validateQueuedOutput(report, queuedOutput) {
   if (queuedOutput.errors?.length) fail('agent output ingestion reported errors');
   const types = queuedOutput.items.map(item => item?.type);
   if (types.some(type => typeof type !== 'string')) fail('queued output type is invalid');
-  const expected = report.mode === 'repair'
-    ? (report.patch.length > 0 ? 'push_to_pull_request_branch' : 'noop')
-    : (report.findings.length > 0 ? 'add_comment' : 'noop');
-  const allowed = report.mode === 'repair'
-    ? new Set(['push_to_pull_request_branch', 'noop'])
-    : new Set(['add_comment', 'noop']);
-  if (types.some(type => !allowed.has(type)) || types.length !== 1 || types[0] !== expected) {
-    fail(`${report.mode} mode requires exactly one ${expected} output`);
-  }
-  if (expected === 'add_comment' && queuedOutput.items[0].body !== renderReport(report)) {
-    fail('fork guidance comment must exactly match the trusted rendered report');
+  if (types.length !== 1 || types[0] !== 'noop') {
+    fail(`${report.mode} analysis worker requires exactly one noop output`);
   }
 }
 
