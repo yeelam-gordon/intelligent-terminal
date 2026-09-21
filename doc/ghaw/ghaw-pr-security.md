@@ -36,16 +36,15 @@ API read must still return the same head.
 Each worker rematerializes the validator from `github.workflow_sha`, not from
 agent-edited bytes.
 
-Both workers use their workflow prompt plus the frontmatter-installed
-`.github/skills/ghaw-pr-security/SKILL.md`; its bundled script owns mechanical
-scope/report validation. The repair workflow embeds only its independent
-read-only repair gate as an inline subagent. Installing the skill through gh-aw
-keeps the runtime procedure tied to the trusted workflow revision, rather than
-trusting a PR-edited copy. The workflows own checkout identity, permissions,
-trusted script materialization, freshness, safe-output policy, artifacts, and
-conclusions. This matches the existing localization separation between
-controller/worker orchestration and reusable domain skills without duplicating
-the primary agent definition.
+Both workers import the same mode-aware
+`.github/agents/ghaw-pr-security.agent.md` and install the same
+`.github/skills/ghaw-pr-security/SKILL.md`; the skill's bundled script owns
+mechanical scope/report validation. The workflow selects `guide` or `repair`
+mode and supplies the corresponding tools, so review-only and repair behavior
+do not require duplicate primary agents. The repair workflow embeds only its
+independent read-only repair gate as an inline subagent. Installing the agent
+and skill through gh-aw keeps them tied to the trusted workflow revision,
+rather than trusting PR-edited copies.
 
 The report contract limits findings to changed files and assigns stable
 `ITSEC-<hash>` IDs from rule/category/path/line. It independently enforces:

@@ -47,6 +47,8 @@ permissions:
   copilot-requests: write
 
 engine: copilot
+imports:
+  - .github/agents/ghaw-pr-security.agent.md
 
 skills:
   - .github/skills/ghaw-pr-security
