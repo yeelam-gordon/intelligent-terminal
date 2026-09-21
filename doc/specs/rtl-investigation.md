@@ -48,11 +48,11 @@ each gets its own one-line wrapper around the OS locale database.
 
 ### `wta` TUI (Rust)
 
-- The Rust TUI library has no native bidi engine; it draws monospaced
-  cells left-to-right. The terminal emulator that hosts `wta` —
-  Windows Terminal since 1.21 / preview — performs the actual character
-  shaping. So the only useful `wta`-side action is right-aligning
-  `Paragraph` widgets that render translated copy.
+- The Rust TUI library and Windows Terminal's cell renderer do not
+  provide full bidirectional reordering. `wta` right-aligns `Paragraph`
+  widgets that render translated copy as a bounded layout improvement;
+  mixed-direction and complex RTL text remain limited until the host
+  adds bidi support.
 - `tools/wta/src/rtl.rs` exposes `is_rtl_locale(&str)` and
   `text_alignment()`. Classification delegates to the Win32
   reading-layout locale-info API via `windows-sys` (the
@@ -84,10 +84,10 @@ is unchanged for them.
 ## What was intentionally skipped
 
 The original investigation considered pulling a Unicode bidirectional
-text crate for in-string reordering. We did not — Windows Terminal
-performs the bidi shaping on rendered cells, and reordering cells in
-`wta` would duplicate that work and risk disagreement with the host
-terminal.
+text crate for in-string reordering. We did not because reordering text
+inside `wta` without corresponding terminal cell, selection, and cursor
+semantics would risk disagreement with the host. Full bidi behavior
+remains a known limitation rather than a completed part of this change.
 
 ## File markers
 

@@ -13,13 +13,10 @@
 //   3  ->  Top-to-bottom with right-to-left column order (legacy CJK)
 //
 // We treat value `1` as RTL and everything else (including failures)
-// as LTR. The Rust TUI library has no native bidi engine; Windows
-// Terminal — the host emulator — performs the actual character
-// shaping. So the only useful WTA-side action is choosing a default
-// UI text alignment for RTL locales — right-aligning the relevant
-// `Paragraph` widgets, regardless of whether their content is purely
-// translated copy or mixed (user / agent messages, code, etc.). The
-// terminal handles the rest.
+// as LTR. The Rust TUI library and Windows Terminal's cell renderer
+// do not provide full bidirectional reordering. WTA right-aligns
+// localized prose as a bounded layout improvement, but mixed-direction
+// and complex RTL text remain limited until the host adds bidi support.
 
 use ratatui::layout::Alignment;
 use std::sync::OnceLock;
