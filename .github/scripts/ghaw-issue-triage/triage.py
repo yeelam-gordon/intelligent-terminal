@@ -711,6 +711,8 @@ def verify(item, evidence, config):
     author_request = compact(item.get("author_request"), 1000)
     if disposition == "REQUEST_AUTHOR" and not author_request:
         raise TriageError("REQUEST_AUTHOR requires a specific request")
+    if disposition == "REQUEST_AUTHOR" and author_request == "None":
+        raise TriageError("REQUEST_AUTHOR requires a specific request, not None")
     if disposition == "MAINTAINER_REVIEW" and author_request not in {"", "None"}:
         raise TriageError("MAINTAINER_REVIEW cannot ask the author for more work")
     effective_diagnostics_requirement = (

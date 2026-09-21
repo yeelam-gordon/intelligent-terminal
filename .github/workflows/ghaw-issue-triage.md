@@ -22,6 +22,10 @@ max-turns: 8
 max-ai-credits: 20
 max-daily-ai-credits: 500
 timeout-minutes: 15
+tools:
+  bash: []
+  github: false
+  cli-proxy: false
 if: >-
   github.event_name != 'issue_comment' ||
   (

@@ -42,6 +42,8 @@ Like the localization workflow, responsibilities are split by reuse boundary:
   verifies the content hash and label/owner allowlists, rejects stale issue
   timestamps, checks assignability again, and performs idempotent publication.
   API or validation failure stops the job; it is never converted to success.
+- The agent has no shell or built-in GitHub MCP tools. Deterministic preparation
+  and the privileged publisher perform the only repository/API operations.
 
 ## Ownership configuration
 

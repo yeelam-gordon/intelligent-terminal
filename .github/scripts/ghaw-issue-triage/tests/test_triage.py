@@ -520,6 +520,18 @@ class TriageTests(unittest.TestCase):
         self.assertIsNone(evidence)
         self.assertIn("meaningful", reason)
 
+    def test_request_author_rejects_literal_none_sentinel(self):
+        evidence = self.collect("Please add a feature", ["Issue-Feature"])
+        item = base_item(
+            evidence,
+            disposition="REQUEST_AUTHOR",
+            author_request="None",
+        )
+        with self.assertRaisesRegex(
+            TRIAGE.TriageError, "REQUEST_AUTHOR requires a specific request"
+        ):
+            TRIAGE.verify(item, evidence, CONFIG)
+
     def test_unconfigured_and_ineligible_assignees_are_rejected(self):
         evidence = self.collect("Please add a feature", ["Issue-Feature"])
         evidence["eligible_assignees"] = ["eligible-person"]
