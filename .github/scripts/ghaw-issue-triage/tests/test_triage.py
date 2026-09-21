@@ -197,6 +197,21 @@ class TriageTests(unittest.TestCase):
         self.assertIn(scheme + " <redacted>", redacted)
         self.assertEqual(TRIAGE.redact(scheme + " status"), scheme + " status")
 
+    def test_redact_handles_whitespace_quoted_assignments_and_token_variants(self):
+        value = (
+            'password = "my secret password"; '
+            "access-token: 'my access token'; "
+            "refresh_token = refresh-token-value"
+        )
+        redacted = TRIAGE.redact(value)
+        self.assertNotIn("my secret password", redacted)
+        self.assertNotIn("my access token", redacted)
+        self.assertNotIn("refresh-token-value", redacted)
+        self.assertEqual(
+            redacted,
+            "password=<redacted>; access-token=<redacted>; refresh_token=<redacted>",
+        )
+
     def test_input_hash_ignores_workflow_managed_labels_and_assignees(self):
         original = issue("Please add a feature", ["Issue-Feature", "external-label"])
         original["assignees"] = [{"login": "reporter"}]
@@ -679,8 +694,12 @@ class TriageTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("imports:\n  - .github/agents/issue-triage.agent.md", workflow)
         self.assertIn(".github/skills/ghaw-issue-triage/SKILL.md", agent)
-        self.assertIn("tools: ['read', 'agent']", agent)
-        self.assertIn("Never expose or concatenate child", agent)
+        self.assertIn("tools: []", agent)
+        self.assertNotIn("tools: ['read'", agent)
+        self.assertNotIn("tools: ['agent'", agent)
+        self.assertNotIn("delegate", agent.lower())
+        self.assertNotIn("child-agent", agent.lower())
+        self.assertNotIn("Read `/tmp/gh-aw/issue-context.md`", workflow)
         self.assertIn("## Diagnostic sufficiency", skill)
         self.assertIn("`bug_diagnostics_requirement`", skill)
         self.assertIn(TRIAGE.LOG_GUIDE, skill)

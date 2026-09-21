@@ -291,9 +291,9 @@ safe-outputs:
 
 Imported runtime role: `Issue Triage Specialist`.
 
-Read `/tmp/gh-aw/issue-context.md` exactly once, then follow
-`.github/skills/ghaw-issue-triage/SKILL.md`. The caller has already bounded and
-redacted issue evidence and owns all mutation checks.
+Use only the bounded and redacted issue evidence supplied by the caller, then
+follow `.github/skills/ghaw-issue-triage/SKILL.md`. Do not read workspace files
+or invoke other agents. The caller owns all mutation checks.
 
 If preprocessing says execution was skipped, emit no output because the
 deterministic `noop` is already queued. Otherwise call

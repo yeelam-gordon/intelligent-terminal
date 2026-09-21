@@ -215,7 +215,10 @@ def redact(value):
         (r"\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b", "<ip-address>"),
         (r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b", "<guid>"),
         (r"\bS-1-5-(?:\d+-){1,14}\d+\b", "<sid>"),
-        (r"(?i)\b(token|secret|password|api[_-]?key)\b\s*[:=]\s*[^\s,;]+", r"\1=<redacted>"),
+        (
+            r"""(?i)\b(token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)\b\s*[:=]\s*(?:(["'])(.*?)\2|[^\s,;]+)""",
+            r"\1=<redacted>",
+        ),
     )
     for pattern, replacement in substitutions:
         text = re.sub(pattern, replacement, text)
