@@ -110,8 +110,10 @@ python -m unittest discover -s .github\scripts\ghaw-issue-triage\tests -v
 gh aw compile ghaw-issue-triage --validate --no-emit
 ```
 
-Hosted execution remains disabled until maintainers review label authority,
-configure owners if desired, and approve the generated workflow manifest.
+The `.md` workflow source is authoring input, not a registered GitHub workflow.
+It is intentionally uncompiled and unregistered until maintainers review it and
+approve activation. Compile is validation-only for this change; do not emit,
+register, or deploy the generated `.lock.yml` workflow until that approval.
 
 `gh aw trial` is not a local agent runner in v0.87.10: it creates or uses a
 GitHub trial repository and dispatches Actions. Local semantic evaluation can

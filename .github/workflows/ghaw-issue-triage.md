@@ -22,6 +22,12 @@ max-turns: 8
 max-ai-credits: 20
 max-daily-ai-credits: 500
 timeout-minutes: 15
+if: >-
+  github.event_name != 'issue_comment' ||
+  (
+    !github.event.issue.pull_request &&
+    github.event.comment.user.login == github.event.issue.user.login
+  )
 
 permissions:
   contents: read
@@ -191,13 +197,17 @@ safe-outputs:
                 return response.data;
               };
 
+              const assertFresh = (issue) => {
+                if (verified.issue_updated_at &&
+                    issue.updated_at !== verified.issue_updated_at) {
+                  throw new Error(
+                    `Stale triage rejected: issue changed at ${issue.updated_at} after evidence ${verified.issue_updated_at}.`
+                  );
+                }
+              };
+
               let current = await readIssue();
-              if (verified.issue_updated_at &&
-                  current.updated_at !== verified.issue_updated_at) {
-                throw new Error(
-                  `Stale triage rejected: issue changed at ${current.updated_at} after evidence ${verified.issue_updated_at}.`
-                );
-              }
+              assertFresh(current);
 
               const managed = new Set(verified.managed_labels);
               const desired = new Set(verified.desired_managed_labels);
@@ -256,7 +266,8 @@ safe-outputs:
                 )
                 .sort((left, right) => left.id - right.id)[0];
 
-              await readIssue();
+              current = await readIssue();
+              assertFresh(current);
               if (canonical) {
                 await github.rest.issues.updateComment({
                   ...context.repo,

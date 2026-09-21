@@ -24,6 +24,8 @@ LOG_GUIDE = "https://github.com/microsoft/intelligent-terminal#collecting-logs"
 MAX_BODY_CHARS = 10000
 MAX_COMMENT_CHARS = 4000
 MAX_COMMENTS = 20
+MAX_COMMENT_PAGES = 3
+MAX_CANONICAL_PAGES = 3
 MAX_DOWNLOAD_BYTES = 16 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 1500
 MAX_UNCOMPRESSED_BYTES = 48 * 1024 * 1024
@@ -118,7 +120,33 @@ class GitHubApi:
         return self.request(f"/repos/{self.repository}/issues/{number}")
 
     def comments(self, number):
-        return self.paged(f"/repos/{self.repository}/issues/{number}/comments")
+        return self.paged(
+            f"/repos/{self.repository}/issues/{number}/comments"
+            "?sort=created&direction=desc",
+            max_pages=MAX_COMMENT_PAGES,
+        )
+
+    def canonical_hash(self, number):
+        route = (
+            f"/repos/{self.repository}/issues/{number}/comments"
+            "?sort=created&direction=asc"
+        )
+        separator = "&" if "?" in route else "?"
+        for page in range(1, MAX_CANONICAL_PAGES + 1):
+            batch = self.request(f"{route}{separator}per_page=100&page={page}")
+            if not isinstance(batch, list):
+                raise TriageError(f"GitHub API returned a non-list for {route}")
+            for comment in batch:
+                if (
+                    comment.get("user", {}).get("login") == "github-actions[bot]"
+                    and CANONICAL_MARKER in (comment.get("body") or "")
+                ):
+                    match = HASH_PATTERN.search(comment.get("body") or "")
+                    if match:
+                        return match.group(1)
+            if len(batch) < 100:
+                break
+        return None
 
     def labels(self):
         return self.paged(f"/repos/{self.repository}/labels", max_pages=4)
@@ -163,6 +191,16 @@ def compact(value, limit):
 def redact(value):
     text = str(value or "").replace("\x00", "")
     substitutions = (
+        (
+            r"""(?i)(["'](?:token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)["']\s*:\s*")([^"\\]*(?:\\.[^"\\]*)*)(")""",
+            r"\1<redacted>\3",
+        ),
+        (r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{20,}", "Bearer " + "<redacted>"),
+        (
+            r"(?i)\b(?:github_pat|gh[pousr])_[A-Za-z0-9_]{20,}\b",
+            "<redacted>",
+        ),
+        (r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b", "<redacted>"),
         (r"(?i)\b[A-Z]:\\Users\\[^\\\s\"']+", "<user-profile>"),
         (r"(?i)/(?:home|Users)/[^/\s\"']+", "/<user>"),
         (r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "<email>"),
@@ -422,7 +460,12 @@ def collect_evidence(event, api, config, force=False, downloader=download_attach
     digest = input_hash(issue, selected_comments)
     if not force and not meaningful_trigger(event, author):
         return None, "No meaningful issue-author evidence changed."
-    if not force and digest == existing_hash(comments):
+    canonical = (
+        api.canonical_hash(issue["number"])
+        if not force and hasattr(api, "canonical_hash")
+        else existing_hash(comments)
+    )
+    if not force and digest == canonical:
         return None, "Triage-relevant evidence is unchanged."
 
     labels = {
@@ -436,8 +479,9 @@ def collect_evidence(event, api, config, force=False, downloader=download_attach
         name: labels[name] for name in config["managed_labels"] if name in labels
     }
     kind = issue_kind(issue)
+    safe_title = redact(issue.get("title") or "")
     combined = "\n".join(
-        [issue.get("title") or "", issue.get("body") or ""]
+        [safe_title, issue.get("body") or ""]
         + [item["body"] for item in selected_comments]
     )
     requirement = diagnostics_requirement(kind, combined)
@@ -477,7 +521,7 @@ def collect_evidence(event, api, config, force=False, downloader=download_attach
             item.get("login", "") if isinstance(item, dict) else str(item)
             for item in issue.get("assignees", [])
         ],
-        "title": compact(issue.get("title"), 500),
+        "title": compact(safe_title, 500),
         "body": redact(issue.get("body") or "")[:MAX_BODY_CHARS],
         "author_follow_up": [redact(item["body"]) for item in selected_comments],
     }

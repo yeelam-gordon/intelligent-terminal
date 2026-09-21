@@ -139,6 +139,70 @@ class TriageTests(unittest.TestCase):
         self.assertEqual(captured["authorization"], "Bearer test-token")
         self.assertEqual(captured["timeout"], 30)
 
+    def test_issue_comments_use_newest_window_and_canonical_lookup_is_independent(self):
+        routes = []
+        digest = "a" * 64
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        def request_impl(request, timeout):
+            routes.append(request.full_url)
+            if "direction=desc" in request.full_url:
+                payload = [{"id": 9, "body": "newest"}]
+            else:
+                payload = [{
+                    "id": 1,
+                    "user": {"login": "github-actions[bot]"},
+                    "body": (
+                        f"{TRIAGE.CANONICAL_MARKER}\n"
+                        f"<!-- intelligent-terminal-ai-triage:input-sha256:{digest} -->"
+                    ),
+                }]
+            return Response(json.dumps(payload).encode("utf-8"))
+
+        api = TRIAGE.GitHubApi(
+            "test-token",
+            "microsoft/intelligent-terminal",
+            request_impl=request_impl,
+        )
+        self.assertEqual(api.comments(42)[0]["id"], 9)
+        self.assertEqual(api.canonical_hash(42), digest)
+        self.assertIn("sort=created&direction=desc", routes[0])
+        self.assertIn("sort=created&direction=asc", routes[1])
+
+    def test_redact_handles_quoted_credentials_and_secret_shapes(self):
+        scheme = "Be" + "arer"
+        bearer = "a" * 30
+        pat = "gh" + "p_" + ("b" * 24)
+        jwt = ".".join(("eyJ" + ("c" * 10), "d" * 12, "e" * 12))
+        value = (
+            '{"token": "quoted-secret", "password":"another-secret"} '
+            f"{scheme} {bearer} {pat} {jwt} ordinary text"
+        )
+        redacted = TRIAGE.redact(value)
+        self.assertNotIn("quoted-secret", redacted)
+        self.assertNotIn("another-secret", redacted)
+        self.assertNotIn(bearer, redacted)
+        self.assertNotIn(pat, redacted)
+        self.assertNotIn(jwt, redacted)
+        self.assertIn("ordinary text", redacted)
+        self.assertIn(scheme + " <redacted>", redacted)
+        self.assertEqual(TRIAGE.redact(scheme + " status"), scheme + " status")
+
+    def test_issue_title_is_redacted_before_compaction(self):
+        evidence = self.collect(
+            "Please add a feature",
+            ["Issue-Feature"],
+            title='token="title-secret" ' + ("x" * 600),
+        )
+        self.assertNotIn("title-secret", evidence["title"])
+        self.assertLessEqual(len(evidence["title"]), 500)
+
     def test_missing_required_logs_prevent_root_cause_certainty(self):
         evidence = self.collect(
             "### Steps to reproduce\n1. Open agent pane\n"
@@ -524,6 +588,8 @@ class TriageTests(unittest.TestCase):
         self.assertIn("Use the literal string `None`", skill)
         self.assertNotIn("## Classification\n", workflow)
         self.assertIn("if (response.data.pull_request)", workflow)
+        self.assertIn("github.event.comment.user.login == github.event.issue.user.login", workflow)
+        self.assertIn("assertFresh(current)", workflow)
         self.assertIn("managed.has(label) && !desired.has(label)", workflow)
         self.assertIn("updateComment", workflow)
         self.assertIn("createComment", workflow)
