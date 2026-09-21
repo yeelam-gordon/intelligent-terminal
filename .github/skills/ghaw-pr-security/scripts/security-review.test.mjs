@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { chmodSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
   attestChecks, buildScope, classifyPath, normalizePath, renderReport, validatePatch,
-  validateQueuedOutput, validateReport,
+  validateQueuedOutput, validateReport, stageRepairFiles,
 } from './security-review.mjs';
 
 const BASE = '1'.repeat(40);
@@ -162,10 +165,32 @@ test('only trusted post-step attestation can authorize a passing repair check', 
       { name: 'wta-tests', status: 'pass', headSha: HEAD, evidence: 'local command: untrusted claim (exit 0)' },
     ],
   });
+
   const unattested = attestChecks(claimed, HEAD, false);
   assert.equal(unattested.checks.some(check => check.name === 'wta-tests' && check.status === 'pass'), false);
   const attested = attestChecks(claimed, HEAD, true);
   assert.match(attested.checks.find(check => check.name === 'wta-tests').evidence, /^trusted post-step:/);
+});
+
+test('trusted repair staging rejects symlinks and mode changes', () => {
+  const root = join(tmpdir(), `ghaw-security-${process.pid}-${Date.now()}`);
+  const source = join(root, 'source');
+  const target = join(root, 'target');
+  const relative = 'tools/wta/src/master/mod.rs';
+  mkdirSync(join(source, 'tools/wta/src/master'), { recursive: true });
+  mkdirSync(join(target, 'tools/wta/src/master'), { recursive: true });
+  writeFileSync(join(source, relative), 'safe\n');
+  writeFileSync(join(target, relative), 'base\n');
+  const candidate = { patch: [{ path: relative }] };
+  if (process.platform !== 'win32') {
+    chmodSync(join(source, relative), 0o755);
+    assert.throws(() => stageRepairFiles(candidate, source, target), /file mode/);
+    chmodSync(join(source, relative), 0o644);
+  }
+  writeFileSync(join(source, 'link-target'), 'unsafe\n');
+  unlinkSync(join(source, relative));
+  symlinkSync(join(source, 'link-target'), join(source, relative));
+  assert.throws(() => stageRepairFiles(candidate, source, target), /regular tracked file/);
 });
 
 test('rejects a fixed finding without applicable validation or independent PASS', () => {

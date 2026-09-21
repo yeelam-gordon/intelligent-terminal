@@ -69,12 +69,14 @@ is failed/blocked, an independent reviewer returns `PASS` for the immutable
 head and exact final patch digest, and the live PR head still equals the
 reviewed SHA. This model review is defense in depth, not a separate credential
 or authorization principal; native checks and safe-output policy remain the
-mechanical boundary. After inference, the trusted post-step recomputes scope
-from the dispatch SHAs, removes agent-authored passing validation claims, and
-runs the fixed WTA test command against any final repair. Automatic repairs are
-therefore limited to WTA Rust source. The native validator compares every
-reported patch path and patch digest with the actual worktree and rejects
-CI/security policy, manifests, unrelated dependencies, and medium/low edits.
+mechanical boundary. After inference, the trusted post-step creates a fresh
+checkout of the immutable head, recomputes scope from the dispatch SHAs, copies
+only reported regular non-executable WTA source files without mode changes,
+removes agent-authored passing validation claims, and runs the fixed WTA test
+command against the reconstructed final repair. The native validator compares
+every reported patch path and patch digest with this trusted worktree and
+rejects symlinks, submodules, mode changes, CI/security policy, manifests,
+unrelated dependencies, and medium/low edits.
 Unsafe or unvalidated HIGH findings remain blocking. Automatic repair also
 rejects untracked files, so the reviewed binary-diff digest covers every
 published byte.

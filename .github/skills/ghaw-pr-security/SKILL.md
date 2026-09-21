@@ -154,10 +154,11 @@ mode. In repair mode, `fixed` is valid only for HIGH/high-confidence findings
 with strong evidence, at least one applicable passing validation check, no
 failed/blocked check, a matching patch entry, and independent review PASS.
 Every passing check must name the immutable `headSha`. Agent-reported command
-results are advisory: before authorizing a repair, the trusted post-step removes
-non-scope pass claims and adds only validation it executed against the final
-patch. External run URLs are context only and cannot authorize automatic
-repair.
+results are advisory: before authorizing a repair, the trusted post-step creates
+a fresh immutable checkout, copies only reported regular non-executable WTA
+source files without mode changes, removes non-scope pass claims, and adds only
+validation it executed against that reconstructed final patch. External run
+URLs are context only and cannot authorize automatic repair.
 
 ## Publication constraint
 

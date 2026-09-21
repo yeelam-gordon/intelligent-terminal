@@ -161,13 +161,37 @@ post-steps:
       }
       trusted_validator="$RUNNER_TEMP/security-review-final.mjs"
       git show "$TRUSTED_SHA:.github/skills/ghaw-pr-security/scripts/security-review.mjs" > "$trusted_validator"
+      source_workspace="$GITHUB_WORKSPACE"
+      trusted_workspace="$RUNNER_TEMP/security-repair-workspace"
       trusted_scope="$RUNNER_TEMP/security-scope.final.json"
       trusted_report="$RUNNER_TEMP/security-findings.attested.json"
+      rm -rf "$trusted_workspace"
       rm -f "$trusted_scope" "$trusted_report" \
         /tmp/gh-aw/security-findings.validated.json \
         /tmp/gh-aw/security-summary.md \
         /tmp/gh-aw/security-status.txt \
         /tmp/gh-aw/security-repair.patch
+      mkdir "$trusted_workspace"
+      askpass="$RUNNER_TEMP/security-git-askpass.sh"
+      cat > "$askpass" <<'EOF'
+      #!/bin/sh
+      case "$1" in
+        *Username*) printf '%s\n' x-access-token ;;
+        *) printf '%s\n' "$GH_TOKEN" ;;
+      esac
+      EOF
+      chmod 700 "$askpass"
+      export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+      git -C "$trusted_workspace" init --quiet
+      git -C "$trusted_workspace" remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
+      git -C "$trusted_workspace" fetch --quiet --no-tags --filter=blob:none origin \
+        "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA"
+      git -C "$trusted_workspace" checkout --quiet --detach "$EXPECTED_HEAD_SHA"
+      git -C "$trusted_workspace" remote remove origin
+      rm -f "$askpass"
+      unset GIT_ASKPASS GH_TOKEN
+      pushd "$trusted_workspace"
       node "$trusted_validator" scope \
         --base "$EXPECTED_BASE_SHA" \
         --head "$EXPECTED_HEAD_SHA" \
@@ -176,16 +200,13 @@ post-steps:
         --mode repair \
         --output "$trusted_scope"
       [ "$(node -p "JSON.parse(require('fs').readFileSync('$trusted_scope','utf8')).baseSha")" = "$COMPARISON_BASE_SHA" ]
-      git diff --binary HEAD > /tmp/gh-aw/security-repair.patch
       attest_args=()
-      if [ -s /tmp/gh-aw/security-repair.patch ]; then
-        mapfile -d '' modified_paths < <(git diff --name-only -z HEAD)
-        for path in "${modified_paths[@]}"; do
-          [[ "$path" =~ ^tools/wta/src/.*\.rs$ ]] || {
-            echo "::error::Automatic repair validation is limited to WTA Rust source: $path"
-            exit 1
-          }
-        done
+      patch_count="$(node -p "JSON.parse(require('fs').readFileSync('/tmp/gh-aw/security-findings.json','utf8')).patch.length")"
+      if [ "$patch_count" -gt 0 ]; then
+        node "$trusted_validator" stage-repair \
+          --report /tmp/gh-aw/security-findings.json \
+          --source "$source_workspace" \
+          --target "$trusted_workspace"
         cargo test --manifest-path tools/wta/Cargo.toml
         attest_args+=(--wta-tests-passed)
       fi
@@ -203,6 +224,8 @@ post-steps:
       node "$trusted_validator" validate-output \
         --validated /tmp/gh-aw/security-findings.validated.json \
         --agent-output /tmp/gh-aw/agent_output.json
+      git diff --binary HEAD > /tmp/gh-aw/security-repair.patch
+      popd
       cp "$trusted_scope" /tmp/gh-aw/security-scope.validated.json
       cat /tmp/gh-aw/security-summary.md >> "$GITHUB_STEP_SUMMARY"
 

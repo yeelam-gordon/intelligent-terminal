@@ -2,7 +2,8 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -369,6 +370,44 @@ export function attestChecks(report, headSha, wtaTestsPassed) {
   return { ...report, checks };
 }
 
+export function stageRepairFiles(report, sourceRoot, targetRoot) {
+  if (!report || typeof report !== 'object' || !Array.isArray(report.patch) ||
+      report.patch.length < 1 || report.patch.length > 20) {
+    fail('repair staging requires 1 to 20 reported patch entries');
+  }
+  const sourceBase = resolve(sourceRoot);
+  const targetBase = resolve(targetRoot);
+  const seen = new Set();
+  for (const [index, item] of report.patch.entries()) {
+    const path = normalizePath(item?.path, `patch item ${index + 1} path`);
+    if (!/^tools\/wta\/src\/.*\.rs$/.test(path) || seen.has(path)) {
+      fail(`patch item ${index + 1} is not a unique WTA Rust source path`);
+    }
+    seen.add(path);
+    const source = resolve(sourceBase, path);
+    const target = resolve(targetBase, path);
+    if (!source.startsWith(`${sourceBase}${sep}`) || !target.startsWith(`${targetBase}${sep}`)) {
+      fail(`patch item ${index + 1} escapes its workspace`);
+    }
+    const sourceStat = lstatSync(source);
+    const targetStat = lstatSync(target);
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink() ||
+        !targetStat.isFile() || targetStat.isSymbolicLink()) {
+      fail(`patch item ${index + 1} must remain a regular tracked file`);
+    }
+    if ((sourceStat.mode & 0o777) !== (targetStat.mode & 0o777)) {
+      fail(`patch item ${index + 1} changes the tracked file mode`);
+    }
+    const treeEntry = git(['ls-tree', 'HEAD', '--', path]).trim().split(/\s+/);
+    if (treeEntry.length < 3 || treeEntry[0] !== '100644' || treeEntry[1] !== 'blob') {
+      fail(`patch item ${index + 1} must target a non-executable regular Git blob`);
+    }
+    copyFileSync(source, target);
+    chmodSync(target, targetStat.mode & 0o777);
+  }
+  return [...seen].sort();
+}
+
 function escapeMarkdown(value) {
   return value
     .replace(/\r?\n/g, ' ')
@@ -469,6 +508,11 @@ function main() {
     writeFileSync(option('--output'), `${JSON.stringify(attested, null, 2)}\n`, { flag: 'wx' });
     return;
   }
+  if (command === 'stage-repair') {
+    const report = JSON.parse(readFileSync(option('--report'), 'utf8'));
+    stageRepairFiles(report, option('--source'), option('--target'));
+    return;
+  }
   if (command === 'validate-output') {
     const report = JSON.parse(readFileSync(option('--validated'), 'utf8'));
     validateQueuedOutput(report, JSON.parse(readFileSync(option('--agent-output'), 'utf8')));
@@ -484,7 +528,7 @@ function main() {
     }
     return;
   }
-  fail('expected scope, attest, validate, validate-output, or enforce command');
+  fail('expected scope, stage-repair, attest, validate, validate-output, or enforce command');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
