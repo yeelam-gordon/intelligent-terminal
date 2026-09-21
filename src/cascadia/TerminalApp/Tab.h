@@ -32,7 +32,9 @@ namespace winrt::TerminalApp::implementation
         void Scroll(const int delta);
 
         std::shared_ptr<Pane> DetachRoot();
+        std::shared_ptr<Pane> TakeRootForTransfer();
         std::shared_ptr<Pane> DetachPane();
+        std::shared_ptr<Pane> DetachPane(const std::shared_ptr<Pane>& pane);
         void AttachPane(std::shared_ptr<Pane> pane);
 
         void AttachColorPicker(winrt::TerminalApp::ColorPickupFlyout& colorPicker);
@@ -122,6 +124,9 @@ namespace winrt::TerminalApp::implementation
         // original orientation.
         bool RestoreStashedAgentPane(winrt::Microsoft::Terminal::Settings::Model::SplitDirection direction);
         bool HasStashedAgentPane() const;
+        void SuppressAgentPrewarm() noexcept { _agentPrewarmSuppressed = true; }
+        void AllowAgentPrewarm() noexcept { _agentPrewarmSuppressed = false; }
+        bool AgentPrewarmSuppressed() const noexcept { return _agentPrewarmSuppressed; }
 
         // Runtime-only position selected by `/move`. A missing override means
         // this tab follows the global AgentPanePosition setting.
@@ -308,6 +313,7 @@ namespace winrt::TerminalApp::implementation
         bool _receivedKeyDown{ false };
         bool _iconHidden{ false };
         bool _changingActivePane{ false };
+        bool _agentPrewarmSuppressed{ false };
 
         winrt::hstring _stableId{};
 
