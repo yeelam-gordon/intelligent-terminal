@@ -176,8 +176,8 @@ safe-outputs:
         - name: Render the canonical triage card
           run: >-
             python .github/scripts/ghaw-issue-triage/triage.py render
-            --verified "$RUNNER_TEMP/verified-issue-triage.json"
-            --output "$RUNNER_TEMP/issue-triage-comment.md"
+            --verified "$RUNNER_TEMP/gh-aw/verified-issue-triage.json"
+            --output "$RUNNER_TEMP/gh-aw/issue-triage-comment.md"
         - name: Publish verified issue intake
           uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
           env:

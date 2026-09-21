@@ -545,6 +545,31 @@ class TriageTests(unittest.TestCase):
         self.assertIsNotNone(evidence)
         self.assertNotEqual(evidence["input_sha256"], old_digest)
 
+    def test_author_follow_up_preserves_needs_attention_handoff(self):
+        item = issue(
+            "### Steps to reproduce\n1. Open app\n### Actual Behavior\nIt crashes",
+            ["Issue-Bug", "Needs-Attention"],
+        )
+        comment = {
+            "id": 2,
+            "user": {"login": "reporter"},
+            "body": "The app still crashes at 10:30 UTC in the active pane.",
+        }
+        evidence, _ = TRIAGE.collect_evidence(
+            {"action": "created", "issue": item, "comment": comment},
+            FakeApi(item, comments=[comment]),
+            CONFIG,
+        )
+        self.assertTrue(evidence["author_follow_up_trigger"])
+        triage = base_item(
+            evidence,
+            disposition="REQUEST_AUTHOR",
+            author_request=f"Please attach diagnostics using {TRIAGE.LOG_GUIDE}",
+        )
+        verified = TRIAGE.verify(triage, evidence, CONFIG)
+        self.assertNotIn("Needs-Author-Feedback", verified["desired_managed_labels"])
+        self.assertNotIn("Needs-Triage", verified["desired_managed_labels"])
+
     def test_non_author_comment_and_pull_request_are_skipped(self):
         item = issue("Please add a feature", ["Issue-Feature"])
         event = {

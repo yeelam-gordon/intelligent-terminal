@@ -537,6 +537,10 @@ def collect_evidence(event, api, config, force=False, downloader=download_attach
         "issue_number": issue["number"],
         "issue_updated_at": issue.get("updated_at") or "",
         "issue_author": author,
+        "author_follow_up_trigger": (
+            "comment" in event
+            and event.get("comment", {}).get("user", {}).get("login") == author
+        ),
         "issue_kind_hint": kind,
         "diagnostics_requirement": requirement,
         "bug_diagnostics_requirement": bug_requirement,
@@ -815,8 +819,18 @@ def verify(item, evidence, config):
         raise TriageError("next_steps_json must contain one to five concrete steps")
 
     desired = set(labels)
-    desired.add("Needs-Author-Feedback" if disposition == "REQUEST_AUTHOR" else "Needs-Triage")
-    desired.discard("Needs-Triage" if disposition == "REQUEST_AUTHOR" else "Needs-Author-Feedback")
+    if disposition == "REQUEST_AUTHOR":
+        desired.discard("Needs-Triage")
+        if (
+            evidence.get("author_follow_up_trigger")
+            and "Needs-Attention" in evidence["current_labels"]
+        ):
+            desired.discard("Needs-Author-Feedback")
+        else:
+            desired.add("Needs-Author-Feedback")
+    else:
+        desired.add("Needs-Triage")
+        desired.discard("Needs-Author-Feedback")
     if not desired.issubset(allowed):
         raise TriageError("Required lifecycle labels are unavailable")
     return {
