@@ -31,6 +31,7 @@ MAX_ARCHIVE_ENTRIES = 1500
 MAX_UNCOMPRESSED_BYTES = 48 * 1024 * 1024
 MAX_ENTRY_BYTES = 4 * 1024 * 1024
 MAX_EXTRACTED_CHARS = 14000
+MAX_ARCHIVE_BASENAME_CHARS = 80
 DEFAULT_MUTABLE_LABEL_PREFIXES = (
     "Issue-",
     "Needs-",
@@ -194,6 +195,22 @@ def load_config(path):
 
 def compact(value, limit):
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+
+
+def sanitize_archive_basename(name):
+    basename = str(name or "").replace("\\", "/")
+    basename = basename.rsplit("/", 1)[-1]
+    basename = re.sub(r"[^A-Za-z0-9._-]", "-", basename)
+    basename = basename.strip(".-")
+    if not basename:
+        basename = "archive"
+
+    sensitive = re.compile(
+        r"(?i)(?:^|[._-])(?:token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)(?:[._-]|$)"
+    )
+    if sensitive.search(basename):
+        basename = "archive"
+    return basename[:MAX_ARCHIVE_BASENAME_CHARS]
 
 
 def redact(value):
@@ -363,11 +380,12 @@ def extract_diagnostics(data):
         signals = []
         total = 0
         for entry in candidates[:30]:
+            basename = sanitize_archive_basename(PurePosixPath(entry.filename).name)
             for line_number, line in enumerate(decode_text(archive.read(entry)).splitlines(), 1):
                 if not ERROR_PATTERN.search(line):
                     continue
                 rendered = (
-                    f"{PurePosixPath(entry.filename).name}:{line_number}: "
+                    f"{basename}:{line_number}: "
                     f"{compact(redact(line), 700)}"
                 )
                 if total + len(rendered) > MAX_EXTRACTED_CHARS:
@@ -577,7 +595,12 @@ def write_output(name, value):
     path = os.environ.get("GITHUB_OUTPUT")
     if path:
         with open(path, "a", encoding="utf-8", newline="\n") as stream:
-            stream.write(f"{name}={value}\n")
+            value = str(value)
+            if "\n" not in value:
+                stream.write(f"{name}={value}\n")
+                return
+            delimiter = f"gh_aw_{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
+            stream.write(f"{name}<<{delimiter}\n{value}{delimiter}\n")
 
 
 def prepare(args):
@@ -597,7 +620,9 @@ def prepare(args):
             encoding="utf-8",
         )
         return
-    Path(args.context).write_text(render_context(evidence), encoding="utf-8")
+    context = render_context(evidence)
+    Path(args.context).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.context).write_text(context, encoding="utf-8")
     Path(args.evidence).write_text(
         json.dumps(evidence, ensure_ascii=True, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -700,6 +725,11 @@ def verify(item, evidence, config):
     if area_label != "None" and area_label not in labels:
         raise TriageError("Selected area_label must be included in labels_json")
     agent_label = item.get("agent_label")
+    agent_labels = sorted(label for label in labels if label.startswith("Agent-"))
+    if len(agent_labels) > 1:
+        raise TriageError("At most one Agent-* label may be selected")
+    if agent_labels != ([] if agent_label == "None" else [agent_label]):
+        raise TriageError("Agent-* label must be equal to the selected agent or be absent")
     if agent_label != "None" and agent_label not in evidence["agent_candidates"]:
         raise TriageError("agent_label is outside deterministic candidates")
     if agent_label != "None" and agent_label not in labels:

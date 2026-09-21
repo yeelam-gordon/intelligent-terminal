@@ -315,6 +315,23 @@ class TriageTests(unittest.TestCase):
         self.assertIn("wta.log:1:", rendered)
         self.assertNotIn("secret", rendered)
 
+    def test_archive_basename_redaction_and_bounding(self):
+        payload = zip_bytes(filename="token=abc123-should-not-leak-" + ("x" * 300) + ".log")
+        evidence = self.collect(
+            "### Steps to reproduce\n1. Open app\n### Actual Behavior\nIt crashes\n"
+            "https://github.com/user-attachments/files/123/Logs.zip",
+            ["Issue-Bug"],
+            downloader=lambda _: payload,
+        )
+        self.assertEqual(evidence["diagnostics_status"], "SUFFICIENT")
+        rendered = "\n".join(evidence["diagnostic_signals"])
+        self.assertNotIn("should-not-leak", rendered)
+        self.assertTrue(all(signal.startswith("archive:") for signal in evidence["diagnostic_signals"]))
+        self.assertTrue(all(
+            len(signal.split(":", 2)[0]) <= TRIAGE.MAX_ARCHIVE_BASENAME_CHARS
+            for signal in evidence["diagnostic_signals"]
+        ))
+
     def test_irrelevant_logs_do_not_count_as_sufficient(self):
         evidence = self.collect(
             "### Steps to reproduce\n1. Open app\n### Actual Behavior\nIt crashes\n"
@@ -434,6 +451,40 @@ class TriageTests(unittest.TestCase):
             labels_json='["Issue-Bug","Area-AgentPane"]',
         )
         with self.assertRaisesRegex(TRIAGE.TriageError, "equal to the selected area"):
+            TRIAGE.verify(item, evidence, CONFIG)
+
+    def test_verifier_rejects_mismatched_none_area_and_agent_labels(self):
+        evidence = self.collect(
+            "The agent pane layout is clipped.",
+            ["Issue-Bug"],
+            title="Agent pane visual defect",
+        )
+        item = base_item(
+            evidence,
+            area_label="None",
+            area_confidence="NONE",
+            agent_label="None",
+            labels_json='["Issue-Bug","Area-AgentPane"]',
+        )
+        with self.assertRaisesRegex(TRIAGE.TriageError, r"Area-\* label must be equal"):
+            TRIAGE.verify(item, evidence, CONFIG)
+
+        item = base_item(
+            evidence,
+            area_label="Area-AgentPane",
+            agent_label="Agent-Gemini",
+            labels_json='["Issue-Bug","Area-AgentPane","Agent-Copilot"]',
+        )
+        with self.assertRaisesRegex(TRIAGE.TriageError, r"Agent-\* label must be equal"):
+            TRIAGE.verify(item, evidence, CONFIG)
+
+        item = base_item(
+            evidence,
+            area_label="Area-AgentPane",
+            agent_label="None",
+            labels_json='["Issue-Bug","Area-AgentPane","Agent-Claude"]',
+        )
+        with self.assertRaisesRegex(TRIAGE.TriageError, "Agent-\\* label must be equal"):
             TRIAGE.verify(item, evidence, CONFIG)
 
     def test_optional_bug_diagnostics_cannot_be_requested_from_author(self):
@@ -705,13 +756,13 @@ class TriageTests(unittest.TestCase):
             Path(__file__).parents[3] / "skills" / "ghaw-issue-triage" / "SKILL.md"
         ).read_text(encoding="utf-8")
         self.assertIn("imports:\n  - .github/agents/issue-triage.agent.md", workflow)
+        self.assertIn("/tmp/gh-aw/agent/issue-context.md", workflow)
         self.assertIn(".github/skills/ghaw-issue-triage/SKILL.md", agent)
-        self.assertIn("tools: []", agent)
-        self.assertNotIn("tools: ['read'", agent)
+        self.assertIn("tools: ['read']", agent)
         self.assertNotIn("tools: ['agent'", agent)
         self.assertNotIn("delegate", agent.lower())
         self.assertNotIn("child-agent", agent.lower())
-        self.assertNotIn("Read `/tmp/gh-aw/issue-context.md`", workflow)
+        self.assertIn("Read `/tmp/gh-aw/agent/issue-context.md`", workflow)
         self.assertIn("## Diagnostic sufficiency", skill)
         self.assertIn("`bug_diagnostics_requirement`", skill)
         self.assertIn(TRIAGE.LOG_GUIDE, skill)
