@@ -1,6 +1,6 @@
 ---
-name: 'Intelligent Terminal Security Guide Fork'
-description: 'Read-only fork PR security worker that may publish one validated guidance comment.'
+name: 'Intelligent Terminal Security Fork Review'
+description: 'Read-only fork PR security worker that may produce one validated guidance artifact.'
 
 on:
   workflow_dispatch:
@@ -47,8 +47,6 @@ permissions:
   copilot-requests: write
 
 engine: copilot
-imports:
-  - .github/agents/ghaw-pr-security-reviewer.agent.md
 
 skills:
   - .github/skills/ghaw-pr-security

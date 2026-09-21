@@ -36,15 +36,16 @@ API read must still return the same head.
 Each worker rematerializes the validator from `github.workflow_sha`, not from
 agent-edited bytes.
 
-The thin custom agents delegate the reusable reasoning and report procedure to
-the frontmatter-installed `.github/skills/ghaw-pr-security/SKILL.md`; its
-bundled script owns mechanical scope/report validation. Installing the skill
-through gh-aw keeps the runtime procedure tied to the trusted workflow
-revision, rather than trusting a PR-edited copy. The workflows own only
-checkout identity, permissions, trusted script materialization, freshness,
-safe-output policy, artifacts, and conclusions. This matches the existing
-localization separation between controller/worker orchestration, minimal role
-agents, and the `ensure-localization` skill.
+Both workers use their workflow prompt plus the frontmatter-installed
+`.github/skills/ghaw-pr-security/SKILL.md`; its bundled script owns mechanical
+scope/report validation. The repair workflow embeds only its independent
+read-only repair gate as an inline subagent. Installing the skill through gh-aw
+keeps the runtime procedure tied to the trusted workflow revision, rather than
+trusting a PR-edited copy. The workflows own checkout identity, permissions,
+trusted script materialization, freshness, safe-output policy, artifacts, and
+conclusions. This matches the existing localization separation between
+controller/worker orchestration and reusable domain skills without duplicating
+the primary agent definition.
 
 The report contract limits findings to changed files and assigns stable
 `ITSEC-<hash>` IDs from rule/category/path/line. It independently enforces:
@@ -133,8 +134,8 @@ Detached workers are dispatched on the base branch but fail in `prepare` unless
 `item_type`, so the generated generic `Checkout PR branch` step is ineligible.
 The repair worker's explicit checkout is pinned to the immutable head; fork
 guidance stays on the trusted workflow checkout and reads only fetched Git
-objects. Inline agents and skills are restored from gh-aw's trusted activation
-artifact after checkout.
+objects. The inline repair gate and skill are restored from gh-aw's trusted
+activation artifact after checkout.
 
 ## Local validation
 

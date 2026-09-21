@@ -1,6 +1,6 @@
 ---
-name: 'Intelligent Terminal Security Repair'
-description: 'Same-repository security review worker that may publish one validated HIGH-confidence repair.'
+name: 'Intelligent Terminal Security Repair Analysis'
+description: 'Same-repository security review worker that may produce one validated HIGH-confidence repair artifact.'
 
 on:
   workflow_dispatch:
@@ -47,8 +47,6 @@ permissions:
   copilot-requests: write
 
 engine: copilot
-imports:
-  - .github/agents/ghaw-pr-security.agent.md
 
 skills:
   - .github/skills/ghaw-pr-security
@@ -58,6 +56,7 @@ checkout:
   fetch-depth: 0
 
 tools:
+  edit:
   bash:
     - 'git diff:*'
     - 'git grep:*'
@@ -225,5 +224,17 @@ fast-forward repair or guidance-comment operation. Remaining HIGH findings stay
 blocking with a concrete reason.
 
 ## agent: `ghaw-pr-security-reviewer`
-{{#runtime-import .github/agents/ghaw-pr-security-reviewer.agent.md}}
+---
+description: Independently verifies a proposed security finding and repair
+tools: ['read', 'search', 'execute']
+---
+
+Re-derive the original finding from the immutable comparison-base/head patch,
+then inspect the proposed final patch and validation evidence. Do not trust the
+repair agent's severity, confidence, selected lines, or summary. Return `PASS`
+only when every claimed fixed finding is HIGH/high-confidence, the original
+regression is proven, the patch is minimal and preserves intended behavior, the
+applicable final validation passed, no lower-severity issue was edited, and no
+new security regression was introduced. Otherwise return `FAIL` with concise,
+non-secret findings. Do not edit or publish.
 ## end agent: `ghaw-pr-security-reviewer`
