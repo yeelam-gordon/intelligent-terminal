@@ -17,11 +17,17 @@ detached worker:
   inspects immutable fork objects read-only, and may produce one validated
   guidance artifact.
 
-Both workers expose only non-mutating `noop` safe output because generated
-gh-aw publication jobs are not ordered after native post-validation. After a
-successful worker, the trusted controller performs the mutually exclusive
-operation: an index-only, non-force fast-forward repair push for same-repository
-PRs, or an idempotent trusted-renderer guidance comment for fork PRs.
+Both workers accept only a non-mutating `noop` result because generated gh-aw
+publication jobs are not ordered after native post-validation. gh-aw always
+exposes its system outputs and auto-injects `create-issue` when only system
+outputs are configured, so each worker declares a staged check-run output to
+suppress that injection, globally stages safe outputs, and explicitly disables
+noop, missing-data, missing-tool, incomplete-report, and failure issue
+publication. The check-run tool is preview-only and the native validator rejects
+it. After a successful worker, the trusted controller performs the mutually
+exclusive operation: an index-only, non-force fast-forward repair push for
+same-repository PRs, or an idempotent trusted-renderer guidance comment for fork
+PRs.
 
 Before inference, the trusted script validates the immutable observed-base/head
 commits, resolves their merge base, normalizes changed paths, classifies
@@ -68,7 +74,8 @@ unrelated dependencies, and medium/low edits. Unsafe or unvalidated HIGH
 findings remain blocking. Automatic repair also rejects untracked files, so the
 reviewed binary-diff digest covers every published byte.
 
-Both workers emit exactly one `noop`; they never publish. The controller
+Both workers emit exactly one `noop`; all of their gh-aw safe outputs are staged
+and issue-reporting paths are disabled, so they never publish. The controller
 downloads the validated card and exact binary patch. It publishes a
 same-repository repair only as a commit whose parent is the reviewed head and
 uses a non-force push, so a concurrent branch update fails atomically. For a

@@ -105,7 +105,19 @@ jobs:
     needs: [prepare]
 
 safe-outputs:
+  staged: true
+  report-failure-as-issue: false
+  create-check-run:
+    max: 1
+    staged: true
+  missing-data:
+    create-issue: false
+  missing-tool:
+    create-issue: false
   noop:
+    report-as-issue: false
+  report-incomplete:
+    create-issue: false
 
 steps:
   - name: Prepare immutable repair scope
