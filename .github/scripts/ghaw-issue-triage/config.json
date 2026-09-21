@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "managed_labels": [
+    "Issue-Bug",
+    "Issue-Docs",
+    "Issue-Feature",
+    "Issue-Question",
+    "Needs-Triage",
+    "Needs-Author-Feedback",
+    "Area-Terminal",
+    "Area-AgentPane",
+    "Area-AutoFix",
+    "Area-SessionManagement",
+    "Area-Settings",
+    "Area-FirstRun",
+    "Area-Installer",
+    "Area-CLI",
+    "Agent-Copilot",
+    "Agent-Claude",
+    "Agent-Gemini",
+    "Agent-Codex",
+    "Agent-Custom",
+    "Severity-High",
+    "Severity-Regression"
+  ],
+  "resolution_labels": [
+    "Resolution-Duplicate",
+    "Resolution-By-Design",
+    "Resolution-Cant-Repro",
+    "Resolution-Fix-Committed",
+    "Resolution-External"
+  ],
+  "type_labels": {
+    "BUG": "Issue-Bug",
+    "DOCUMENTATION": "Issue-Docs",
+    "FEATURE": "Issue-Feature",
+    "QUESTION": "Issue-Question"
+  },
+  "area_owners": {},
+  "fallback_owners": []
+}
