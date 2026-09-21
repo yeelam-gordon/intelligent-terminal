@@ -36,7 +36,8 @@ each gets its own one-line wrapper around the OS locale database.
   on the Next / Save buttons (XAML auto-flips those when the parent's
   `FlowDirection` is `RightToLeft`).
 - `FreOverlay::Initialize` reads the resolved UI language
-  (`globals.Language()` first, then `ApplicationLanguages::Languages()`)
+  (`globals.Language()` first, then MRT's effective `language` qualifier
+  from `ResourceContext::GetForViewIndependentUse()`)
   and sets `RootGrid().FlowDirection(...)` on both branches —
   `RightToLeft` for RTL languages, `LeftToRight` otherwise. Setting
   both branches explicitly matters because the FRE element is reused
