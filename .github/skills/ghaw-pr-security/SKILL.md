@@ -115,7 +115,7 @@ Write JSON to the exact caller-selected path:
   "mode": "guide",
   "summary": "Concise review conclusion.",
   "checks": [
-    {"name":"deterministic-scope","status":"pass","evidence":"Immutable diff classified."},
+    {"name":"deterministic-scope","status":"pass","headSha":"<40 hex>","evidence":"Immutable diff classified."},
     {"name":"native-windows","status":"skipped","evidence":"Not available in this Linux review job."}
   ],
   "review": {
@@ -153,6 +153,9 @@ and check names accepted by the trusted validator. Mark unavailable checks
 mode. In repair mode, `fixed` is valid only for HIGH/high-confidence findings
 with strong evidence, at least one applicable passing validation check, no
 failed/blocked check, a matching patch entry, and independent review PASS.
+Every passing check must name the immutable `headSha`; non-scope checks must
+use exact `local command:` evidence from the current immutable workspace.
+External run URLs are context only and cannot authorize automatic repair.
 
 ## Publication constraint
 

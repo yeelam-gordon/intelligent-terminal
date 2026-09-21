@@ -85,18 +85,20 @@ jobs:
           COMPARISON_BASE_SHA: ${{ github.event.inputs.comparison_base_sha }}
           HEAD_REPO: ${{ github.event.inputs.head_repo }}
           REPOSITORY: ${{ github.repository }}
+          TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
           [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$COMPARISON_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [ "$TRUSTED_WORKFLOW_SHA" = "$EXPECTED_BASE_SHA" ]
           [ "$HEAD_REPO" != "$REPOSITORY" ]
           current_head="$(gh api "/repos/$REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)"
           current_head_repo="$(gh api "/repos/$REPOSITORY/pulls/$PR_NUMBER" --jq .head.repo.full_name)"
           [ "$current_head" = "$EXPECTED_HEAD_SHA" ]
           [ "$current_head_repo" = "$HEAD_REPO" ]
-          echo "trusted_code_revision=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "trusted_code_revision=$TRUSTED_WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
 
   agent:
     needs: [prepare]

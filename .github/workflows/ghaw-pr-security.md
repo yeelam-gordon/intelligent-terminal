@@ -85,6 +85,7 @@ jobs:
           COMPARISON_BASE_SHA: ${{ github.event.inputs.comparison_base_sha }}
           HEAD_REPO: ${{ github.event.inputs.head_repo }}
           REPOSITORY: ${{ github.repository }}
+          TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -92,6 +93,7 @@ jobs:
           [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$COMPARISON_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [ "$TRUSTED_WORKFLOW_SHA" = "$EXPECTED_BASE_SHA" ]
           [ "$HEAD_REPO" = "$REPOSITORY" ]
           current_head="$(gh api "/repos/$REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)"
           current_head_repo="$(gh api "/repos/$REPOSITORY/pulls/$PR_NUMBER" --jq .head.repo.full_name)"
@@ -207,12 +209,16 @@ may be marked `fixed`.
 
 For a proposed repair, invoke the registered `ghaw-pr-security-reviewer` after the
 final validation. Give it the comparison base, immutable original head, exact
-finding, final diff, and command/exit evidence. Do not publish if it does not
-return explicit `PASS`.
+finding, final diff, SHA-256 of `git diff --binary HEAD`, and command/exit
+evidence. Record that exact digest and immutable head in the review result. Do
+not publish if it does not return explicit `PASS` for both.
 
 Write `/tmp/gh-aw/security-findings.json` exactly as the skill specifies.
 List every modified path in `patch`. For a validated non-empty patch, call
 `push-to-pull-request-branch` exactly once after inspecting its runtime schema.
+Set its branch to `${{ github.event.inputs.head_ref }}`; the controller has
+already verified that branch belongs to this repository and currently resolves
+to the immutable head.
 Use a focused commit message ending with `[security-expert]`. With no patch,
 call `noop` exactly once. Never add a PR comment: gh-aw PR output cannot combine
 comment and commit in this worker. Remaining HIGH findings stay blocking with a

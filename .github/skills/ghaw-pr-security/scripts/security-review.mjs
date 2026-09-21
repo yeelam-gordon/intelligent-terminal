@@ -181,11 +181,19 @@ export function validateReport(report, scope) {
         !['pass', 'fail', 'skipped', 'blocked'].includes(check.status)) {
       fail(`check ${index + 1} is invalid`);
     }
-    if (check.name !== 'deterministic-scope' && check.status === 'pass' &&
-        !/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/[0-9]+|local command:/i.test(check.evidence ?? '')) {
-      fail(`passing check ${check.name} needs a run URL or local command evidence`);
+    if (check.status === 'pass' && check.headSha !== scope.headSha) {
+      fail(`passing check ${check.name} must identify the immutable head SHA`);
     }
-    return { name: check.name, status: check.status, evidence: text(check.evidence, `check ${index + 1} evidence`, 500) };
+    if (check.name !== 'deterministic-scope' && check.status === 'pass' &&
+        !/^local command:/i.test(check.evidence ?? '')) {
+      fail(`passing check ${check.name} needs local command evidence from this immutable workspace`);
+    }
+    return {
+      name: check.name,
+      status: check.status,
+      evidence: text(check.evidence, `check ${index + 1} evidence`, 500),
+      ...(check.status === 'pass' ? { headSha: check.headSha } : {}),
+    };
   });
   if (!checks.some(check => check.name === 'deterministic-scope' && check.status === 'pass')) {
     fail('deterministic-scope PASS is required');
@@ -197,7 +205,15 @@ export function validateReport(report, scope) {
     status: report.review.status,
     reviewer: text(report.review.reviewer, 'independent reviewer', 100),
     evidence: text(report.review.evidence, 'independent review evidence', 500),
+    ...(report.review.status === 'pass' ? {
+      headSha: report.review.headSha,
+      patchSha256: report.review.patchSha256,
+    } : {}),
   };
+  if (review.status === 'pass' &&
+      (review.headSha !== scope.headSha || !/^[0-9a-f]{64}$/.test(review.patchSha256 ?? ''))) {
+    fail('independent review PASS must bind the immutable head and final patch digest');
+  }
   if (!Array.isArray(report.findings) || report.findings.length > 20) {
     fail('findings must be an array with at most 20 entries');
   }
@@ -299,11 +315,17 @@ export function validateReport(report, scope) {
   return { ...report, summary, checks, review, findings, patch };
 }
 
-export function validatePatch(report, actualPaths) {
+export function validatePatch(report, actualPaths, patchText = '') {
   const expected = [...new Set(report.patch.map(item => item.path))].sort();
   const actual = [...new Set(actualPaths.map(path => normalizePath(path, 'working tree path')))].sort();
   if (JSON.stringify(expected) !== JSON.stringify(actual)) {
     fail(`reported patch paths do not match the working tree: expected [${expected}], actual [${actual}]`);
+  }
+  if (report.patch.length > 0) {
+    const actualDigest = createHash('sha256').update(patchText).digest('hex');
+    if (report.review.patchSha256 !== actualDigest) {
+      fail('independent review PASS does not match the final patch digest');
+    }
   }
 }
 
@@ -407,7 +429,8 @@ function main() {
     if (scope.mode === 'repair') {
       const modified = git(['diff', '--name-only', '-z', 'HEAD']).split('\0').filter(Boolean);
       const untracked = git(['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean);
-      validatePatch(report, [...modified, ...untracked]);
+      const patchText = git(['diff', '--binary', 'HEAD']);
+      validatePatch(report, [...modified, ...untracked], patchText);
     }
     writeFileSync(option('--validated'), `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx' });
     writeFileSync(option('--summary'), renderReport(report), { flag: 'wx' });

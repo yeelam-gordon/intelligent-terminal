@@ -116,10 +116,9 @@ jobs:
               head_ref: process.env.HEAD_REF,
               head_repo: process.env.HEAD_REPO,
               aw_context: JSON.stringify({
-                item_type: "pull_request",
-                item_number: pr.number,
+                source_pr_number: pr.number,
                 repo: `${context.repo.owner}/${context.repo.repo}`,
-                event_type: "pull_request",
+                event_type: "workflow_dispatch",
                 head_sha: process.env.EXPECTED_HEAD_SHA,
                 base_sha: process.env.EXPECTED_BASE_SHA,
                 comparison_base_sha: process.env.COMPARISON_BASE_SHA,

@@ -41,8 +41,9 @@ The report contract limits findings to changed files and assigns stable
 
 - HIGH findings are blocking; medium/low findings are advice-only.
 - HIGH/high-confidence findings cannot rely only on hypotheses.
-- analyzer/native checks cannot be marked passing without a matching run URL or
-  explicit local command record.
+- passing checks name the immutable head, and non-scope validation requires an
+  explicit local command record from that immutable workspace; arbitrary
+  Actions run URLs cannot authorize a repair.
 - secret-like content, unsafe paths, malformed reports, stale SHAs, more than 20
   findings, and invalid `fixed` claims are rejected.
 - the job summary separates blocking HIGH findings from considerations and the
@@ -51,9 +52,12 @@ The report contract limits findings to changed files and assigns stable
 Automatic repair is allowed only when the original finding is HIGH with high
 confidence and strong evidence, the patch is minimal and inside `src/**`,
 `tools/wta/src/**`, or `test/**`, applicable final validation passes, no check
-is failed/blocked, an independent reviewer returns `PASS`, and the live PR head
-still equals the reviewed SHA. The native validator compares every reported
-patch path with the actual worktree and rejects CI/security policy, manifests,
+is failed/blocked, an independent reviewer returns `PASS` for the immutable
+head and exact final patch digest, and the live PR head still equals the
+reviewed SHA. This model review is defense in depth, not a separate credential
+or authorization principal; native checks and safe-output policy remain the
+mechanical boundary. The native validator compares every reported patch path
+and patch digest with the actual worktree and rejects CI/security policy, manifests,
 unrelated dependencies, and medium/low edits. Unsafe or unvalidated HIGH
 findings remain blocking.
 
@@ -107,6 +111,15 @@ The implementation reuses security architecture, not generic prompt wording:
 Separate CodeQL, AuditMode/CppCoreCheck, TAEF, and explicit-target Cargo checks
 remain independent evidence. Missing or mismatched-head evidence is reported as
 skipped/blocked, never as a passing native check.
+
+Detached workers are dispatched on the base branch but fail in `prepare` unless
+`github.workflow_sha` equals the controller-recorded base SHA. Their
+`workflow_dispatch` context deliberately omits gh-aw's `pull_request`
+`item_type`, so the generated generic `Checkout PR branch` step is ineligible.
+The repair worker's explicit checkout is pinned to the immutable head; fork
+guidance stays on the trusted workflow checkout and reads only fetched Git
+objects. Inline agents and skills are restored from gh-aw's trusted activation
+artifact after checkout.
 
 ## Local validation
 

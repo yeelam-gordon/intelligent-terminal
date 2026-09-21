@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   buildScope, classifyPath, normalizePath, renderReport, validatePatch,
@@ -7,6 +8,8 @@ import {
 
 const BASE = '1'.repeat(40);
 const HEAD = '2'.repeat(40);
+const PATCH_TEXT = 'diff --git a/tools/wta/src/master/mod.rs b/tools/wta/src/master/mod.rs\n';
+const PATCH_SHA256 = createHash('sha256').update(PATCH_TEXT).digest('hex');
 
 function scope(relation = 'same-repo') {
   return buildScope(
@@ -42,7 +45,7 @@ function report(overrides = {}, relation = 'same-repo') {
     mode: 'guide',
     summary: 'No security regression found.',
     checks: [
-      { name: 'deterministic-scope', status: 'pass', evidence: 'Immutable diff classified.' },
+      { name: 'deterministic-scope', status: 'pass', headSha: HEAD, evidence: 'Immutable diff classified.' },
       { name: 'native-windows', status: 'skipped', evidence: 'Not available in Linux.' },
     ],
     review: { status: 'not-required', reviewer: 'none', evidence: 'No automatic repair was attempted.' },
@@ -118,10 +121,16 @@ test('accepts only validated high-confidence HIGH repairs with matching patch', 
     scopeSha256: current.scopeSha256,
     mode: 'repair',
     checks: [
-      { name: 'deterministic-scope', status: 'pass', evidence: 'Immutable diff classified.' },
-      { name: 'wta-tests', status: 'pass', evidence: 'local command: cargo test focused-security-test (exit 0)' },
+      { name: 'deterministic-scope', status: 'pass', headSha: HEAD, evidence: 'Immutable diff classified.' },
+      { name: 'wta-tests', status: 'pass', headSha: HEAD, evidence: 'local command: cargo test focused-security-test (exit 0)' },
     ],
-    review: { status: 'pass', reviewer: 'ghaw-pr-security-reviewer', evidence: 'Independent final-patch review returned PASS.' },
+    review: {
+      status: 'pass',
+      reviewer: 'ghaw-pr-security-reviewer',
+      headSha: HEAD,
+      patchSha256: PATCH_SHA256,
+      evidence: 'Independent final-patch review returned PASS.',
+    },
     findings: [{
       rule: 'session-route-target-binding',
       severity: 'high',
@@ -141,7 +150,7 @@ test('accepts only validated high-confidence HIGH repairs with matching patch', 
     patch: [{ path: 'tools/wta/src/master/mod.rs', summary: 'Restore owner-bound lookup.' }],
   };
   const validated = validateReport(candidate, current);
-  validatePatch(validated, ['tools/wta/src/master/mod.rs']);
+  validatePatch(validated, ['tools/wta/src/master/mod.rs'], PATCH_TEXT);
   validateQueuedOutput(validated, { items: [{ type: 'push_to_pull_request_branch' }], errors: [] });
   assert.throws(() => validateQueuedOutput(validated, { items: [{ type: 'add_comment' }] }), /push_to_pull_request_branch/);
 });
@@ -153,8 +162,8 @@ test('rejects a fixed finding without applicable validation or independent PASS'
     scopeSha256: current.scopeSha256,
     mode: 'repair',
     checks: [
-      { name: 'deterministic-scope', status: 'pass', evidence: 'Immutable diff classified.' },
-      { name: 'manual-review', status: 'pass', evidence: 'local command: git diff (exit 0)' },
+      { name: 'deterministic-scope', status: 'pass', headSha: HEAD, evidence: 'Immutable diff classified.' },
+      { name: 'manual-review', status: 'pass', headSha: HEAD, evidence: 'local command: git diff (exit 0)' },
     ],
     findings: [{
       rule: 'session-route-target-binding',
@@ -221,10 +230,16 @@ test('fork guidance requires comment for findings and noop for no findings', () 
 test('rejects secret-like diagnostic evidence and unsupported passing checks', () => {
   assert.throws(() => validateReport(report({
     checks: [
-      { name: 'deterministic-scope', status: 'pass', evidence: 'Immutable diff classified.' },
-      { name: 'wta-tests', status: 'pass', evidence: 'Everything looked green.' },
+      { name: 'deterministic-scope', status: 'pass', headSha: HEAD, evidence: 'Immutable diff classified.' },
+      { name: 'wta-tests', status: 'pass', headSha: HEAD, evidence: 'Everything looked green.' },
     ],
-  }), scope()), /run URL or local command/);
+  }), scope()), /local command evidence/);
+  assert.throws(() => validateReport(report({
+    checks: [
+      { name: 'deterministic-scope', status: 'pass', headSha: HEAD, evidence: 'Immutable diff classified.' },
+      { name: 'wta-tests', status: 'pass', headSha: HEAD, evidence: 'https://github.com/other/repo/actions/runs/123' },
+    ],
+  }), scope()), /local command evidence/);
   assert.throws(() => validateReport(report({
     summary: 'token=abcdefghijklmnopqrstuvwxyz123456',
   }), scope()), /secret material/);
