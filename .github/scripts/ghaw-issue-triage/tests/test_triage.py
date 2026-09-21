@@ -212,6 +212,15 @@ class TriageTests(unittest.TestCase):
             "password=<redacted>; access-token=<redacted>; refresh_token=<redacted>",
         )
 
+    def test_redact_handles_compound_credential_environment_names(self):
+        redacted = TRIAGE.redact(
+            "ERROR AWS_SECRET_ACCESS_KEY=aws-value CLIENT_SECRET='client-value'"
+        )
+        self.assertIn("AWS_SECRET_ACCESS_KEY=<redacted>", redacted)
+        self.assertIn("CLIENT_SECRET=<redacted>", redacted)
+        self.assertNotIn("aws-value", redacted)
+        self.assertNotIn("client-value", redacted)
+
     def test_input_hash_ignores_workflow_managed_labels_and_assignees(self):
         original = issue("Please add a feature", ["Issue-Feature", "external-label"])
         original["assignees"] = [{"login": "reporter"}]
@@ -783,11 +792,12 @@ class TriageTests(unittest.TestCase):
         self.assertIn("imports:\n  - .github/agents/issue-triage.agent.md", workflow)
         self.assertIn("/tmp/gh-aw/agent/issue-context.md", workflow)
         self.assertIn(".github/skills/ghaw-issue-triage/SKILL.md", agent)
-        self.assertIn("tools: ['read']", agent)
+        self.assertIn("tools: ['execute']", agent)
+        self.assertIn('"cat /tmp/gh-aw/agent/issue-context.md"', workflow)
         self.assertNotIn("tools: ['agent'", agent)
         self.assertNotIn("delegate", agent.lower())
         self.assertNotIn("child-agent", agent.lower())
-        self.assertIn("Read `/tmp/gh-aw/agent/issue-context.md`", workflow)
+        self.assertIn("Run `cat /tmp/gh-aw/agent/issue-context.md`", workflow)
         self.assertIn("## Diagnostic sufficiency", skill)
         self.assertIn("`bug_diagnostics_requirement`", skill)
         self.assertIn(TRIAGE.LOG_GUIDE, skill)
@@ -801,7 +811,7 @@ class TriageTests(unittest.TestCase):
         self.assertIn("ref: ${{ github.workflow_sha }}", workflow)
         self.assertIn("if: steps.prepare.outputs.should_process != 'true'", workflow)
         self.assertIn("exit 1", workflow)
-        self.assertNotIn('bash:\n', workflow)
+        self.assertNotIn('bash: [":*"]', workflow)
         self.assertIn("updateComment", workflow)
         self.assertIn("createComment", workflow)
         self.assertIn("throw new Error('Configured assignee is no longer eligible.')", workflow)

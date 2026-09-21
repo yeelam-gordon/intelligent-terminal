@@ -233,7 +233,7 @@ def redact(value):
         (r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b", "<guid>"),
         (r"\bS-1-5-(?:\d+-){1,14}\d+\b", "<sid>"),
         (
-            r"""(?i)\b(token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)\b\s*[:=]\s*(?:(["'])(.*?)\2|[^\s,;]+)""",
+            r"""(?i)(?<![A-Z0-9_])([A-Z0-9_]*(?:token|secret|password|api[_-]?key|access[_-]?key)[A-Z0-9_]*)\s*[:=]\s*(?:(["'])(.*?)\2|[^\s,;]+)""",
             r"\1=<redacted>",
         ),
     )
