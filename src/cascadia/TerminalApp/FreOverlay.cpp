@@ -59,18 +59,19 @@ namespace winrt::TerminalApp::implementation
         // for any RTL language the OS knows about (and the qps-plocm
         // pseudo-locale used for validation). We honor the explicit
         // `Language` override from settings.json first (matches the way
-        // AppLogic::_ApplyLanguageSettingChange resolves it), then fall
-        // back to the OS preferred UI language.
+        // AppLogic::_ApplyLanguageSettingChange resolves it), then use
+        // the effective language selected by MRT.
         {
             winrt::hstring language = globals.Language();
             if (language.empty())
             {
                 try
                 {
-                    const auto langs = winrt::Windows::Globalization::ApplicationLanguages::Languages();
-                    if (langs && langs.Size() > 0)
+                    const auto context{ winrt::Windows::ApplicationModel::Resources::Core::ResourceContext::GetForViewIndependentUse() };
+                    const auto qualifiers{ context.QualifierValues() };
+                    if (const auto effectiveLanguage{ qualifiers.TryLookup(L"language") })
                     {
-                        language = langs.GetAt(0);
+                        language = *effectiveLanguage;
                     }
                 }
                 CATCH_LOG();

@@ -84,16 +84,16 @@ pub fn initialize_text_direction(locale: &str) {
     UI_IS_RTL.get_or_init(|| is_rtl_locale(locale));
 }
 
+fn effective_is_rtl(preserved_direction: Option<bool>, translation_locale: &str) -> bool {
+    preserved_direction.unwrap_or_else(|| is_rtl_locale(translation_locale))
+}
+
 /// Returns the default UI text alignment for RTL locales — right when
 /// the original user-selected or OS locale is RTL, left otherwise.
 /// Tests that do not initialize the process-wide direction continue
 /// to follow the current `rust_i18n` locale.
 pub fn text_alignment() -> Alignment {
-    if UI_IS_RTL
-        .get()
-        .copied()
-        .unwrap_or_else(|| is_rtl_locale(&rust_i18n::locale()))
-    {
+    if effective_is_rtl(UI_IS_RTL.get().copied(), &rust_i18n::locale()) {
         Alignment::Right
     } else {
         Alignment::Left
@@ -103,10 +103,7 @@ pub fn text_alignment() -> Alignment {
 /// Thin convenience wrapper for call sites that need the boolean
 /// without pulling in `ratatui` types.
 pub fn is_current_locale_rtl() -> bool {
-    UI_IS_RTL
-        .get()
-        .copied()
-        .unwrap_or_else(|| is_rtl_locale(&rust_i18n::locale()))
+    effective_is_rtl(UI_IS_RTL.get().copied(), &rust_i18n::locale())
 }
 
 #[cfg(test)]
@@ -242,6 +239,13 @@ mod tests {
         // one LTR pseudo-locale (avoids hardcoding any real language).
         assert_eq!(is_rtl_locale("qps-plocm"), is_rtl_locale("QPS-PLOCM"));
         assert_eq!(is_rtl_locale("qps-ploc"), is_rtl_locale("QPS-PLOC"));
+    }
+
+    #[test]
+    fn preserved_direction_wins_over_translation_fallback() {
+        assert!(effective_is_rtl(Some(true), "en-US"));
+        assert!(!effective_is_rtl(Some(false), "qps-plocm"));
+        assert!(effective_is_rtl(None, "qps-plocm"));
     }
 
     #[test]
