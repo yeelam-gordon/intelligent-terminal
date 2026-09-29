@@ -451,7 +451,7 @@ namespace winrt::TerminalApp::implementation
                                 IVector<TerminalApp::TabStripPaneItem> const& panes,
                                 bool isGroup)
     {
-        SetPaneItems(item, panes, isGroup, panes && panes.Size() > 0);
+        SetPaneItems(item, panes, isGroup, false);
     }
 
     void TabStrip::SetPaneItems(IInspectable const& item,

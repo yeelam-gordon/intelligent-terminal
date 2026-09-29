@@ -290,6 +290,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabStripPreservesClosePolicy);
         TEST_METHOD(VerticalTabStripCollapsedItemsPreserveSelection);
         TEST_METHOD(VerticalTabStripHostsPaneGroups);
+        TEST_METHOD(VerticalTabStripCompatibilitySetPaneItemsPreservesHeaderProgress);
         TEST_METHOD(PaneProgressSurvivesTabLayoutLifecycle);
         TEST_METHOD(VerticalTabPaneProgressThemeSwitchRefreshesBrushes);
         TEST_METHOD(VerticalTabExpandedGroupKeepsHeaderProgressForAgentSource);
@@ -6140,6 +6141,71 @@ namespace TerminalAppLocalTests
 
             strip.TabItems().Clear();
             VERIFY_IS_TRUE(tab.Header() == header);
+        });
+    }
+
+    void TabTests::VerticalTabStripCompatibilitySetPaneItemsPreservesHeaderProgress()
+    {
+        winrt::TerminalApp::TabStrip strip;
+        Grid host;
+        winrt::MUX::Controls::TabViewItem tab;
+
+        TestOnUIThread([&]() {
+            host.Width(240);
+            host.Height(200);
+            strip.Width(240);
+            strip.Height(200);
+
+            winrt::TerminalApp::TerminalTabStatus tabStatus;
+            tabStatus.IsProgressRingActive(true);
+            tabStatus.ProgressValue(60);
+
+            winrt::TerminalApp::TabHeaderControl header;
+            header.Title(L"Split tab");
+            header.TabStatus(tabStatus);
+            tab.Header(header);
+
+            winrt::MUX::Controls::SymbolIconSource icon;
+            icon.Symbol(winrt::Windows::UI::Xaml::Controls::Symbol::Document);
+            tab.IconSource(icon);
+            strip.TabItems().Append(tab);
+            strip.SetTabPresentation(tab, L"Split tab", L"\xE8A5");
+
+            std::vector<winrt::TerminalApp::TabStripPaneItem> panes;
+            panes.emplace_back(winrt::make<winrt::TerminalApp::implementation::TabStripPaneItem>(tab, 11, L"First pane", true));
+            panes.emplace_back(winrt::make<winrt::TerminalApp::implementation::TabStripPaneItem>(tab, 12, L"Second pane", false));
+            strip.SetPaneItems(tab, winrt::single_threaded_vector<winrt::TerminalApp::TabStripPaneItem>(std::move(panes)), true);
+
+            host.Children().Append(strip);
+            Window::Current().Content(host);
+            Window::Current().Activate();
+            host.UpdateLayout();
+
+            const auto stripImpl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(strip);
+            const auto container = strip.ContainerFromIndex(0).as<ListViewItem>();
+            const auto display = stripImpl->ItemsList().ItemFromContainer(container).as<winrt::TerminalApp::TabStripDisplayItem>();
+            VERIFY_IS_TRUE(display.IsGroup());
+            VERIFY_ARE_EQUAL(2u, display.PaneItems().Size());
+            VERIFY_ARE_EQUAL(uint64_t{ 0 }, display.PaneItems().GetAt(0).ProgressState());
+            VERIFY_ARE_EQUAL(uint64_t{ 0 }, display.PaneItems().GetAt(1).ProgressState());
+
+            const auto templateRoot = container.ContentTemplateRoot().as<StackPanel>();
+            const auto paneList = templateRoot.Children().GetAt(1).as<ItemsControl>();
+            const auto firstPaneContainer = paneList.ContainerFromIndex(0).as<ContentPresenter>();
+            const auto firstPaneRoot = Media::VisualTreeHelper::GetChild(firstPaneContainer, 0).as<FrameworkElement>();
+            const auto firstPaneRing = firstPaneRoot.FindName(L"PaneProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            VERIFY_IS_FALSE(firstPaneRing.IsActive());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, firstPaneRing.Visibility());
+
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            VERIFY_IS_TRUE(headerImpl->ShowProgressRing());
+            VERIFY_IS_TRUE(header.TabStatus().IsProgressRingActive());
+            VERIFY_IS_FALSE(header.TabStatus().IsProgressRingIndeterminate());
+            VERIFY_ARE_EQUAL(uint32_t{ 60 }, header.TabStatus().ProgressValue());
+            VERIFY_ARE_EQUAL(Visibility::Visible, headerRing.Visibility());
+            VERIFY_IS_TRUE(headerRing.IsActive());
+            VERIFY_ARE_EQUAL(uint32_t{ 60 }, gsl::narrow<uint32_t>(headerRing.Value()));
         });
     }
 
