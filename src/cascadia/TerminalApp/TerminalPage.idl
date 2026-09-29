@@ -126,7 +126,7 @@ namespace TerminalApp
 
         event Windows.Foundation.TypedEventHandler<Object, Object> OpenSystemMenu;
         event Windows.Foundation.TypedEventHandler<Object, Microsoft.Terminal.Control.ShowWindowArgs> ShowWindowChanged;
-        event Windows.Foundation.TypedEventHandler<Object, Windows.Foundation.Collections.IVectorView<Microsoft.Terminal.Settings.Model.SettingsLoadWarnings>> ShowLoadWarningsDialog;
+        event Windows.Foundation.TypedEventHandler<Object, Windows.Foundation.Collections.IVectorView<Microsoft.Terminal.Settings.Model.SettingsLoadWarnings> > ShowLoadWarningsDialog;
 
         event Windows.Foundation.TypedEventHandler<Object, RequestMoveContentArgs> RequestMoveContent;
         event Windows.Foundation.TypedEventHandler<Object, RequestReceiveContentArgs> RequestReceiveContent;
@@ -145,8 +145,8 @@ namespace TerminalApp
         UInt32 TabCount { get; };
         Windows.Foundation.IReference<UInt32> FocusedTabIndex { get; };
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.PaneInfo> GetProtocolActivePane();
-        Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.TabInfo>> GetProtocolTabs();
-        Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.PaneInfo>> GetProtocolPanes(UInt32 tabIdFilter);
+        Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.TabInfo> > GetProtocolTabs();
+        Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IVector<Microsoft.Terminal.Protocol.PaneInfo> > GetProtocolPanes(UInt32 tabIdFilter);
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.PaneOutput> ReadProtocolPaneOutput(Guid sessionId, String source, Int32 maxLines);
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.PaneContext> GetProtocolPaneContext(Guid sourceSessionId, Boolean hasExplicitSource, Int32 maxLines, Int32 maxCharacters);
         Windows.Foundation.IAsyncOperation<Microsoft.Terminal.Protocol.ProcessStatus> GetProtocolProcessStatus(Guid sessionId);

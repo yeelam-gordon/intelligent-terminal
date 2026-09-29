@@ -29,6 +29,7 @@ namespace TerminalAppUnitTests
         TEST_METHOD(PersistentSessionHelloRoundTrips);
         TEST_METHOD(PersistentSessionResizeFrameRoundTrips);
         TEST_METHOD(SessionRouteSelectionTests);
+        TEST_METHOD(SessionRouteProbePolicyTests);
         TEST_METHOD(PersistentSessionHostDiscoveryParsingTests);
         TEST_METHOD(PersistentSessionHostSelectionAutoSelectsSameUserHost);
         TEST_METHOD(PersistentSessionHostSelectionRequiresExplicitDesktopSessionWhenAmbiguous);
@@ -332,30 +333,107 @@ namespace TerminalAppUnitTests
         }
     }
 
+    void ProtocolParsingTests::SessionRouteProbePolicyTests()
+    {
+        {
+            wtcli::SessionRouteContext ctx{
+                .currentSessionId = 3,
+                .targetDesktopSession = std::nullopt,
+                .canActivateBrandedServerDirectly = true,
+            };
+            VERIFY_IS_TRUE(wtcli::ShouldProbeDirectConnection(ctx));
+        }
+
+        {
+            wtcli::SessionRouteContext ctx{
+                .currentSessionId = 5,
+                .targetDesktopSession = 5u,
+                .canActivateBrandedServerDirectly = true,
+            };
+            VERIFY_IS_TRUE(wtcli::ShouldProbeDirectConnection(ctx));
+        }
+
+        {
+            wtcli::SessionRouteContext ctx{
+                .currentSessionId = 7,
+                .targetDesktopSession = 8u,
+                .canActivateBrandedServerDirectly = true,
+            };
+            VERIFY_IS_FALSE(wtcli::ShouldProbeDirectConnection(ctx));
+        }
+
+        {
+            wtcli::SessionRouteContext ctx{
+                .currentSessionId = 0,
+                .targetDesktopSession = std::nullopt,
+                .canActivateBrandedServerDirectly = true,
+            };
+            VERIFY_IS_FALSE(wtcli::ShouldProbeDirectConnection(ctx));
+        }
+
+        {
+            wtcli::SessionRouteContext ctx{
+                .currentSessionId = 3,
+                .targetDesktopSession = std::nullopt,
+                .canActivateBrandedServerDirectly = false,
+            };
+            VERIFY_IS_FALSE(wtcli::ShouldProbeDirectConnection(ctx));
+        }
+    }
+
     void ProtocolParsingTests::PersistentSessionHostDiscoveryParsingTests()
     {
+        constexpr auto desktopSessionId = 3u;
+        constexpr auto generation = "11111111-2222-3333-4444-555555555555";
+        constexpr auto instanceId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        constexpr auto ownerSid = "S-1-5-21-1000-1001-1002-1003";
+
         Json::Value valid;
-        valid["desktop_session_id"] = 3u;
+        valid["desktop_session_id"] = desktopSessionId;
         valid["pid"] = 4321u;
-        valid["pipe_name"] = R"(\\.\pipe\IntelligentTerminal.SessionHost.3.test)";
-        valid["owner_sid"] = "S-1-5-21-1000";
-        valid["generation"] = "generation";
-        valid["instance_id"] = "instance";
+        valid["pipe_name"] = R"(\\.\pipe\IntelligentTerminal.SessionHost.3.11111111-2222-3333-4444-555555555555)";
+        valid["owner_sid"] = ownerSid;
+        valid["generation"] = generation;
+        valid["instance_id"] = instanceId;
 
         wtcli::PersistentSessionHostDiscoveryRecord record;
         VERIFY_IS_TRUE(wtcli::TryParsePersistentSessionHostDiscoveryRecord(valid, record));
-        VERIFY_ARE_EQUAL(3u, record.desktopSessionId);
+        VERIFY_ARE_EQUAL(desktopSessionId, record.desktopSessionId);
         VERIFY_ARE_EQUAL(4321u, record.pid);
-        VERIFY_ARE_EQUAL(std::string{ R"(\\.\pipe\IntelligentTerminal.SessionHost.3.test)" }, record.pipeName);
-        VERIFY_ARE_EQUAL(std::string{ "S-1-5-21-1000" }, record.ownerSid);
+        VERIFY_ARE_EQUAL(std::string{ R"(\\.\pipe\IntelligentTerminal.SessionHost.3.11111111-2222-3333-4444-555555555555)" }, record.pipeName);
+        VERIFY_ARE_EQUAL(std::string{ ownerSid }, record.ownerSid);
 
         Json::Value missingOwner = valid;
         missingOwner.removeMember("owner_sid");
         VERIFY_IS_FALSE(wtcli::TryParsePersistentSessionHostDiscoveryRecord(missingOwner, record));
 
-        Json::Value emptyPipe = valid;
-        emptyPipe["pipe_name"] = "";
-        VERIFY_IS_FALSE(wtcli::TryParsePersistentSessionHostDiscoveryRecord(emptyPipe, record));
+        Json::Value attackerPipe = valid;
+        attackerPipe["pipe_name"] = R"(\\.\pipe\attacker-controlled)";
+        VERIFY_IS_FALSE(wtcli::TryParsePersistentSessionHostDiscoveryRecord(attackerPipe, record));
+
+        Json::Value filePath = valid;
+        filePath["pipe_name"] = R"(C:\temp\fake-host.json)";
+        VERIFY_IS_FALSE(wtcli::TryParsePersistentSessionHostDiscoveryRecord(filePath, record));
+
+        Json::Value remoteUncPipe = valid;
+        remoteUncPipe["pipe_name"] = R"(\\remote-host\pipe\IntelligentTerminal.SessionHost.3.11111111-2222-3333-4444-555555555555)";
+        VERIFY_IS_FALSE(wtcli::TryParsePersistentSessionHostDiscoveryRecord(remoteUncPipe, record));
+
+        Json::Value wrongSession = valid;
+        wrongSession["desktop_session_id"] = 4u;
+        VERIFY_IS_FALSE(wtcli::TryParsePersistentSessionHostDiscoveryRecord(wrongSession, record));
+
+        Json::Value wrongSid = valid;
+        wrongSid["owner_sid"] = "not-a-sid";
+        VERIFY_IS_FALSE(wtcli::TryParsePersistentSessionHostDiscoveryRecord(wrongSid, record));
+
+        Json::Value malformedGeneration = valid;
+        malformedGeneration["generation"] = "not-a-guid";
+        VERIFY_IS_FALSE(wtcli::TryParsePersistentSessionHostDiscoveryRecord(malformedGeneration, record));
+
+        Json::Value malformedInstance = valid;
+        malformedInstance["instance_id"] = "still-not-a-guid";
+        VERIFY_IS_FALSE(wtcli::TryParsePersistentSessionHostDiscoveryRecord(malformedInstance, record));
     }
 
     void ProtocolParsingTests::PersistentSessionHostSelectionAutoSelectsSameUserHost()
