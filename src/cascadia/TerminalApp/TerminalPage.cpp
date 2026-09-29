@@ -7,6 +7,7 @@
 #include "TabStrip.h"
 
 #include <iomanip>
+#include <winrt/Windows.Globalization.NumberFormatting.h>
 
 #include <json/json.h>
 #include <TerminalCore/ControlKeyStates.hpp>
@@ -6307,6 +6308,46 @@ namespace winrt::TerminalApp::implementation
         return RS_(L"VerticalTabsHistoryStatusUnknown");
     }
 
+    static winrt::hstring _SidebarHistoryLanguageTag()
+    {
+        try
+        {
+            const auto context = winrt::Windows::ApplicationModel::Resources::Core::ResourceContext::GetForViewIndependentUse();
+            if (const auto language = context.QualifierValues().TryLookup(L"language"))
+            {
+                return *language;
+            }
+        }
+        catch (...)
+        {
+            LOG_CAUGHT_EXCEPTION();
+        }
+
+        return {};
+    }
+
+    winrt::hstring TerminalPage::_FormatLocalizedPercentValue(const uint32_t progressValue,
+                                                              const std::wstring_view languageTag)
+    {
+        try
+        {
+            using namespace winrt::Windows::Globalization::NumberFormatting;
+
+            const auto effectiveLanguage = languageTag.empty() ? _SidebarHistoryLanguageTag() :
+                                                                 winrt::hstring{ languageTag };
+            const auto formatter = effectiveLanguage.empty() ?
+                                       PercentFormatter{} :
+                                       PercentFormatter(winrt::single_threaded_vector<winrt::hstring>({ effectiveLanguage }), L"ZZ");
+            return formatter.FormatDouble(static_cast<double>(progressValue) / 100.0);
+        }
+        catch (...)
+        {
+            LOG_CAUGHT_EXCEPTION();
+        }
+
+        return winrt::hstring{ fmt::format(FMT_COMPILE(L"{}%"), progressValue) };
+    }
+
     winrt::hstring TerminalPage::_SidebarHistoryAgeText(const std::optional<uint64_t> lastActivityAtMs, const uint64_t nowMs)
     {
         if (!lastActivityAtMs || *lastActivityAtMs == 0)
@@ -6354,9 +6395,7 @@ namespace winrt::TerminalApp::implementation
         time.wYear = static_cast<WORD>(static_cast<int>(date.year()));
         time.wMonth = static_cast<WORD>(static_cast<unsigned>(date.month()));
         time.wDay = static_cast<WORD>(static_cast<unsigned>(date.day()));
-        const auto context = winrt::Windows::ApplicationModel::Resources::Core::ResourceContext::GetForViewIndependentUse();
-        const auto language = context.QualifierValues().TryLookup(L"language");
-        const auto locale = language ? *language : winrt::hstring{};
+        const auto locale = _SidebarHistoryLanguageTag();
         wchar_t buffer[256]{};
         if (GetDateFormatEx(locale.empty() ? LOCALE_NAME_USER_DEFAULT : locale.c_str(),
                             DATE_LONGDATE,
@@ -12125,7 +12164,7 @@ namespace winrt::TerminalApp::implementation
                 return status;
             }
 
-            return winrt::hstring{ fmt::format(FMT_COMPILE(L"{}, {}%"), status, pane.ProgressValue) };
+            return winrt::hstring{ fmt::format(FMT_COMPILE(L"{}, {}"), status, _FormatLocalizedPercentValue(gsl::narrow<uint32_t>(pane.ProgressValue))) };
         };
         size_t groupPaneCount = 0;
         bool headerProgressProjectedToPaneRows = false;

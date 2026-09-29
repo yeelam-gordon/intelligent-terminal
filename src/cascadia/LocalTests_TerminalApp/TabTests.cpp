@@ -27,6 +27,7 @@
 #include "CppWinrtTailored.h"
 
 #include <cmath>
+#include <winrt/Windows.Globalization.NumberFormatting.h>
 #include <winrt/Windows.UI.Xaml.Automation.h>
 #include <winrt/Windows.UI.Xaml.Automation.Peers.h>
 #include <winrt/Windows.UI.Xaml.Automation.Provider.h>
@@ -307,6 +308,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabHistoryCloseStopsRefresh);
         TEST_METHOD(VerticalTabFilterContainsOnlyMetadata);
         TEST_METHOD(VerticalTabHistoryStatusText);
+        TEST_METHOD(VerticalTabProgressPercentUsesLocaleFormatting);
         TEST_METHOD(SessionRegistryStatusDeltaUpdatesCaches);
         TEST_METHOD(BottomBarSessionsButtonFollowsLayout);
         TEST_METHOD(BottomBarSessionsButtonDispatchesExistingAction);
@@ -4186,6 +4188,20 @@ namespace TerminalAppLocalTests
         });
     }
 
+    void TabTests::VerticalTabProgressPercentUsesLocaleFormatting()
+    {
+        TestOnUIThread([&]() {
+            using namespace winrt::Windows::Globalization::NumberFormatting;
+
+            const auto formatter = PercentFormatter(winrt::single_threaded_vector<winrt::hstring>({ L"fr-FR" }), L"ZZ");
+            const auto expected = formatter.FormatDouble(0.25);
+            const auto actual = winrt::TerminalApp::implementation::TerminalPage::_FormatLocalizedPercentValue(25, L"fr-FR");
+
+            VERIFY_ARE_EQUAL(expected, actual);
+            VERIFY_ARE_NOT_EQUAL(winrt::hstring{ L"25%" }, actual);
+        });
+    }
+
     void TabTests::SessionRegistryStatusDeltaUpdatesCaches()
     {
         auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
@@ -6408,8 +6424,11 @@ namespace TerminalAppLocalTests
                 const auto actualName = std::wstring_view{ automationName.c_str(), automationName.size() };
                 const auto containsStatus = expectedStatusToken.empty() ||
                                             actualName.find(std::wstring_view{ expectedStatusToken.c_str(), expectedStatusToken.size() }) != std::wstring_view::npos;
-                const auto containsValue = expectedState == 0 || expectedState == 3 ||
-                                           actualName.find(std::to_wstring(expectedValue) + L"%") != std::wstring_view::npos;
+                const auto expectedPercent = expectedState == 0 || expectedState == 3 ?
+                                                 winrt::hstring{} :
+                                                 winrt::TerminalApp::implementation::TerminalPage::_FormatLocalizedPercentValue(expectedValue);
+                const auto containsValue = expectedPercent.empty() ||
+                                           actualName.find(std::wstring_view{ expectedPercent.c_str(), expectedPercent.size() }) != std::wstring_view::npos;
                 const auto foreground = ring.Foreground().try_as<Media::SolidColorBrush>();
                 const auto foregroundMatches = !expectedForeground.has_value() ?
                                                    foreground == nullptr :
@@ -6653,6 +6672,24 @@ namespace TerminalAppLocalTests
         const auto progressBrushColor = [&](const ElementTheme theme, const wchar_t* key) {
             return ThemeLookup(page->_tabStrip.Resources(), theme, winrt::box_value(key)).as<Media::SolidColorBrush>().Color();
         };
+        const auto themeDictionary = [&](const wchar_t* themeKey) {
+            const auto key = winrt::box_value(themeKey);
+            for (const auto& dictionary : page->_tabStrip.Resources().MergedDictionaries())
+            {
+                if (dictionary.Source())
+                {
+                    continue;
+                }
+
+                const auto themeDictionaries = dictionary.ThemeDictionaries();
+                if (themeDictionaries.HasKey(key))
+                {
+                    return themeDictionaries.Lookup(key).as<ResourceDictionary>();
+                }
+            }
+
+            return ResourceDictionary{ nullptr };
+        };
         const auto waitForProgressBrush = [&](const uint32_t contentId,
                                               const uint64_t expectedState,
                                               const ElementTheme expectedTheme,
@@ -6752,6 +6789,39 @@ namespace TerminalAppLocalTests
         TestOnUIThread([&]() {
             page->RequestedTheme(ElementTheme::Light);
             page->UpdateLayout();
+        });
+
+        waitForProgressBrush(fixture.firstContentId, 3, ElementTheme::Light, L"PaneProgressAccentBrush", true);
+        waitForProgressBrush(fixture.secondContentId, 2, ElementTheme::Light, L"PaneProgressCriticalBrush", false);
+        waitForProgressBrush(fixture.thirdContentId, 4, ElementTheme::Light, L"PaneProgressCautionBrush", false);
+        verifyStableProjection();
+
+        TestOnUIThread([&]() {
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            const auto highContrast = themeDictionary(L"HighContrast");
+            VERIFY_IS_NOT_NULL(highContrast);
+
+            const auto customAccent = Media::SolidColorBrush{ winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0x12, 0x34, 0x56) };
+            const auto customCritical = Media::SolidColorBrush{ winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0x65, 0x43, 0x21) };
+            const auto customCaution = Media::SolidColorBrush{ winrt::Windows::UI::ColorHelper::FromArgb(0xFF, 0x24, 0x68, 0xAC) };
+            highContrast.Insert(winrt::box_value(L"PaneProgressAccentBrush"), customAccent);
+            highContrast.Insert(winrt::box_value(L"PaneProgressCriticalBrush"), customCritical);
+            highContrast.Insert(winrt::box_value(L"PaneProgressCautionBrush"), customCaution);
+
+            strip->_refreshRealizedPaneRowVisuals(true);
+
+            const auto firstRing = paneProgressRing(fixture.firstContentId);
+            const auto secondRing = paneProgressRing(fixture.secondContentId);
+            const auto thirdRing = paneProgressRing(fixture.thirdContentId);
+            VERIFY_IS_NOT_NULL(firstRing);
+            VERIFY_IS_NOT_NULL(secondRing);
+            VERIFY_IS_NOT_NULL(thirdRing);
+            VERIFY_ARE_EQUAL(ElementTheme::Light, page->_tabStrip.ActualTheme());
+            VERIFY_ARE_EQUAL(customAccent.Color(), firstRing.Foreground().as<Media::SolidColorBrush>().Color());
+            VERIFY_ARE_EQUAL(customCritical.Color(), secondRing.Foreground().as<Media::SolidColorBrush>().Color());
+            VERIFY_ARE_EQUAL(customCaution.Color(), thirdRing.Foreground().as<Media::SolidColorBrush>().Color());
+
+            strip->_refreshRealizedPaneRowVisuals(false);
         });
 
         waitForProgressBrush(fixture.firstContentId, 3, ElementTheme::Light, L"PaneProgressAccentBrush", true);

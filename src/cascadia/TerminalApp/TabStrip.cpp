@@ -35,6 +35,12 @@ namespace winrt
 
 namespace winrt::TerminalApp::implementation
 {
+    static Windows::UI::ViewManagement::AccessibilitySettings& _GetAccessibilitySettings()
+    {
+        static Windows::UI::ViewManagement::AccessibilitySettings accessibilitySettings;
+        return accessibilitySettings;
+    }
+
     TabStripPaneItem::TabStripPaneItem(MUX::Controls::TabViewItem tab,
                                        uint32_t contentId,
                                        hstring title,
@@ -145,7 +151,8 @@ namespace winrt::TerminalApp::implementation
 
     static WUX::Media::Brush _paneProgressBrush(const WUX::ResourceDictionary& resources,
                                                 const WUX::ElementTheme requestedTheme,
-                                                const uint64_t progressState)
+                                                const uint64_t progressState,
+                                                const bool highContrastActive)
     {
         std::wstring_view key;
         switch (progressState)
@@ -164,7 +171,34 @@ namespace winrt::TerminalApp::implementation
             return nullptr;
         }
 
-        return ThemeLookup(resources, requestedTheme, winrt::box_value(key)).try_as<WUX::Media::Brush>();
+        const auto keyValue = winrt::box_value(key);
+        if (highContrastActive)
+        {
+            const auto highContrastKey = winrt::box_value(L"HighContrast");
+            for (const auto& dictionary : resources.MergedDictionaries())
+            {
+                if (dictionary.Source())
+                {
+                    continue;
+                }
+
+                const auto themeDictionaries = dictionary.ThemeDictionaries();
+                if (!themeDictionaries.HasKey(highContrastKey))
+                {
+                    continue;
+                }
+
+                const auto highContrastDictionary = themeDictionaries.Lookup(highContrastKey).as<WUX::ResourceDictionary>();
+                if (highContrastDictionary.HasKey(keyValue))
+                {
+                    return highContrastDictionary.Lookup(keyValue).try_as<WUX::Media::Brush>();
+                }
+            }
+
+            return resources.Lookup(keyValue).try_as<WUX::Media::Brush>();
+        }
+
+        return ThemeLookup(resources, requestedTheme, keyValue).try_as<WUX::Media::Brush>();
     }
 
     static bool _originatesFromHeaderControl(IInspectable const& source, WUX::DependencyObject const& root)
@@ -307,13 +341,16 @@ namespace winrt::TerminalApp::implementation
                 self->_updateSearchVisualState();
             }
         });
+        _highContrastChangedRevoker = _GetAccessibilitySettings().HighContrastChanged(winrt::auto_revoke, [weakThis{ get_weak() }](const Windows::UI::ViewManagement::AccessibilitySettings& a11ySettings, auto&&) {
+            if (const auto self = weakThis.get())
+            {
+                self->_refreshRealizedPaneRowVisuals(a11ySettings.HighContrast());
+            }
+        });
         ActualThemeChanged([weakThis{ get_weak() }](auto&&, auto&&) {
             if (const auto self = weakThis.get())
             {
-                for (uint32_t index = 0; index < self->_displayItems.Size(); ++index)
-                {
-                    self->_refreshPaneRowVisuals(self->_displayItems.GetAt(index));
-                }
+                self->_refreshRealizedPaneRowVisuals(_GetAccessibilitySettings().HighContrast());
             }
         });
         Unloaded([weakThis{ get_weak() }](auto&&, auto&&) {
@@ -614,6 +651,13 @@ namespace winrt::TerminalApp::implementation
     void TabStrip::_updatePaneRowVisuals(FrameworkElement const& root,
                                          TerminalApp::TabStripPaneItem const& pane)
     {
+        _updatePaneRowVisuals(root, pane, _GetAccessibilitySettings().HighContrast());
+    }
+
+    void TabStrip::_updatePaneRowVisuals(FrameworkElement const& root,
+                                         TerminalApp::TabStripPaneItem const& pane,
+                                         const bool highContrastActive)
+    {
         if (!root || !pane)
         {
             return;
@@ -621,7 +665,7 @@ namespace winrt::TerminalApp::implementation
 
         if (const auto ring = _findNamedElement(root, L"PaneProgressRing").try_as<MUX::Controls::ProgressRing>())
         {
-            if (const auto brush = _paneProgressBrush(Resources(), root.ActualTheme(), pane.ProgressState()))
+            if (const auto brush = _paneProgressBrush(Resources(), root.ActualTheme(), pane.ProgressState(), highContrastActive))
             {
                 ring.Foreground(brush);
             }
@@ -631,6 +675,14 @@ namespace winrt::TerminalApp::implementation
             }
 
             WUX::Automation::AutomationProperties::SetName(ring, pane.AutomationName());
+        }
+    }
+
+    void TabStrip::_refreshRealizedPaneRowVisuals(const bool highContrastActive)
+    {
+        for (uint32_t index = 0; index < _displayItems.Size(); ++index)
+        {
+            _refreshPaneRowVisuals(_displayItems.GetAt(index), highContrastActive);
         }
     }
 
@@ -653,6 +705,12 @@ namespace winrt::TerminalApp::implementation
     }
 
     void TabStrip::_refreshPaneRowVisuals(TerminalApp::TabStripDisplayItem const& display)
+    {
+        _refreshPaneRowVisuals(display, _GetAccessibilitySettings().HighContrast());
+    }
+
+    void TabStrip::_refreshPaneRowVisuals(TerminalApp::TabStripDisplayItem const& display,
+                                          const bool highContrastActive)
     {
         if (!display)
         {
@@ -684,7 +742,7 @@ namespace winrt::TerminalApp::implementation
 
             if (const auto paneRoot = WUX::Media::VisualTreeHelper::GetChild(paneContainer, 0).try_as<FrameworkElement>())
             {
-                _updatePaneRowVisuals(paneRoot, panes.GetAt(index));
+                _updatePaneRowVisuals(paneRoot, panes.GetAt(index), highContrastActive);
             }
         }
     }
