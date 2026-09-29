@@ -143,33 +143,28 @@ namespace winrt::TerminalApp::implementation
         return nullptr;
     }
 
-    static WUX::Media::Brush _paneProgressBrush(const WUX::ElementTheme requestedTheme, const uint64_t progressState)
+    static WUX::Media::Brush _paneProgressBrush(const WUX::ResourceDictionary& resources,
+                                                const WUX::ElementTheme requestedTheme,
+                                                const uint64_t progressState)
     {
         std::wstring_view key;
         switch (progressState)
         {
         case 1:
         case 3:
-            key = L"SystemControlForegroundAccentBrush";
+            key = L"PaneProgressAccentBrush";
             break;
         case 2:
-            key = L"SystemFillColorCriticalBrush";
+            key = L"PaneProgressCriticalBrush";
             break;
         case 4:
-            key = L"SystemFillColorCautionBrush";
+            key = L"PaneProgressCautionBrush";
             break;
         default:
             return nullptr;
         }
 
-        const auto resources = WUX::Application::Current().Resources();
-        const auto boxedKey = winrt::box_value(key);
-        if (!resources.HasKey(boxedKey))
-        {
-            return nullptr;
-        }
-
-        return ThemeLookup(resources, requestedTheme, boxedKey).try_as<WUX::Media::Brush>();
+        return ThemeLookup(resources, requestedTheme, winrt::box_value(key)).try_as<WUX::Media::Brush>();
     }
 
     static bool _originatesFromHeaderControl(IInspectable const& source, WUX::DependencyObject const& root)
@@ -310,6 +305,15 @@ namespace winrt::TerminalApp::implementation
             {
                 self->_searchAnimationEnabled = true;
                 self->_updateSearchVisualState();
+            }
+        });
+        ActualThemeChanged([weakThis{ get_weak() }](auto&&, auto&&) {
+            if (const auto self = weakThis.get())
+            {
+                for (uint32_t index = 0; index < self->_displayItems.Size(); ++index)
+                {
+                    self->_refreshPaneRowVisuals(self->_displayItems.GetAt(index));
+                }
             }
         });
         Unloaded([weakThis{ get_weak() }](auto&&, auto&&) {
@@ -617,7 +621,7 @@ namespace winrt::TerminalApp::implementation
 
         if (const auto ring = _findNamedElement(root, L"PaneProgressRing").try_as<MUX::Controls::ProgressRing>())
         {
-            if (const auto brush = _paneProgressBrush(root.ActualTheme(), pane.ProgressState()))
+            if (const auto brush = _paneProgressBrush(Resources(), root.ActualTheme(), pane.ProgressState()))
             {
                 ring.Foreground(brush);
             }

@@ -290,7 +290,9 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabStripCollapsedItemsPreserveSelection);
         TEST_METHOD(VerticalTabStripHostsPaneGroups);
         TEST_METHOD(PaneProgressSurvivesTabLayoutLifecycle);
+        TEST_METHOD(VerticalTabPaneProgressThemeSwitchRefreshesBrushes);
         TEST_METHOD(VerticalTabExpandedGroupKeepsHeaderProgressForAgentSource);
+        TEST_METHOD(VerticalTabExpandedGroupKeepsHeaderProgressForHiddenWinningPane);
         TEST_METHOD(VerticalTabSelectionPreservesPresentation);
         TEST_METHOD(VerticalTabIconChangesUpdatePresentation);
         TEST_METHOD(VerticalTabThemeChangesDoNotReprojectPanes);
@@ -486,8 +488,25 @@ namespace TerminalAppLocalTests
 
     private:
         using TransferStage = winrt::TerminalApp::implementation::TerminalPage::ContentTransferStage;
+        struct VerticalProgressProjectionFixture
+        {
+            winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
+            winrt::com_ptr<winrt::TerminalApp::implementation::Tab> tab;
+            uint32_t firstContentId{};
+            uint32_t secondContentId{};
+            uint32_t thirdContentId{};
+        };
         static winrt::TerminalApp::implementation::SharedWtaLease _acquireIsolatedAgentLease();
         std::unique_ptr<ContentTransferFixture> _createContentTransferFixture(bool agentFirst, bool hidden, bool freshReceiver = false, bool twoLeaves = false, std::optional<int32_t> historySize = std::nullopt);
+        VerticalProgressProjectionFixture _createVerticalProgressProjectionFixture(const winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage>& page,
+                                                                                  const winrt::com_ptr<TestConnection>& first,
+                                                                                  const winrt::com_ptr<TestConnection>& second,
+                                                                                  const winrt::com_ptr<TestConnection>& third,
+                                                                                  bool thirdIsAgent = false);
+        winrt::TerminalApp::TabStripDisplayItem _displayForTab(const VerticalProgressProjectionFixture& fixture) const;
+        winrt::TerminalApp::TabStripPaneItem _findPaneItem(const VerticalProgressProjectionFixture& fixture, uint32_t contentId) const;
+        winrt::TerminalApp::TabHeaderControl _headerForTab(const VerticalProgressProjectionFixture& fixture) const;
+        void _emitOsc(const winrt::com_ptr<TestConnection>& connection, std::u16string_view sequence);
         void _verifyContentTransferReviewZoom(bool hidden, bool zoomed, bool freshReceiver, bool twoLeaves = true, bool restoredAgent = false);
         void _verifyContentTransferReviewScroll(bool transfer, bool reject = true);
         void _verifyContentTransferReviewSuppression(bool singlePane, bool destinationSuppressed = false);
@@ -602,6 +621,100 @@ namespace TerminalAppLocalTests
     private:
         UIElement previousContent{ nullptr };
     };
+
+    TabTests::VerticalProgressProjectionFixture TabTests::_createVerticalProgressProjectionFixture(
+        const winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage>& page,
+        const winrt::com_ptr<TestConnection>& first,
+        const winrt::com_ptr<TestConnection>& second,
+        const winrt::com_ptr<TestConnection>& third,
+        const bool thirdIsAgent)
+    {
+        VerticalProgressProjectionFixture fixture;
+        fixture.page = page;
+
+        TestOnUIThread([&]() {
+            const auto firstPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *first);
+            VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(firstPane));
+            fixture.tab = page->_GetFocusedTabImpl();
+            VERIFY_IS_NOT_NULL(fixture.tab);
+
+            const auto secondPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *second);
+            VERIFY_IS_TRUE(page->_SplitPane(fixture.tab, SplitDirection::Right, 0.5f, secondPane));
+
+            const auto thirdPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *third);
+            thirdPane->IsAgentPane(thirdIsAgent);
+            VERIFY_IS_TRUE(page->_SplitPane(fixture.tab, SplitDirection::Down, 0.5f, thirdPane));
+
+            page->_ApplyTabListProjection(*fixture.tab);
+            page->UpdateLayout();
+
+            const auto root = fixture.tab->GetRootPane();
+            VERIFY_IS_NOT_NULL(root);
+            const auto firstPaneNode = root->FindPaneBySessionId(first->SessionId());
+            const auto secondPaneNode = root->FindPaneBySessionId(second->SessionId());
+            const auto thirdPaneNode = root->FindPaneBySessionId(third->SessionId());
+            VERIFY_IS_NOT_NULL(firstPaneNode);
+            VERIFY_IS_NOT_NULL(secondPaneNode);
+            VERIFY_IS_NOT_NULL(thirdPaneNode);
+            fixture.firstContentId = firstPaneNode->ContentId().value();
+            fixture.secondContentId = secondPaneNode->ContentId().value();
+            fixture.thirdContentId = thirdPaneNode->ContentId().value();
+        });
+
+        return fixture;
+    }
+
+    winrt::TerminalApp::TabStripDisplayItem TabTests::_displayForTab(const VerticalProgressProjectionFixture& fixture) const
+    {
+        const auto stripImpl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(fixture.page->_tabStrip);
+        const auto items = stripImpl->ItemsList().Items();
+        for (uint32_t index = 0; index < items.Size(); ++index)
+        {
+            const auto display = items.GetAt(index).try_as<winrt::TerminalApp::TabStripDisplayItem>();
+            if (display != nullptr && fixture.tab && display.Tab() == fixture.tab->TabViewItem())
+            {
+                return display;
+            }
+        }
+        return winrt::TerminalApp::TabStripDisplayItem{ nullptr };
+    }
+
+    winrt::TerminalApp::TabStripPaneItem TabTests::_findPaneItem(const VerticalProgressProjectionFixture& fixture, const uint32_t contentId) const
+    {
+        const auto display = _displayForTab(fixture);
+        if (display == nullptr)
+        {
+            return winrt::TerminalApp::TabStripPaneItem{ nullptr };
+        }
+
+        const auto panes = display.PaneItems();
+        for (uint32_t index = 0; index < panes.Size(); ++index)
+        {
+            const auto paneItem = panes.GetAt(index);
+            if (paneItem.ContentId() == contentId)
+            {
+                return paneItem;
+            }
+        }
+        return winrt::TerminalApp::TabStripPaneItem{ nullptr };
+    }
+
+    winrt::TerminalApp::TabHeaderControl TabTests::_headerForTab(const VerticalProgressProjectionFixture& fixture) const
+    {
+        if (!fixture.tab)
+        {
+            return winrt::TerminalApp::TabHeaderControl{ nullptr };
+        }
+
+        return winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(fixture.page->_tabStrip)->HeaderForTab(fixture.tab->TabViewItem()).try_as<winrt::TerminalApp::TabHeaderControl>();
+    }
+
+    void TabTests::_emitOsc(const winrt::com_ptr<TestConnection>& connection, const std::u16string_view sequence)
+    {
+        TestOnUIThread([&]() {
+            connection->TerminalOutput.raise(winrt::array_view<const char16_t>{ sequence.data(), sequence.data() + sequence.size() });
+        });
+    }
 
     void TabTests::EnsureTestsActivate()
     {
@@ -6489,6 +6602,164 @@ namespace TerminalAppLocalTests
         verifyTaskbarState(1, 25);
     }
 
+    void TabTests::VerticalTabPaneProgressThemeSwitchRefreshesBrushes()
+    {
+        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto first = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-ffff-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto second = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-1111-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto third = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-2222-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto fixture = _createVerticalProgressProjectionFixture(page, first, second, third);
+
+        const auto paneProgressRing = [&](const uint32_t contentId) {
+            const auto display = _displayForTab(fixture);
+            if (display == nullptr)
+            {
+                return winrt::MUX::Controls::ProgressRing{ nullptr };
+            }
+
+            const auto panes = display.PaneItems();
+            for (uint32_t paneIndex = 0; paneIndex < panes.Size(); ++paneIndex)
+            {
+                if (panes.GetAt(paneIndex).ContentId() != contentId)
+                {
+                    continue;
+                }
+
+                const auto displayContainer = page->_tabStrip.ContainerFromIndex(0).as<ListViewItem>();
+                if (!displayContainer)
+                {
+                    return winrt::MUX::Controls::ProgressRing{ nullptr };
+                }
+
+                const auto templateRoot = displayContainer.ContentTemplateRoot().as<StackPanel>();
+                const auto paneList = templateRoot.Children().GetAt(1).as<ItemsControl>();
+                const auto paneContainer = paneList.ContainerFromIndex(paneIndex).as<ContentPresenter>();
+                if (!paneContainer || Media::VisualTreeHelper::GetChildrenCount(paneContainer) == 0)
+                {
+                    return winrt::MUX::Controls::ProgressRing{ nullptr };
+                }
+
+                return Media::VisualTreeHelper::GetChild(paneContainer, 0).as<FrameworkElement>().FindName(L"PaneProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            }
+
+            return winrt::MUX::Controls::ProgressRing{ nullptr };
+        };
+        const auto progressBrushColor = [&](const ElementTheme theme, const wchar_t* key) {
+            return ThemeLookup(page->_tabStrip.Resources(), theme, winrt::box_value(key)).as<Media::SolidColorBrush>().Color();
+        };
+        const auto waitForProgressBrush = [&](const uint32_t contentId,
+                                              const uint64_t expectedState,
+                                              const ElementTheme expectedTheme,
+                                              const wchar_t* expectedBrushKey,
+                                              const bool expectedIndeterminate) {
+            _waitForContentTransferReviewUI([&]() {
+                const auto paneItem = _findPaneItem(fixture, contentId);
+                const auto ring = paneProgressRing(contentId);
+                const auto foreground = ring ? ring.Foreground().try_as<Media::SolidColorBrush>() : nullptr;
+                return paneItem != nullptr &&
+                       paneItem.ProgressState() == expectedState &&
+                       page->_tabStrip.ActualTheme() == expectedTheme &&
+                       ring != nullptr &&
+                       ring.Visibility() == Visibility::Visible &&
+                       ring.IsIndeterminate() == expectedIndeterminate &&
+                       foreground != nullptr &&
+                       foreground.Color() == progressBrushColor(expectedTheme, expectedBrushKey);
+            });
+        };
+
+        _emitOsc(first, u"\x1b]9;4;1;25\a");
+        _emitOsc(second, u"\x1b]9;4;2;50\a");
+        _emitOsc(third, u"\x1b]9;4;4;75\a");
+        TestOnUIThread([&]() {
+            page->RequestedTheme(ElementTheme::Light);
+            page->UpdateLayout();
+        });
+        waitForProgressBrush(fixture.firstContentId, 1, ElementTheme::Light, L"PaneProgressAccentBrush", false);
+        waitForProgressBrush(fixture.secondContentId, 2, ElementTheme::Light, L"PaneProgressCriticalBrush", false);
+        waitForProgressBrush(fixture.thirdContentId, 4, ElementTheme::Light, L"PaneProgressCautionBrush", false);
+
+        winrt::TerminalApp::TabStripDisplayItem display{ nullptr };
+        winrt::TerminalApp::TabStripPaneItem firstPaneItem{ nullptr };
+        winrt::TerminalApp::TabStripPaneItem secondPaneItem{ nullptr };
+        winrt::TerminalApp::TabStripPaneItem thirdPaneItem{ nullptr };
+        uint32_t paneCollectionChanges = 0;
+        uint32_t paneProjectionChanges = 0;
+        winrt::event_token paneItemsChangedToken{};
+        winrt::event_token paneProjectionChangedToken{};
+        TestOnUIThread([&]() {
+            display = _displayForTab(fixture);
+            firstPaneItem = _findPaneItem(fixture, fixture.firstContentId);
+            secondPaneItem = _findPaneItem(fixture, fixture.secondContentId);
+            thirdPaneItem = _findPaneItem(fixture, fixture.thirdContentId);
+            VERIFY_IS_NOT_NULL(display);
+            VERIFY_IS_NOT_NULL(firstPaneItem);
+            VERIFY_IS_NOT_NULL(secondPaneItem);
+            VERIFY_IS_NOT_NULL(thirdPaneItem);
+            paneItemsChangedToken = display.PaneItems().VectorChanged([&](auto&&, auto&&) {
+                ++paneCollectionChanges;
+            });
+            paneProjectionChangedToken = fixture.tab->PaneProjectionChanged([&]() {
+                ++paneProjectionChanges;
+            });
+        });
+        const auto revoke = wil::scope_exit([&]() {
+            TestOnUIThread([&]() {
+                if (display != nullptr)
+                {
+                    display.PaneItems().VectorChanged(paneItemsChangedToken);
+                }
+                if (fixture.tab)
+                {
+                    fixture.tab->PaneProjectionChanged(paneProjectionChangedToken);
+                }
+            });
+        });
+
+        const auto verifyStableProjection = [&]() {
+            TestOnUIThread([&]() {
+                VERIFY_ARE_EQUAL(0u, paneCollectionChanges);
+                VERIFY_ARE_EQUAL(0u, paneProjectionChanges);
+                const auto currentDisplay = _displayForTab(fixture);
+                VERIFY_IS_TRUE(currentDisplay == display);
+                VERIFY_IS_TRUE(_findPaneItem(fixture, fixture.firstContentId) == firstPaneItem);
+                VERIFY_IS_TRUE(_findPaneItem(fixture, fixture.secondContentId) == secondPaneItem);
+                VERIFY_IS_TRUE(_findPaneItem(fixture, fixture.thirdContentId) == thirdPaneItem);
+            });
+        };
+
+        for (const auto theme : { ElementTheme::Light, ElementTheme::Dark })
+        {
+            TestOnUIThread([&]() {
+                page->RequestedTheme(theme);
+                page->UpdateLayout();
+            });
+
+            waitForProgressBrush(fixture.firstContentId, 1, theme, L"PaneProgressAccentBrush", false);
+            waitForProgressBrush(fixture.secondContentId, 2, theme, L"PaneProgressCriticalBrush", false);
+            waitForProgressBrush(fixture.thirdContentId, 4, theme, L"PaneProgressCautionBrush", false);
+            verifyStableProjection();
+        }
+
+        _emitOsc(first, u"\x1b]9;4;3;0\a");
+        waitForProgressBrush(fixture.firstContentId, 3, ElementTheme::Dark, L"PaneProgressAccentBrush", true);
+
+        TestOnUIThread([&]() {
+            page->RequestedTheme(ElementTheme::Light);
+            page->UpdateLayout();
+        });
+
+        waitForProgressBrush(fixture.firstContentId, 3, ElementTheme::Light, L"PaneProgressAccentBrush", true);
+        waitForProgressBrush(fixture.secondContentId, 2, ElementTheme::Light, L"PaneProgressCriticalBrush", false);
+        waitForProgressBrush(fixture.thirdContentId, 4, ElementTheme::Light, L"PaneProgressCautionBrush", false);
+        verifyStableProjection();
+    }
+
     void TabTests::VerticalTabExpandedGroupKeepsHeaderProgressForAgentSource()
     {
         auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
@@ -6501,98 +6772,17 @@ namespace TerminalAppLocalTests
         const auto agent = winrt::make_self<TestConnection>(
             winrt::guid{ L"{6239a42c-eeee-49a3-80bd-e8fdd045185c}" },
             winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto fixture = _createVerticalProgressProjectionFixture(page, first, second, agent, true);
 
-        winrt::com_ptr<winrt::TerminalApp::implementation::Tab> tab;
-        uint32_t firstContentId{};
-        uint32_t secondContentId{};
-        uint32_t agentContentId{};
-
-        auto displayForTab = [&]() {
-            const auto stripImpl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
-            const auto items = stripImpl->ItemsList().Items();
-            for (uint32_t index = 0; index < items.Size(); ++index)
-            {
-                const auto display = items.GetAt(index).try_as<winrt::TerminalApp::TabStripDisplayItem>();
-                if (display != nullptr && tab && display.Tab() == tab->TabViewItem())
-                {
-                    return display;
-                }
-            }
-            return winrt::TerminalApp::TabStripDisplayItem{ nullptr };
-        };
-
-        auto findPaneItem = [&](const uint32_t contentId) {
-            const auto display = displayForTab();
-            if (display == nullptr)
-            {
-                return winrt::TerminalApp::TabStripPaneItem{ nullptr };
-            }
-
-            const auto panes = display.PaneItems();
-            for (uint32_t index = 0; index < panes.Size(); ++index)
-            {
-                const auto paneItem = panes.GetAt(index);
-                if (paneItem.ContentId() == contentId)
-                {
-                    return paneItem;
-                }
-            }
-            return winrt::TerminalApp::TabStripPaneItem{ nullptr };
-        };
-
-        auto headerForTab = [&]() {
-            if (!tab)
-            {
-                return winrt::TerminalApp::TabHeaderControl{ nullptr };
-            }
-
-            return winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)->HeaderForTab(tab->TabViewItem()).try_as<winrt::TerminalApp::TabHeaderControl>();
-        };
-
-        const auto emitOsc = [&](const winrt::com_ptr<TestConnection>& connection, const std::u16string_view sequence) {
-            TestOnUIThread([&]() {
-                connection->TerminalOutput.raise(winrt::array_view<const char16_t>{ sequence.data(), sequence.data() + sequence.size() });
-            });
-        };
-
-        TestOnUIThread([&]() {
-            const auto firstPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *first);
-            VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(firstPane));
-            tab = page->_GetFocusedTabImpl();
-            VERIFY_IS_NOT_NULL(tab);
-
-            const auto secondPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *second);
-            VERIFY_IS_TRUE(page->_SplitPane(tab, SplitDirection::Right, 0.5f, secondPane));
-
-            const auto agentPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *agent);
-            agentPane->IsAgentPane(true);
-            VERIFY_IS_TRUE(page->_SplitPane(tab, SplitDirection::Down, 0.5f, agentPane));
-
-            page->_ApplyTabListProjection(*tab);
-            page->UpdateLayout();
-
-            const auto root = tab->GetRootPane();
-            VERIFY_IS_NOT_NULL(root);
-            const auto firstPaneNode = root->FindPaneBySessionId(first->SessionId());
-            const auto secondPaneNode = root->FindPaneBySessionId(second->SessionId());
-            const auto agentPaneNode = root->FindPaneBySessionId(agent->SessionId());
-            VERIFY_IS_NOT_NULL(firstPaneNode);
-            VERIFY_IS_NOT_NULL(secondPaneNode);
-            VERIFY_IS_NOT_NULL(agentPaneNode);
-            firstContentId = firstPaneNode->ContentId().value();
-            secondContentId = secondPaneNode->ContentId().value();
-            agentContentId = agentPaneNode->ContentId().value();
-        });
-
-        emitOsc(first, u"\x1b]9;4;1;25\a");
-        emitOsc(second, u"\x1b]9;4;4;60\a");
-        emitOsc(agent, u"\x1b]9;4;2;90\a");
+        _emitOsc(first, u"\x1b]9;4;1;25\a");
+        _emitOsc(second, u"\x1b]9;4;4;60\a");
+        _emitOsc(agent, u"\x1b]9;4;2;90\a");
 
         _waitForContentTransferReviewUI([&]() {
-            const auto display = displayForTab();
-            const auto firstPaneItem = findPaneItem(firstContentId);
-            const auto secondPaneItem = findPaneItem(secondContentId);
-            const auto header = headerForTab();
+            const auto display = _displayForTab(fixture);
+            const auto firstPaneItem = _findPaneItem(fixture, fixture.firstContentId);
+            const auto secondPaneItem = _findPaneItem(fixture, fixture.secondContentId);
+            const auto header = _headerForTab(fixture);
             if (display == nullptr || firstPaneItem == nullptr || secondPaneItem == nullptr || header == nullptr)
             {
                 return false;
@@ -6604,7 +6794,7 @@ namespace TerminalAppLocalTests
             return display.IsGroup() &&
                    display.PaneItems().Size() == 2 &&
                    display.ChildrenVisibility() == Visibility::Visible &&
-                   findPaneItem(agentContentId) == nullptr &&
+                   _findPaneItem(fixture, fixture.thirdContentId) == nullptr &&
                    firstPaneItem.ProgressState() == 1 &&
                    firstPaneItem.ProgressValue() == 25 &&
                    secondPaneItem.ProgressState() == 4 &&
@@ -6621,13 +6811,13 @@ namespace TerminalAppLocalTests
         });
 
         TestOnUIThread([&]() {
-            const auto display = displayForTab();
+            const auto display = _displayForTab(fixture);
             VERIFY_IS_NOT_NULL(display);
             VERIFY_IS_TRUE(display.IsGroup());
             VERIFY_ARE_EQUAL(2u, display.PaneItems().Size());
-            VERIFY_IS_NULL(findPaneItem(agentContentId));
+            VERIFY_IS_NULL(_findPaneItem(fixture, fixture.thirdContentId));
 
-            const auto header = headerForTab();
+            const auto header = _headerForTab(fixture);
             VERIFY_IS_NOT_NULL(header);
             const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
             const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
@@ -6640,23 +6830,23 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(uint64_t{ 90 }, state.Progress());
         });
 
-        emitOsc(first, u"\x1b]9;4;2;40\a");
-        emitOsc(second, u"\x1b]9;4;1;20\a");
-        emitOsc(agent, u"\x1b]9;4;1;10\a");
+        _emitOsc(first, u"\x1b]9;4;2;40\a");
+        _emitOsc(second, u"\x1b]9;4;1;20\a");
+        _emitOsc(agent, u"\x1b]9;4;1;10\a");
 
         TestOnUIThread([&]() {
-            const auto agentPaneNode = tab->GetRootPane()->FindPaneBySessionId(agent->SessionId());
+            const auto agentPaneNode = fixture.tab->GetRootPane()->FindPaneBySessionId(agent->SessionId());
             VERIFY_IS_NOT_NULL(agentPaneNode);
             VERIFY_IS_TRUE(agentPaneNode->Id().has_value());
-            VERIFY_IS_TRUE(tab->FocusPane(agentPaneNode->Id().value()));
+            VERIFY_IS_TRUE(fixture.tab->FocusPane(agentPaneNode->Id().value()));
             page->UpdateLayout();
         });
 
         _waitForContentTransferReviewUI([&]() {
-            const auto display = displayForTab();
-            const auto firstPaneItem = findPaneItem(firstContentId);
-            const auto secondPaneItem = findPaneItem(secondContentId);
-            const auto header = headerForTab();
+            const auto display = _displayForTab(fixture);
+            const auto firstPaneItem = _findPaneItem(fixture, fixture.firstContentId);
+            const auto secondPaneItem = _findPaneItem(fixture, fixture.secondContentId);
+            const auto header = _headerForTab(fixture);
             if (display == nullptr || firstPaneItem == nullptr || secondPaneItem == nullptr || header == nullptr)
             {
                 return false;
@@ -6665,11 +6855,11 @@ namespace TerminalAppLocalTests
             const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
             const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
             const auto state = page->TaskbarState();
-            const auto activePane = tab->GetActivePane();
+            const auto activePane = fixture.tab->GetActivePane();
             return activePane != nullptr &&
                    activePane->IsAgentPane() &&
                    display.HeaderVisibility() == Visibility::Visible &&
-                   findPaneItem(agentContentId) == nullptr &&
+                   _findPaneItem(fixture, fixture.thirdContentId) == nullptr &&
                    firstPaneItem.ProgressState() == 2 &&
                    firstPaneItem.ProgressValue() == 40 &&
                    secondPaneItem.ProgressState() == 1 &&
@@ -6686,11 +6876,11 @@ namespace TerminalAppLocalTests
         });
 
         TestOnUIThread([&]() {
-            const auto display = displayForTab();
+            const auto display = _displayForTab(fixture);
             VERIFY_IS_NOT_NULL(display);
             VERIFY_ARE_EQUAL(Visibility::Visible, display.HeaderVisibility());
 
-            const auto header = headerForTab();
+            const auto header = _headerForTab(fixture);
             VERIFY_IS_NOT_NULL(header);
             const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
             const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
@@ -6698,14 +6888,160 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(Visibility::Visible, header.as<UIElement>().Visibility());
             VERIFY_ARE_EQUAL(Visibility::Collapsed, headerRing.Visibility());
 
-            const auto firstPaneItem = findPaneItem(firstContentId);
-            const auto secondPaneItem = findPaneItem(secondContentId);
+            const auto firstPaneItem = _findPaneItem(fixture, fixture.firstContentId);
+            const auto secondPaneItem = _findPaneItem(fixture, fixture.secondContentId);
             VERIFY_IS_NOT_NULL(firstPaneItem);
             VERIFY_IS_NOT_NULL(secondPaneItem);
             VERIFY_ARE_EQUAL(uint64_t{ 2 }, firstPaneItem.ProgressState());
             VERIFY_ARE_EQUAL(uint32_t{ 40 }, firstPaneItem.ProgressValue());
             VERIFY_ARE_EQUAL(uint64_t{ 1 }, secondPaneItem.ProgressState());
             VERIFY_ARE_EQUAL(uint32_t{ 20 }, secondPaneItem.ProgressValue());
+        });
+    }
+
+    void TabTests::VerticalTabExpandedGroupKeepsHeaderProgressForHiddenWinningPane()
+    {
+        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto first = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-ffff-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto second = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-1111-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto third = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-2222-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto fixture = _createVerticalProgressProjectionFixture(page, first, second, third);
+
+        TestOnUIThread([&]() {
+            const auto hiddenPane = fixture.tab->GetRootPane()->FindPaneBySessionId(first->SessionId());
+            VERIFY_IS_NOT_NULL(hiddenPane);
+            VERIFY_IS_TRUE(hiddenPane->Id().has_value());
+            VERIFY_IS_TRUE(fixture.tab->FocusPane(hiddenPane->Id().value()));
+            fixture.tab->HidePane();
+            page->UpdateLayout();
+        });
+
+        _waitForContentTransferReviewUI([&]() {
+            const auto display = _displayForTab(fixture);
+            return display != nullptr &&
+                   display.IsGroup() &&
+                   display.PaneItems().Size() == 2 &&
+                   display.ChildrenVisibility() == Visibility::Visible &&
+                   _findPaneItem(fixture, fixture.firstContentId) == nullptr &&
+                   _findPaneItem(fixture, fixture.secondContentId) != nullptr &&
+                   _findPaneItem(fixture, fixture.thirdContentId) != nullptr;
+        });
+
+        _emitOsc(first, u"\x1b]9;4;2;90\a");
+        _emitOsc(second, u"\x1b]9;4;2;40\a");
+        _emitOsc(third, u"\x1b]9;4;1;20\a");
+
+        _waitForContentTransferReviewUI([&]() {
+            const auto display = _displayForTab(fixture);
+            const auto secondPaneItem = _findPaneItem(fixture, fixture.secondContentId);
+            const auto thirdPaneItem = _findPaneItem(fixture, fixture.thirdContentId);
+            const auto header = _headerForTab(fixture);
+            if (display == nullptr || secondPaneItem == nullptr || thirdPaneItem == nullptr || header == nullptr)
+            {
+                return false;
+            }
+
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            const auto state = page->TaskbarState();
+            return display.IsGroup() &&
+                   display.PaneItems().Size() == 2 &&
+                   display.ChildrenVisibility() == Visibility::Visible &&
+                   _findPaneItem(fixture, fixture.firstContentId) == nullptr &&
+                   secondPaneItem.ProgressState() == 2 &&
+                   secondPaneItem.ProgressValue() == 40 &&
+                   thirdPaneItem.ProgressState() == 1 &&
+                   thirdPaneItem.ProgressValue() == 20 &&
+                   headerImpl->ShowProgressRing() &&
+                   header.TabStatus().IsProgressRingActive() &&
+                   !header.TabStatus().IsProgressRingIndeterminate() &&
+                   header.TabStatus().ProgressValue() == 90 &&
+                   headerRing != nullptr &&
+                   headerRing.Visibility() == Visibility::Visible &&
+                   gsl::narrow<uint32_t>(headerRing.Value()) == 90 &&
+                   state.State() == 2 &&
+                   state.Progress() == 90;
+        });
+
+        TestOnUIThread([&]() {
+            const auto display = _displayForTab(fixture);
+            VERIFY_IS_NOT_NULL(display);
+            VERIFY_IS_TRUE(display.IsGroup());
+            VERIFY_ARE_EQUAL(2u, display.PaneItems().Size());
+            VERIFY_IS_NULL(_findPaneItem(fixture, fixture.firstContentId));
+
+            const auto header = _headerForTab(fixture);
+            VERIFY_IS_NOT_NULL(header);
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            VERIFY_IS_TRUE(headerImpl->ShowProgressRing());
+            VERIFY_ARE_EQUAL(Visibility::Visible, headerRing.Visibility());
+            VERIFY_ARE_EQUAL(uint32_t{ 90 }, header.TabStatus().ProgressValue());
+
+            const auto state = page->TaskbarState();
+            VERIFY_ARE_EQUAL(uint64_t{ 2 }, state.State());
+            VERIFY_ARE_EQUAL(uint64_t{ 90 }, state.Progress());
+        });
+
+        _emitOsc(first, u"\x1b]9;4;1;10\a");
+
+        _waitForContentTransferReviewUI([&]() {
+            const auto display = _displayForTab(fixture);
+            const auto secondPaneItem = _findPaneItem(fixture, fixture.secondContentId);
+            const auto thirdPaneItem = _findPaneItem(fixture, fixture.thirdContentId);
+            const auto header = _headerForTab(fixture);
+            if (display == nullptr || secondPaneItem == nullptr || thirdPaneItem == nullptr || header == nullptr)
+            {
+                return false;
+            }
+
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            const auto state = page->TaskbarState();
+            return display.IsGroup() &&
+                   display.PaneItems().Size() == 2 &&
+                   display.ChildrenVisibility() == Visibility::Visible &&
+                   _findPaneItem(fixture, fixture.firstContentId) == nullptr &&
+                   secondPaneItem.ProgressState() == 2 &&
+                   secondPaneItem.ProgressValue() == 40 &&
+                   thirdPaneItem.ProgressState() == 1 &&
+                   thirdPaneItem.ProgressValue() == 20 &&
+                   !headerImpl->ShowProgressRing() &&
+                   header.TabStatus().IsProgressRingActive() &&
+                   !header.TabStatus().IsProgressRingIndeterminate() &&
+                   header.TabStatus().ProgressValue() == 40 &&
+                   headerRing != nullptr &&
+                   headerRing.Visibility() == Visibility::Collapsed &&
+                   state.State() == 2 &&
+                   state.Progress() == 40;
+        });
+
+        TestOnUIThread([&]() {
+            const auto display = _displayForTab(fixture);
+            VERIFY_IS_NOT_NULL(display);
+            VERIFY_ARE_EQUAL(Visibility::Visible, display.HeaderVisibility());
+
+            const auto header = _headerForTab(fixture);
+            VERIFY_IS_NOT_NULL(header);
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            VERIFY_IS_FALSE(headerImpl->ShowProgressRing());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, headerRing.Visibility());
+
+            const auto secondPaneItem = _findPaneItem(fixture, fixture.secondContentId);
+            const auto thirdPaneItem = _findPaneItem(fixture, fixture.thirdContentId);
+            VERIFY_IS_NOT_NULL(secondPaneItem);
+            VERIFY_IS_NOT_NULL(thirdPaneItem);
+            VERIFY_ARE_EQUAL(uint64_t{ 2 }, secondPaneItem.ProgressState());
+            VERIFY_ARE_EQUAL(uint32_t{ 40 }, secondPaneItem.ProgressValue());
+            VERIFY_ARE_EQUAL(uint64_t{ 1 }, thirdPaneItem.ProgressState());
+            VERIFY_ARE_EQUAL(uint32_t{ 20 }, thirdPaneItem.ProgressValue());
         });
     }
 

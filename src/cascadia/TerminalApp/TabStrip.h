@@ -496,8 +496,8 @@ namespace winrt::TerminalApp::implementation
         void _refreshPaneRowVisuals(TerminalApp::TabStripDisplayItem const& display);
         static void _updateDisplayItemVisuals(winrt::Windows::UI::Xaml::FrameworkElement const& root,
                                               TerminalApp::TabStripDisplayItem const& display);
-        static void _updatePaneRowVisuals(winrt::Windows::UI::Xaml::FrameworkElement const& root,
-                                          TerminalApp::TabStripPaneItem const& pane);
+        void _updatePaneRowVisuals(winrt::Windows::UI::Xaml::FrameworkElement const& root,
+                                   TerminalApp::TabStripPaneItem const& pane);
         void _toggleGroup(TerminalApp::TabStripDisplayItem const& display);
 
         // Axis-parameterized per B→C rules. Returns -1 to mean "append at end."

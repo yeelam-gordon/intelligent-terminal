@@ -23,6 +23,34 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="ms-resource:///Files/TerminalApp/AgentIconResources.xaml" />
+                <ResourceDictionary>
+                    <ResourceDictionary.ThemeDictionaries>
+                        <ResourceDictionary x:Key="Light">
+                            <StaticResource x:Key="PaneProgressAccentBrush"
+                                            ResourceKey="SystemControlForegroundAccentBrush" />
+                            <StaticResource x:Key="PaneProgressCriticalBrush"
+                                            ResourceKey="SystemFillColorCriticalBrush" />
+                            <StaticResource x:Key="PaneProgressCautionBrush"
+                                            ResourceKey="SystemFillColorCautionBrush" />
+                        </ResourceDictionary>
+                        <ResourceDictionary x:Key="Dark">
+                            <StaticResource x:Key="PaneProgressAccentBrush"
+                                            ResourceKey="SystemControlForegroundAccentBrush" />
+                            <StaticResource x:Key="PaneProgressCriticalBrush"
+                                            ResourceKey="SystemFillColorCriticalBrush" />
+                            <StaticResource x:Key="PaneProgressCautionBrush"
+                                            ResourceKey="SystemFillColorCautionBrush" />
+                        </ResourceDictionary>
+                        <ResourceDictionary x:Key="HighContrast">
+                            <StaticResource x:Key="PaneProgressAccentBrush"
+                                            ResourceKey="SystemControlForegroundAccentBrush" />
+                            <StaticResource x:Key="PaneProgressCriticalBrush"
+                                            ResourceKey="SystemFillColorCriticalBrush" />
+                            <StaticResource x:Key="PaneProgressCautionBrush"
+                                            ResourceKey="SystemFillColorCautionBrush" />
+                        </ResourceDictionary>
+                    </ResourceDictionary.ThemeDictionaries>
+                </ResourceDictionary>
             </ResourceDictionary.MergedDictionaries>
             <!--  Remove the native horizontal tab border within this vertical-only scope.  -->
             <Thickness x:Key="TabViewItemBorderThickness">0</Thickness>

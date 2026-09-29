@@ -12129,23 +12129,24 @@ namespace winrt::TerminalApp::implementation
         };
         size_t groupPaneCount = 0;
         bool headerProgressProjectedToPaneRows = false;
-        winrt::TerminalApp::TaskbarState headerProgressSource{ nullptr };
+        const auto headerProgressSource = tab->GetCombinedTaskbarState();
+        const auto headerProgressState = headerProgressSource.State();
+        const auto headerProgressValue = headerProgressSource.Progress();
         std::vector<TerminalApp::TabStripPaneItem> items;
         for (const auto& pane : visiblePanes)
         {
             const auto projectedPane = !pane.IsAgentPane &&
                                        (!_IsAgentScopeEffective() || _MatchesPaneAgentScope(pane));
 
-            if (pane.ProgressState != 0)
-            {
-                const auto candidate = winrt::make<winrt::TerminalApp::implementation::TaskbarState>(pane.ProgressState, pane.ProgressValue);
-                if (!headerProgressSource ||
-                    TerminalApp::implementation::TaskbarState::ComparePriority(candidate, headerProgressSource))
-                {
-                    headerProgressSource = candidate;
-                    headerProgressProjectedToPaneRows = projectedPane;
-                }
-            }
+            // Hidden or filtered panes still contribute to the tab aggregate,
+            // so only suppress the header when a projected row shows that
+            // exact winning state/value.
+            headerProgressProjectedToPaneRows =
+                headerProgressProjectedToPaneRows ||
+                (projectedPane &&
+                 headerProgressState != 0 &&
+                 pane.ProgressState == headerProgressState &&
+                 pane.ProgressValue == headerProgressValue);
 
             if (pane.IsAgentPane)
             {
