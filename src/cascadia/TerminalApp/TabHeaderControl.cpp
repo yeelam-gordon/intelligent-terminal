@@ -100,13 +100,13 @@ namespace winrt::TerminalApp::implementation
         {
             _showProgressRing = value;
             PropertyChanged.raise(*this, Windows::UI::Xaml::Data::PropertyChangedEventArgs{ L"ShowProgressRing" });
-            if (const auto status = TabStatus())
-            {
-                HeaderProgressRing().IsActive(_showProgressRing && status.IsProgressRingActive());
-                HeaderProgressRing().Visibility(_showProgressRing && status.IsProgressRingActive() ?
-                                                   Windows::UI::Xaml::Visibility::Visible :
-                                                   Windows::UI::Xaml::Visibility::Collapsed);
-            }
+        }
+        if (const auto status = TabStatus())
+        {
+            HeaderProgressRing().IsActive(_showProgressRing && status.IsProgressRingActive());
+            HeaderProgressRing().Visibility(_showProgressRing && status.IsProgressRingActive() ?
+                                               Windows::UI::Xaml::Visibility::Visible :
+                                               Windows::UI::Xaml::Visibility::Collapsed);
         }
     }
 

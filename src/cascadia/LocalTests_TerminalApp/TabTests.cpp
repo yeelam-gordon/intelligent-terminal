@@ -6580,6 +6580,52 @@ namespace TerminalAppLocalTests
         verifyHeaderProgress(false, Visibility::Collapsed, true, false, 80);
         verifyTaskbarState(4, 80);
 
+        TestOnUIThread([&]() {
+            const auto display = displayForTab();
+            const auto paneItem = findPaneItem(secondContentId);
+            const auto paneRing = paneProgressRing(secondContentId);
+            const auto header = headerForTab();
+            VERIFY_IS_NOT_NULL(display);
+            VERIFY_IS_NOT_NULL(paneItem);
+            VERIFY_IS_NOT_NULL(paneRing);
+            VERIFY_IS_NOT_NULL(header);
+
+            const auto displayImpl = winrt::get_self<winrt::TerminalApp::implementation::TabStripDisplayItem>(display);
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            VERIFY_IS_TRUE(displayImpl->HeaderProgressProjectedToPaneRows());
+            VERIFY_IS_FALSE(headerImpl->ShowProgressRing());
+
+            paneItem.ProgressState(0);
+            paneItem.ProgressValue(0);
+            paneItem.IsProgressRingActive(false);
+            header.TabStatus().ProgressValue(0);
+            header.TabStatus().IsProgressRingActive(false);
+            displayImpl->UpdatePresentation(false);
+
+            VERIFY_IS_FALSE(headerImpl->ShowProgressRing());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, paneRing.Visibility());
+            VERIFY_IS_FALSE(paneRing.IsActive());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, headerRing.Visibility());
+            VERIFY_IS_FALSE(headerRing.IsActive());
+
+            paneItem.ProgressState(4);
+            paneItem.ProgressValue(80);
+            paneItem.IsProgressRingActive(true);
+            header.TabStatus().ProgressValue(80);
+            header.TabStatus().IsProgressRingActive(true);
+            displayImpl->UpdatePresentation(false);
+            page->UpdateLayout();
+
+            VERIFY_IS_TRUE(displayImpl->HeaderProgressProjectedToPaneRows());
+            VERIFY_IS_TRUE(paneItem.IsProgressRingActive());
+            VERIFY_ARE_EQUAL(Visibility::Visible, paneRing.Visibility());
+            VERIFY_IS_TRUE(paneRing.IsActive());
+            VERIFY_IS_FALSE(headerImpl->ShowProgressRing());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, headerRing.Visibility());
+            VERIFY_IS_FALSE(headerRing.IsActive());
+        });
+
         applyLayout(TabLayout::Horizontal);
         emitOsc(first, u"\x1b]9;4;2;33\a");
         waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, false, 33, 2, 33);
