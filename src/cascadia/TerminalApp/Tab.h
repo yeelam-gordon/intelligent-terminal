@@ -114,6 +114,8 @@ namespace winrt::TerminalApp::implementation
             winrt::hstring Title;
             bool IsActive{};
             bool IsAgentPane{};
+            uint64_t ProgressState{};
+            uint64_t ProgressValue{};
         };
         std::vector<VisiblePaneSnapshot> GetVisiblePaneSnapshot() const;
         std::vector<std::shared_ptr<Pane>> GetPaneCloseScope(uint32_t contentId) const;

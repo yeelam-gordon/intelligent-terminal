@@ -21,6 +21,8 @@ namespace winrt::TerminalApp::implementation
         bool InRename();
         bool IsMetadataVisible() const noexcept;
         void IsMetadataVisible(bool value);
+        bool ShowProgressRing() const noexcept;
+        void ShowProgressRing(bool value);
 
         til::event<TerminalApp::TitleChangeRequestedArgs> TitleChangeRequested;
         til::typed_event<> RenameEnded;
@@ -37,6 +39,7 @@ namespace winrt::TerminalApp::implementation
         bool _receivedKeyDown{ false };
         bool _renameCancelled{ false };
         bool _isMetadataVisible{ false };
+        bool _showProgressRing{ true };
 
         void _CloseRenameBox();
         void _UpdateMetadataVisibility();

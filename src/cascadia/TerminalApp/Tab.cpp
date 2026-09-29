@@ -1323,6 +1323,7 @@ namespace winrt::TerminalApp::implementation
                 if (const auto tab = weakThis.get())
                 {
                     tab->_UpdateProgressState();
+                    tab->PaneProjectionChanged.raise();
                 }
             });
 
@@ -1474,12 +1475,10 @@ namespace winrt::TerminalApp::implementation
     // Method Description:
     // - This should be called on the UI thread. If you don't, then it might
     //   silently do nothing.
-    // - Update our TabStatus to reflect the progress state of the currently
-    //   active pane.
-    // - This is called every time _any_ control's progress state changes,
-    //   regardless of if that control is the active one or not. This is simpler
-    //   then re-attaching this handler to the active control each time it
-    //   changes.
+    // - Update our TabStatus to reflect the aggregate progress state of this
+    //   tab's panes. This is the tab-level status used by the horizontal tab
+    //   header and by collapsed vertical groups; per-pane sidebar rows have
+    //   their own projection.
     // Arguments:
     // - <none>
     // Return Value:
@@ -1489,8 +1488,8 @@ namespace winrt::TerminalApp::implementation
         const auto state{ GetCombinedTaskbarState() };
 
         const auto taskbarState = state.State();
-        // The progress of the control changed, but not necessarily the progress of the tab.
-        // Set the tab's progress ring to the active pane's progress
+        // Mirror the tab's aggregate progress state. Individual pane rows in
+        // the vertical rail project their own raw progress separately.
         if (taskbarState > 0)
         {
             if (taskbarState == 3)
@@ -3049,6 +3048,8 @@ namespace winrt::TerminalApp::implementation
                         .IsActive = pane == activeLeaf,
                         .IsAgentPane = pane->_content.try_as<winrt::TerminalApp::AgentPaneContent>() != nullptr ||
                                        pane->IsAgentPane(),
+                        .ProgressState = pane->_content.TaskbarState(),
+                        .ProgressValue = pane->_content.TaskbarProgress(),
                     });
                 }
                 return;

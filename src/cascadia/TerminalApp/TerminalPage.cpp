@@ -12099,16 +12099,60 @@ namespace winrt::TerminalApp::implementation
         const auto activeSourceContentId = activeSourcePane && activeSourcePane->ContentId() ?
                                                activeSourcePane->ContentId() :
                                                std::nullopt;
+        const auto appendAutomationSegment = [](std::wstring& value, const std::wstring_view segment) {
+            if (segment.empty())
+            {
+                return;
+            }
+
+            if (!value.empty())
+            {
+                value.append(L", ");
+            }
+            value.append(segment);
+        };
+        const auto progressAutomationText = [&](const Tab::VisiblePaneSnapshot& pane) -> winrt::hstring {
+            if (pane.ProgressState == 0)
+            {
+                return {};
+            }
+
+            const auto status = pane.ProgressState == 2 ? _SidebarHistoryStatusText("Error") :
+                                pane.ProgressState == 4 ? _SidebarHistoryStatusText("Attention") :
+                                                         _SidebarHistoryStatusText("Working");
+            if (pane.ProgressState == 3)
+            {
+                return status;
+            }
+
+            return winrt::hstring{ fmt::format(FMT_COMPILE(L"{}, {}%"), status, pane.ProgressValue) };
+        };
         size_t groupPaneCount = 0;
+        bool headerProgressProjectedToPaneRows = false;
+        winrt::TerminalApp::TaskbarState headerProgressSource{ nullptr };
         std::vector<TerminalApp::TabStripPaneItem> items;
         for (const auto& pane : visiblePanes)
         {
+            const auto projectedPane = !pane.IsAgentPane &&
+                                       (!_IsAgentScopeEffective() || _MatchesPaneAgentScope(pane));
+
+            if (pane.ProgressState != 0)
+            {
+                const auto candidate = winrt::make<winrt::TerminalApp::implementation::TaskbarState>(pane.ProgressState, pane.ProgressValue);
+                if (!headerProgressSource ||
+                    TerminalApp::implementation::TaskbarState::ComparePriority(candidate, headerProgressSource))
+                {
+                    headerProgressSource = candidate;
+                    headerProgressProjectedToPaneRows = projectedPane;
+                }
+            }
+
             if (pane.IsAgentPane)
             {
                 continue;
             }
             ++groupPaneCount;
-            if (_IsAgentScopeEffective() && !_MatchesPaneAgentScope(pane))
+            if (!projectedPane)
             {
                 continue;
             }
@@ -12117,6 +12161,12 @@ namespace winrt::TerminalApp::implementation
                 pane.ContentId,
                 pane.Title,
                 pane.IsActive || activeSourceContentId == pane.ContentId);
+            const auto itemImpl = winrt::get_self<TabStripPaneItem>(item);
+            itemImpl->ProgressState(pane.ProgressState);
+            itemImpl->IsProgressRingActive(pane.ProgressState != 0);
+            itemImpl->IsProgressRingIndeterminate(pane.ProgressState == 3);
+            itemImpl->ProgressValue(gsl::narrow<uint32_t>(pane.ProgressValue));
+            std::wstring automationName{ pane.Title.c_str(), pane.Title.size() };
             if (pane.SessionId != winrt::guid{})
             {
                 const auto sessionId = _FormatRichTabSessionId(pane.SessionId);
@@ -12124,25 +12174,27 @@ namespace winrt::TerminalApp::implementation
                     presentation != _richTabPresentations.end() && presentation->second.presentation)
                 {
                     const auto& value = *presentation->second.presentation;
-                    const auto itemImpl = winrt::get_self<TabStripPaneItem>(item);
                     itemImpl->MetadataText(winrt::hstring{ value.text });
                     itemImpl->MetadataVisibility(value.text.empty() ? Visibility::Collapsed : Visibility::Visible);
                     if (!value.accessibilityText.empty())
                     {
-                        std::wstring automationName{ pane.Title };
-                        automationName.append(L", ");
-                        automationName.append(value.accessibilityText);
-                        itemImpl->AutomationName(winrt::hstring{ automationName });
+                        appendAutomationSegment(automationName, value.accessibilityText);
                     }
                 }
             }
+            if (const auto progressText = progressAutomationText(pane); !progressText.empty())
+            {
+                appendAutomationSegment(automationName, std::wstring_view{ progressText.c_str(), progressText.size() });
+            }
+            itemImpl->AutomationName(winrt::hstring{ automationName });
             items.emplace_back(std::move(item));
         }
         _tabStrip.SetTabPresentation(tab->TabViewItem(), tab->Title(), tab->Icon());
-        _tabStrip.SetPaneItems(
+        winrt::get_self<implementation::TabStrip>(_tabStrip)->SetPaneItems(
             tab->TabViewItem(),
             single_threaded_vector<TerminalApp::TabStripPaneItem>(std::move(items)),
-            groupPaneCount > 1);
+            groupPaneCount > 1,
+            headerProgressProjectedToPaneRows);
     }
 
     void TerminalPage::_ActivatePaneFromTabStrip(const TerminalApp::TabStripPaneEventArgs& args)

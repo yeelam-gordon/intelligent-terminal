@@ -89,6 +89,27 @@ namespace winrt::TerminalApp::implementation
         _UpdateMetadataVisibility();
     }
 
+    bool TabHeaderControl::ShowProgressRing() const noexcept
+    {
+        return _showProgressRing;
+    }
+
+    void TabHeaderControl::ShowProgressRing(const bool value)
+    {
+        if (_showProgressRing != value)
+        {
+            _showProgressRing = value;
+            PropertyChanged.raise(*this, Windows::UI::Xaml::Data::PropertyChangedEventArgs{ L"ShowProgressRing" });
+            if (const auto status = TabStatus())
+            {
+                HeaderProgressRing().IsActive(_showProgressRing && status.IsProgressRingActive());
+                HeaderProgressRing().Visibility(_showProgressRing && status.IsProgressRingActive() ?
+                                                   Windows::UI::Xaml::Visibility::Visible :
+                                                   Windows::UI::Xaml::Visibility::Collapsed);
+            }
+        }
+    }
+
     void TabHeaderControl::_UpdateMetadataVisibility()
     {
         HeaderMetadataTextBlock().Visibility(_isMetadataVisible && !InRename() ?

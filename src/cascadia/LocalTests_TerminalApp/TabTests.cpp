@@ -8,6 +8,7 @@
 #include "../TerminalApp/SettingsLoadEventArgs.h"
 #include "../TerminalApp/MinMaxCloseControl.h"
 #include "../TerminalApp/TabRowControl.h"
+#include "../TerminalApp/TabHeaderControl.h"
 #include "../TerminalApp/TabStrip.h"
 #include "../TerminalApp/ShortcutActionDispatch.h"
 #include "../TerminalApp/AgentPaneContent.h"
@@ -19,6 +20,7 @@
 #include "../TerminalSettingsAppAdapterLib/TerminalSettings.h"
 #include "../TerminalApp/TerminalSettingsCache.h"
 #include "../TerminalApp/TerminalPaneContent.h"
+#include "../WinRTUtils/inc/Utils.h"
 #include "../inc/AgentPaneRestore.h"
 #include "../inc/AgentPaneBackend.h"
 #include "../UnitTests_Control/MockControlSettings.h"
@@ -287,6 +289,8 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabStripPreservesClosePolicy);
         TEST_METHOD(VerticalTabStripCollapsedItemsPreserveSelection);
         TEST_METHOD(VerticalTabStripHostsPaneGroups);
+        TEST_METHOD(PaneProgressSurvivesTabLayoutLifecycle);
+        TEST_METHOD(VerticalTabExpandedGroupKeepsHeaderProgressForAgentSource);
         TEST_METHOD(VerticalTabSelectionPreservesPresentation);
         TEST_METHOD(VerticalTabIconChangesUpdatePresentation);
         TEST_METHOD(VerticalTabThemeChangesDoNotReprojectPanes);
@@ -6007,6 +6011,701 @@ namespace TerminalAppLocalTests
 
             strip.TabItems().Clear();
             VERIFY_IS_TRUE(tab.Header() == header);
+        });
+    }
+
+    void TabTests::PaneProgressSurvivesTabLayoutLifecycle()
+    {
+        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto first = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-aaaa-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto second = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-bbbb-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+
+        winrt::com_ptr<winrt::TerminalApp::implementation::Tab> tab;
+        uint32_t firstContentId{};
+        uint32_t secondContentId{};
+
+        auto displayForTab = [&]() {
+            const auto stripImpl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            const auto items = stripImpl->ItemsList().Items();
+            for (uint32_t index = 0; index < items.Size(); ++index)
+            {
+                const auto display = items.GetAt(index).try_as<winrt::TerminalApp::TabStripDisplayItem>();
+                if (display != nullptr && tab && display.Tab() == tab->TabViewItem())
+                {
+                    return display;
+                }
+            }
+            return winrt::TerminalApp::TabStripDisplayItem{ nullptr };
+        };
+
+        auto headerForTab = [&]() {
+            if (!tab)
+            {
+                return winrt::TerminalApp::TabHeaderControl{ nullptr };
+            }
+
+            if (page->_isVerticalLayout)
+            {
+                return winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)->HeaderForTab(tab->TabViewItem()).try_as<winrt::TerminalApp::TabHeaderControl>();
+            }
+
+            return tab->TabViewItem().Header().try_as<winrt::TerminalApp::TabHeaderControl>();
+        };
+
+        auto findPaneItem = [&](const uint32_t contentId) {
+            const auto display = displayForTab();
+            if (display == nullptr)
+            {
+                return winrt::TerminalApp::TabStripPaneItem{ nullptr };
+            }
+
+            const auto panes = display.PaneItems();
+            for (uint32_t index = 0; index < panes.Size(); ++index)
+            {
+                const auto paneItem = panes.GetAt(index);
+                if (paneItem.ContentId() == contentId)
+                {
+                    return paneItem;
+                }
+            }
+            return winrt::TerminalApp::TabStripPaneItem{ nullptr };
+        };
+
+        const auto emitOsc = [&](const winrt::com_ptr<TestConnection>& connection, const std::u16string_view sequence) {
+            TestOnUIThread([&]() {
+                connection->TerminalOutput.raise(winrt::array_view<const char16_t>{ sequence.data(), sequence.data() + sequence.size() });
+            });
+        };
+
+        const auto applyLayout = [&](const TabLayout layout) {
+            TestOnUIThread([&]() {
+                VERIFY_IS_TRUE(page->_ApplyTabLayout(layout));
+                page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
+                page->UpdateLayout();
+            });
+            _waitForContentTransferReviewUI([&]() {
+                const auto header = headerForTab();
+                if (layout == TabLayout::Vertical)
+                {
+                    return page->_isVerticalLayout && displayForTab() != nullptr && header != nullptr;
+                }
+                return !page->_isVerticalLayout && header != nullptr;
+            });
+        };
+
+        const auto waitForPaneProgress = [&](const uint32_t contentId,
+                                             const uint64_t expectedState,
+                                             const uint32_t expectedValue,
+                                             const bool expectedActive,
+                                             const bool expectedIndeterminate) {
+            _waitForContentTransferReviewUI([&]() {
+                const auto paneItem = findPaneItem(contentId);
+                return paneItem != nullptr &&
+                       paneItem.ProgressState() == expectedState &&
+                       paneItem.ProgressValue() == expectedValue &&
+                       paneItem.IsProgressRingActive() == expectedActive &&
+                       paneItem.IsProgressRingIndeterminate() == expectedIndeterminate;
+            });
+        };
+
+        const auto waitForProjectedGroup = [&](const uint64_t expectedFirstState,
+                                               const uint32_t expectedFirstValue,
+                                               const uint64_t expectedSecondState,
+                                               const uint32_t expectedSecondValue) {
+            _waitForContentTransferReviewUI([&]() {
+                const auto display = displayForTab();
+                const auto firstPaneItem = findPaneItem(firstContentId);
+                const auto secondPaneItem = findPaneItem(secondContentId);
+                return page->_isVerticalLayout &&
+                       display != nullptr &&
+                       display.IsGroup() &&
+                       display.PaneItems().Size() == 2 &&
+                       display.ChildrenVisibility() == Visibility::Visible &&
+                       firstPaneItem != nullptr &&
+                       secondPaneItem != nullptr &&
+                       firstPaneItem.ProgressState() == expectedFirstState &&
+                       firstPaneItem.ProgressValue() == expectedFirstValue &&
+                       secondPaneItem.ProgressState() == expectedSecondState &&
+                       secondPaneItem.ProgressValue() == expectedSecondValue;
+            });
+        };
+
+        const auto verifyTaskbarState = [&](const uint64_t expectedState, const uint64_t expectedValue) {
+            TestOnUIThread([&]() {
+                const auto state = page->TaskbarState();
+                VERIFY_ARE_EQUAL(expectedState, state.State());
+                VERIFY_ARE_EQUAL(expectedValue, state.Progress());
+            });
+        };
+
+        const auto waitForHeaderProgressAndTaskbar = [&](const bool expectedShowProgressRing,
+                                                         const Visibility expectedVisibility,
+                                                         const bool expectedActive,
+                                                         const bool expectedIndeterminate,
+                                                         const uint32_t expectedValue,
+                                                         const uint64_t expectedState,
+                                                         const uint64_t expectedProgress) {
+            _waitForContentTransferReviewUI([&]() {
+                const auto header = headerForTab();
+                if (header == nullptr)
+                {
+                    return false;
+                }
+
+                const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+                const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+                const auto state = page->TaskbarState();
+                return headerImpl->ShowProgressRing() == expectedShowProgressRing &&
+                       header.TabStatus().IsProgressRingActive() == expectedActive &&
+                       header.TabStatus().IsProgressRingIndeterminate() == expectedIndeterminate &&
+                       (!expectedActive || expectedIndeterminate || header.TabStatus().ProgressValue() == expectedValue) &&
+                       headerRing != nullptr &&
+                       headerRing.Visibility() == expectedVisibility &&
+                       (expectedVisibility != Visibility::Visible || expectedIndeterminate || gsl::narrow<uint32_t>(headerRing.Value()) == expectedValue) &&
+                       state.State() == expectedState &&
+                       state.Progress() == expectedProgress;
+            });
+        };
+
+        const auto verifyHeaderProgress = [&](const bool expectedShowProgressRing,
+                                              const Visibility expectedVisibility,
+                                              const bool expectedActive,
+                                              const bool expectedIndeterminate,
+                                              const uint32_t expectedValue) {
+            TestOnUIThread([&]() {
+                const auto header = headerForTab();
+                VERIFY_IS_NOT_NULL(header);
+                const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+                const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+                VERIFY_IS_NOT_NULL(headerRing);
+                VERIFY_ARE_EQUAL(expectedShowProgressRing, headerImpl->ShowProgressRing());
+                VERIFY_ARE_EQUAL(expectedActive, header.TabStatus().IsProgressRingActive());
+                VERIFY_ARE_EQUAL(expectedIndeterminate, header.TabStatus().IsProgressRingIndeterminate());
+                if (expectedActive && !expectedIndeterminate)
+                {
+                    VERIFY_ARE_EQUAL(expectedValue, header.TabStatus().ProgressValue());
+                }
+                VERIFY_ARE_EQUAL(expectedVisibility, headerRing.Visibility());
+                if (expectedVisibility == Visibility::Visible && !expectedIndeterminate)
+                {
+                    VERIFY_ARE_EQUAL(expectedValue, gsl::narrow<uint32_t>(headerRing.Value()));
+                }
+            });
+        };
+
+        const auto resources = winrt::Windows::ApplicationModel::Resources::Core::ResourceManager::Current()
+                                   .MainResourceMap()
+                                   .GetSubtree(L"TerminalApp/Resources");
+        const auto statusText = [&](const winrt::hstring& key) {
+            return resources.GetValue(key).ValueAsString();
+        };
+        const auto brushColor = [&](const wchar_t* key) {
+            return ThemeLookup(Application::Current().Resources(), page->_tabStrip.ActualTheme(), winrt::box_value(key)).as<Media::SolidColorBrush>().Color();
+        };
+        const auto paneProgressRing = [&](const uint32_t contentId) {
+            const auto display = displayForTab();
+            if (display == nullptr)
+            {
+                return winrt::MUX::Controls::ProgressRing{ nullptr };
+            }
+
+            const auto panes = display.PaneItems();
+            for (uint32_t paneIndex = 0; paneIndex < panes.Size(); ++paneIndex)
+            {
+                if (panes.GetAt(paneIndex).ContentId() != contentId)
+                {
+                    continue;
+                }
+
+                const auto displayContainer = page->_tabStrip.ContainerFromIndex(0).as<ListViewItem>();
+                if (!displayContainer)
+                {
+                    return winrt::MUX::Controls::ProgressRing{ nullptr };
+                }
+
+                const auto templateRoot = displayContainer.ContentTemplateRoot().as<StackPanel>();
+                const auto paneList = templateRoot.Children().GetAt(1).as<ItemsControl>();
+                const auto paneContainer = paneList.ContainerFromIndex(paneIndex).as<ContentPresenter>();
+                if (!paneContainer || Media::VisualTreeHelper::GetChildrenCount(paneContainer) == 0)
+                {
+                    return winrt::MUX::Controls::ProgressRing{ nullptr };
+                }
+
+                return Media::VisualTreeHelper::GetChild(paneContainer, 0).as<FrameworkElement>().FindName(L"PaneProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            }
+
+            return winrt::MUX::Controls::ProgressRing{ nullptr };
+        };
+        const auto paneAutomationName = [&](const uint32_t contentId) {
+            const auto display = displayForTab();
+            if (display == nullptr)
+            {
+                return winrt::hstring{};
+            }
+
+            const auto panes = display.PaneItems();
+            for (uint32_t paneIndex = 0; paneIndex < panes.Size(); ++paneIndex)
+            {
+                if (panes.GetAt(paneIndex).ContentId() != contentId)
+                {
+                    continue;
+                }
+
+                const auto displayContainer = page->_tabStrip.ContainerFromIndex(0).as<ListViewItem>();
+                if (!displayContainer)
+                {
+                    return winrt::hstring{};
+                }
+
+                const auto templateRoot = displayContainer.ContentTemplateRoot().as<StackPanel>();
+                const auto paneList = templateRoot.Children().GetAt(1).as<ItemsControl>();
+                const auto paneContainer = paneList.ContainerFromIndex(paneIndex).as<ContentPresenter>();
+                if (!paneContainer || Media::VisualTreeHelper::GetChildrenCount(paneContainer) == 0)
+                {
+                    return winrt::hstring{};
+                }
+
+                const auto paneRoot = Media::VisualTreeHelper::GetChild(paneContainer, 0).as<FrameworkElement>();
+                const auto button = paneRoot.FindName(L"PaneActivateButton").as<Button>();
+                return Automation::AutomationProperties::GetName(button);
+            }
+
+            return winrt::hstring{};
+        };
+        const auto verifyPaneRowState = [&](const uint32_t contentId,
+                                            const uint64_t expectedState,
+                                            const uint32_t expectedValue,
+                                            const Visibility expectedVisibility,
+                                            const bool expectedIndeterminate,
+                                            const std::optional<winrt::Windows::UI::Color>& expectedForeground,
+                                            const winrt::hstring& expectedStatusToken) {
+            _waitForContentTransferReviewUI([&]() {
+                const auto paneItem = findPaneItem(contentId);
+                const auto ring = paneProgressRing(contentId);
+                const auto automationName = paneAutomationName(contentId);
+                if (paneItem == nullptr || ring == nullptr)
+                {
+                    return false;
+                }
+
+                const auto actualName = std::wstring_view{ automationName.c_str(), automationName.size() };
+                const auto containsStatus = expectedStatusToken.empty() ||
+                                            actualName.find(std::wstring_view{ expectedStatusToken.c_str(), expectedStatusToken.size() }) != std::wstring_view::npos;
+                const auto containsValue = expectedState == 0 || expectedState == 3 ||
+                                           actualName.find(std::to_wstring(expectedValue) + L"%") != std::wstring_view::npos;
+                const auto foreground = ring.Foreground().try_as<Media::SolidColorBrush>();
+                const auto foregroundMatches = !expectedForeground.has_value() ?
+                                                   foreground == nullptr :
+                                                   foreground != nullptr && foreground.Color() == *expectedForeground;
+                return paneItem.ProgressState() == expectedState &&
+                       paneItem.ProgressValue() == expectedValue &&
+                       ring.Visibility() == expectedVisibility &&
+                       ring.IsIndeterminate() == expectedIndeterminate &&
+                       foregroundMatches &&
+                       containsStatus &&
+                       containsValue;
+            });
+        };
+
+        TestOnUIThread([&]() {
+            const auto firstPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *first);
+            VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(firstPane));
+            tab = page->_GetFocusedTabImpl();
+            VERIFY_IS_NOT_NULL(tab);
+            page->_ApplyTabListProjection(*tab);
+            page->UpdateLayout();
+
+            const auto firstPaneNode = tab->GetRootPane()->FindPaneBySessionId(first->SessionId());
+            VERIFY_IS_NOT_NULL(firstPaneNode);
+            firstContentId = firstPaneNode->ContentId().value();
+
+            const auto display = displayForTab();
+            VERIFY_IS_NOT_NULL(display);
+            VERIFY_IS_FALSE(display.IsGroup());
+        });
+
+        emitOsc(first, u"\x1b]9;4;3;0\a");
+        waitForPaneProgress(firstContentId, 3, 0, true, true);
+        verifyHeaderProgress(true, Visibility::Visible, true, true, 0);
+        verifyTaskbarState(3, 0);
+
+        emitOsc(first, u"\x1b]9;4;1;15\a");
+        waitForPaneProgress(firstContentId, 1, 15, true, false);
+        verifyTaskbarState(1, 15);
+
+        emitOsc(first, u"\x1b]9;4;2;15\a");
+        waitForPaneProgress(firstContentId, 2, 15, true, false);
+        verifyTaskbarState(2, 15);
+
+        emitOsc(first, u"\x1b]9;4;4;15\a");
+        waitForPaneProgress(firstContentId, 4, 15, true, false);
+        verifyTaskbarState(4, 15);
+
+        emitOsc(first, u"\x1b]9;4;0;0\a");
+        waitForPaneProgress(firstContentId, 0, 0, false, false);
+        verifyHeaderProgress(true, Visibility::Collapsed, false, false, 0);
+        verifyTaskbarState(0, 0);
+
+        emitOsc(first, u"\x1b]9;4;1;25\a");
+        waitForPaneProgress(firstContentId, 1, 25, true, false);
+        verifyHeaderProgress(true, Visibility::Visible, true, false, 25);
+        verifyTaskbarState(1, 25);
+
+        applyLayout(TabLayout::Horizontal);
+        waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, false, 25, 1, 25);
+        verifyHeaderProgress(true, Visibility::Visible, true, false, 25);
+        verifyTaskbarState(1, 25);
+
+        TestOnUIThread([&]() {
+            const auto secondPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *second);
+            VERIFY_IS_TRUE(page->_SplitPane(tab, SplitDirection::Right, 0.5f, secondPane));
+            page->UpdateLayout();
+
+            const auto secondPaneNode = tab->GetRootPane()->FindPaneBySessionId(second->SessionId());
+            VERIFY_IS_NOT_NULL(secondPaneNode);
+            secondContentId = secondPaneNode->ContentId().value();
+        });
+
+        emitOsc(second, u"\x1b]9;4;4;80\a");
+        waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, false, 80, 4, 80);
+        verifyHeaderProgress(true, Visibility::Visible, true, false, 80);
+        verifyTaskbarState(4, 80);
+
+        applyLayout(TabLayout::Vertical);
+        waitForProjectedGroup(1, 25, 4, 80);
+        verifyPaneRowState(firstContentId, 1, 25, Visibility::Visible, false, brushColor(L"SystemControlForegroundAccentBrush"), statusText(L"VerticalTabsHistoryStatusWorking"));
+        verifyPaneRowState(secondContentId, 4, 80, Visibility::Visible, false, brushColor(L"SystemFillColorCautionBrush"), statusText(L"VerticalTabsHistoryStatusAttention"));
+        verifyHeaderProgress(false, Visibility::Collapsed, true, false, 80);
+        verifyTaskbarState(4, 80);
+
+        applyLayout(TabLayout::Horizontal);
+        emitOsc(first, u"\x1b]9;4;2;33\a");
+        waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, false, 33, 2, 33);
+        verifyHeaderProgress(true, Visibility::Visible, true, false, 33);
+        verifyTaskbarState(2, 33);
+
+        applyLayout(TabLayout::Vertical);
+        waitForProjectedGroup(2, 33, 4, 80);
+        verifyPaneRowState(firstContentId, 2, 33, Visibility::Visible, false, brushColor(L"SystemFillColorCriticalBrush"), statusText(L"VerticalTabsHistoryStatusError"));
+        verifyPaneRowState(secondContentId, 4, 80, Visibility::Visible, false, brushColor(L"SystemFillColorCautionBrush"), statusText(L"VerticalTabsHistoryStatusAttention"));
+        verifyHeaderProgress(false, Visibility::Collapsed, true, false, 33);
+        verifyTaskbarState(2, 33);
+
+        applyLayout(TabLayout::Horizontal);
+        emitOsc(second, u"\x1b]9;4;3;0\a");
+        waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, false, 33, 2, 33);
+
+        applyLayout(TabLayout::Vertical);
+        waitForProjectedGroup(2, 33, 3, 0);
+        verifyPaneRowState(firstContentId, 2, 33, Visibility::Visible, false, brushColor(L"SystemFillColorCriticalBrush"), statusText(L"VerticalTabsHistoryStatusError"));
+        verifyPaneRowState(secondContentId, 3, 0, Visibility::Visible, true, brushColor(L"SystemControlForegroundAccentBrush"), statusText(L"VerticalTabsHistoryStatusWorking"));
+        verifyHeaderProgress(false, Visibility::Collapsed, true, false, 33);
+        verifyTaskbarState(2, 33);
+
+        applyLayout(TabLayout::Horizontal);
+        emitOsc(first, u"\x1b]9;4;0;0\a");
+        waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, true, 0, 3, 0);
+        verifyHeaderProgress(true, Visibility::Visible, true, true, 0);
+        verifyTaskbarState(3, 0);
+
+        applyLayout(TabLayout::Vertical);
+        waitForProjectedGroup(0, 0, 3, 0);
+        verifyPaneRowState(firstContentId, 0, 0, Visibility::Collapsed, false, std::nullopt, {});
+        verifyPaneRowState(secondContentId, 3, 0, Visibility::Visible, true, brushColor(L"SystemControlForegroundAccentBrush"), statusText(L"VerticalTabsHistoryStatusWorking"));
+        verifyHeaderProgress(false, Visibility::Collapsed, true, true, 0);
+        verifyTaskbarState(3, 0);
+
+        applyLayout(TabLayout::Horizontal);
+        emitOsc(first, u"\x1b]9;4;1;25\a");
+        emitOsc(second, u"\x1b]9;4;4;80\a");
+        waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, false, 80, 4, 80);
+        verifyHeaderProgress(true, Visibility::Visible, true, false, 80);
+        verifyTaskbarState(4, 80);
+
+        applyLayout(TabLayout::Vertical);
+        waitForProjectedGroup(1, 25, 4, 80);
+        verifyPaneRowState(firstContentId, 1, 25, Visibility::Visible, false, brushColor(L"SystemControlForegroundAccentBrush"), statusText(L"VerticalTabsHistoryStatusWorking"));
+        verifyPaneRowState(secondContentId, 4, 80, Visibility::Visible, false, brushColor(L"SystemFillColorCautionBrush"), statusText(L"VerticalTabsHistoryStatusAttention"));
+        verifyHeaderProgress(false, Visibility::Collapsed, true, false, 80);
+        verifyTaskbarState(4, 80);
+
+        applyLayout(TabLayout::Horizontal);
+        waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, false, 80, 4, 80);
+        verifyHeaderProgress(true, Visibility::Visible, true, false, 80);
+        verifyTaskbarState(4, 80);
+
+        applyLayout(TabLayout::Vertical);
+        waitForProjectedGroup(1, 25, 4, 80);
+        verifyHeaderProgress(false, Visibility::Collapsed, true, false, 80);
+        verifyTaskbarState(4, 80);
+
+        applyLayout(TabLayout::Horizontal);
+        waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, false, 80, 4, 80);
+        verifyHeaderProgress(true, Visibility::Visible, true, false, 80);
+        verifyTaskbarState(4, 80);
+
+        TestOnUIThread([&]() {
+            const auto closingPane = tab->GetRootPane()->FindPaneBySessionId(second->SessionId());
+            VERIFY_IS_NOT_NULL(closingPane);
+            page->_HandleClosePaneRequested(closingPane);
+        });
+        _waitForContentTransferReviewUI([&]() {
+            return tab->GetLeafPaneCount() == 1;
+        });
+        waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, false, 25, 1, 25);
+        verifyHeaderProgress(true, Visibility::Visible, true, false, 25);
+        verifyTaskbarState(1, 25);
+
+        applyLayout(TabLayout::Vertical);
+        _waitForContentTransferReviewUI([&]() {
+            const auto display = displayForTab();
+            const auto remainingPaneItem = findPaneItem(firstContentId);
+            return page->_isVerticalLayout &&
+                   display != nullptr &&
+                   !display.IsGroup() &&
+                   display.PaneItems().Size() == 1 &&
+                   remainingPaneItem != nullptr &&
+                   remainingPaneItem.ProgressState() == 1 &&
+                   remainingPaneItem.ProgressValue() == 25 &&
+                   findPaneItem(secondContentId) == nullptr;
+        });
+        waitForHeaderProgressAndTaskbar(true, Visibility::Visible, true, false, 25, 1, 25);
+        TestOnUIThread([&]() {
+            const auto display = displayForTab();
+            VERIFY_IS_NOT_NULL(display);
+            VERIFY_IS_FALSE(display.IsGroup());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, display.ChildrenVisibility());
+
+            const auto remainingPaneItem = findPaneItem(firstContentId);
+            VERIFY_IS_NOT_NULL(remainingPaneItem);
+            VERIFY_ARE_EQUAL(uint64_t{ 1 }, remainingPaneItem.ProgressState());
+            VERIFY_ARE_EQUAL(uint32_t{ 25 }, remainingPaneItem.ProgressValue());
+        });
+        verifyHeaderProgress(true, Visibility::Visible, true, false, 25);
+        verifyTaskbarState(1, 25);
+    }
+
+    void TabTests::VerticalTabExpandedGroupKeepsHeaderProgressForAgentSource()
+    {
+        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto first = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-cccc-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto second = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-dddd-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto agent = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-eeee-49a3-80bd-e8fdd045185c}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+
+        winrt::com_ptr<winrt::TerminalApp::implementation::Tab> tab;
+        uint32_t firstContentId{};
+        uint32_t secondContentId{};
+        uint32_t agentContentId{};
+
+        auto displayForTab = [&]() {
+            const auto stripImpl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            const auto items = stripImpl->ItemsList().Items();
+            for (uint32_t index = 0; index < items.Size(); ++index)
+            {
+                const auto display = items.GetAt(index).try_as<winrt::TerminalApp::TabStripDisplayItem>();
+                if (display != nullptr && tab && display.Tab() == tab->TabViewItem())
+                {
+                    return display;
+                }
+            }
+            return winrt::TerminalApp::TabStripDisplayItem{ nullptr };
+        };
+
+        auto findPaneItem = [&](const uint32_t contentId) {
+            const auto display = displayForTab();
+            if (display == nullptr)
+            {
+                return winrt::TerminalApp::TabStripPaneItem{ nullptr };
+            }
+
+            const auto panes = display.PaneItems();
+            for (uint32_t index = 0; index < panes.Size(); ++index)
+            {
+                const auto paneItem = panes.GetAt(index);
+                if (paneItem.ContentId() == contentId)
+                {
+                    return paneItem;
+                }
+            }
+            return winrt::TerminalApp::TabStripPaneItem{ nullptr };
+        };
+
+        auto headerForTab = [&]() {
+            if (!tab)
+            {
+                return winrt::TerminalApp::TabHeaderControl{ nullptr };
+            }
+
+            return winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)->HeaderForTab(tab->TabViewItem()).try_as<winrt::TerminalApp::TabHeaderControl>();
+        };
+
+        const auto emitOsc = [&](const winrt::com_ptr<TestConnection>& connection, const std::u16string_view sequence) {
+            TestOnUIThread([&]() {
+                connection->TerminalOutput.raise(winrt::array_view<const char16_t>{ sequence.data(), sequence.data() + sequence.size() });
+            });
+        };
+
+        TestOnUIThread([&]() {
+            const auto firstPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *first);
+            VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(firstPane));
+            tab = page->_GetFocusedTabImpl();
+            VERIFY_IS_NOT_NULL(tab);
+
+            const auto secondPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *second);
+            VERIFY_IS_TRUE(page->_SplitPane(tab, SplitDirection::Right, 0.5f, secondPane));
+
+            const auto agentPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *agent);
+            agentPane->IsAgentPane(true);
+            VERIFY_IS_TRUE(page->_SplitPane(tab, SplitDirection::Down, 0.5f, agentPane));
+
+            page->_ApplyTabListProjection(*tab);
+            page->UpdateLayout();
+
+            const auto root = tab->GetRootPane();
+            VERIFY_IS_NOT_NULL(root);
+            const auto firstPaneNode = root->FindPaneBySessionId(first->SessionId());
+            const auto secondPaneNode = root->FindPaneBySessionId(second->SessionId());
+            const auto agentPaneNode = root->FindPaneBySessionId(agent->SessionId());
+            VERIFY_IS_NOT_NULL(firstPaneNode);
+            VERIFY_IS_NOT_NULL(secondPaneNode);
+            VERIFY_IS_NOT_NULL(agentPaneNode);
+            firstContentId = firstPaneNode->ContentId().value();
+            secondContentId = secondPaneNode->ContentId().value();
+            agentContentId = agentPaneNode->ContentId().value();
+        });
+
+        emitOsc(first, u"\x1b]9;4;1;25\a");
+        emitOsc(second, u"\x1b]9;4;4;60\a");
+        emitOsc(agent, u"\x1b]9;4;2;90\a");
+
+        _waitForContentTransferReviewUI([&]() {
+            const auto display = displayForTab();
+            const auto firstPaneItem = findPaneItem(firstContentId);
+            const auto secondPaneItem = findPaneItem(secondContentId);
+            const auto header = headerForTab();
+            if (display == nullptr || firstPaneItem == nullptr || secondPaneItem == nullptr || header == nullptr)
+            {
+                return false;
+            }
+
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            const auto state = page->TaskbarState();
+            return display.IsGroup() &&
+                   display.PaneItems().Size() == 2 &&
+                   display.ChildrenVisibility() == Visibility::Visible &&
+                   findPaneItem(agentContentId) == nullptr &&
+                   firstPaneItem.ProgressState() == 1 &&
+                   firstPaneItem.ProgressValue() == 25 &&
+                   secondPaneItem.ProgressState() == 4 &&
+                   secondPaneItem.ProgressValue() == 60 &&
+                   headerImpl->ShowProgressRing() &&
+                   header.TabStatus().IsProgressRingActive() &&
+                   !header.TabStatus().IsProgressRingIndeterminate() &&
+                   header.TabStatus().ProgressValue() == 90 &&
+                   headerRing != nullptr &&
+                   headerRing.Visibility() == Visibility::Visible &&
+                   gsl::narrow<uint32_t>(headerRing.Value()) == 90 &&
+                   state.State() == 2 &&
+                   state.Progress() == 90;
+        });
+
+        TestOnUIThread([&]() {
+            const auto display = displayForTab();
+            VERIFY_IS_NOT_NULL(display);
+            VERIFY_IS_TRUE(display.IsGroup());
+            VERIFY_ARE_EQUAL(2u, display.PaneItems().Size());
+            VERIFY_IS_NULL(findPaneItem(agentContentId));
+
+            const auto header = headerForTab();
+            VERIFY_IS_NOT_NULL(header);
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            VERIFY_IS_TRUE(headerImpl->ShowProgressRing());
+            VERIFY_ARE_EQUAL(Visibility::Visible, headerRing.Visibility());
+            VERIFY_ARE_EQUAL(uint32_t{ 90 }, header.TabStatus().ProgressValue());
+
+            const auto state = page->TaskbarState();
+            VERIFY_ARE_EQUAL(uint64_t{ 2 }, state.State());
+            VERIFY_ARE_EQUAL(uint64_t{ 90 }, state.Progress());
+        });
+
+        emitOsc(first, u"\x1b]9;4;2;40\a");
+        emitOsc(second, u"\x1b]9;4;1;20\a");
+        emitOsc(agent, u"\x1b]9;4;1;10\a");
+
+        TestOnUIThread([&]() {
+            const auto agentPaneNode = tab->GetRootPane()->FindPaneBySessionId(agent->SessionId());
+            VERIFY_IS_NOT_NULL(agentPaneNode);
+            VERIFY_IS_TRUE(agentPaneNode->Id().has_value());
+            VERIFY_IS_TRUE(tab->FocusPane(agentPaneNode->Id().value()));
+            page->UpdateLayout();
+        });
+
+        _waitForContentTransferReviewUI([&]() {
+            const auto display = displayForTab();
+            const auto firstPaneItem = findPaneItem(firstContentId);
+            const auto secondPaneItem = findPaneItem(secondContentId);
+            const auto header = headerForTab();
+            if (display == nullptr || firstPaneItem == nullptr || secondPaneItem == nullptr || header == nullptr)
+            {
+                return false;
+            }
+
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            const auto state = page->TaskbarState();
+            const auto activePane = tab->GetActivePane();
+            return activePane != nullptr &&
+                   activePane->IsAgentPane() &&
+                   display.HeaderVisibility() == Visibility::Visible &&
+                   findPaneItem(agentContentId) == nullptr &&
+                   firstPaneItem.ProgressState() == 2 &&
+                   firstPaneItem.ProgressValue() == 40 &&
+                   secondPaneItem.ProgressState() == 1 &&
+                   secondPaneItem.ProgressValue() == 20 &&
+                   !headerImpl->ShowProgressRing() &&
+                   header.as<UIElement>().Visibility() == Visibility::Visible &&
+                   headerRing != nullptr &&
+                   headerRing.Visibility() == Visibility::Collapsed &&
+                   header.TabStatus().IsProgressRingActive() &&
+                   !header.TabStatus().IsProgressRingIndeterminate() &&
+                   header.TabStatus().ProgressValue() == 40 &&
+                   state.State() == 2 &&
+                   state.Progress() == 40;
+        });
+
+        TestOnUIThread([&]() {
+            const auto display = displayForTab();
+            VERIFY_IS_NOT_NULL(display);
+            VERIFY_ARE_EQUAL(Visibility::Visible, display.HeaderVisibility());
+
+            const auto header = headerForTab();
+            VERIFY_IS_NOT_NULL(header);
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            VERIFY_IS_FALSE(headerImpl->ShowProgressRing());
+            VERIFY_ARE_EQUAL(Visibility::Visible, header.as<UIElement>().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, headerRing.Visibility());
+
+            const auto firstPaneItem = findPaneItem(firstContentId);
+            const auto secondPaneItem = findPaneItem(secondContentId);
+            VERIFY_IS_NOT_NULL(firstPaneItem);
+            VERIFY_IS_NOT_NULL(secondPaneItem);
+            VERIFY_ARE_EQUAL(uint64_t{ 2 }, firstPaneItem.ProgressState());
+            VERIFY_ARE_EQUAL(uint32_t{ 40 }, firstPaneItem.ProgressValue());
+            VERIFY_ARE_EQUAL(uint64_t{ 1 }, secondPaneItem.ProgressState());
+            VERIFY_ARE_EQUAL(uint32_t{ 20 }, secondPaneItem.ProgressValue());
         });
     }
 

@@ -377,6 +377,7 @@
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="3" />
                                                     <ColumnDefinition Width="28" />
+                                                    <ColumnDefinition Width="Auto" />
                                                     <ColumnDefinition Width="*" />
                                                 </Grid.ColumnDefinitions>
                                                 <Border x:Name="PaneActiveIndicator"
@@ -395,14 +396,27 @@
                                                           FontFamily="{ThemeResource SymbolThemeFontFamily}"
                                                           FontSize="12"
                                                           Glyph="&#xE756;" />
+                                                <mux:ProgressRing x:Name="PaneProgressRing"
+                                                                  Grid.Column="2"
+                                                                  Grid.RowSpan="2"
+                                                                  Width="15"
+                                                                  Height="15"
+                                                                  MinWidth="0"
+                                                                  MinHeight="0"
+                                                                  Margin="0,0,6,0"
+                                                                  VerticalAlignment="Center"
+                                                                  IsActive="{x:Bind IsProgressRingActive, Mode=OneWay}"
+                                                                  IsIndeterminate="{x:Bind IsProgressRingIndeterminate, Mode=OneWay}"
+                                                                  Visibility="{x:Bind IsProgressRingActive, Mode=OneWay}"
+                                                                  Value="{x:Bind ProgressValue, Mode=OneWay}" />
                                                 <TextBlock x:Name="PaneTitleText"
-                                                           Grid.Column="2"
+                                                           Grid.Column="3"
                                                            Margin="2,3,0,0"
                                                            VerticalAlignment="Center"
                                                            Text="{x:Bind Title, Mode=OneWay}"
                                                            TextTrimming="CharacterEllipsis" />
                                                 <TextBlock Grid.Row="1"
-                                                           Grid.Column="2"
+                                                           Grid.Column="3"
                                                            Margin="2,1,0,3"
                                                            MaxLines="2"
                                                            FontSize="10"

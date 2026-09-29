@@ -6,6 +6,8 @@
 #include "pch.h"
 #include "TabStrip.h"
 #include "TabStripAutomationPeer.h"
+#include "TabHeaderControl.h"
+#include "Utils.h"
 
 #include "TabStrip.g.cpp"
 #include "TabStripSelectionChangedEventArgs.g.cpp"
@@ -95,8 +97,16 @@ namespace winrt::TerminalApp::implementation
     void TabStripDisplayItem::UpdatePresentation(bool railCollapsed)
     {
         const auto isGroup = IsGroup();
+        const auto showPaneRows = isGroup && !railCollapsed && IsExpanded();
+        const auto showHeaderProgressRing = !showPaneRows || !HeaderProgressProjectedToPaneRows();
+
+        if (const auto header = Header().try_as<TerminalApp::TabHeaderControl>())
+        {
+            winrt::get_self<implementation::TabHeaderControl>(header)->ShowProgressRing(showHeaderProgressRing);
+        }
+
         GroupVisibility(isGroup && !railCollapsed ? Visibility::Visible : Visibility::Collapsed);
-        ChildrenVisibility(isGroup && !railCollapsed && IsExpanded() ? Visibility::Visible : Visibility::Collapsed);
+        ChildrenVisibility(showPaneRows ? Visibility::Visible : Visibility::Collapsed);
         IconVisibility(isGroup && !railCollapsed ? Visibility::Collapsed : Visibility::Visible);
         HeaderMinHeight(railCollapsed ? 32.0 : 40.0);
         ChevronGlyph(IsExpanded() ? L"\xE70D" : L"\xE76C");
@@ -131,6 +141,35 @@ namespace winrt::TerminalApp::implementation
         }
 
         return nullptr;
+    }
+
+    static WUX::Media::Brush _paneProgressBrush(const WUX::ElementTheme requestedTheme, const uint64_t progressState)
+    {
+        std::wstring_view key;
+        switch (progressState)
+        {
+        case 1:
+        case 3:
+            key = L"SystemControlForegroundAccentBrush";
+            break;
+        case 2:
+            key = L"SystemFillColorCriticalBrush";
+            break;
+        case 4:
+            key = L"SystemFillColorCautionBrush";
+            break;
+        default:
+            return nullptr;
+        }
+
+        const auto resources = WUX::Application::Current().Resources();
+        const auto boxedKey = winrt::box_value(key);
+        if (!resources.HasKey(boxedKey))
+        {
+            return nullptr;
+        }
+
+        return ThemeLookup(resources, requestedTheme, boxedKey).try_as<WUX::Media::Brush>();
     }
 
     static bool _originatesFromHeaderControl(IInspectable const& source, WUX::DependencyObject const& root)
@@ -371,6 +410,14 @@ namespace winrt::TerminalApp::implementation
                                 IVector<TerminalApp::TabStripPaneItem> const& panes,
                                 bool isGroup)
     {
+        SetPaneItems(item, panes, isGroup, panes && panes.Size() > 0);
+    }
+
+    void TabStrip::SetPaneItems(IInspectable const& item,
+                                IVector<TerminalApp::TabStripPaneItem> const& panes,
+                                bool isGroup,
+                                bool headerProgressProjectedToPaneRows)
+    {
         if (const auto tab = item.try_as<MUX::Controls::TabViewItem>())
         {
             if (const auto display = _displayItemForTab(tab))
@@ -399,6 +446,10 @@ namespace winrt::TerminalApp::implementation
                         existing.MetadataText(pane.MetadataText());
                         existing.MetadataVisibility(pane.MetadataVisibility());
                         existing.AutomationName(pane.AutomationName());
+                        existing.ProgressState(pane.ProgressState());
+                        existing.IsProgressRingActive(pane.IsProgressRingActive());
+                        existing.IsProgressRingIndeterminate(pane.IsProgressRingIndeterminate());
+                        existing.ProgressValue(pane.ProgressValue());
                         if (match != index)
                         {
                             current.RemoveAt(match);
@@ -411,7 +462,9 @@ namespace winrt::TerminalApp::implementation
                     current.RemoveAtEnd();
                 }
                 display.IsGroup(isGroup);
+                winrt::get_self<TabStripDisplayItem>(display)->HeaderProgressProjectedToPaneRows(headerProgressProjectedToPaneRows);
                 winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed);
+                _refreshPaneRowVisuals(display);
             }
         }
     }
@@ -554,6 +607,29 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    void TabStrip::_updatePaneRowVisuals(FrameworkElement const& root,
+                                         TerminalApp::TabStripPaneItem const& pane)
+    {
+        if (!root || !pane)
+        {
+            return;
+        }
+
+        if (const auto ring = _findNamedElement(root, L"PaneProgressRing").try_as<MUX::Controls::ProgressRing>())
+        {
+            if (const auto brush = _paneProgressBrush(root.ActualTheme(), pane.ProgressState()))
+            {
+                ring.Foreground(brush);
+            }
+            else
+            {
+                ring.ClearValue(WUX::Controls::Control::ForegroundProperty());
+            }
+
+            WUX::Automation::AutomationProperties::SetName(ring, pane.AutomationName());
+        }
+    }
+
     void TabStrip::_refreshDisplayItemVisuals(TerminalApp::TabStripDisplayItem const& display)
     {
         if (!display)
@@ -567,6 +643,44 @@ namespace winrt::TerminalApp::implementation
             if (const auto container = ItemsList().ContainerFromIndex(index).try_as<FrameworkElement>())
             {
                 _updateDisplayItemVisuals(container, display);
+                _refreshPaneRowVisuals(display);
+            }
+        }
+    }
+
+    void TabStrip::_refreshPaneRowVisuals(TerminalApp::TabStripDisplayItem const& display)
+    {
+        if (!display)
+        {
+            return;
+        }
+
+        uint32_t displayIndex{};
+        if (!_displayItems.IndexOf(display, displayIndex))
+        {
+            return;
+        }
+
+        const auto container = ItemsList().ContainerFromIndex(displayIndex).try_as<ListViewItem>();
+        const auto root = container ? container.ContentTemplateRoot().try_as<FrameworkElement>() : nullptr;
+        const auto paneList = root ? _findNamedElement(root, L"TabPaneItems").try_as<ItemsControl>() : nullptr;
+        if (!paneList)
+        {
+            return;
+        }
+
+        const auto panes = display.PaneItems();
+        for (uint32_t index = 0; index < panes.Size(); ++index)
+        {
+            const auto paneContainer = paneList.ContainerFromIndex(index).try_as<ContentPresenter>();
+            if (!paneContainer || WUX::Media::VisualTreeHelper::GetChildrenCount(paneContainer) == 0)
+            {
+                continue;
+            }
+
+            if (const auto paneRoot = WUX::Media::VisualTreeHelper::GetChild(paneContainer, 0).try_as<FrameworkElement>())
+            {
+                _updatePaneRowVisuals(paneRoot, panes.GetAt(index));
             }
         }
     }
@@ -607,6 +721,8 @@ namespace winrt::TerminalApp::implementation
                     WUX::Automation::AutomationProperties::SetName(close, label);
                     ToolTipService::SetToolTip(close, box_value(label));
                 }
+
+                _updatePaneRowVisuals(root, pane);
             }
         }
     }
@@ -1795,6 +1911,7 @@ namespace winrt::TerminalApp::implementation
                 display.Header(nullptr);
                 if (const auto headerControl = header.try_as<TerminalApp::TabHeaderControl>())
                 {
+                    winrt::get_self<implementation::TabHeaderControl>(headerControl)->ShowProgressRing(true);
                     headerControl.IsMetadataVisible(!headerControl.MetadataText().empty());
                 }
                 if (_deferringHeaderRestore)

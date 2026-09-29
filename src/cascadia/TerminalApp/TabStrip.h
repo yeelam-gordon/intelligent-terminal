@@ -79,6 +79,10 @@ namespace winrt::TerminalApp::implementation
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, MetadataText, PropertyChanged.raise);
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, AutomationName, PropertyChanged.raise);
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Visibility, MetadataVisibility, PropertyChanged.raise, winrt::Windows::UI::Xaml::Visibility::Collapsed);
+        WINRT_OBSERVABLE_PROPERTY(uint64_t, ProgressState, PropertyChanged.raise, 0);
+        WINRT_OBSERVABLE_PROPERTY(bool, IsProgressRingActive, PropertyChanged.raise, false);
+        WINRT_OBSERVABLE_PROPERTY(bool, IsProgressRingIndeterminate, PropertyChanged.raise, false);
+        WINRT_OBSERVABLE_PROPERTY(uint32_t, ProgressValue, PropertyChanged.raise, 0);
 
     public:
         til::property_changed_event PropertyChanged;
@@ -116,12 +120,15 @@ namespace winrt::TerminalApp::implementation
         void SyncTabPresentation(bool railCollapsed);
         void SyncIcon(winrt::hstring const& iconPath);
         void UpdatePresentation(bool railCollapsed);
+        bool HeaderProgressProjectedToPaneRows() const noexcept { return _headerProgressProjectedToPaneRows; }
+        void HeaderProgressProjectedToPaneRows(bool value) noexcept { _headerProgressProjectedToPaneRows = value; }
         til::property_changed_event PropertyChanged;
 
     private:
         winrt::Microsoft::UI::Xaml::Controls::TabViewItem _tab{ nullptr };
         winrt::Windows::Foundation::Collections::IObservableVector<TerminalApp::TabStripPaneItem> _paneItems{ nullptr };
         std::optional<winrt::hstring> _iconPath;
+        bool _headerProgressProjectedToPaneRows{ false };
     };
 
     struct TabStripPaneEventArgs : TabStripPaneEventArgsT<TabStripPaneEventArgs>
@@ -203,6 +210,10 @@ namespace winrt::TerminalApp::implementation
         void SetPaneItems(winrt::Windows::Foundation::IInspectable const& item,
                           winrt::Windows::Foundation::Collections::IVector<TerminalApp::TabStripPaneItem> const& panes,
                           bool isGroup);
+        void SetPaneItems(winrt::Windows::Foundation::IInspectable const& item,
+                          winrt::Windows::Foundation::Collections::IVector<TerminalApp::TabStripPaneItem> const& panes,
+                          bool isGroup,
+                          bool headerProgressProjectedToPaneRows);
         winrt::Windows::Foundation::IInspectable HeaderForTab(winrt::Windows::Foundation::IInspectable const& item) const;
         void SetTabSearchText(winrt::Windows::Foundation::IInspectable const& item, winrt::hstring const& searchText);
 
@@ -482,8 +493,11 @@ namespace winrt::TerminalApp::implementation
         uint32_t _richTabMetadataSelectionCount() const noexcept;
         void _updateRichTabMetadataSelectionState();
         void _refreshDisplayItemVisuals(TerminalApp::TabStripDisplayItem const& display);
+        void _refreshPaneRowVisuals(TerminalApp::TabStripDisplayItem const& display);
         static void _updateDisplayItemVisuals(winrt::Windows::UI::Xaml::FrameworkElement const& root,
                                               TerminalApp::TabStripDisplayItem const& display);
+        static void _updatePaneRowVisuals(winrt::Windows::UI::Xaml::FrameworkElement const& root,
+                                          TerminalApp::TabStripPaneItem const& pane);
         void _toggleGroup(TerminalApp::TabStripDisplayItem const& display);
 
         // Axis-parameterized per B→C rules. Returns -1 to mean "append at end."
