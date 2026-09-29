@@ -290,6 +290,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabStripPreservesClosePolicy);
         TEST_METHOD(VerticalTabStripCollapsedItemsPreserveSelection);
         TEST_METHOD(VerticalTabStripHostsPaneGroups);
+        TEST_METHOD(VerticalTabDeferredHeaderTransferRestoresProgressAfterAttachment);
         TEST_METHOD(VerticalTabStripCompatibilitySetPaneItemsPreservesHeaderProgress);
         TEST_METHOD(PaneProgressSurvivesTabLayoutLifecycle);
         TEST_METHOD(VerticalTabPaneProgressThemeSwitchRefreshesBrushes);
@@ -6206,6 +6207,36 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(Visibility::Visible, headerRing.Visibility());
             VERIFY_IS_TRUE(headerRing.IsActive());
             VERIFY_ARE_EQUAL(uint32_t{ 60 }, gsl::narrow<uint32_t>(headerRing.Value()));
+        });
+    }
+
+    void TabTests::VerticalTabDeferredHeaderTransferRestoresProgressAfterAttachment()
+    {
+        winrt::TerminalApp::TabStrip strip;
+        winrt::MUX::Controls::TabViewItem tab;
+        winrt::TerminalApp::TabHeaderControl header;
+
+        TestOnUIThread([&]() {
+            winrt::TerminalApp::TerminalTabStatus status;
+            status.IsProgressRingActive(true);
+            header.TabStatus(status);
+            tab.Header(header);
+            strip.TabItems().Append(tab);
+
+            const auto stripImpl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(strip);
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            headerImpl->ShowProgressRing(false);
+
+            stripImpl->BeginHeaderTransfer();
+            strip.TabItems().Clear();
+
+            VERIFY_IS_NULL(tab.Header());
+            VERIFY_IS_FALSE(headerImpl->ShowProgressRing());
+
+            stripImpl->CompleteHeaderTransfer();
+
+            VERIFY_IS_TRUE(tab.Header() == header);
+            VERIFY_IS_TRUE(headerImpl->ShowProgressRing());
         });
     }
 

@@ -1119,6 +1119,10 @@ namespace winrt::TerminalApp::implementation
             if (const auto tab = pending.Item.get(); tab && pending.Header && !tab.Header())
             {
                 tab.Header(pending.Header);
+                if (const auto headerControl = pending.Header.try_as<TerminalApp::TabHeaderControl>())
+                {
+                    winrt::get_self<implementation::TabHeaderControl>(headerControl)->ShowProgressRing(true);
+                }
             }
         }
         _pendingHeaderTransfers.clear();
@@ -1973,7 +1977,6 @@ namespace winrt::TerminalApp::implementation
                 display.Header(nullptr);
                 if (const auto headerControl = header.try_as<TerminalApp::TabHeaderControl>())
                 {
-                    winrt::get_self<implementation::TabHeaderControl>(headerControl)->ShowProgressRing(true);
                     headerControl.IsMetadataVisible(!headerControl.MetadataText().empty());
                 }
                 if (_deferringHeaderRestore)
@@ -1985,6 +1988,10 @@ namespace winrt::TerminalApp::implementation
                 else
                 {
                     tab.Header(header);
+                    if (const auto headerControl = header.try_as<TerminalApp::TabHeaderControl>())
+                    {
+                        winrt::get_self<implementation::TabHeaderControl>(headerControl)->ShowProgressRing(true);
+                    }
                 }
             }
         }
