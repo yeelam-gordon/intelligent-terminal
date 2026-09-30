@@ -291,6 +291,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabStripHostsPaneGroups);
         TEST_METHOD(VerticalTabSelectionPreservesPresentation);
         TEST_METHOD(VerticalTabIconChangesUpdatePresentation);
+        TEST_METHOD(RunningAgentIconOverridesProfileIcon);
         TEST_METHOD(VerticalTabThemeChangesDoNotReprojectPanes);
         TEST_METHOD(VerticalTabColorsFollowSidebarTheme);
         TEST_METHOD(VerticalTabStripUsesNativeInteractionStates);
@@ -4841,17 +4842,71 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
                 "session-a",
                 "00000000-0000-0000-0000-000000000001",
+                "claude",
+                uint64_t{ 1234 },
                 "Attention"));
             VERIFY_ARE_EQUAL(uint64_t{ 42 }, page->_richTabAgentStatusRequestGeneration);
             VERIFY_IS_FALSE(page->_richTabAgentStatusSnapshotLoaded);
             VERIFY_IS_TRUE(page->_richTabAgentStatusRefreshPending);
             VERIFY_ARE_EQUAL(
                 std::string{ "Attention" },
-                page->_richTabAgentStatusBySessionId.at("session-a"));
+                page->_richTabAgentStatusBySessionId.at("session-a").status);
+            VERIFY_ARE_EQUAL(
+                std::string{ "claude" },
+                page->_richTabAgentStatusBySessionId.at("session-a").providerId);
+            VERIFY_ARE_EQUAL(
+                uint64_t{ 1234 },
+                page->_richTabAgentStatusBySessionId.at("session-a").lastActivityAtMs.value());
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-a",
+                "00000000-0000-0000-0000-000000000001",
+                "custom:claude-wrapper",
+                uint64_t{ 2345 },
+                "Error"));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"Attention" }, item.Status());
+            VERIFY_ARE_EQUAL(
+                uint64_t{ 1234 },
+                page->_richTabAgentStatusBySessionId.at("session-a").lastActivityAtMs.value());
+            VERIFY_ARE_EQUAL(
+                std::string{ "claude" },
+                page->_richTabAgentStatusBySessionId.at("session-a").providerId);
+            VERIFY_ARE_EQUAL(
+                std::string{ "Attention" },
+                page->_richTabAgentStatusBySessionId.at("session-a").status);
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-b",
+                "00000000-0000-0000-0000-000000000002",
+                "custom:gemini-wrapper",
+                uint64_t{ 3456 },
+                "Error"));
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-b",
+                "00000000-0000-0000-0000-000000000002",
+                "gemini",
+                uint64_t{ 4567 },
+                "Working"));
+            VERIFY_ARE_EQUAL(
+                std::string{ "gemini" },
+                page->_richTabAgentStatusBySessionId.at("session-b").providerId);
+            VERIFY_ARE_EQUAL(
+                std::string{ "Working" },
+                page->_richTabAgentStatusBySessionId.at("session-b").status);
             VERIFY_ARE_EQUAL(
                 std::string{ "Attention" },
                 page->_richTabAgentStatusByPaneId.at(
-                    winrt::guid{ L"00000000-0000-0000-0000-000000000001" }));
+                    winrt::guid{ L"00000000-0000-0000-0000-000000000001" })
+                    .status);
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-c",
+                "00000000-0000-0000-0000-000000000001",
+                "",
+                uint64_t{ 5678 },
+                "Working"));
+            const auto& reusedPaneInfo = page->_richTabAgentStatusByPaneId.at(
+                winrt::guid{ L"00000000-0000-0000-0000-000000000001" });
+            VERIFY_ARE_EQUAL(std::string{ "session-c" }, reusedPaneInfo.sessionId);
+            VERIFY_IS_TRUE(reusedPaneInfo.providerId.empty());
+            VERIFY_ARE_EQUAL(std::string{ "Working" }, reusedPaneInfo.status);
             VERIFY_ARE_EQUAL(1u, page->_tabStrip.HistoryItems().Size());
             const auto updated = page->_tabStrip.HistoryItems().GetAt(0);
             VERIFY_ARE_EQUAL(winrt::hstring{ L"Attention" }, updated.Status());
@@ -4864,7 +4919,7 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(updated.IsLive());
             VERIFY_IS_FALSE(updated.IsHistorical());
 
-            VERIFY_IS_FALSE(page->_ApplyAgentSessionStatusDelta("session-a", "", "FutureStatus"));
+            VERIFY_IS_FALSE(page->_ApplyAgentSessionStatusDelta("session-a", "", "claude", std::nullopt, "FutureStatus"));
         });
     }
 
@@ -7010,6 +7065,141 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_TRUE(display.PaneItems().GetAt(0) == pane);
             }
             VERIFY_ARE_EQUAL(0u, collectionChanges);
+        });
+    }
+
+    void TabTests::RunningAgentIconOverridesProfileIcon()
+    {
+        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+
+        TestOnUIThread([&]() {
+            const auto tab = page->_GetFocusedTabImpl();
+            const auto sourcePane = tab->GetActivePane();
+            const auto paneSessionId = sourcePane->GetSessionId();
+            const auto profileIcon = sourcePane->GetContent().Icon();
+            page->_UpdateTabIcon(*tab);
+            VERIFY_ARE_EQUAL(profileIcon, tab->Icon());
+            page->_tabStrip.RichTabAgentStatusVisible(false);
+
+            auto agentPane = page->_WrapInAgentPaneContent(page->_MakePane(nullptr, nullptr, nullptr));
+            agentPane->IsAgentPane(true);
+            VERIFY_IS_TRUE(page->_SplitPane(tab, SplitDirection::Right, 0.5f, agentPane));
+            VERIFY_IS_TRUE(tab->GetActivePane() == agentPane);
+
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-agent-icon",
+                winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(paneSessionId)),
+                "gemini",
+                uint64_t{ 1234 },
+                "Working"));
+            VERIFY_ARE_EQUAL(
+                winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" },
+                tab->Icon());
+
+            VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Horizontal));
+            page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
+            VERIFY_IS_FALSE(page->_isVerticalLayout);
+            VERIFY_ARE_EQUAL(
+                winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" },
+                tab->Icon());
+            VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Vertical));
+            page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
+            VERIFY_IS_TRUE(page->_isVerticalLayout);
+            VERIFY_ARE_EQUAL(
+                winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" },
+                tab->Icon());
+
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-agent-icon",
+                winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(paneSessionId)),
+                "gemini",
+                uint64_t{ 2345 },
+                "Ended"));
+            VERIFY_ARE_EQUAL(profileIcon, tab->Icon());
+            page->_paneAgentSessions[paneSessionId] = { L"session-collision", L"custom:agent", {} };
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-collision",
+                winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(paneSessionId)),
+                "custom:agent",
+                uint64_t{ 3456 },
+                "Working"));
+            VERIFY_ARE_EQUAL(profileIcon, tab->Icon());
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-collision",
+                "00000000-0000-0000-0000-000000000001",
+                "copilot",
+                uint64_t{ 4567 },
+                "Attention"));
+            const auto info = page->_RichTabAgentInfoForControl(sourcePane->GetTerminalControl());
+            VERIFY_IS_TRUE(info.has_value());
+            VERIFY_ARE_EQUAL(std::string{ "custom:agent" }, info->providerId);
+            VERIFY_ARE_EQUAL(std::string{ "Working" }, info->status);
+            VERIFY_ARE_EQUAL(profileIcon, tab->Icon());
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-collision",
+                winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(paneSessionId)),
+                "gemini",
+                uint64_t{ 5678 },
+                "Working"));
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-collision",
+                "00000000-0000-0000-0000-000000000001",
+                "custom:other",
+                uint64_t{ 6789 },
+                "Idle"));
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-collision",
+                winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(paneSessionId)),
+                "custom:agent",
+                uint64_t{ 7890 },
+                "Error"));
+            const auto preferred = page->_RichTabAgentInfoForControl(sourcePane->GetTerminalControl());
+            VERIFY_IS_TRUE(preferred.has_value());
+            VERIFY_ARE_EQUAL(std::string{ "gemini" }, preferred->providerId);
+            VERIFY_ARE_EQUAL(std::string{ "Working" }, preferred->status);
+            VERIFY_ARE_EQUAL(
+                winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" },
+                tab->Icon());
+            VERIFY_IS_TRUE(tab->FocusPane(sourcePane->Id().value()));
+            const auto secondPane = page->_MakePane(nullptr, page->_GetFocusedTab(), nullptr);
+            VERIFY_IS_TRUE(page->_SplitPane(tab, SplitDirection::Right, 0.5f, secondPane));
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "second-pane-session",
+                winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(secondPane->GetSessionId())),
+                "claude",
+                uint64_t{ 8901 },
+                "Working"));
+            const auto verifyPaneIcons = [&](const winrt::hstring& secondIcon) {
+                const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+                const auto display = strip->DisplayItemForTab(tab->TabViewItem());
+                VERIFY_ARE_EQUAL(2u, display.PaneItems().Size());
+                for (const auto& item : display.PaneItems())
+                {
+                    const auto expected = item.ContentId() == sourcePane->ContentId().value() ?
+                                              winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" } :
+                                              secondIcon;
+                    VERIFY_ARE_EQUAL(expected, winrt::get_self<winrt::TerminalApp::implementation::TabStripPaneItem>(item)->IconPath());
+                }
+            };
+            verifyPaneIcons(L"ms-appx:///AgentIcons/claude.svg");
+            for (const auto layout : { TabLayout::Horizontal, TabLayout::Vertical })
+            {
+                VERIFY_IS_TRUE(page->_ApplyTabLayout(layout));
+                page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
+                VERIFY_ARE_EQUAL(layout == TabLayout::Vertical, page->_isVerticalLayout);
+                VERIFY_IS_TRUE(tab->FocusPane(sourcePane->Id().value()));
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" }, tab->Icon());
+                VERIFY_IS_TRUE(tab->FocusPane(secondPane->Id().value()));
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"ms-appx:///AgentIcons/claude.svg" }, tab->Icon());
+            }
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "second-pane-session",
+                winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(secondPane->GetSessionId())),
+                "claude",
+                uint64_t{ 9012 },
+                "Ended"));
+            VERIFY_ARE_EQUAL(secondPane->GetContent().Icon(), tab->Icon());
+            verifyPaneIcons(secondPane->GetContent().Icon());
         });
     }
 
