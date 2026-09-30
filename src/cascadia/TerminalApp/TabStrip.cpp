@@ -146,7 +146,7 @@ namespace winrt::TerminalApp::implementation
         GroupVisibility(isGroup && !railCollapsed ? Visibility::Visible : Visibility::Collapsed);
         ChildrenVisibility(showPaneRows ? Visibility::Visible : Visibility::Collapsed);
         const auto hideIcon = (isGroup && !railCollapsed) ||
-                              (verticalPresentation && showHeaderProgressRing && headerProgressActive);
+                              (verticalPresentation && !railCollapsed && showHeaderProgressRing && headerProgressActive);
         IconVisibility(hideIcon ? Visibility::Collapsed : Visibility::Visible);
         PinnedIconVisibility(railCollapsed && IsPinned() ? Visibility::Visible : Visibility::Collapsed);
         HeaderMinHeight(railCollapsed ? 32.0 : 40.0);
@@ -1180,8 +1180,16 @@ namespace winrt::TerminalApp::implementation
     {
         if (from == to ||
             from >= _tabItems.Size() ||
-            to >= _tabItems.Size() ||
-            from >= _displayItems.Size())
+            to >= _tabItems.Size())
+        {
+            return;
+        }
+
+        if (_displayItems.Size() != _tabItems.Size())
+        {
+            _syncDisplayItems();
+        }
+        if (from >= _displayItems.Size() || to >= _displayItems.Size())
         {
             return;
         }

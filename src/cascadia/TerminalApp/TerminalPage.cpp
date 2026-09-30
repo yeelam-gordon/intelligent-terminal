@@ -740,6 +740,15 @@ namespace winrt::TerminalApp::implementation
         {
             constexpr std::string_view gitStatusProviderId{ "com.microsoft.intelligent-terminal.git-status" };
             auto& richTabBroker = ::Microsoft::Terminal::RichTab::Provider::ProviderBroker::Instance();
+            richTabBroker.SetFieldDisplayNames(
+                gitStatusProviderId,
+                {
+                    { "agentStatus", winrt::to_string(RS_(L"VerticalTabsMetadataAgentStatus.Text")) },
+                    { "workingDirectory", winrt::to_string(RS_(L"VerticalTabsMetadataWorkingDirectory.Text")) },
+                    { "repository", winrt::to_string(RS_(L"VerticalTabsMetadataRepository.Text")) },
+                    { "branch", winrt::to_string(RS_(L"VerticalTabsMetadataBranch.Text")) },
+                    { "changes", winrt::to_string(RS_(L"VerticalTabsMetadataChanges.Text")) },
+                });
             if (const auto fields = richTabBroker.VisibleFields(gitStatusProviderId))
             {
                 const auto contains = [&](const std::string_view field) {
@@ -10588,12 +10597,14 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
+        auto firstPartyFields = _BuildRichTabFirstPartyFields(control);
         const auto attachment = broker.Attach(
             {
                 sessionId,
                 workingDirectory,
                 authoritative,
                 shellType,
+                std::move(firstPartyFields),
             },
             [weakThis = get_weak(), key, reservation](const auto& update) {
                 if (const auto page = weakThis.get())
@@ -10739,6 +10750,18 @@ namespace winrt::TerminalApp::implementation
         return std::nullopt;
     }
 
+    std::unordered_map<std::string, std::string> TerminalPage::_BuildRichTabFirstPartyFields(const TermControl& control)
+    {
+        std::unordered_map<std::string, std::string> firstPartyFields;
+        if (const auto rawAgentStatus = _RichTabAgentStatusForControl(control))
+        {
+            firstPartyFields.emplace("agentStatus", winrt::to_string(_SidebarHistoryStatusText(*rawAgentStatus)));
+        }
+        firstPartyFields.emplace("branchLabel", winrt::to_string(RS_(L"VerticalTabsMetadataBranch.Text")));
+        firstPartyFields.emplace("changesLabel", winrt::to_string(RS_(L"VerticalTabsMetadataChanges.Text")));
+        return firstPartyFields;
+    }
+
     void TerminalPage::_UpdateRichTabFirstPartyFields(const TermControl& control)
     {
         const auto key = reinterpret_cast<uintptr_t>(winrt::get_abi(control));
@@ -10761,14 +10784,9 @@ namespace winrt::TerminalApp::implementation
             _RequestRichTabAgentStatusRefresh();
         }
 
-        std::unordered_map<std::string, std::string> firstPartyFields;
-        if (const auto rawAgentStatus = _RichTabAgentStatusForControl(control))
-        {
-            firstPartyFields.emplace("agentStatus", winrt::to_string(_SidebarHistoryStatusText(*rawAgentStatus)));
-        }
         ::Microsoft::Terminal::RichTab::Provider::ProviderBroker::Instance().UpdateFirstPartyFields(
             attachment,
-            std::move(firstPartyFields));
+            _BuildRichTabFirstPartyFields(control));
     }
 
     void TerminalPage::_RefreshRichTabForTab(Tab& tab, const bool activate, const bool refreshPaneItems)
@@ -12267,7 +12285,7 @@ namespace winrt::TerminalApp::implementation
             {
                 const auto currentTabIndex = tabIndex.value();
                 const auto delta = direction == MoveTabDirection::Forward ? 1 : -1;
-                _TryMoveTab(currentTabIndex, currentTabIndex + delta);
+                _TryMoveTab(currentTabIndex, gsl::narrow_cast<int32_t>(currentTabIndex) + delta);
             }
         }
 
