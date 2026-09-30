@@ -7156,7 +7156,9 @@ namespace TerminalAppLocalTests
 
     void TabTests::RunningAgentIconOverridesProfileIcon()
     {
-        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
+        const auto connection = winrt::make_self<TestConnection>(winrt::guid{ L"{436c8552-a3b3-4141-9b6c-c57b3251936e}" }, State::Connected);
+        auto page = _commonSetup(*connection, nullptr, std::nullopt, true);
 
         TestOnUIThread([&]() {
             const auto tab = page->_GetFocusedTabImpl();
@@ -7172,6 +7174,12 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(page->_SplitPane(tab, SplitDirection::Right, 0.5f, agentPane));
             VERIFY_IS_TRUE(tab->GetActivePane() == agentPane);
 
+            const std::u16string progressStart{ u"\x1b]9;4;3\x07" };
+            connection->TerminalOutput.raise(winrt::array_view<const char16_t>{ progressStart.data(), progressStart.data() + progressStart.size() });
+            tab->_UpdateProgressState();
+            VERIFY_IS_TRUE(tab->_tabStatus.IsProgressRingActive());
+            VERIFY_ARE_EQUAL(profileIcon, tab->Icon());
+
             VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
                 "session-agent-icon",
                 winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(paneSessionId)),
@@ -7181,10 +7189,19 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(
                 winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" },
                 tab->Icon());
+            VERIFY_IS_NULL(tab->TabViewItem().IconSource());
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            const auto display = strip->DisplayItemForTab(tab->TabViewItem());
+            VERIFY_IS_NOT_NULL(display.Icon().try_as<winrt::Windows::UI::Xaml::Controls::PathIcon>());
+            const std::u16string progressEnd{ u"\x1b]9;4;0\x07" };
+            connection->TerminalOutput.raise(winrt::array_view<const char16_t>{ progressEnd.data(), progressEnd.data() + progressEnd.size() });
+            tab->_UpdateProgressState();
+            VERIFY_IS_FALSE(tab->_tabStatus.IsProgressRingActive());
             const auto tabIcon = tab->TabViewItem().IconSource().try_as<winrt::Microsoft::UI::Xaml::Controls::PathIconSource>();
             VERIFY_IS_NOT_NULL(tabIcon);
             VERIFY_IS_NOT_NULL(tabIcon.Data());
             tab->HideIcon(true);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" }, tab->Icon());
             tab->HideIcon(false);
             VERIFY_IS_NOT_NULL(tab->TabViewItem().IconSource().try_as<winrt::Microsoft::UI::Xaml::Controls::PathIconSource>());
 

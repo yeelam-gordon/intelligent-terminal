@@ -485,13 +485,6 @@ namespace winrt::TerminalApp::implementation
         _lastIconPath = iconPath;
         _lastIconStyle = iconStyle;
 
-        // If the icon is currently hidden, just return here (but only after setting _lastIconPath to the new path
-        // for when we show the icon again)
-        if (_iconHidden)
-        {
-            return;
-        }
-
         if (iconStyle == IconStyle::Hidden)
         {
             // The TabViewItem Icon needs MUX while the IconSourceElement in the CommandPalette needs WUX...
@@ -501,6 +494,10 @@ namespace winrt::TerminalApp::implementation
         else
         {
             Icon(_lastIconPath);
+            if (_iconHidden)
+            {
+                return;
+            }
             bool isMonochrome = iconStyle == IconStyle::Monochrome;
             TabViewItem().IconSource(::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(_lastIconPath, isMonochrome));
         }
@@ -519,13 +516,13 @@ namespace winrt::TerminalApp::implementation
         {
             if (hide)
             {
-                Icon({});
                 TabViewItem().IconSource(IconSource{ nullptr });
             }
             else
             {
-                Icon(_lastIconPath);
-                TabViewItem().IconSource(::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(_lastIconPath, _lastIconStyle == IconStyle::Monochrome));
+                TabViewItem().IconSource(_lastIconStyle == IconStyle::Hidden ?
+                                             IconSource{ nullptr } :
+                                             ::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(_lastIconPath, _lastIconStyle == IconStyle::Monochrome));
             }
             _iconHidden = hide;
         }
