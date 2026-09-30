@@ -4698,6 +4698,10 @@ namespace TerminalAppLocalTests
                 "custom:claude-wrapper",
                 uint64_t{ 2345 },
                 "Error"));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"Attention" }, item.Status());
+            VERIFY_ARE_EQUAL(
+                uint64_t{ 1234 },
+                page->_richTabAgentStatusBySessionId.at("session-a").lastActivityAtMs.value());
             VERIFY_ARE_EQUAL(
                 std::string{ "claude" },
                 page->_richTabAgentStatusBySessionId.at("session-a").providerId);

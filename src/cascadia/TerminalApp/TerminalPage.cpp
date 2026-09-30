@@ -3368,6 +3368,23 @@ namespace winrt::TerminalApp::implementation
         const auto statusString = std::string{ status };
         const auto providerIdString = std::string{ providerId };
         const auto paneId = _TryParsePaneSessionId(paneSessionId);
+        const auto rejectsIncoming = [&](const auto& info) {
+            return info.sessionId == sessionId && info.paneSessionId == paneId &&
+                   !_ShouldUseIncomingAgentProvider(info.providerId, providerId);
+        };
+        if (const auto existing = _richTabAgentStatusBySessionId.find(sessionIdString);
+            existing != _richTabAgentStatusBySessionId.end() && rejectsIncoming(existing->second))
+        {
+            return true;
+        }
+        if (paneId)
+        {
+            if (const auto existing = _richTabAgentStatusByPaneId.find(*paneId);
+                existing != _richTabAgentStatusByPaneId.end() && rejectsIncoming(existing->second))
+            {
+                return true;
+            }
+        }
         const auto updateInfo = [&](auto& info) {
             const auto sameSession = info.sessionId.empty() ||
                                      (info.sessionId == sessionId && info.paneSessionId == paneId);
@@ -10985,7 +11002,8 @@ namespace winrt::TerminalApp::implementation
                             return false;
                         });
                     }
-                    page->_RefreshRichTabForTab(*tab, false);
+                    page->_RefreshRichTabForTab(*tab, false, false);
+                    page->_RefreshTabStripPaneItems(tab);
                 }
             }
         }
