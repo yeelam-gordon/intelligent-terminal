@@ -103,6 +103,71 @@ A subsequent History opening captures a new entry context.
 
 - Use the localized labels **Expand sidebar** and **Collapse sidebar** for the
   tooltip and automation name, retaining the existing resource identifiers.
+
+## Tab-header ownership and rename focus
+
+The tab owns a data-only `TabHeaderPresentation` and the existing aggregate
+`TerminalTabStatus`. The canonical horizontal `TabViewItem` permanently retains
+its native `TabHeaderControl`. Each sidebar row template creates a separate
+`TabHeaderControl` bound to the same presentation; no header control is extracted,
+detached, or transferred during reorder or layout changes. Sidebar icon elements
+are also template-owned, with retained `IconSource` data rather than shared live
+elements. Pane rows and terminal/taskbar progress remain independent of this
+presentation contract.
+
+Indeterminate header, pane-row, and tab-switcher progress use the shared native
+WUX `ProgressRing` style in `IndeterminateProgressResources.xaml`. Its rotating
+arc restarts through a declarative template `Loaded` trigger, with no visual
+state groups or C++ reload repair. The native `IsActive` property remains bound
+to status for accessibility; the existing outer active gate and inner
+indeterminate gate control drawing. The arc uses `TemplateBinding Foreground`;
+MUX determinate/error/paused progress and the shared data/identity policy are
+unchanged. Product-host reload/animation acceptance still requires runtime
+integration validation.
+
+Identity and progress are separate: a profile or known live agent icon remains
+visible beside active progress in horizontal tabs and sidebar rows. Group
+chevrons and identity use separate leading cells; the compact rail retains
+identity. Explicit hidden-icon styling remains hidden, including while busy.
+The sidebar uses the native tab's configured source, including monochrome
+styling; the existing agent-session projection still selects the provider icon.
+Selected-color contrast applies to monochrome identity, not colored bitmaps or
+extracted images.
+
+Metadata visibility and the aggregate-progress visibility gate belong to the
+individual view. Title, search text, rename width, metadata text/accessibility
+text, and aggregate status are shared data. A recycled view cancels an outstanding
+rename before rebinding without committing it or requesting focus for its new
+owner.
+
+Context-menu and palette rename commands resolve the realized row header, as
+does the color-picker anchor. Rename commits route through that row's current
+canonical tab to `SetTabText`; rename completion uses the existing focus-request
+path. Closing a context menu checks the real row's `InRename` before restoring
+terminal focus.
+Interactive requests reveal the actual row by closing History and expanding a
+collapsed rail through the existing view commands. Filter-hidden rows remain
+unavailable; no invisible native-header fallback is used.
+
+Existing WinRT methods retain their ordering and signatures. New members are
+appended. `TabStripDisplayItem.Header` retains its `Object` getter/setter slots,
+but now returns `TabHeaderPresentation`, never a visual; its setter accepts
+presentation data, a legacy header (extracting only its data), a boxed title,
+or null (creating an empty presentation). `Icon` retains its `IconElement`
+getter/setter slots on both tab and pane descriptors as a data-only compatibility
+adapter, not a promise of full legacy visual semantics: the getter creates a fresh,
+unparented native icon element, and the setter extracts source data from standard
+icon types. Unsupported inputs fail with `E_INVALIDARG`. Templates use the
+`Presentation` and validated, data-only `IconSource` properties instead. The
+`Object` icon-source slot contains a MUX `IconSource`; this avoids the XAML
+function-binding compiler default-constructing the abstract source base class.
+The icon-source
+factory creates a fresh element per template and retains EXE/DLL image sources,
+agent SVG geometry, bitmap and symbol sources, and font/RTL properties.
+Pane descriptors retain source data, content identity, and status, never live
+icon elements. Tab and pane adapters share the same conversion and element
+factory; simultaneous containers share geometry/image data but own distinct
+elements.
 - Show the label and dimmed shortcut on the same line with 8 units of spacing.
   Keep Segoe UI Variable, `FontSize=12`, normal weight, `LineHeight=16`, and
   shortcut opacity `0.7`.

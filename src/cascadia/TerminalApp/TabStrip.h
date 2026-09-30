@@ -83,7 +83,13 @@ namespace winrt::TerminalApp::implementation
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, MetadataText, PropertyChanged.raise);
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, AutomationName, PropertyChanged.raise);
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Visibility, MetadataVisibility, PropertyChanged.raise, winrt::Windows::UI::Xaml::Visibility::Collapsed);
-        WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Controls::IconElement, Icon, PropertyChanged.raise, nullptr);
+
+    public:
+        winrt::Windows::UI::Xaml::Controls::IconElement Icon() const;
+        void Icon(winrt::Windows::UI::Xaml::Controls::IconElement const& value);
+        winrt::Windows::UI::Xaml::Controls::IconElement CreateIcon(winrt::Windows::Foundation::IInspectable const& source) const;
+        winrt::Microsoft::UI::Xaml::Controls::IconSource IconSource() const noexcept { return _iconSource; }
+        void IconSource(winrt::Windows::Foundation::IInspectable const& value);
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, HighlightQuery, PropertyChanged.raise);
         WINRT_OBSERVABLE_PROPERTY(uint64_t, ProgressState, PropertyChanged.raise, 0);
         WINRT_OBSERVABLE_PROPERTY(bool, IsProgressRingActive, PropertyChanged.raise, false);
@@ -97,6 +103,7 @@ namespace winrt::TerminalApp::implementation
         winrt::Microsoft::UI::Xaml::Controls::TabViewItem _tab{ nullptr };
         uint32_t _contentId{};
         winrt::hstring _iconPath;
+        winrt::Microsoft::UI::Xaml::Controls::IconSource _iconSource{ nullptr };
     };
 
     struct TabStripDisplayItem : TabStripDisplayItemT<TabStripDisplayItem>
@@ -107,10 +114,20 @@ namespace winrt::TerminalApp::implementation
 
         winrt::Microsoft::UI::Xaml::Controls::TabViewItem Tab() const noexcept { return _tab; }
         winrt::Windows::Foundation::Collections::IObservableVector<TerminalApp::TabStripPaneItem> PaneItems() const noexcept { return _paneItems; }
-        WINRT_OBSERVABLE_PROPERTY(winrt::Windows::Foundation::IInspectable, Header, PropertyChanged.raise, nullptr);
+        winrt::Windows::Foundation::IInspectable Header() const { return _header; }
+        void Header(winrt::Windows::Foundation::IInspectable const& value);
+        TerminalApp::TabHeaderPresentation Presentation() const { return Header().as<TerminalApp::TabHeaderPresentation>(); }
+        WINRT_OBSERVABLE_PROPERTY(bool, IsMetadataVisible, PropertyChanged.raise, false);
+        WINRT_OBSERVABLE_PROPERTY(bool, ShowProgressRing, PropertyChanged.raise, true);
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, Title, PropertyChanged.raise);
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, SearchText, PropertyChanged.raise);
-        WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Controls::IconElement, Icon, PropertyChanged.raise, nullptr);
+
+    public:
+        winrt::Windows::UI::Xaml::Controls::IconElement Icon() const;
+        void Icon(winrt::Windows::UI::Xaml::Controls::IconElement const& value);
+        winrt::Windows::UI::Xaml::Controls::IconElement CreateIcon(winrt::Windows::Foundation::IInspectable const& source) const;
+        winrt::Microsoft::UI::Xaml::Controls::IconSource IconSource() const noexcept { return _iconSource; }
+        void IconSource(winrt::Windows::Foundation::IInspectable const& value);
         WINRT_OBSERVABLE_PROPERTY(winrt::Windows::UI::Xaml::Controls::Primitives::FlyoutBase, ContextFlyout, PropertyChanged.raise, nullptr);
         WINRT_OBSERVABLE_PROPERTY(bool, IsExpanded, PropertyChanged.raise, true);
         WINRT_OBSERVABLE_PROPERTY(bool, IsGroup, PropertyChanged.raise, false);
@@ -140,6 +157,8 @@ namespace winrt::TerminalApp::implementation
         winrt::Microsoft::UI::Xaml::Controls::TabViewItem _tab{ nullptr };
         winrt::Windows::Foundation::Collections::IObservableVector<TerminalApp::TabStripPaneItem> _paneItems{ nullptr };
         std::optional<winrt::hstring> _iconPath;
+        TerminalApp::TabHeaderPresentation _header{ nullptr };
+        winrt::Microsoft::UI::Xaml::Controls::IconSource _iconSource{ nullptr };
         bool _headerProgressProjectedToPaneRows{ false };
     };
 
@@ -222,7 +241,8 @@ namespace winrt::TerminalApp::implementation
                                 winrt::hstring const& iconPath);
         void SetTabPresentation(TerminalApp::TabStripDisplayItem const& display,
                                 winrt::hstring const& title,
-                                winrt::hstring const& iconPath);
+                                winrt::hstring const& iconPath,
+                                bool useNativeIconSource = false);
         void SetPaneItems(winrt::Windows::Foundation::IInspectable const& item,
                           winrt::Windows::Foundation::Collections::IVector<TerminalApp::TabStripPaneItem> const& panes,
                           bool isGroup);
@@ -237,7 +257,7 @@ namespace winrt::TerminalApp::implementation
                           winrt::Windows::Foundation::Collections::IVector<TerminalApp::TabStripPaneItem> const& panes,
                           bool isGroup,
                           bool headerProgressProjectedToPaneRows);
-        winrt::Windows::Foundation::IInspectable HeaderForTab(winrt::Windows::Foundation::IInspectable const& item) const;
+        winrt::Windows::Foundation::IInspectable HeaderForTab(winrt::Windows::Foundation::IInspectable const& item, bool realize = false);
         TerminalApp::TabStripDisplayItem DisplayItemForTab(winrt::Windows::Foundation::IInspectable const& item) const;
         TerminalApp::TabStripDisplayItem DisplayItemAt(uint32_t index) const;
         void SyncTabPresentation(TerminalApp::TabStripDisplayItem const& display);
@@ -290,8 +310,6 @@ namespace winrt::TerminalApp::implementation
         void SetVerticalPresentation(bool vertical);
         void RestoreTabOrder(const std::vector<winrt::Windows::Foundation::IInspectable>& items);
         void SetTabPinned(const winrt::Microsoft::UI::Xaml::Controls::TabViewItem& item, bool pinned);
-        void BeginHeaderTransfer();
-        void CompleteHeaderTransfer();
         bool RichTabRepositoryVisible() const noexcept { return _richTabRepositoryVisible; }
         void RichTabRepositoryVisible(bool value);
         bool RichTabBranchVisible() const noexcept { return _richTabBranchVisible; }
@@ -308,8 +326,6 @@ namespace winrt::TerminalApp::implementation
         void TopChromeContent(winrt::Windows::UI::Xaml::UIElement const& value);
 
         // XAML-bound event handlers.
-        void OnIndeterminateProgressRingLoaded(winrt::Windows::Foundation::IInspectable const& sender,
-                                              winrt::Windows::UI::Xaml::RoutedEventArgs const& e);
         void OnListSelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                      winrt::Windows::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
         void OnDragItemsStarting(winrt::Windows::Foundation::IInspectable const& sender,
@@ -369,6 +385,10 @@ namespace winrt::TerminalApp::implementation
                                         winrt::Windows::UI::Xaml::Controls::ContainerContentChangingEventArgs const& e);
         void OnTabHeaderLoaded(winrt::Windows::Foundation::IInspectable const& sender,
                                winrt::Windows::UI::Xaml::RoutedEventArgs const& e);
+        void OnRowHeaderLoaded(winrt::Windows::Foundation::IInspectable const& sender,
+                               winrt::Windows::UI::Xaml::RoutedEventArgs const& e);
+        void OnHeaderRenameEnded(winrt::Windows::Foundation::IInspectable const& sender,
+                                 winrt::Windows::Foundation::IInspectable const& args);
         void OnPaneRowLoaded(winrt::Windows::Foundation::IInspectable const& sender,
                              winrt::Windows::UI::Xaml::RoutedEventArgs const& e);
         void OnGroupToggleClick(winrt::Windows::Foundation::IInspectable const& sender,
@@ -423,6 +443,7 @@ namespace winrt::TerminalApp::implementation
         til::typed_event<TerminalApp::TabStrip, TerminalApp::TabStripPaneEventArgs> PaneCloseRequested;
         til::typed_event<TerminalApp::TabStrip, TerminalApp::TabStripCloseRequestedEventArgs> TabRenameRequested;
         til::typed_event<TerminalApp::TabStrip, TerminalApp::TabStripCloseRequestedEventArgs> TabFocusRequested;
+        til::typed_event<winrt::Microsoft::UI::Xaml::Controls::TabViewItem, winrt::hstring> HeaderTitleChangeRequested;
         til::typed_event<TerminalApp::TabStrip, winrt::Windows::Foundation::IInspectable> VisibleFieldsChanged;
         til::event<winrt::delegate<>> HistoryProjectionChanged;
 
@@ -486,13 +507,6 @@ namespace winrt::TerminalApp::implementation
             bool Expanded{ true };
         };
         std::unordered_map<void*, GroupExpansionState> _groupExpansion;
-        struct PendingHeaderTransfer
-        {
-            winrt::weak_ref<winrt::Microsoft::UI::Xaml::Controls::TabViewItem> Item;
-            winrt::Windows::Foundation::IInspectable Header;
-        };
-        std::unordered_map<void*, PendingHeaderTransfer> _pendingHeaderTransfers;
-        bool _deferringHeaderRestore{ false };
 
         // The item currently being dragged. Set in OnDragItemsStarting, cleared in
         // OnDragItemsCompleted. If DropResult is None, this is the item to fire
@@ -512,7 +526,6 @@ namespace winrt::TerminalApp::implementation
         TerminalApp::TabStripDisplayItem _displayItemAt(uint32_t index) const;
         TerminalApp::TabStripDisplayItem _displayItemForTab(winrt::Microsoft::UI::Xaml::Controls::TabViewItem const& tab) const;
         TerminalApp::TabStripDisplayItem _makeDisplayItem(winrt::Microsoft::UI::Xaml::Controls::TabViewItem const& tab);
-        void _restoreDisplayItemHeader(TerminalApp::TabStripDisplayItem const& display);
         static winrt::Microsoft::UI::Xaml::Controls::TabViewItem _tabFromItem(winrt::Windows::Foundation::IInspectable const& item);
         void _syncDisplayItems();
         void _hookCloseRequested(winrt::Microsoft::UI::Xaml::Controls::TabViewItem const& item);

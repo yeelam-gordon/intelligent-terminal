@@ -485,27 +485,20 @@ namespace winrt::TerminalApp::implementation
         _lastIconPath = iconPath;
         _lastIconStyle = iconStyle;
 
-        if (iconStyle == IconStyle::Hidden)
+        const auto previousIcon = Icon();
+        TabViewItem().IconSource(iconStyle == IconStyle::Hidden || _iconHidden ?
+                                     IconSource{ nullptr } :
+                                     ::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(_lastIconPath, iconStyle == IconStyle::Monochrome));
+        Icon(iconStyle == IconStyle::Hidden ? winrt::hstring{} : _lastIconPath);
+        if (Icon() == previousIcon)
         {
-            // The TabViewItem Icon needs MUX while the IconSourceElement in the CommandPalette needs WUX...
-            Icon({});
-            TabViewItem().IconSource(IconSource{ nullptr });
-        }
-        else
-        {
-            Icon(_lastIconPath);
-            if (_iconHidden)
-            {
-                return;
-            }
-            bool isMonochrome = iconStyle == IconStyle::Monochrome;
-            TabViewItem().IconSource(::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(_lastIconPath, isMonochrome));
+            PropertyChanged.raise(*this, WUX::Data::PropertyChangedEventArgs{ L"Icon" });
         }
     }
 
     // Method Description:
     // - Hide or show the tab icon for this tab
-    // - Used when we want to show the progress ring, which should replace the icon
+    // - Independent of progress; explicit icon visibility is retained.
     // Arguments:
     // - hide: if true, we hide the icon; if false, we show the icon
     void Tab::HideIcon(const bool hide)
@@ -525,6 +518,7 @@ namespace winrt::TerminalApp::implementation
                                              ::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(_lastIconPath, _lastIconStyle == IconStyle::Monochrome));
             }
             _iconHidden = hide;
+            PropertyChanged.raise(*this, WUX::Data::PropertyChangedEventArgs{ L"Icon" });
         }
     }
 
@@ -1043,6 +1037,12 @@ namespace winrt::TerminalApp::implementation
     {
         ASSERT_UI_THREAD();
 
+        const auto header = _HeaderControl(true);
+        if (!header)
+        {
+            LOG_HR(E_UNEXPECTED);
+            return;
+        }
         auto weakThis{ get_weak() };
 
         _tabColorPickup = colorPicker;
@@ -1071,7 +1071,7 @@ namespace winrt::TerminalApp::implementation
             }
         });
 
-        _tabColorPickup.ShowAt(_headerControl);
+        _tabColorPickup.ShowAt(header);
     }
 
     // Method Description:
@@ -1271,13 +1271,28 @@ namespace winrt::TerminalApp::implementation
     {
         ASSERT_UI_THREAD();
 
-        _headerControl.BeginRename();
+        if (const auto header = _HeaderControl(true))
+        {
+            header.BeginRename();
+        }
+        else
+        {
+            LOG_HR(E_UNEXPECTED);
+        }
     }
 
     void Tab::CancelTabRename()
     {
         ASSERT_UI_THREAD();
-        _headerControl.CancelRename();
+        if (const auto header = _HeaderControl())
+        {
+            header.CancelRename();
+        }
+    }
+
+    TerminalApp::TabHeaderControl Tab::_HeaderControl(const bool realize)
+    {
+        return _isVerticalTabLayout ? (_headerResolver ? _headerResolver(realize) : nullptr) : _headerControl;
     }
 
     // Method Description:
@@ -1541,14 +1556,10 @@ namespace winrt::TerminalApp::implementation
                 const auto progressValue = gsl::narrow<uint32_t>(state.Progress());
                 _tabStatus.ProgressValue(progressValue);
             }
-            // Hide the tab icon (the progress ring is placed over it)
-            HideIcon(true);
             _tabStatus.IsProgressRingActive(true);
         }
         else
         {
-            // Show the tab icon
-            HideIcon(false);
             _tabStatus.IsProgressRingActive(false);
         }
 
@@ -2316,7 +2327,8 @@ namespace winrt::TerminalApp::implementation
                 // If we're
                 // * NOT in a rename
                 // * AND (the content isn't a TermControl, OR the term control doesn't have focus in the search box)
-                if (!tab->_headerControl.InRename() &&
+                const auto header = tab->_HeaderControl();
+                if ((!header || !header.InRename()) &&
                     (terminalControl == nullptr || !terminalControl.SearchBoxEditInFocus()))
                 {
                     tab->RequestFocusActiveControl.raise();

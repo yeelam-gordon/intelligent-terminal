@@ -645,10 +645,22 @@ namespace winrt::TerminalApp::implementation
                 }
             }
         });
-        _tabStrip.TabFocusRequested([weakThis{ get_weak() }](auto&&, const auto&) {
+        winrt::get_self<implementation::TabStrip>(_tabStrip)->HeaderTitleChangeRequested([weakThis = get_weak()](const auto& item, const auto& title) {
             if (const auto page = weakThis.get())
             {
-                page->_FocusCurrentTab(false);
+                if (const auto tab = page->_GetTabByTabViewItem(item))
+                {
+                    page->_GetTabImpl(tab)->SetTabText(title);
+                }
+            }
+        });
+        _tabStrip.TabFocusRequested([weakThis{ get_weak() }](auto&&, const auto& args) {
+            if (const auto page = weakThis.get())
+            {
+                if (const auto tab = page->_GetTabByTabViewItem(args.Tab()))
+                {
+                    page->_GetTabImpl(tab)->RequestFocusActiveControl.raise();
+                }
             }
         });
         _tabStrip.PaneActivationRequested([weakThis{ get_weak() }](auto&&, const auto& args) {
@@ -5881,7 +5893,6 @@ namespace winrt::TerminalApp::implementation
             if (_tabLayoutTransitionPreviousVertical)
             {
                 _tabStrip.IsRailCollapsed(false);
-                winrt::get_self<implementation::TabStrip>(_tabStrip)->BeginHeaderTransfer();
             }
             _tabStrip.TopChromeContent(nullptr);
 
@@ -5892,7 +5903,7 @@ namespace winrt::TerminalApp::implementation
                                     _tabView.TabItems();
             source.Clear();
 
-            // With no headers to detach, complete before startup can insert a
+            // With no tabs to move, complete before startup can insert a
             // tab into the old layout and lose its selection during the switch.
             if (_tabs.Size() == 0)
             {
@@ -5956,9 +5967,6 @@ namespace winrt::TerminalApp::implementation
         _tabRow.IsVerticalLayout(vertical);
         _isVerticalLayout = vertical;
         _newTabButton = vertical ? _verticalNewTabButton : _horizontalNewTabButton;
-
-        stage = "complete header transfer";
-        winrt::get_self<implementation::TabStrip>(_tabStrip)->CompleteHeaderTransfer();
 
         stage = "append tab items";
         auto destination = vertical ?
@@ -11656,7 +11664,11 @@ namespace winrt::TerminalApp::implementation
                 }
                 else if ((propertyName == L"Icon" || propertyName == L"ToolTip") && page->_isVerticalLayout)
                 {
-                    page->_tabStrip.SetTabPresentation(tab->TabViewItem(), tab->Title(), tab->Icon());
+                    const auto strip = winrt::get_self<TabStrip>(page->_tabStrip);
+                    if (const auto display = strip->DisplayItemForTab(tab->TabViewItem()))
+                    {
+                        strip->SetTabPresentation(display, tab->Title(), tab->Icon(), true);
+                    }
                 }
                 else if (propertyName == L"Content")
                 {
@@ -12620,7 +12632,7 @@ namespace winrt::TerminalApp::implementation
             itemImpl->AutomationName(winrt::hstring{ automationName });
             items.emplace_back(std::move(item));
         }
-        tabStrip->SetTabPresentation(display, tab->Title(), tab->Icon());
+        tabStrip->SetTabPresentation(display, tab->Title(), tab->Icon(), true);
         tabStrip->SetPaneItems(
             display,
             single_threaded_vector<TerminalApp::TabStripPaneItem>(std::move(items)),

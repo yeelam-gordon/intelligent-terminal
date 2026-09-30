@@ -23,6 +23,9 @@
 
     <UserControl.Resources>
         <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="ms-resource:///Files/TerminalApp/IndeterminateProgressResources.xaml" />
+            </ResourceDictionary.MergedDictionaries>
             <!--  KeyChordText styles  -->
             <Style x:Key="KeyChordBorderStyle"
                    TargetType="Border">
@@ -212,7 +215,7 @@
                                           Visibility="{x:Bind mtu:Converters.InvertedBooleanToVisibility(Item.(local:TabPaletteItem.TabStatus).IsProgressRingIndeterminate), Mode=OneWay}"
                                           Value="{x:Bind Item.(local:TabPaletteItem.TabStatus).ProgressValue, Mode=OneWay}" />
                         <ProgressRing x:Name="TabIndeterminateProgressRing"
-                                      Loaded="OnIndeterminateProgressRingLoaded"
+                                      Style="{StaticResource DeclarativeSpinner}"
                                       Width="15"
                                       Height="15"
                                       MinWidth="0"

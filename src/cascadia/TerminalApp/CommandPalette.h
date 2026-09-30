@@ -75,8 +75,6 @@ namespace winrt::TerminalApp::implementation
         };
 
         friend struct CommandPaletteT<CommandPalette>; // for Xaml to bind events
-        void OnIndeterminateProgressRingLoaded(const Windows::Foundation::IInspectable& sender,
-                                              const Windows::UI::Xaml::RoutedEventArgs& e);
 
         Windows::Foundation::Collections::IVector<winrt::TerminalApp::FilteredCommand> _allCommands{ nullptr };
         Windows::Foundation::Collections::IVector<winrt::TerminalApp::FilteredCommand> _currentNestedCommands{ nullptr };

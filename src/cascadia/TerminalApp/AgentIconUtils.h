@@ -86,4 +86,161 @@ namespace Microsoft::Terminal::UI::AgentIcons
         }
         return winrt::Microsoft::Terminal::UI::IconPathConverter::IconWUX(iconPath);
     }
+
+    inline winrt::Microsoft::UI::Xaml::Controls::IconSource SourceForIconElement(const winrt::Windows::UI::Xaml::Controls::IconElement& value)
+    {
+        namespace MUX = winrt::Microsoft::UI::Xaml::Controls;
+        namespace WUX = winrt::Windows::UI::Xaml::Controls;
+        MUX::IconSource source{ nullptr };
+        if (!value)
+        {
+            source = MUX::BitmapIconSource{};
+        }
+        else if (const auto element = value.try_as<WUX::IconSourceElement>())
+        {
+            const auto data = element.IconSource();
+            if (const auto font = data.try_as<WUX::FontIconSource>())
+            {
+                MUX::FontIconSource converted;
+                converted.Glyph(font.Glyph());
+                converted.FontFamily(font.FontFamily());
+                converted.FontSize(font.FontSize());
+                converted.FontStyle(font.FontStyle());
+                converted.FontWeight(font.FontWeight());
+                converted.MirroredWhenRightToLeft(font.MirroredWhenRightToLeft());
+                converted.IsTextScaleFactorEnabled(font.IsTextScaleFactorEnabled());
+                source = converted;
+            }
+            else if (const auto bitmap = data.try_as<WUX::BitmapIconSource>())
+            {
+                MUX::BitmapIconSource converted;
+                converted.UriSource(bitmap.UriSource());
+                converted.ShowAsMonochrome(bitmap.ShowAsMonochrome());
+                source = converted;
+            }
+            else if (const auto path = data.try_as<WUX::PathIconSource>())
+            {
+                MUX::PathIconSource converted;
+                converted.Data(path.Data());
+                source = converted;
+            }
+            else if (const auto symbol = data.try_as<WUX::SymbolIconSource>())
+            {
+                MUX::SymbolIconSource converted;
+                converted.Symbol(symbol.Symbol());
+                source = converted;
+            }
+            else
+            {
+                THROW_HR_IF(E_INVALIDARG, data);
+            }
+        }
+        else if (const auto font = value.try_as<WUX::FontIcon>())
+        {
+            MUX::FontIconSource data;
+            data.Glyph(font.Glyph());
+            data.FontFamily(font.FontFamily());
+            data.FontSize(font.FontSize());
+            data.FontStyle(font.FontStyle());
+            data.FontWeight(font.FontWeight());
+            data.MirroredWhenRightToLeft(font.MirroredWhenRightToLeft());
+            data.IsTextScaleFactorEnabled(font.IsTextScaleFactorEnabled());
+            source = data;
+        }
+        else if (const auto bitmap = value.try_as<WUX::BitmapIcon>())
+        {
+            MUX::BitmapIconSource data;
+            data.UriSource(bitmap.UriSource());
+            data.ShowAsMonochrome(bitmap.ShowAsMonochrome());
+            source = data;
+        }
+        else if (const auto path = value.try_as<WUX::PathIcon>())
+        {
+            MUX::PathIconSource data;
+            data.Data(path.Data());
+            source = data;
+        }
+        else if (const auto symbol = value.try_as<WUX::SymbolIcon>())
+        {
+            MUX::SymbolIconSource data;
+            data.Symbol(symbol.Symbol());
+            source = data;
+        }
+        else if (const auto image = value.try_as<MUX::ImageIcon>())
+        {
+            MUX::ImageIconSource data;
+            data.ImageSource(image.Source());
+            source = data;
+        }
+        else
+        {
+            THROW_HR(E_INVALIDARG);
+        }
+        if (!source)
+        {
+            source = MUX::BitmapIconSource{};
+        }
+        if (value)
+        {
+            source.Foreground(value.Foreground());
+        }
+        return source;
+    }
+
+    inline winrt::Windows::UI::Xaml::Controls::IconElement ElementForIconSource(const winrt::Microsoft::UI::Xaml::Controls::IconSource& source)
+    {
+        namespace MUX = winrt::Microsoft::UI::Xaml::Controls;
+        namespace WUX = winrt::Windows::UI::Xaml::Controls;
+        WUX::IconElement element{ nullptr };
+        if (const auto font = source.try_as<MUX::FontIconSource>())
+        {
+            WUX::FontIcon icon;
+            icon.Glyph(font.Glyph());
+            icon.FontFamily(font.FontFamily());
+            icon.FontSize(font.FontSize());
+            icon.FontStyle(font.FontStyle());
+            icon.FontWeight(font.FontWeight());
+            icon.MirroredWhenRightToLeft(font.MirroredWhenRightToLeft());
+            icon.IsTextScaleFactorEnabled(font.IsTextScaleFactorEnabled());
+            element = icon;
+        }
+        else if (const auto bitmap = source.try_as<MUX::BitmapIconSource>())
+        {
+            WUX::BitmapIcon icon;
+            icon.UriSource(bitmap.UriSource());
+            icon.ShowAsMonochrome(bitmap.ShowAsMonochrome());
+            element = icon;
+        }
+        else if (const auto path = source.try_as<MUX::PathIconSource>())
+        {
+            WUX::PathIcon icon;
+            icon.Data(path.Data());
+            icon.Width(16);
+            icon.Height(16);
+            element = icon;
+        }
+        else if (const auto symbol = source.try_as<MUX::SymbolIconSource>())
+        {
+            WUX::SymbolIcon icon;
+            icon.Symbol(symbol.Symbol());
+            element = icon;
+        }
+        else if (const auto image = source.try_as<MUX::ImageIconSource>())
+        {
+            MUX::ImageIcon icon;
+            icon.Source(image.ImageSource());
+            icon.Width(32);
+            icon.Height(32);
+            element = icon;
+        }
+        else
+        {
+            THROW_HR(E_INVALIDARG);
+        }
+        if (source.Foreground())
+        {
+            element.Foreground(source.Foreground());
+        }
+        return element;
+    }
 }

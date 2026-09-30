@@ -89,6 +89,9 @@
     <Page Include="AgentIconResources.xaml">
       <SubType>Designer</SubType>
     </Page>
+    <Page Include="IndeterminateProgressResources.xaml">
+      <SubType>Designer</SubType>
+    </Page>
     <Page Include="FreOverlay.xaml">
       <SubType>Designer</SubType>
     </Page>

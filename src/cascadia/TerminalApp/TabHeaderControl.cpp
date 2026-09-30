@@ -5,27 +5,16 @@
 #include "TabHeaderControl.h"
 
 #include "TabHeaderControl.g.cpp"
+#include "TabHeaderPresentation.g.cpp"
 
 using namespace winrt;
 using namespace winrt::Microsoft::UI::Xaml;
 
 namespace winrt::TerminalApp::implementation
 {
-    void TabHeaderControl::OnIndeterminateProgressRingLoaded(const Windows::Foundation::IInspectable& sender,
-                                                           const Windows::UI::Xaml::RoutedEventArgs&)
-    {
-        const auto ring = sender.as<Windows::UI::Xaml::Controls::ProgressRing>();
-        ring.ApplyTemplate();
-        // A same-state transition does not restart a storyboard stopped by unloading.
-        LOG_HR_IF(E_UNEXPECTED, !Windows::UI::Xaml::VisualStateManager::GoToState(ring, L"Inactive", false));
-        if (ring.IsActive())
-        {
-            LOG_HR_IF(E_UNEXPECTED, !Windows::UI::Xaml::VisualStateManager::GoToState(ring, L"Active", false));
-        }
-    }
-
     TabHeaderControl::TabHeaderControl()
     {
+        Presentation(winrt::make<TabHeaderPresentation>());
         InitializeComponent();
         HeaderProgressRingPresenter().DataContext(box_value(_showProgressRing));
 
@@ -79,6 +68,33 @@ namespace winrt::TerminalApp::implementation
                 }
             }
         });
+    }
+
+    void TabHeaderControl::Presentation(const TerminalApp::TabHeaderPresentation& value)
+    {
+        THROW_HR_IF(E_INVALIDARG, !value);
+        if (_presentation == value)
+        {
+            return;
+        }
+        if (_presentation)
+        {
+            // Recycling must not commit an old row's edit to its new data owner.
+            _renameCancelled = true;
+            _CloseRenameBox(false);
+        }
+        _presentationChanged.revoke();
+        _presentation = value;
+        _presentationChanged = value.PropertyChanged(winrt::auto_revoke, [weakThis = get_weak()](auto&&, const auto& args) {
+            if (const auto self = weakThis.get())
+            {
+                self->PropertyChanged.raise(*self, args);
+            }
+        });
+        for (const auto name : { L"Presentation", L"Title", L"SearchText", L"RenamerMaxWidth", L"TabStatus", L"MetadataText", L"MetadataAutomationName" })
+        {
+            PropertyChanged.raise(*this, Windows::UI::Xaml::Data::PropertyChangedEventArgs{ name });
+        }
     }
 
     // Method Description:
@@ -199,14 +215,17 @@ namespace winrt::TerminalApp::implementation
 
     // Method Description:
     // - Hides the rename box and displays the title text block
-    void TabHeaderControl::_CloseRenameBox()
+    void TabHeaderControl::_CloseRenameBox(const bool notify)
     {
         if (HeaderRenamerTextBox().Visibility() == Windows::UI::Xaml::Visibility::Visible)
         {
             HeaderRenamerTextBox().Visibility(Windows::UI::Xaml::Visibility::Collapsed);
             HeaderTextBlock().Visibility(Windows::UI::Xaml::Visibility::Visible);
             _UpdateMetadataVisibility();
-            RenameEnded.raise(*this, nullptr);
+            if (notify)
+            {
+                RenameEnded.raise(*this, nullptr);
+            }
         }
     }
 }
