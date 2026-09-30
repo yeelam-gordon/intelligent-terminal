@@ -751,8 +751,12 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        if (const auto ring = _findNamedElement(root, L"PaneProgressRing").try_as<MUX::Controls::ProgressRing>())
-        {
+        const auto updateRing = [&](WUX::Controls::Control const& ring) {
+            if (!ring)
+            {
+                return;
+            }
+
             if (const auto brush = _paneProgressBrush(Resources(), root.ActualTheme(), pane.ProgressState(), highContrastActive))
             {
                 ring.Foreground(brush);
@@ -763,7 +767,9 @@ namespace winrt::TerminalApp::implementation
             }
 
             WUX::Automation::AutomationProperties::SetName(ring, pane.AutomationName());
-        }
+        };
+        updateRing(_findNamedElement(root, L"PaneProgressRing").try_as<WUX::Controls::Control>());
+        updateRing(_findNamedElement(root, L"PaneIndeterminateProgressRing").try_as<WUX::Controls::Control>());
     }
 
     void TabStrip::_refreshRealizedPaneRowVisuals(const bool highContrastActive)

@@ -14,6 +14,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:local="using:TerminalApp"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:mtu="using:Microsoft.Terminal.UI"
              xmlns:mux="using:Microsoft.UI.Xaml.Controls"
              MinWidth="40"
              Background="{ThemeResource TabViewBackground}"
@@ -451,9 +452,21 @@
                                                                   HorizontalAlignment="Center"
                                                                   VerticalAlignment="Center"
                                                                   Content="{x:Bind Icon, Mode=OneWay}" />
-                                                <mux:ProgressRing x:Name="PaneProgressRing"
-                                                                  Grid.Column="2"
-                                                                  Grid.RowSpan="2"
+                                                <Grid Grid.RowSpan="2"
+                                                      Grid.Column="2"
+                                                      Visibility="{x:Bind IsProgressRingActive, Mode=OneWay}">
+                                                    <mux:ProgressRing x:Name="PaneProgressRing"
+                                                                      Width="15"
+                                                                      Height="15"
+                                                                      MinWidth="0"
+                                                                      MinHeight="0"
+                                                                      Margin="0,0,6,0"
+                                                                      VerticalAlignment="Center"
+                                                                      IsActive="{x:Bind IsProgressRingActive, Mode=OneWay}"
+                                                                      IsIndeterminate="False"
+                                                                      Visibility="{x:Bind mtu:Converters.InvertedBooleanToVisibility(IsProgressRingIndeterminate), Mode=OneWay}"
+                                                                      Value="{x:Bind ProgressValue, Mode=OneWay}" />
+                                                    <ProgressRing x:Name="PaneIndeterminateProgressRing"
                                                                   Width="15"
                                                                   Height="15"
                                                                   MinWidth="0"
@@ -461,9 +474,8 @@
                                                                   Margin="0,0,6,0"
                                                                   VerticalAlignment="Center"
                                                                   IsActive="{x:Bind IsProgressRingActive, Mode=OneWay}"
-                                                                  IsIndeterminate="{x:Bind IsProgressRingIndeterminate, Mode=OneWay}"
-                                                                  Visibility="{x:Bind IsProgressRingActive, Mode=OneWay}"
-                                                                  Value="{x:Bind ProgressValue, Mode=OneWay}" />
+                                                                  Visibility="{x:Bind IsProgressRingIndeterminate, Mode=OneWay}" />
+                                                </Grid>
                                                 <local:HighlightedTextControl x:Name="PaneTitleText"
                                                                               Grid.Column="3"
                                                                               Margin="2,3,0,0"

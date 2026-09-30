@@ -5773,6 +5773,8 @@ namespace winrt::TerminalApp::implementation
             }
             _tabStrip.TopChromeContent(nullptr);
 
+            winrt::get_self<implementation::TabStrip>(_tabStrip)->SetVerticalPresentation(targetVertical);
+
             const auto source = _tabLayoutTransitionPreviousVertical ?
                                     _tabStrip.TabItems().as<Windows::Foundation::Collections::IVector<IInspectable>>() :
                                     _tabView.TabItems();
