@@ -6927,6 +6927,15 @@ namespace TerminalAppLocalTests
                 winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" },
                 tab->Icon());
 
+            page->_SetVerticalRailVisibility(false);
+            VERIFY_ARE_EQUAL(
+                winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" },
+                tab->Icon());
+            page->_SetVerticalRailVisibility(true);
+            VERIFY_ARE_EQUAL(
+                winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" },
+                tab->Icon());
+
             VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
                 "session-agent-icon",
                 winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(paneSessionId)),
