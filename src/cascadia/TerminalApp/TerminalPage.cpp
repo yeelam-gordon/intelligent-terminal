@@ -3336,6 +3336,10 @@ namespace winrt::TerminalApp::implementation
             if (!sessionId.empty() && !status.empty() &&
                 _ApplyAgentSessionStatusDelta(sessionId, paneSessionId, providerId, lastActivityAtMs, status))
             {
+                if (_tabStrip.HistoryActive())
+                {
+                    _RequestSidebarHistoryRefresh(false);
+                }
                 return;
             }
         }
