@@ -46,7 +46,6 @@
 #include "SettingsPaneContent.h"
 #include "SharedWta.h"
 #include "SnippetsPaneContent.h"
-#include "TabHeaderControl.h"
 #include "TabRowControl.h"
 #include "TerminalSettingsCache.h"
 
@@ -5821,6 +5820,8 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_RebuildTabLayout(const bool vertical, const IInspectable& selectedItem, std::string& stage)
     {
+        winrt::get_self<implementation::TabStrip>(_tabStrip)->SetVerticalPresentation(vertical);
+
         std::vector<IInspectable> canonicalItems;
         canonicalItems.reserve(_tabs.Size());
         for (const auto& tab : _tabs)
@@ -5850,16 +5851,6 @@ namespace winrt::TerminalApp::implementation
         for (const auto& item : canonicalItems)
         {
             destination.Append(item);
-        }
-        if (!vertical)
-        {
-            for (const auto& tab : _tabs)
-            {
-                if (const auto header = tab.TabViewItem().Header().try_as<TerminalApp::TabHeaderControl>())
-                {
-                    winrt::get_self<implementation::TabHeaderControl>(header)->ShowProgressRing(true);
-                }
-            }
         }
         if (vertical)
         {
@@ -12359,9 +12350,24 @@ namespace winrt::TerminalApp::implementation
                 return {};
             }
 
-            const auto status = pane.ProgressState == 2 ? _SidebarHistoryStatusText("Error") :
-                                pane.ProgressState == 4 ? _SidebarHistoryStatusText("Attention") :
-                                                         _SidebarHistoryStatusText("Working");
+            winrt::hstring status;
+            switch (pane.ProgressState)
+            {
+            case 1:
+                status = RS_(L"PaneProgressStatusNormal");
+                break;
+            case 2:
+                status = RS_(L"PaneProgressStatusError");
+                break;
+            case 3:
+                status = RS_(L"PaneProgressStatusIndeterminate");
+                break;
+            case 4:
+                status = RS_(L"PaneProgressStatusPaused");
+                break;
+            default:
+                return {};
+            }
             if (pane.ProgressState == 3)
             {
                 return status;
@@ -12371,9 +12377,9 @@ namespace winrt::TerminalApp::implementation
         };
         size_t groupPaneCount = 0;
         bool headerProgressProjectedToPaneRows = false;
-        const auto headerProgressSource = tab->GetCombinedTaskbarState();
-        const auto headerProgressState = headerProgressSource.State();
-        const auto headerProgressValue = headerProgressSource.Progress();
+        const auto headerProgressSource = tab->GetCombinedTaskbarStateWithContentId();
+        const auto headerProgressState = headerProgressSource.CombinedState.State();
+        const auto headerProgressContentId = headerProgressSource.ContentId;
         std::vector<TerminalApp::TabStripPaneItem> items;
         for (const auto& pane : visiblePanes)
         {
@@ -12381,13 +12387,13 @@ namespace winrt::TerminalApp::implementation
 
             // Hidden or filtered panes still contribute to the tab aggregate,
             // so only suppress the header when a projected row shows that
-            // exact winning state/value.
+            // exact winning content.
             headerProgressProjectedToPaneRows =
                 headerProgressProjectedToPaneRows ||
                 (projectedPane &&
                  headerProgressState != 0 &&
-                 pane.ProgressState == headerProgressState &&
-                 pane.ProgressValue == headerProgressValue);
+                 headerProgressContentId.has_value() &&
+                 pane.ContentId == headerProgressContentId.value());
 
             if (!pane.IsAgentPane)
             {

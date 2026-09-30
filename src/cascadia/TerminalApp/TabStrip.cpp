@@ -88,7 +88,7 @@ namespace winrt::TerminalApp::implementation
         Header(std::move(header));
     }
 
-    void TabStripDisplayItem::SyncTabPresentation(bool railCollapsed)
+    void TabStripDisplayItem::SyncTabPresentation(bool railCollapsed, bool verticalPresentation)
     {
         if (const auto header = Header().try_as<TerminalApp::TabHeaderControl>())
         {
@@ -104,7 +104,7 @@ namespace winrt::TerminalApp::implementation
         AcceleratorKey(WUX::Automation::AutomationProperties::GetAcceleratorKey(_tab));
         HeaderVisibility(railCollapsed ? Visibility::Collapsed : Visibility::Visible);
         CloseVisibility(!railCollapsed && _tab.IsClosable() ? Visibility::Visible : Visibility::Collapsed);
-        UpdatePresentation(railCollapsed);
+        UpdatePresentation(railCollapsed, verticalPresentation);
     }
 
     void TabStripDisplayItem::SyncIcon(hstring const& iconPath)
@@ -128,20 +128,25 @@ namespace winrt::TerminalApp::implementation
         _iconPath = iconPath;
     }
 
-    void TabStripDisplayItem::UpdatePresentation(bool railCollapsed)
+    void TabStripDisplayItem::UpdatePresentation(bool railCollapsed, bool verticalPresentation)
     {
         const auto isGroup = IsGroup();
-        const auto showPaneRows = isGroup && !railCollapsed && IsExpanded();
+        const auto showPaneRows = verticalPresentation && isGroup && !railCollapsed && IsExpanded();
         const auto showHeaderProgressRing = !showPaneRows || !HeaderProgressProjectedToPaneRows();
+        const auto header = Header().try_as<TerminalApp::TabHeaderControl>();
+        const auto tabStatus = header ? header.TabStatus() : nullptr;
+        const auto headerProgressActive = tabStatus && tabStatus.IsProgressRingActive();
 
-        if (const auto header = Header().try_as<TerminalApp::TabHeaderControl>())
+        if (header)
         {
             winrt::get_self<implementation::TabHeaderControl>(header)->ShowProgressRing(showHeaderProgressRing);
         }
 
         GroupVisibility(isGroup && !railCollapsed ? Visibility::Visible : Visibility::Collapsed);
         ChildrenVisibility(showPaneRows ? Visibility::Visible : Visibility::Collapsed);
-        IconVisibility(isGroup && !railCollapsed ? Visibility::Collapsed : Visibility::Visible);
+        const auto hideIcon = (isGroup && !railCollapsed) ||
+                              (verticalPresentation && showHeaderProgressRing && headerProgressActive);
+        IconVisibility(hideIcon ? Visibility::Collapsed : Visibility::Visible);
         HeaderMinHeight(railCollapsed ? 32.0 : 40.0);
         LeadingContentMargin(railCollapsed ? WUX::Thickness{} : WUX::Thickness{ 6, 0, 10, 0 });
         ChevronGlyph(IsExpanded() ? L"\xE70D" : L"\xE76C");
@@ -480,7 +485,7 @@ namespace winrt::TerminalApp::implementation
             header.Title(title);
         }
         winrt::get_self<TabStripDisplayItem>(display)->SyncIcon(iconPath);
-        winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed);
+        winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed, _isVerticalPresentation);
         _refreshDisplayItemVisuals(display);
     }
 
@@ -560,7 +565,7 @@ namespace winrt::TerminalApp::implementation
         }
         display.IsGroup(isGroup);
         winrt::get_self<TabStripDisplayItem>(display)->HeaderProgressProjectedToPaneRows(headerProgressProjectedToPaneRows);
-        winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed);
+        winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed, _isVerticalPresentation);
         _refreshPaneRowVisuals(display);
     }
 
@@ -594,7 +599,7 @@ namespace winrt::TerminalApp::implementation
     {
         if (display)
         {
-            winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed);
+            winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed, _isVerticalPresentation);
             _refreshDisplayItemVisuals(display);
         }
     }
@@ -924,7 +929,7 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto display = _displayItemForTab(item))
         {
-            winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed);
+            winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed, _isVerticalPresentation);
         }
     }
 
@@ -1186,6 +1191,18 @@ namespace winrt::TerminalApp::implementation
         _displayItems.InsertAt(to, display);
     }
 
+    void TabStrip::SetVerticalPresentation(const bool vertical)
+    {
+        if (_isVerticalPresentation != vertical)
+        {
+            _isVerticalPresentation = vertical;
+            for (const auto& display : _displayItems)
+            {
+                winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed, _isVerticalPresentation);
+            }
+        }
+    }
+
     void TabStrip::BeginHeaderTransfer()
     {
         _pendingHeaderTransfers.clear();
@@ -1200,10 +1217,6 @@ namespace winrt::TerminalApp::implementation
             if (const auto tab = pending.Item.get(); tab && pending.Header && !tab.Header())
             {
                 tab.Header(pending.Header);
-                if (const auto headerControl = pending.Header.try_as<TerminalApp::TabHeaderControl>())
-                {
-                    winrt::get_self<implementation::TabHeaderControl>(headerControl)->ShowProgressRing(true);
-                }
             }
         }
         _pendingHeaderTransfers.clear();
@@ -1612,7 +1625,7 @@ namespace winrt::TerminalApp::implementation
             }
             if (const auto display = _displayItemAt(index))
             {
-                winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed);
+                winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed, _isVerticalPresentation);
             }
         }
 
@@ -1648,7 +1661,7 @@ namespace winrt::TerminalApp::implementation
         _refreshCloseButton(item);
         if (const auto display = _displayItemForTab(item))
         {
-            winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed);
+            winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed, _isVerticalPresentation);
         }
     }
 
@@ -2050,7 +2063,7 @@ namespace winrt::TerminalApp::implementation
         {
             _groupExpansion.insert_or_assign(key, GroupExpansionState{ winrt::make_weak(tab), true });
         }
-        winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed);
+        winrt::get_self<TabStripDisplayItem>(display)->SyncTabPresentation(_isRailCollapsed, _isVerticalPresentation);
         return display;
     }
 
@@ -2090,10 +2103,6 @@ namespace winrt::TerminalApp::implementation
                 else
                 {
                     tab.Header(header);
-                    if (const auto headerControl = header.try_as<TerminalApp::TabHeaderControl>())
-                    {
-                        winrt::get_self<implementation::TabHeaderControl>(headerControl)->ShowProgressRing(true);
-                    }
                 }
             }
         }
@@ -2377,7 +2386,7 @@ namespace winrt::TerminalApp::implementation
         _groupExpansion.insert_or_assign(
             winrt::get_abi(display.Tab()),
             GroupExpansionState{ winrt::make_weak(display.Tab()), display.IsExpanded() });
-        winrt::get_self<TabStripDisplayItem>(display)->UpdatePresentation(_isRailCollapsed);
+        winrt::get_self<TabStripDisplayItem>(display)->UpdatePresentation(_isRailCollapsed, _isVerticalPresentation);
         _refreshDisplayItemVisuals(display);
         GroupExpansionChanged.raise(*this, display.Tab());
     }

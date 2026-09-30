@@ -104,6 +104,7 @@ namespace winrt::TerminalApp::implementation
 
         std::shared_ptr<Pane> GetActivePane() const;
         winrt::TerminalApp::TaskbarState GetCombinedTaskbarState() const;
+        Pane::TaskbarStateWithContentId GetCombinedTaskbarStateWithContentId() const;
 
         std::shared_ptr<Pane> GetRootPane() const { return _rootPane; }
         std::vector<uint32_t> GetMruPanes() const { return _mruPanes; }

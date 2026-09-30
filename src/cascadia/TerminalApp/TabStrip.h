@@ -126,9 +126,9 @@ namespace winrt::TerminalApp::implementation
         WINRT_OBSERVABLE_PROPERTY(winrt::hstring, AcceleratorKey, PropertyChanged.raise);
 
     public:
-        void SyncTabPresentation(bool railCollapsed);
+        void SyncTabPresentation(bool railCollapsed, bool verticalPresentation);
         void SyncIcon(winrt::hstring const& iconPath);
-        void UpdatePresentation(bool railCollapsed);
+        void UpdatePresentation(bool railCollapsed, bool verticalPresentation);
         bool HeaderProgressProjectedToPaneRows() const noexcept { return _headerProgressProjectedToPaneRows; }
         void HeaderProgressProjectedToPaneRows(bool value) noexcept { _headerProgressProjectedToPaneRows = value; }
         til::property_changed_event PropertyChanged;
@@ -284,6 +284,7 @@ namespace winrt::TerminalApp::implementation
         void HistoryRefreshError(winrt::hstring const& value);
         void ProjectionControlsEnabled(bool value);
         void MoveTabItem(uint32_t from, uint32_t to);
+        void SetVerticalPresentation(bool vertical);
         void BeginHeaderTransfer();
         void CompleteHeaderTransfer();
         bool RichTabRepositoryVisible() const noexcept { return _richTabRepositoryVisible; }
@@ -422,6 +423,7 @@ namespace winrt::TerminalApp::implementation
         TerminalApp::TabStripOrientation _orientation{ TerminalApp::TabStripOrientation::Vertical };
         bool _tabsVisible{ true };
         bool _isRailCollapsed{ false };
+        bool _isVerticalPresentation{ true };
         bool _searchActive{ false };
         bool _syncingSearchState{ false };
         bool _searchPanelExpanded{ false };

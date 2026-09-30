@@ -1475,15 +1475,26 @@ namespace winrt::TerminalApp::implementation
     //   progress percentage of all our panes.
     winrt::TerminalApp::TaskbarState Tab::GetCombinedTaskbarState() const
     {
+        return GetCombinedTaskbarStateWithContentId().CombinedState;
+    }
+
+    Pane::TaskbarStateWithContentId Tab::GetCombinedTaskbarStateWithContentId() const
+    {
         ASSERT_UI_THREAD();
 
-        std::vector<winrt::TerminalApp::TaskbarState> states;
+        std::vector<Pane::TaskbarStateWithContentId> states;
         if (_rootPane)
         {
             _rootPane->CollectTaskbarStates(states);
         }
-        return states.empty() ? winrt::make<winrt::TerminalApp::implementation::TaskbarState>() :
-                                *std::min_element(states.begin(), states.end(), TerminalApp::implementation::TaskbarState::ComparePriority);
+        return states.empty() ?
+                   Pane::TaskbarStateWithContentId{
+                       .CombinedState = winrt::make<winrt::TerminalApp::implementation::TaskbarState>(),
+                       .ContentId = std::nullopt,
+                   } :
+                   *std::min_element(states.begin(), states.end(), [](const auto& lhs, const auto& rhs) {
+                       return TerminalApp::implementation::TaskbarState::ComparePriority(lhs.CombinedState, rhs.CombinedState);
+                   });
     }
 
     // Method Description:

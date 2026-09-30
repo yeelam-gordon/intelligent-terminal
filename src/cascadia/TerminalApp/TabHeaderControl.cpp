@@ -14,6 +14,7 @@ namespace winrt::TerminalApp::implementation
     TabHeaderControl::TabHeaderControl()
     {
         InitializeComponent();
+        HeaderProgressRingPresenter().DataContext(box_value(_showProgressRing));
 
         const auto keepRunningIcon = HeaderKeepRunningIcon();
         const auto keepRunningName = RS_(L"KeepTabRunningText");
@@ -99,14 +100,8 @@ namespace winrt::TerminalApp::implementation
         if (_showProgressRing != value)
         {
             _showProgressRing = value;
+            HeaderProgressRingPresenter().DataContext(box_value(value));
             PropertyChanged.raise(*this, Windows::UI::Xaml::Data::PropertyChangedEventArgs{ L"ShowProgressRing" });
-        }
-        if (const auto status = TabStatus())
-        {
-            HeaderProgressRing().IsActive(_showProgressRing && status.IsProgressRingActive());
-            HeaderProgressRing().Visibility(_showProgressRing && status.IsProgressRingActive() ?
-                                               Windows::UI::Xaml::Visibility::Visible :
-                                               Windows::UI::Xaml::Visibility::Collapsed);
         }
     }
 
