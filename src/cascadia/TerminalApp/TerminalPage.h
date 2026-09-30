@@ -956,8 +956,10 @@ namespace winrt::TerminalApp::implementation
             std::string status;
             std::string providerId;
             std::optional<uint64_t> lastActivityAtMs;
+            std::optional<winrt::guid> paneSessionId;
         };
         std::optional<_RichTabAgentInfo> _RichTabAgentInfoForControl(const Microsoft::Terminal::Control::TermControl& control);
+        winrt::hstring _AgentIconForControl(const Microsoft::Terminal::Control::TermControl& control, const winrt::hstring& profileIcon);
         void _UpdateRichTabFirstPartyFields(const Microsoft::Terminal::Control::TermControl& control);
         void _LogSidebarRowFieldsTelemetry() const;
         void _RefreshRichTabForTab(Tab& tab, bool activate, bool refreshPaneItems = true);
