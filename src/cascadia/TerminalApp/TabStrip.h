@@ -6,6 +6,7 @@
 #pragma once
 
 #include "winrt/Microsoft.UI.Xaml.Controls.h"
+#include "winrt/Windows.UI.ViewManagement.h"
 
 #include "TabStrip.g.h"
 #include "TabStripSelectionChangedEventArgs.g.h"
@@ -460,7 +461,9 @@ namespace winrt::TerminalApp::implementation
         std::vector<TerminalApp::TabStripHistoryItem> _historySnapshot;
         std::vector<std::vector<winrt::hstring>> _historySearchTerms;
         winrt::Windows::Foundation::Collections::IObservableVector<winrt::Windows::Foundation::IInspectable>::VectorChanged_revoker _vectorChangedRevoker;
+        winrt::Windows::UI::ViewManagement::AccessibilitySettings _accessibilitySettings;
         winrt::Windows::UI::ViewManagement::AccessibilitySettings::HighContrastChanged_revoker _highContrastChangedRevoker{};
+        bool _highContrast{ false };
 
         struct CloseRequestedSubscription
         {
@@ -502,6 +505,8 @@ namespace winrt::TerminalApp::implementation
         winrt::weak_ref<winrt::Microsoft::UI::Xaml::Controls::TabViewItem> _pressedHeaderTab;
         bool _pressedHeaderWasSelected{ false };
 
+        void _onListKeyDown(winrt::Windows::Foundation::IInspectable const& sender,
+                            winrt::Windows::UI::Xaml::Input::KeyRoutedEventArgs const& e);
         void _onItemsVectorChanged(winrt::Windows::Foundation::Collections::IObservableVector<winrt::Windows::Foundation::IInspectable> const& sender,
                                      winrt::Windows::Foundation::Collections::IVectorChangedEventArgs const& args);
         TerminalApp::TabStripDisplayItem _displayItemAt(uint32_t index) const;
@@ -530,13 +535,14 @@ namespace winrt::TerminalApp::implementation
         void _updateHistoryVisualState();
         uint32_t _richTabMetadataSelectionCount() const noexcept;
         void _updateRichTabMetadataSelectionState();
+        void _setHighContrastMode(bool enabled);
         void _refreshDisplayItemVisuals(TerminalApp::TabStripDisplayItem const& display);
         void _refreshRealizedPaneRowVisuals(bool highContrastActive);
         void _refreshPaneRowVisuals(TerminalApp::TabStripDisplayItem const& display);
         void _refreshPaneRowVisuals(TerminalApp::TabStripDisplayItem const& display,
                                     bool highContrastActive);
-        static void _updateDisplayItemVisuals(winrt::Windows::UI::Xaml::FrameworkElement const& root,
-                                              TerminalApp::TabStripDisplayItem const& display);
+        void _updateDisplayItemVisuals(winrt::Windows::UI::Xaml::FrameworkElement const& root,
+                                       TerminalApp::TabStripDisplayItem const& display);
         void _updatePaneRowVisuals(winrt::Windows::UI::Xaml::FrameworkElement const& root,
                                    TerminalApp::TabStripPaneItem const& pane);
         void _updatePaneRowVisuals(winrt::Windows::UI::Xaml::FrameworkElement const& root,
