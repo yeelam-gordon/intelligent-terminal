@@ -467,6 +467,7 @@
                                                                       Visibility="{x:Bind mtu:Converters.InvertedBooleanToVisibility(IsProgressRingIndeterminate), Mode=OneWay}"
                                                                       Value="{x:Bind ProgressValue, Mode=OneWay}" />
                                                     <ProgressRing x:Name="PaneIndeterminateProgressRing"
+                                                                  Loaded="OnIndeterminateProgressRingLoaded"
                                                                   Width="15"
                                                                   Height="15"
                                                                   MinWidth="0"

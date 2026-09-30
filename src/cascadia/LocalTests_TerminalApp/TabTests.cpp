@@ -7247,6 +7247,11 @@ namespace TerminalAppLocalTests
 
     void TabTests::HeaderProgressWrapperBindingPreservesRingState()
     {
+        UIElement previousContent{ nullptr };
+        TestOnUIThread([&]() { previousContent = Window::Current().Content(); });
+        const auto cleanup = wil::scope_exit([&]() {
+            TestOnUIThread([&]() { Window::Current().Content(previousContent); });
+        });
         winrt::TerminalApp::TabHeaderControl header{ nullptr };
         Grid wrapper{ nullptr };
         winrt::MUX::Controls::ProgressRing ring{ nullptr };
@@ -7300,17 +7305,82 @@ namespace TerminalAppLocalTests
         _waitForContentTransferReviewUI([&]() {
             return _progressIndicatorsMatch(header, L"Header", true, true);
         });
+        ProgressRing busy{ nullptr };
         TestOnUIThread([&]() {
-            const auto busy = header.as<FrameworkElement>().FindName(L"HeaderIndeterminateProgressRing").as<ProgressRing>();
+            busy = header.as<FrameworkElement>().FindName(L"HeaderIndeterminateProgressRing").as<ProgressRing>();
             const Automation::Peers::ProgressRingAutomationPeer peer{ busy };
             VERIFY_ARE_EQUAL(Automation::Peers::AutomationControlType::ProgressBar, peer.GetAutomationControlType());
             VERIFY_IS_NULL(peer.GetPattern(Automation::Peers::PatternInterface::RangeValue));
-            second.Content(nullptr);
-            first.Content(header);
         });
-        _waitForContentTransferReviewUI([&]() {
+        const auto templateIsActive = [&]() {
+            bool activeState = false;
+            FrameworkElement templateRing{ nullptr };
+            const auto visit = [&](auto&& self, const DependencyObject& object) -> void {
+                if (const auto element = object.try_as<FrameworkElement>())
+                {
+                    if (element.Name() == L"Ring")
+                    {
+                        templateRing = element;
+                    }
+                    for (const auto& group : VisualStateManager::GetVisualStateGroups(element))
+                    {
+                        if (group.Name() == L"ActiveStates")
+                        {
+                            activeState = group.CurrentState() && group.CurrentState().Name() == L"Active";
+                        }
+                    }
+                }
+                for (int i = 0; i < Media::VisualTreeHelper::GetChildrenCount(object); ++i)
+                {
+                    self(self, Media::VisualTreeHelper::GetChild(object, i));
+                }
+            };
+            visit(visit, busy);
+            if (!busy.IsLoaded() || !busy.IsActive() || !activeState || !templateRing)
+            {
+                return false;
+            }
+            for (DependencyObject element = templateRing; element && element != busy; element = Media::VisualTreeHelper::GetParent(element))
+            {
+                if (element.as<UIElement>().Visibility() != Visibility::Visible)
+                {
+                    return false;
+                }
+            }
             return _progressIndicatorsMatch(header, L"Header", true, true);
-        });
+        };
+        _waitForContentTransferReviewUI(templateIsActive);
+        for (int cycle = 0; cycle < 3; ++cycle)
+        {
+            TestOnUIThread([&]() {
+                first.Content(nullptr);
+                second.Content(nullptr);
+            });
+            _waitForContentTransferReviewUI([&]() { return !busy.IsLoaded(); });
+            TestOnUIThread([&]() {
+                // Cover both a stale Inactive state and an Active state whose storyboard stopped.
+                VERIFY_IS_TRUE(VisualStateManager::GoToState(busy, cycle == 1 ? L"Active" : L"Inactive", false));
+                if (cycle == 1)
+                {
+                    const auto root = Media::VisualTreeHelper::GetChild(busy, 0).as<FrameworkElement>();
+                    bool stopped = false;
+                    for (const auto& group : VisualStateManager::GetVisualStateGroups(root))
+                    {
+                        if (group.Name() == L"ActiveStates")
+                        {
+                            VERIFY_ARE_EQUAL(winrt::hstring{ L"Active" }, group.CurrentState().Name());
+                            group.CurrentState().Storyboard().Stop();
+                            stopped = true;
+                        }
+                    }
+                    VERIFY_IS_TRUE(stopped);
+                    VERIFY_ARE_EQUAL(Visibility::Collapsed, root.Visibility());
+                }
+                VERIFY_IS_TRUE(busy.IsActive());
+                first.Content(header);
+            });
+            _waitForContentTransferReviewUI(templateIsActive);
+        }
         TestOnUIThread([&]() {
             header.TabStatus().IsProgressRingActive(false);
         });

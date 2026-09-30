@@ -12,6 +12,8 @@ namespace winrt::TerminalApp::implementation
     struct TabHeaderControl : TabHeaderControlT<TabHeaderControl>
     {
         TabHeaderControl();
+        void OnIndeterminateProgressRingLoaded(const winrt::Windows::Foundation::IInspectable& sender,
+                                              const winrt::Windows::UI::Xaml::RoutedEventArgs& e);
         void BeginRename();
         void CancelRename();
 

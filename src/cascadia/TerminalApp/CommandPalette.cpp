@@ -19,6 +19,17 @@ using namespace winrt::Microsoft::Terminal::Settings::Model;
 
 namespace winrt::TerminalApp::implementation
 {
+    void CommandPalette::OnIndeterminateProgressRingLoaded(const IInspectable& sender, const RoutedEventArgs&)
+    {
+        const auto ring = sender.as<ProgressRing>();
+        ring.ApplyTemplate();
+        LOG_HR_IF(E_UNEXPECTED, !VisualStateManager::GoToState(ring, L"Inactive", false));
+        if (ring.IsActive())
+        {
+            LOG_HR_IF(E_UNEXPECTED, !VisualStateManager::GoToState(ring, L"Active", false));
+        }
+    }
+
     CommandPalette::CommandPalette() :
         _switcherStartIdx{ 0 }
     {

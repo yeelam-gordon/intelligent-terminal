@@ -11,6 +11,19 @@ using namespace winrt::Microsoft::UI::Xaml;
 
 namespace winrt::TerminalApp::implementation
 {
+    void TabHeaderControl::OnIndeterminateProgressRingLoaded(const Windows::Foundation::IInspectable& sender,
+                                                           const Windows::UI::Xaml::RoutedEventArgs&)
+    {
+        const auto ring = sender.as<Windows::UI::Xaml::Controls::ProgressRing>();
+        ring.ApplyTemplate();
+        // A same-state transition does not restart a storyboard stopped by unloading.
+        LOG_HR_IF(E_UNEXPECTED, !Windows::UI::Xaml::VisualStateManager::GoToState(ring, L"Inactive", false));
+        if (ring.IsActive())
+        {
+            LOG_HR_IF(E_UNEXPECTED, !Windows::UI::Xaml::VisualStateManager::GoToState(ring, L"Active", false));
+        }
+    }
+
     TabHeaderControl::TabHeaderControl()
     {
         InitializeComponent();

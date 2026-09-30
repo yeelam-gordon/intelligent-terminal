@@ -307,6 +307,8 @@ namespace winrt::TerminalApp::implementation
         void TopChromeContent(winrt::Windows::UI::Xaml::UIElement const& value);
 
         // XAML-bound event handlers.
+        void OnIndeterminateProgressRingLoaded(winrt::Windows::Foundation::IInspectable const& sender,
+                                              winrt::Windows::UI::Xaml::RoutedEventArgs const& e);
         void OnListSelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                      winrt::Windows::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
         void OnDragItemsStarting(winrt::Windows::Foundation::IInspectable const& sender,

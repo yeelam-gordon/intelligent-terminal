@@ -35,6 +35,17 @@ namespace winrt
 
 namespace winrt::TerminalApp::implementation
 {
+    void TabStrip::OnIndeterminateProgressRingLoaded(IInspectable const& sender, RoutedEventArgs const&)
+    {
+        const auto ring = sender.as<ProgressRing>();
+        ring.ApplyTemplate();
+        LOG_HR_IF(E_UNEXPECTED, !VisualStateManager::GoToState(ring, L"Inactive", false));
+        if (ring.IsActive())
+        {
+            LOG_HR_IF(E_UNEXPECTED, !VisualStateManager::GoToState(ring, L"Active", false));
+        }
+    }
+
     static Windows::UI::ViewManagement::AccessibilitySettings& _GetAccessibilitySettings()
     {
         static Windows::UI::ViewManagement::AccessibilitySettings accessibilitySettings;
