@@ -293,6 +293,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabStripCollapsedItemsPreserveSelection);
         TEST_METHOD(VerticalTabStripHostsPaneGroups);
         TEST_METHOD(VerticalTabDeferredHeaderTransferRestoresProgressAfterAttachment);
+        TEST_METHOD(HorizontalTabProgressSurvivesAsyncVerticalTeardown);
         TEST_METHOD(VerticalTabStripCompatibilitySetPaneItemsPreservesHeaderProgress);
         TEST_METHOD(PaneProgressSurvivesTabLayoutLifecycle);
         TEST_METHOD(VerticalTabPaneProgressThemeSwitchRefreshesBrushes);
@@ -6860,6 +6861,68 @@ namespace TerminalAppLocalTests
 
             VERIFY_IS_TRUE(tab.Header() == header);
             VERIFY_IS_TRUE(headerImpl->ShowProgressRing());
+        });
+    }
+
+    void TabTests::HorizontalTabProgressSurvivesAsyncVerticalTeardown()
+    {
+        const auto first = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-aaaa-49a3-80bd-e8fdd045185d}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        const auto second = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{6239a42c-bbbb-49a3-80bd-e8fdd045185d}" },
+            winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+        auto page = _commonSetup(*first, nullptr, std::nullopt, true);
+        winrt::com_ptr<winrt::TerminalApp::implementation::Tab> tab;
+
+        TestOnUIThread([&]() {
+            tab = page->_GetFocusedTabImpl();
+            VERIFY_IS_NOT_NULL(tab);
+            const auto secondPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *second);
+            VERIFY_IS_TRUE(page->_SplitPane(tab, SplitDirection::Right, 0.5f, secondPane));
+            tab->TabViewItem().IconSource(nullptr);
+            page->UpdateLayout();
+        });
+
+        _emitOsc(second, u"\x1b]9;4;3;0\a");
+        _waitForContentTransferReviewUI([&]() {
+            const auto header = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)
+                                    ->HeaderForTab(tab->TabViewItem())
+                                    .try_as<winrt::TerminalApp::TabHeaderControl>();
+            if (!page->_isVerticalLayout || header == nullptr)
+            {
+                return false;
+            }
+
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            return !headerImpl->ShowProgressRing() &&
+                   header.TabStatus().IsProgressRingActive() &&
+                   header.TabStatus().IsProgressRingIndeterminate() &&
+                   tab->TabViewItem().IconSource() == nullptr;
+        });
+
+        TestOnUIThread([&]() {
+            VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Horizontal));
+            VERIFY_IS_TRUE(page->_changingTabLayout);
+        });
+        _waitForContentTransferReviewUI([&]() {
+            return !page->_changingTabLayout &&
+                   !page->_isVerticalLayout &&
+                   tab->TabViewItem().Header() != nullptr;
+        });
+
+        TestOnUIThread([&]() {
+            page->UpdateLayout();
+
+            const auto header = tab->TabViewItem().Header().as<winrt::TerminalApp::TabHeaderControl>();
+            const auto headerImpl = winrt::get_self<winrt::TerminalApp::implementation::TabHeaderControl>(header);
+            const auto headerRing = header.as<FrameworkElement>().FindName(L"HeaderProgressRing").as<winrt::MUX::Controls::ProgressRing>();
+            VERIFY_IS_TRUE(headerImpl->ShowProgressRing());
+            VERIFY_IS_TRUE(header.TabStatus().IsProgressRingActive());
+            VERIFY_IS_TRUE(header.TabStatus().IsProgressRingIndeterminate());
+            VERIFY_ARE_EQUAL(Visibility::Visible, headerRing.Visibility());
+            VERIFY_IS_TRUE(headerRing.IsActive());
+            VERIFY_IS_NULL(tab->TabViewItem().IconSource());
         });
     }
 

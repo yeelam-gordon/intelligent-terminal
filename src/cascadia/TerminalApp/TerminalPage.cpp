@@ -46,6 +46,7 @@
 #include "SettingsPaneContent.h"
 #include "SharedWta.h"
 #include "SnippetsPaneContent.h"
+#include "TabHeaderControl.h"
 #include "TabRowControl.h"
 #include "TerminalSettingsCache.h"
 
@@ -5849,6 +5850,16 @@ namespace winrt::TerminalApp::implementation
         for (const auto& item : canonicalItems)
         {
             destination.Append(item);
+        }
+        if (!vertical)
+        {
+            for (const auto& tab : _tabs)
+            {
+                if (const auto header = tab.TabViewItem().Header().try_as<TerminalApp::TabHeaderControl>())
+                {
+                    winrt::get_self<implementation::TabHeaderControl>(header)->ShowProgressRing(true);
+                }
+            }
         }
         if (vertical)
         {
