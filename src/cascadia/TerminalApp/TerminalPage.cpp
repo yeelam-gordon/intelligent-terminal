@@ -3369,6 +3369,11 @@ namespace winrt::TerminalApp::implementation
         const auto providerIdString = std::string{ providerId };
         const auto updateInfo = [&](auto& info) {
             const auto sameSession = info.sessionId.empty() || info.sessionId == sessionId;
+            if (!sameSession)
+            {
+                info = _RichTabAgentInfo{ sessionIdString, statusString, providerIdString, lastActivityAtMs };
+                return;
+            }
             if (sameSession && !_ShouldUseIncomingAgentProvider(info.providerId, providerId))
             {
                 return;
@@ -10926,7 +10931,7 @@ namespace winrt::TerminalApp::implementation
                              _ShouldUseIncomingAgentProvider(existing->second.providerId, providerId) :
                              rank(status) > rank(existing->second.status)))
                     {
-                        if (providerId.empty() && existing != statusesByPaneId.end())
+                        if (providerId.empty() && sameSession)
                         {
                             incoming.providerId = existing->second.providerId;
                         }

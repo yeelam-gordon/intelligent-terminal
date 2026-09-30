@@ -4727,6 +4727,17 @@ namespace TerminalAppLocalTests
                 page->_richTabAgentStatusByPaneId.at(
                     winrt::guid{ L"00000000-0000-0000-0000-000000000001" })
                     .status);
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-c",
+                "00000000-0000-0000-0000-000000000001",
+                "",
+                uint64_t{ 5678 },
+                "Working"));
+            const auto& reusedPaneInfo = page->_richTabAgentStatusByPaneId.at(
+                winrt::guid{ L"00000000-0000-0000-0000-000000000001" });
+            VERIFY_ARE_EQUAL(std::string{ "session-c" }, reusedPaneInfo.sessionId);
+            VERIFY_IS_TRUE(reusedPaneInfo.providerId.empty());
+            VERIFY_ARE_EQUAL(std::string{ "Working" }, reusedPaneInfo.status);
             VERIFY_ARE_EQUAL(1u, page->_tabStrip.HistoryItems().Size());
             const auto updated = page->_tabStrip.HistoryItems().GetAt(0);
             VERIFY_ARE_EQUAL(winrt::hstring{ L"Attention" }, updated.Status());
@@ -6894,11 +6905,17 @@ namespace TerminalAppLocalTests
 
         TestOnUIThread([&]() {
             const auto tab = page->_GetFocusedTabImpl();
-            const auto paneSessionId = tab->GetActivePane()->GetSessionId();
-            const auto profileIcon = tab->GetActiveContent().Icon();
+            const auto sourcePane = tab->GetActivePane();
+            const auto paneSessionId = sourcePane->GetSessionId();
+            const auto profileIcon = sourcePane->GetContent().Icon();
             page->_UpdateTabIcon(*tab);
             VERIFY_ARE_EQUAL(profileIcon, tab->Icon());
             page->_tabStrip.RichTabAgentStatusVisible(false);
+
+            auto agentPane = page->_WrapInAgentPaneContent(page->_MakePane(nullptr, nullptr, nullptr));
+            agentPane->IsAgentPane(true);
+            VERIFY_IS_TRUE(page->_SplitPane(tab, SplitDirection::Right, 0.5f, agentPane));
+            VERIFY_IS_TRUE(tab->GetActivePane() == agentPane);
 
             VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
                 "session-agent-icon",
