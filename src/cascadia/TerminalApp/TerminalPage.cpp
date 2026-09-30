@@ -10744,17 +10744,17 @@ namespace winrt::TerminalApp::implementation
         {
             return std::nullopt;
         }
+        if (const auto info = _richTabAgentStatusByPaneId.find(*paneSessionId);
+            info != _richTabAgentStatusByPaneId.end())
+        {
+            return info->second;
+        }
         const auto findSessionInfo = [&](const winrt::hstring& sessionId, const winrt::hstring& agent) -> std::optional<_RichTabAgentInfo> {
             if (sessionId.empty())
             {
                 return std::nullopt;
             }
             const auto sessionIdString = winrt::to_string(sessionId);
-            if (const auto info = _richTabAgentStatusByPaneId.find(*paneSessionId);
-                info != _richTabAgentStatusByPaneId.end() && info->second.sessionId == sessionIdString)
-            {
-                return info->second;
-            }
             if (const auto info = _richTabAgentStatusBySessionId.find(sessionIdString);
                 info != _richTabAgentStatusBySessionId.end() &&
                 (info->second.paneSessionId == paneSessionId ||
@@ -10779,11 +10779,6 @@ namespace winrt::TerminalApp::implementation
             {
                 return info;
             }
-        }
-        if (const auto info = _richTabAgentStatusByPaneId.find(*paneSessionId);
-            info != _richTabAgentStatusByPaneId.end())
-        {
-            return info->second;
         }
         return std::nullopt;
     }

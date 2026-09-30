@@ -7095,6 +7095,12 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(
                 winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" },
                 tab->Icon());
+            const auto tabIcon = tab->TabViewItem().IconSource().try_as<winrt::Microsoft::UI::Xaml::Controls::PathIconSource>();
+            VERIFY_IS_NOT_NULL(tabIcon);
+            VERIFY_IS_NOT_NULL(tabIcon.Data());
+            tab->HideIcon(true);
+            tab->HideIcon(false);
+            VERIFY_IS_NOT_NULL(tab->TabViewItem().IconSource().try_as<winrt::Microsoft::UI::Xaml::Controls::PathIconSource>());
 
             VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Horizontal));
             page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
@@ -7157,6 +7163,15 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(preferred.has_value());
             VERIFY_ARE_EQUAL(std::string{ "gemini" }, preferred->providerId);
             VERIFY_ARE_EQUAL(std::string{ "Working" }, preferred->status);
+            page->_richTabAgentStatusBySessionId["old-binding"] = {
+                "old-binding", "Ended", "copilot", uint64_t{ 1234 }, std::nullopt
+            };
+            page->_paneAgentSessions[paneSessionId] = { L"old-binding", L"copilot", {} };
+            const auto currentPaneInfo = page->_RichTabAgentInfoForControl(sourcePane->GetTerminalControl());
+            VERIFY_IS_TRUE(currentPaneInfo.has_value());
+            VERIFY_ARE_EQUAL(std::string{ "gemini" }, currentPaneInfo->providerId);
+            VERIFY_ARE_EQUAL(std::string{ "Working" }, currentPaneInfo->status);
+            page->_UpdateTabIcon(*tab);
             const auto fields = page->_BuildRichTabFirstPartyFields(sourcePane->GetTerminalControl());
             VERIFY_ARE_EQUAL(
                 winrt::to_string(winrt::TerminalApp::implementation::TerminalPage::_SidebarHistoryStatusText("Working")),
@@ -7185,6 +7200,12 @@ namespace TerminalAppLocalTests
                                               winrt::hstring{ L"ms-appx:///AgentIcons/gemini.svg" } :
                                               secondIcon;
                     VERIFY_ARE_EQUAL(expected, winrt::get_self<winrt::TerminalApp::implementation::TabStripPaneItem>(item)->IconPath());
+                    if (std::wstring_view{ expected }.ends_with(L".svg"))
+                    {
+                        const auto icon = item.Icon().try_as<winrt::Windows::UI::Xaml::Controls::PathIcon>();
+                        VERIFY_IS_NOT_NULL(icon);
+                        VERIFY_IS_NOT_NULL(icon.Data());
+                    }
                 }
             };
             verifyPaneIcons(L"ms-appx:///AgentIcons/claude.svg");
