@@ -115,15 +115,24 @@ are also template-owned, with retained `IconSource` data rather than shared live
 elements. Pane rows and terminal/taskbar progress remain independent of this
 presentation contract.
 
-Indeterminate header, pane-row, and tab-switcher progress use the shared native
-WUX `ProgressRing` style in `IndeterminateProgressResources.xaml`. Its rotating
-arc restarts through a declarative template `Loaded` trigger, with no visual
-state groups or C++ reload repair. The native `IsActive` property remains bound
-to status for accessibility; the existing outer active gate and inner
-indeterminate gate control drawing. The arc uses `TemplateBinding Foreground`;
-MUX determinate/error/paused progress and the shared data/identity policy are
-unchanged. Product-host reload/animation acceptance still requires runtime
-integration validation.
+Indeterminate header, pane-row, and tab-switcher progress use the shared
+`IndeterminateProgressRing` control and its style in
+`IndeterminateProgressResources.xaml`. The control owns one rotating-arc
+storyboard and starts it only while loaded, active, and visible through its
+attached visual ancestry. Activity and ancestor-visibility callbacks stop or
+start the clock; unload stops it and releases weak ancestry observers, and load
+observes the new ancestry. Template replacement stops the old clock before
+creating the replacement. This is view-local rendering lifetime, not progress
+model state or per-move/layout repair; there is no XAML `Loaded` trigger or
+native `ActiveStates` group competing with it.
+
+The control's `IsActive` property remains bound to status; the existing outer
+active gate and inner indeterminate gate control presentation. It is neither a
+keyboard tab stop nor a hit-test target, and its automation peer exposes
+`ProgressBar` without a numeric `RangeValue` pattern. The arc uses
+`TemplateBinding Foreground`; MUX determinate/error/paused progress and the
+shared data/identity policy are unchanged. Product-host reload/animation
+acceptance still requires runtime integration validation.
 
 Identity and progress are separate: a profile or known live agent icon remains
 visible beside active progress in horizontal tabs and sidebar rows. Group
