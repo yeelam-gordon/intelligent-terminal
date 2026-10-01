@@ -1,7 +1,7 @@
 # Pane progress render evidence
 
-`Feature.PaneProgress.Tests.ps1` has three deterministic release cases
-(C364-C366) and a separate literal one-shot, idle-prompt case. The latter sends
+`Feature.PaneProgress.Tests.ps1` has four deterministic release cases
+(C364-C367) and a separate literal one-shot, idle-prompt case. The latter sends
 `$ESC=[char]27;$BEL=[char]7;[Console]::Write("$ESC]9;4;3;0$BEL")`
 once, without a child command or sleeping fixture. It requires the final
 PowerShell prompt and pre-action progress before the exact right-click route.
@@ -9,7 +9,8 @@ The lifecycle case separately uses a gated, persistent shell fixture.
 
 Render assertions capture the actual desktop compositor with
 `System.Drawing.Graphics.CopyFromScreen`, scoped to the foreground owned window
-and freshly queried UIA ring/icon rectangles. Six ring crops must differ.
+and freshly queried UIA ring/icon rectangles. Six ring crops must differ;
+nonuniform sampling delays avoid aliasing the one-second rotation.
 `PrintWindow` is not a substitute: it can return stale XAML icon pixels while
 the compositor already shows the correct Copilot glyph. The Default input
 desktop and foreground ownership are prerequisites; their absence skips rather
@@ -25,8 +26,11 @@ Run through `Invoke-ItE2EReport.ps1` with explicit `ITE2E_PACKAGE=Dev`,
 `ITE2E_ARTIFACT_ROOT`. Obtain hashes from the intended source build receipt,
 not arbitrary installed binaries. The selected package must be inactive.
 Settings/state are backed up and restored by ItE2E. Case tags
-`PaneProgressLiteral`, `PaneProgressLifecycle`, `PaneProgressMenu`, and
-`PaneProgressNative` allow independent runs through the same report driver.
+`PaneProgressLiteral`, `PaneProgressLifecycle`, `PaneProgressMenu`,
+`PaneProgressNative`, and `PaneProgressGroup` allow independent runs through
+the same report driver. C367 checks that expanded/collapsed groups use only the
+chevron in the normal icon slot and align their top-level titles with singleton
+tabs, while pane identity remains independent.
 
 C366 uses real packaged native-hook transport and a fixture-owned Copilot
 session, not model output or a real Copilot invocation. Working/Ended snapshots,

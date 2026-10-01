@@ -135,9 +135,12 @@ shared data/identity policy are unchanged. Product-host reload/animation
 acceptance still requires runtime integration validation.
 
 Identity and progress are separate: a profile or known live agent icon remains
-visible beside active progress in horizontal tabs and sidebar rows. Group
-chevrons and identity use separate leading cells; the compact rail retains
-identity. Explicit hidden-icon styling remains hidden, including while busy.
+visible beside active progress in horizontal tabs, individual sidebar tabs,
+and pane rows. In the expanded sidebar, a collapsible group's chevron occupies
+the same leading slot as an individual tab's identity icon, without an
+additional profile icon; their top-level title positions remain aligned whether
+the group is expanded or collapsed. The compact rail hides the chevron and
+retains identity. Explicit hidden-icon styling remains hidden, including while busy.
 The sidebar uses the native tab's configured source, including monochrome
 styling; the existing agent-session projection still selects the provider icon.
 Selected-color contrast applies to monochrome identity, not colored bitmaps or

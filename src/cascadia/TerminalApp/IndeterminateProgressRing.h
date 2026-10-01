@@ -39,7 +39,6 @@ namespace winrt::TerminalApp::implementation
         std::vector<VisibilitySubscription> _visibilitySubscriptions;
         Windows::UI::Xaml::Media::Animation::Storyboard _storyboard{ nullptr };
         bool _loaded{ false };
-        bool _running{ false };
     };
 
     struct IndeterminateProgressRingAutomationPeer : IndeterminateProgressRingAutomationPeerT<IndeterminateProgressRingAutomationPeer>

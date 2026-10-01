@@ -226,7 +226,7 @@ namespace winrt::TerminalApp::implementation
         GroupVisibility(isGroup && !railCollapsed ? Visibility::Visible : Visibility::Collapsed);
         ChildrenVisibility(showPaneRows ? Visibility::Visible : Visibility::Collapsed);
         const auto bitmap = IconSource().try_as<MUX::Controls::BitmapIconSource>();
-        IconVisibility(bitmap && !bitmap.UriSource() ? Visibility::Collapsed : Visibility::Visible);
+        IconVisibility((isGroup && !railCollapsed) || (bitmap && !bitmap.UriSource()) ? Visibility::Collapsed : Visibility::Visible);
         PinnedIconVisibility(railCollapsed && IsPinned() ? Visibility::Visible : Visibility::Collapsed);
         HeaderMinHeight(railCollapsed ? 32.0 : 40.0);
         LeadingContentMargin(railCollapsed ? WUX::Thickness{} : WUX::Thickness{ 6, 0, 10, 0 });

@@ -34,6 +34,8 @@ namespace winrt::TerminalApp::implementation
         Loaded([weakThis = get_weak()](auto&&, auto&&) {
             if (const auto self = weakThis.get())
             {
+                // A recycled view needs a clock attached to its current visual tree.
+                self->_StopAnimation();
                 self->_loaded = true;
                 self->_ObserveVisibility();
                 self->_UpdateAnimation();
@@ -133,10 +135,9 @@ namespace winrt::TerminalApp::implementation
                 }
             }
         }
-        if (visible && !_running)
+        if (visible && _storyboard.GetCurrentState() == ClockState::Stopped)
         {
             _storyboard.Begin();
-            _running = true;
         }
         else if (!visible)
         {
@@ -146,10 +147,9 @@ namespace winrt::TerminalApp::implementation
 
     void IndeterminateProgressRing::_StopAnimation()
     {
-        if (_running)
+        if (_storyboard && _storyboard.GetCurrentState() != ClockState::Stopped)
         {
             _storyboard.Stop();
-            _running = false;
         }
     }
 

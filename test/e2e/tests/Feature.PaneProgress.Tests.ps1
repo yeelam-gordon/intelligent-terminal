@@ -190,7 +190,8 @@ public static extern bool GetUserObjectInformation(System.IntPtr handle, int ind
                     }
                     Save-CompositorFrame "$Phase-$frame-window"
                     Get-VisualDigest -Bounds $bounds -Name "$Phase-$frame-ring"
-                    Start-Sleep -Milliseconds 173
+                    # Avoid sampling the one-second rotation at an accidentally matching cadence.
+                    Start-Sleep -Milliseconds @(41, 97, 173, 263, 389, 521)[$frame - 1]
                 }
             )
             @($digests | Select-Object -Unique).Count | Should -BeGreaterThan 1 -Because 'six actual ring frames must animate, not merely expose active bound state'
@@ -352,6 +353,54 @@ public static extern bool GetUserObjectInformation(System.IntPtr handle, int ind
             Send-ShellScript $script:a.session_id "[Console]::Write([char]27+']9;4;0'+[char]7)"
             Wait-UiElement -App $script:app -Selector PaneIndeterminateProgressRing -Gone | Out-Null
         }
+    }
+
+    It 'Sidebar group chevrons share the tab icon slot and title alignment' -Tag 'PaneProgressGroup' {
+        # Boundary: group projection -> realized Sidebar template -> compositor/UIA bounds.
+        # Negative: pane rows retain their identity, and compact rail has no group chevron.
+        foreach ($collapsed in @($false, $true, $false)) {
+            if ($collapsed) {
+                Invoke-UiElement -App $script:app -Selector 'Collapse tab group' | Out-Null
+                Wait-UiElement -App $script:app -Selector PaneActivateButton -Gone | Out-Null
+            }
+            elseif (@(Get-OwnedElements AutomationId PaneActivateButton).Count -eq 0) {
+                Invoke-UiElement -App $script:app -Selector 'Expand tab group' | Out-Null
+                Wait-UiElement -App $script:app -Selector PaneActivateButton | Out-Null
+            }
+            $label = if ($collapsed) { 'collapsed' } else { 'expanded' }
+            $group = @(Get-OwnedElements Name $script:titleA | Where-Object {
+                $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text
+            } | Sort-Object { $_.Current.BoundingRectangle.Y }) | Select-Object -First 1
+            $single = @(Get-OwnedElements Name "$script:tabTitle-guard" | Where-Object {
+                $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text
+            } | Sort-Object { $_.Current.BoundingRectangle.Y }) | Select-Object -First 1
+            $group | Should -Not -BeNullOrEmpty
+            $single | Should -Not -BeNullOrEmpty
+            $toggle = @(Get-OwnedElements AutomationId TabGroupToggleButton)
+            $toggle | Should -HaveCount 1
+            $bounds = $group.Current.BoundingRectangle
+            $offset = [math]::Abs($bounds.X - $single.Current.BoundingRectangle.X)
+            $offset | Should -BeLessOrEqual $script:scale -Because 'top-level group and singleton titles share the same leading slot'
+            ($bounds.X - $toggle[0].Current.BoundingRectangle.Right) |
+                Should -BeLessThan (20 * $script:scale) -Because 'no extra profile-icon column may appear after the group chevron'
+            Save-CompositorFrame "group-slot-$label"
+            @{ collapsed = $collapsed; groupBounds = $bounds.ToString()
+                singleBounds = $single.Current.BoundingRectangle.ToString()
+                toggleBounds = $toggle[0].Current.BoundingRectangle.ToString(); titleOffset = $offset } |
+                ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:evidence "group-slot-$label.json")
+            if (-not $collapsed) {
+                Get-ProfileIconDigest "group-slot-$label-pane" | Should -Be $script:profileIcon
+                Get-ProfileIconDigest "group-slot-$label-sibling" $script:titleB | Should -Be $script:siblingIcon
+            }
+        }
+        Invoke-UiElement -App $script:app -Selector 'Collapse sidebar' | Out-Null
+        try {
+            @(Get-OwnedElements AutomationId TabGroupToggleButton) | Should -HaveCount 0
+            Save-CompositorFrame group-slot-compact
+        }
+        finally { Invoke-UiElement -App $script:app -Selector 'Expand sidebar' | Out-Null }
+        Wait-UiElement -App $script:app -Selector PaneActivateButton | Out-Null
+        Get-ProfileIconDigest group-slot-restored-pane | Should -Be $script:profileIcon
     }
 
     It 'OSC progress survives context-menu moves and layout switches' -Tag 'PaneProgressLifecycle' {

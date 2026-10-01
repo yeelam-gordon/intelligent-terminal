@@ -327,7 +327,6 @@
                             <Grid Margin="{x:Bind LeadingContentMargin, Mode=OneWay}"
                                   VerticalAlignment="Center">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="28" />
                                 </Grid.ColumnDefinitions>
                                 <Button x:Name="TabGroupToggleButton"
@@ -344,7 +343,6 @@
                                               Glyph="{x:Bind ChevronGlyph, Mode=OneWay}" />
                                 </Button>
                                 <ContentPresenter x:Name="TabIconPresenter"
-                                                  Grid.Column="1"
                                                   Width="16"
                                                   Height="16"
                                                   HorizontalAlignment="Center"
@@ -352,7 +350,6 @@
                                                   Content="{x:Bind CreateIcon(IconSource), Mode=OneWay}"
                                                   Visibility="{x:Bind IconVisibility, Mode=OneWay}" />
                                 <FontIcon x:Uid="CollapsedPinnedTabIcon"
-                                          Grid.Column="1"
                                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                           FontSize="9"
                                           Glyph="&#xE718;"

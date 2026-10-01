@@ -7283,7 +7283,7 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(display.ContextFlyout() == contextFlyout);
             VERIFY_ARE_EQUAL(2u, display.PaneItems().Size());
             VERIFY_ARE_EQUAL(Visibility::Visible, display.ChildrenVisibility());
-            VERIFY_ARE_EQUAL(Visibility::Visible, display.IconVisibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, display.IconVisibility());
             VERIFY_ARE_EQUAL(40.0, display.HeaderMinHeight());
             VERIFY_IS_FALSE(rowHeader.IsMetadataVisible());
             VERIFY_ARE_EQUAL(firstPaneMetadata, display.PaneItems().GetAt(0).MetadataText());
@@ -7311,20 +7311,21 @@ namespace TerminalAppLocalTests
             const auto headerRoot = templateRoot.Children().GetAt(0).as<Grid>();
             const auto iconPresenter = headerRoot.FindName(L"TabIconPresenter").as<ContentPresenter>();
             const auto headerPresenter = headerRoot.FindName(L"TabHeaderPresenter").as<winrt::TerminalApp::TabHeaderControl>();
-            VERIFY_ARE_EQUAL(Visibility::Visible, iconPresenter.Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, iconPresenter.Visibility());
             VERIFY_ARE_EQUAL(40.0, headerRoot.ActualHeight());
             const auto groupTitleOffset = headerPresenter.TransformToVisual(headerRoot).TransformPoint({ 0, 0 }).X;
-            VERIFY_ARE_EQUAL(72.0f, groupTitleOffset);
+            VERIFY_ARE_EQUAL(44.0f, groupTitleOffset);
             const auto groupButton = headerRoot.FindName(L"TabGroupToggleButton").as<Button>();
             const auto centerX = [&](const FrameworkElement& element) {
                 return element.TransformToVisual(headerRoot).TransformPoint({ static_cast<float>(element.ActualWidth() / 2), 0 }).X;
             };
             const auto groupIconCenter = centerX(groupButton);
             VERIFY_ARE_EQUAL(20.0f, groupIconCenter);
-            VERIFY_ARE_EQUAL(48.0f, centerX(iconPresenter));
             stripImpl->OnGroupToggleClick(groupButton, RoutedEventArgs{});
             host.UpdateLayout();
             VERIFY_ARE_EQUAL(Visibility::Collapsed, display.ChildrenVisibility());
+            VERIFY_ARE_EQUAL(Visibility::Visible, groupButton.Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, iconPresenter.Visibility());
             VERIFY_ARE_EQUAL(groupIconCenter, centerX(groupButton));
             VERIFY_ARE_EQUAL(groupTitleOffset, headerPresenter.TransformToVisual(headerRoot).TransformPoint({ 0, 0 }).X);
             stripImpl->OnGroupToggleClick(groupButton, RoutedEventArgs{});
@@ -7422,8 +7423,9 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(groupIconCenter, centerX(iconPresenter));
             strip.SetPaneItems(tab, display.PaneItems(), true);
             VERIFY_IS_FALSE(rowHeader.IsMetadataVisible());
-            VERIFY_ARE_EQUAL(Visibility::Visible, display.IconVisibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, display.IconVisibility());
             host.UpdateLayout();
+            VERIFY_ARE_EQUAL(groupTitleOffset, headerPresenter.TransformToVisual(headerRoot).TransformPoint({ 0, 0 }).X);
             VERIFY_ARE_EQUAL(display.HeaderMinHeight(), headerRoot.ActualHeight());
 
             rowHeader.BeginRename();
@@ -7881,7 +7883,7 @@ namespace TerminalAppLocalTests
         const auto verifyClock = [&](const bool running) {
             _waitForContentTransferReviewUI([&]() {
                 const auto impl = winrt::get_self<winrt::TerminalApp::implementation::IndeterminateProgressRing>(ring);
-                return impl->_storyboard && impl->_running == running &&
+                return impl->_storyboard &&
                        impl->_storyboard.GetCurrentState() == (running ? Media::Animation::ClockState::Active : Media::Animation::ClockState::Stopped);
             });
             std::set<int64_t> times;
@@ -7904,6 +7906,12 @@ namespace TerminalAppLocalTests
             }
             VERIFY_IS_TRUE(running ? times.size() > 1 : times.size() == 1);
         };
+        verifyClock(true);
+        TestOnUIThread([&]() {
+            const auto impl = winrt::get_self<winrt::TerminalApp::implementation::IndeterminateProgressRing>(ring);
+            impl->_storyboard.Stop();
+            impl->_UpdateAnimation();
+        });
         verifyClock(true);
         TestOnUIThread([&]() { header.TabStatus().IsProgressRingActive(false); });
         verifyClock(false);
@@ -7944,6 +7952,25 @@ namespace TerminalAppLocalTests
                 second.Visibility(Visibility::Visible);
             });
             verifyClock(true);
+        }
+        for (int cycle = 0; cycle < 3; ++cycle)
+        {
+            TestOnUIThread([&]() {
+                second.Children().Clear();
+                first.Children().Append(header);
+            });
+            verifyClock(true);
+            TestOnUIThread([&]() { second.Visibility(Visibility::Collapsed); });
+            verifyClock(true);
+            TestOnUIThread([&]() {
+                second.Visibility(Visibility::Visible);
+                first.Children().Clear();
+                second.Children().Append(header);
+            });
+            verifyClock(true);
+            TestOnUIThread([&]() { first.Visibility(Visibility::Collapsed); });
+            verifyClock(true);
+            TestOnUIThread([&]() { first.Visibility(Visibility::Visible); });
         }
     }
 
@@ -8320,8 +8347,8 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(firstIcon.Parent() != secondIcon.Parent());
             VERIFY_ARE_EQUAL(firstIcon.as<FontIcon>().Glyph(), secondIcon.as<FontIcon>().Glyph());
             VERIFY_IS_TRUE(display.Icon() != display.Icon());
-            VERIFY_ARE_EQUAL(Visibility::Visible, firstRoot.FindName(L"TabIconPresenter").as<ContentPresenter>().Visibility());
-            VERIFY_ARE_EQUAL(Visibility::Visible, secondRoot.FindName(L"TabIconPresenter").as<ContentPresenter>().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, firstRoot.FindName(L"TabIconPresenter").as<ContentPresenter>().Visibility());
+            VERIFY_ARE_EQUAL(Visibility::Collapsed, secondRoot.FindName(L"TabIconPresenter").as<ContentPresenter>().Visibility());
             const auto paneRoot = [](const FrameworkElement& root) {
                 const auto list = root.FindName(L"TabPaneItems").as<ItemsControl>();
                 const auto container = list.ContainerFromIndex(0).as<ContentPresenter>();
@@ -8640,7 +8667,7 @@ namespace TerminalAppLocalTests
                 if (page->_isVerticalLayout)
                 {
                     const auto display = displayForTab();
-                    VERIFY_ARE_EQUAL(Visibility::Visible, display.IconVisibility());
+                    VERIFY_ARE_EQUAL(display.IsGroup() && !page->_tabStrip.IsRailCollapsed() ? Visibility::Collapsed : Visibility::Visible, display.IconVisibility());
                     VERIFY_IS_TRUE(display.IconSource() == tab->TabViewItem().IconSource());
                 }
             });
