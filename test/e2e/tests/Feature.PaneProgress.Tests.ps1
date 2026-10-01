@@ -400,6 +400,20 @@ public static extern bool GetUserObjectInformation(System.IntPtr handle, int ind
         try {
             @(Get-OwnedElements AutomationId TabGroupToggleButton) | Should -HaveCount 0
             Save-CompositorFrame group-slot-compact
+            $list = @(Get-OwnedElements AutomationId ItemsList)
+            $list | Should -HaveCount 1
+            $condition = [Windows.Automation.PropertyCondition]::new(
+                [Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::ListItem)
+            $items = @($list[0].FindAll([Windows.Automation.TreeScope]::Children, $condition) |
+                Where-Object { -not $_.Current.IsOffscreen })
+            $items | Should -HaveCount 3
+            $active = Get-ActivePane -App $script:app
+            $active.session_id | Should -Be $script:a.session_id
+            $bounds = $items[[int]$active.tab_id].Current.BoundingRectangle
+            $size = 16 * $script:scale
+            $icon = [Windows.Rect]::new($bounds.X + 6 * $script:scale, $bounds.Y + ($bounds.Height - $size) / 2, $size, $size)
+            $bounds.Contains($icon) | Should -BeTrue
+            Get-VisualDigest -Bounds $icon -Name compact-group-profile -Icon | Out-Null
         }
         finally { Invoke-UiElement -App $script:app -Selector 'Expand sidebar' | Out-Null }
         Wait-UiElement -App $script:app -Selector PaneActivateButton | Out-Null
