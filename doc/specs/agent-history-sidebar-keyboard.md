@@ -14,7 +14,7 @@ agent/delegation shortcuts.
 | Default shortcut | Responsibility |
 |---|---|
 | `Ctrl+Shift+/` | Show/hide the Agent Session view in the sidebar, called **History** below. Opening History focuses its own search box. |
-| `Ctrl+Shift+S` | Expand/collapse the sidebar only. It does not activate or focus **Search tabs**. |
+| `Ctrl+Shift+S` | Enter the sidebar through **Search tabs**, or collapse it and return to the previous input when focus is already inside. |
 | `Ctrl+Shift+.` | Show/hide the independent Agent Pane; its behavior is unchanged. |
 
 In horizontal layout, `Ctrl+Shift+S` remains a consumed no-op: no layout/chrome
@@ -27,17 +27,18 @@ The two focus policies referenced here are defined separately below.
 
 | State before the action | Action | Resulting surface/state | Focus policy |
 |---|---|---|---|
-| Sidebar collapsed | `Ctrl+Shift+S` | Expand the sidebar only; do not activate a search button. | Keep current focus. Do not create a source-restoration context. |
-| Sidebar expanded, displaying tabs or ordinary tab search | `Ctrl+Shift+S` | Collapse the sidebar. | No-source policy. |
-| Sidebar expanded, History hidden | `Ctrl+Shift+/` | Show History; remember that the sidebar was expanded. | Remember the source input, then focus the History search box. |
+| Sidebar collapsed | `Ctrl+Shift+S` | Expand the sidebar and open **Search tabs**. | Remember the current terminal or Agent input, then focus the tab-search box. |
+| Sidebar expanded, focus outside the sidebar | `Ctrl+Shift+S` | Keep the sidebar expanded and open **Search tabs**. | Remember the current input, then focus the tab-search box. |
+| Sidebar expanded, focus inside the sidebar | `Ctrl+Shift+S` | Collapse the sidebar and close tab search or History. | Best-effort return to the input used before entering the sidebar; fall back to a visible terminal. |
+| Sidebar expanded, History hidden | `Ctrl+Shift+/` | Show History; remember that the sidebar was expanded. | Remember focused tab search or the source input, then focus the History search box. |
 | Sidebar collapsed, History hidden | `Ctrl+Shift+/` | Expand the sidebar and show History; remember that the sidebar was originally collapsed. | Remember the source input, then focus the History search box. |
 | History visible; sidebar was collapsed before History opened | `Ctrl+Shift+/` or the History close button | Hide History **and collapse the sidebar**. | History source-restoration policy. |
 | History visible; sidebar was expanded before History opened | `Ctrl+Shift+/` or the History close button | Hide History; **keep the sidebar expanded**, displaying its ordinary page without History. | History source-restoration policy. |
-| Sidebar expanded with History visible | `Ctrl+Shift+S` | Collapse the whole sidebar and hide History. | No-source policy; do not use History's remembered source or restore its previous expanded state. |
+| Sidebar expanded with History visible and focus inside | `Ctrl+Shift+S` | Collapse the whole sidebar and hide History. | Use the sidebar-hotkey entry input if still available, not History's saved entry state. |
+| Sidebar expanded with History visible and focus outside | `Ctrl+Shift+S` | Hide History, keep the sidebar expanded, and open **Search tabs**. | Remember the current input, then focus tab search. |
 
-The close shortcut and History close button have the same behavior. A later
-`Ctrl+Shift+S` expansion does not automatically activate or focus either search
-box. A future dedicated search shortcut is outside this contract.
+The History close shortcut and close button have the same behavior. By contrast,
+`Ctrl+Shift+S` intentionally opens and focuses ordinary tab search on entry.
 
 ## History: restore the entry state and input, best effort
 
@@ -47,11 +48,15 @@ When transitioning from hidden History to visible History, retain:
   History.
 - The source input location: the Agent Pane chat input or the specific terminal
   pane, including its particular split.
+- Whether ordinary tab search had keyboard focus, retaining its query.
 
 Do not replace this entry context with the History search box when focus moves
 there. When History is closed by its shortcut or close button, restore the
 remembered sidebar expanded/collapsed state and attempt to restore the source
 input.
+
+If History was opened from focused tab search and the rail remains expanded,
+restore focus to that search box with its query intact. Otherwise:
 
 1. If the source is still visible and focusable, return to that input location,
    preserving its unsent draft.
@@ -65,26 +70,36 @@ to recover focus.
 
 **Important:** closing History that originally expanded a collapsed sidebar
 also collapses the sidebar, but this is still a **History close**. It must use
-History's remembered source, not the no-source policy for `Ctrl+Shift+S`.
+History's remembered source, not the separate `Ctrl+Shift+S` entry input.
 
-## Sidebar toggle: no source restoration
+## Sidebar hotkey: enter search and return to input
 
-`Ctrl+Shift+S` controls visibility, not navigation or search.
+`Ctrl+Shift+S` navigates between the current input and the sidebar's tab search.
 
-- Expansion keeps the current input focus and does not invoke the first
-  **Search tabs** button or the History search box.
-- Collapse does not record, look up, or restore an opener.
-- If current focus remains valid after collapse, leave it unchanged.
-- If focus belonged to a sidebar element that is now hidden or otherwise becomes
-  invalid, choose a visible, focusable terminal pane in the current tab, best
-  effort.
-- If no suitable target exists, retain any remaining valid focus without
-  surfacing an error, blocking, or repeatedly trying to restore an unavailable
-  surface.
+- When the sidebar is collapsed, expand it, open ordinary **Search tabs**, and
+  focus its search box. When expanded with focus outside, open/focus the same
+  box without collapsing the sidebar.
+- Remember the terminal or Agent chat input used just before this hotkey entry.
+  A later entry from another input replaces that best-effort return target.
+  Closing Search tabs with Escape or its button expires the target; opening
+  Search tabs without the hotkey (including its pointer or keyboard button)
+  starts without a saved hotkey source. A new hotkey entry captures its input
+  only after search has opened successfully.
+- When focus is inside the expanded sidebar, collapse it. If the remembered
+  input remains visible and focusable, return there without changing its
+  unsent draft. Otherwise, try the currently active visible terminal or Agent
+  input, then a visible terminal pane in the current tab, best effort; never
+  reopen a hidden Agent Pane or create a pane to recover focus.
+- If no target exists, leave any remaining valid focus unchanged; do not
+  display an error, block, or retry indefinitely.
 
-This policy also applies when `Ctrl+Shift+S` hides an open History view. That
-action is not a History-close shortcut and must not use History's saved origin.
-A subsequent History opening captures a new entry context.
+The titlebar's Expand/Collapse button retains its existing visibility behavior;
+it does not itself open tab search. `Ctrl+Shift+S` while History is visible
+does not invoke History's source-restoration path. A subsequent History opening
+captures its own new entry context.
+The public `toggleSidebar` command remains a visibility toggle when invoked
+from the command palette or another non-key source. The titlebar rail toggle
+counts as inside the sidebar for the keybinding's focus policy.
 
 ## Data and lifecycle invariants
 
@@ -177,17 +192,18 @@ Pane descriptors retain source data, content identity, and status, never live
 icon elements. Tab and pane adapters share the same conversion and element
 factory; simultaneous containers share geometry/image data but own distinct
 elements.
-- Show the label and dimmed shortcut on the same line with 8 units of spacing.
-  Keep Segoe UI Variable, `FontSize=12`, normal weight, `LineHeight=16`, and
-  shortcut opacity `0.7`.
+- Show the label and dimmed effective shortcut on the same line with 8 units
+  of spacing for both the collapsed **Expand sidebar** and expanded
+  **Collapse sidebar** buttons. Keep Segoe UI Variable, `FontSize=12`, normal
+  weight, `LineHeight=16`, and shortcut opacity `0.7`.
 - Display normal shortcut casing, such as `Ctrl+Shift+S`, rather than serialized
   lowercase text.
 - Resolve the effective sidebar binding and refresh the hint when settings
   change. Rebinding changes the displayed chord; unbinding or overriding the
   action hides the obsolete shortcut without leaving an empty gap.
 
-The previously discussed idea of expanding the sidebar directly into
-**Search tabs** is superseded. Do not implement it as part of `Ctrl+Shift+S`.
+Opening Search tabs with `Ctrl+Shift+S` does not change the separate
+`Ctrl+Shift+/` History shortcut or the ordinary Tab traversal of sidebar items.
 
 ## Acceptance scenarios
 
@@ -200,12 +216,13 @@ These are required checks for this contract, not claims of completed validation:
   originating terminal split when each remains available.
 - Repeat with an unavailable source and verify the visible-terminal fallback,
   unchanged session data/drafts, and nonblocking behavior.
-- Verify that `Ctrl+Shift+S` expansion does not activate search or move input
-  focus, and that collapse uses no-source fallback even while History is open.
-- Inspect both Expand/Collapse hints against the single-line designer reference,
-  including the sidebar wording, exact casing, dimmed shortcut text, remapping,
-  and unbinding.
+- Verify that `Ctrl+Shift+S` from either collapsed or expanded/outside focus
+  activates tab search and focuses its box; a second press from inside
+  collapses and best-effort restores the originating shell or Agent input.
+- Inspect both Expand/Collapse hints against the single-line designer
+  reference, including the sidebar wording, accurate shortcut presence,
+  casing, remapping, and unbinding.
 
 The related release-checklist IDs remain `C110` (History), `C112` (action
-dispatch), `C349` (sidebar toggle), and `C350` (hint presentation). Earlier
+dispatch), `C365` (sidebar toggle), and `C366` (hint presentation). Earlier
 results for a different behavior contract are not acceptance of this revision.
