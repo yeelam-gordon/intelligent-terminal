@@ -132,20 +132,22 @@ presentation contract.
 
 Indeterminate header, pane-row, and tab-switcher progress use the shared
 `IndeterminateProgressRing` control and its style in
-`IndeterminateProgressResources.xaml`. The control owns one rotating-arc
-storyboard and starts it only while loaded, active, and visible through its
+`IndeterminateProgressResources.xaml`. The control owns one compositor
+rotation animation on its current template visual and starts it only while loaded, active, and visible through its
 attached visual ancestry. Activity and ancestor-visibility callbacks stop or
 start the clock; unload stops it and releases weak ancestry observers, and load
 observes the new ancestry. Template replacement stops the old clock before
-creating the replacement. This is view-local rendering lifetime, not progress
+attaching to the replacement visual. This is view-local rendering lifetime, not progress
 model state or per-move/layout repair; there is no XAML `Loaded` trigger or
-native `ActiveStates` group competing with it.
+native `ActiveStates` group or XAML storyboard target competing with it.
 
+The rotation targets a renderer-owned child ShapeVisual, not the
+framework-owned XAML element visual that recycling/layout can reset.
 The control's `IsActive` property remains bound to status; the existing outer
 active gate and inner indeterminate gate control presentation. It is neither a
 keyboard tab stop nor a hit-test target, and its automation peer exposes
 `ProgressBar` without a numeric `RangeValue` pattern. The arc uses
-`TemplateBinding Foreground`; MUX determinate/error/paused progress and the
+the resolved Foreground brush, including brush color and theme changes; MUX determinate/error/paused progress and the
 shared data/identity policy are unchanged. Product-host reload/animation
 acceptance still requires runtime integration validation.
 

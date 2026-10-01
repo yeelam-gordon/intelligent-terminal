@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <winrt/Windows.UI.Composition.h>
+
 #include "IndeterminateProgressRing.g.h"
 #include "IndeterminateProgressRingAutomationPeer.g.h"
 
@@ -35,10 +37,14 @@ namespace winrt::TerminalApp::implementation
         void _ClearVisibilityObservers();
         void _UpdateAnimation();
         void _StopAnimation();
+        void _UpdateForeground();
 
         std::vector<VisibilitySubscription> _visibilitySubscriptions;
-        Windows::UI::Xaml::Media::Animation::Storyboard _storyboard{ nullptr };
-        bool _loaded{ false };
+        Windows::UI::Composition::ShapeVisual _visual{ nullptr };
+        Windows::UI::Composition::CompositionColorBrush _strokeBrush{ nullptr };
+        Windows::UI::Composition::ScalarKeyFrameAnimation _animation{ nullptr };
+        Windows::UI::Xaml::Media::SolidColorBrush _foreground{ nullptr };
+        int64_t _foregroundToken{ 0 };
     };
 
     struct IndeterminateProgressRingAutomationPeer : IndeterminateProgressRingAutomationPeerT<IndeterminateProgressRingAutomationPeer>

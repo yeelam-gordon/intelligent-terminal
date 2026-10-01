@@ -173,30 +173,33 @@ public static extern bool GetUserObjectInformation(System.IntPtr handle, int ind
             Wait-Until -TimeoutSec 10 -Because "$Phase layout has realized its owned progress widget" -Condition {
                 @(Get-OwnedElements AutomationId $ringId).Count -eq 1
             } | Out-Null
-            $digests = @(
-                foreach ($frame in 1..6) {
-                    $rings = @(Get-OwnedElements AutomationId $ringId)
-                    $rings | Should -HaveCount 1 -Because 'only pane A emitted progress'
-                    Set-WtPaneFocus -App $script:app -SessionId $script:a.session_id
-                    @((Get-WtPanes -App $script:app -TabId $script:tab.tab_id).session_id | Sort-Object) |
-                        Should -Be @(@($script:a.session_id, $script:b.session_id) | Sort-Object)
-                    $bounds = $rings[0].Current.BoundingRectangle
-                    if (-not $Horizontal) {
-                        $row = Get-PaneRow $script:titleA
-                        $row.Current.Name | Should -Match 'Indeterminate progress'
-                        $rings[0].Current.Name | Should -Be $row.Current.Name -Because 'the rendered ring belongs to the emitting pane'
-                        (Get-PaneRow $script:titleB).Current.Name | Should -Not -Match 'Indeterminate progress'
-                        $row.Current.BoundingRectangle.Contains($bounds) | Should -BeTrue -Because 'ring must not be clipped or attached to pane B'
-                    }
-                    Save-CompositorFrame "$Phase-$frame-window"
-                    Get-VisualDigest -Bounds $bounds -Name "$Phase-$frame-ring"
-                    # Avoid sampling the one-second rotation at an accidentally matching cadence.
-                    Start-Sleep -Milliseconds @(41, 97, 173, 263, 389, 521)[$frame - 1]
+            foreach ($frame in 1..6) {
+                $rings = @(Get-OwnedElements AutomationId $ringId)
+                $rings | Should -HaveCount 1 -Because 'only pane A emitted progress'
+                Set-WtPaneFocus -App $script:app -SessionId $script:a.session_id
+                @((Get-WtPanes -App $script:app -TabId $script:tab.tab_id).session_id | Sort-Object) |
+                    Should -Be @(@($script:a.session_id, $script:b.session_id) | Sort-Object)
+                $bounds = $rings[0].Current.BoundingRectangle
+                if (-not $Horizontal) {
+                    $row = Get-PaneRow $script:titleA
+                    $row.Current.Name | Should -Match 'Indeterminate progress'
+                    $rings[0].Current.Name | Should -Be $row.Current.Name -Because 'the rendered ring belongs to the emitting pane'
+                    (Get-PaneRow $script:titleB).Current.Name | Should -Not -Match 'Indeterminate progress'
+                    $row.Current.BoundingRectangle.Contains($bounds) | Should -BeTrue -Because 'ring must not be clipped or attached to pane B'
                 }
-            )
-            @($digests | Select-Object -Unique).Count | Should -BeGreaterThan 1 -Because 'six actual ring frames must animate, not merely expose active bound state'
-            @{ phase = $Phase; hashes = $digests; frames = 6; animated = $true; pane = $script:a.session_id } |
+                Save-CompositorFrame "$Phase-$frame-window"
+                Get-VisualDigest -Bounds $bounds -Name "$Phase-$frame-ring" | Out-Null
+                # Avoid sampling the one-second rotation at an accidentally matching cadence.
+                Start-Sleep -Milliseconds @(41, 97, 173, 263, 389, 521)[$frame - 1]
+            }
+            $digests = @(foreach ($frame in 1..6) {
+                (Get-FileHash -LiteralPath (Join-Path $script:evidence "$Phase-$frame-ring.png")).Hash
+            })
+            $distinct = @($digests | Select-Object -Unique).Count
+            @{ phase = $Phase; hashes = $digests; frames = 6; distinct = $distinct; animated = ($distinct -gt 1); pane = $script:a.session_id } |
                 ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:evidence "$Phase-frames.json")
+            $digests | Should -HaveCount 6
+            $distinct | Should -BeGreaterThan 1 -Because 'six actual ring frames must animate, not merely expose active bound state'
         }
         function Get-ProfileIconDigest {
             param([string]$Name, [string]$Title = $script:titleA)

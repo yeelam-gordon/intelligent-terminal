@@ -1855,8 +1855,8 @@ namespace winrt::TerminalApp::implementation
     }
 
     // Resolve the effective UI language for wta.
-    // Priority: explicit settings.json "language" override → MRT's resolved
-    // language qualifier (matches what XAML actually renders) → empty (let
+    // Priority: explicit settings.json "language" override → MRT's first
+    // preferred language → empty (let
     // wta fall back to sys_locale).
     //
     // Without this, wta uses sys_locale::get_locale() (Windows
@@ -1875,10 +1875,10 @@ namespace winrt::TerminalApp::implementation
         try
         {
             const auto context{ winrt::Windows::ApplicationModel::Resources::Core::ResourceContext::GetForViewIndependentUse() };
-            const auto qualifiers{ context.QualifierValues() };
-            if (const auto language{ qualifiers.TryLookup(L"language") })
+            const auto languages = context.Languages();
+            if (languages.Size() > 0)
             {
-                return winrt::hstring{ *language };
+                return languages.GetAt(0);
             }
         }
         catch (...)
@@ -6629,9 +6629,10 @@ namespace winrt::TerminalApp::implementation
         try
         {
             const auto context = winrt::Windows::ApplicationModel::Resources::Core::ResourceContext::GetForViewIndependentUse();
-            if (const auto language = context.QualifierValues().TryLookup(L"language"))
+            const auto languages = context.Languages();
+            if (languages.Size() > 0)
             {
-                return *language;
+                return languages.GetAt(0);
             }
         }
         catch (...)

@@ -305,6 +305,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(FreIllustrationsFollowThemeWithoutChangingChrome);
         TEST_METHOD(EmptyTabLayoutChangeCompletesBeforeStartup);
         TEST_METHOD(VerticalLayoutMirrorsForRtl);
+        TEST_METHOD(VerticalLayoutUsesFirstPreferredResourceLanguage);
         TEST_METHOD(VerticalRailVisibilityRestoresWidth);
         TEST_METHOD(VerticalRailCollapseRestoresWidth);
         TEST_METHOD(SidebarHotkeyFocusesSearchAndReturnsToInput);
@@ -3682,6 +3683,37 @@ namespace TerminalAppLocalTests
         });
     }
 
+    void TabTests::VerticalLayoutUsesFirstPreferredResourceLanguage()
+    {
+        const CascadiaSettings settings{ LR"({
+            "defaultProfile": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+            "showTabsInTitlebar": false,
+            "tabLayout": "vertical",
+            "profiles": [{
+                "name": "profile0",
+                "guid": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+                "commandline": "cmd.exe"
+            }]
+        })", {} };
+        const auto context = winrt::Windows::ApplicationModel::Resources::Core::ResourceContext::GetForViewIndependentUse();
+        const auto originalLanguages = context.Languages();
+        const auto restoreLanguages = wil::scope_exit([&]() { context.Languages(originalLanguages); });
+        for (const bool rtl : { true, false })
+        {
+            context.Languages(winrt::single_threaded_vector<winrt::hstring>(
+                                  rtl ? std::vector<winrt::hstring>{ L"ar-SA", L"en-US" } :
+                                        std::vector<winrt::hstring>{ L"en-US", L"ar-SA" })
+                                  .GetView());
+            winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
+            _initializeTerminalPage(page, settings);
+            TestOnUIThread([&]() {
+                VERIFY_ARE_EQUAL(rtl, page->_isRightToLeft);
+                VERIFY_ARE_EQUAL(rtl ? FlowDirection::RightToLeft : FlowDirection::LeftToRight, page->_tabStrip.FlowDirection());
+                VERIFY_ARE_EQUAL(rtl ? 1 : 0, Grid::GetColumn(page->_tabStrip));
+            });
+        }
+    }
+
     void TabTests::SidebarRailHintsTrackBindings()
     {
         const auto connection = winrt::make_self<TestConnection>(
@@ -5477,8 +5509,8 @@ namespace TerminalAppLocalTests
                              winrt::TerminalApp::implementation::TerminalPage::_SidebarHistoryAgeText(std::nullopt, nowMs));
 
             const auto context = winrt::Windows::ApplicationModel::Resources::Core::ResourceContext::GetForViewIndependentUse();
-            const auto language = context.QualifierValues().TryLookup(L"language");
-            const auto locale = language ? *language : winrt::hstring{};
+            const auto languages = context.Languages();
+            const auto locale = languages.Size() == 0 ? winrt::hstring{} : languages.GetAt(0);
             const auto expectedDate = [&](WORD year, WORD month, WORD day) {
                 SYSTEMTIME time{};
                 time.wYear = year;
@@ -7866,8 +7898,7 @@ namespace TerminalAppLocalTests
             };
             visit(visit, busy);
             if (!busy.IsLoaded() || !busy.IsActive() || stateGroups != 0 || !templateView ||
-                templateView.ActualWidth() <= 0 || templateView.ActualHeight() <= 0 ||
-                !templateView.RenderTransform().try_as<Media::RotateTransform>())
+                templateView.ActualWidth() <= 0 || templateView.ActualHeight() <= 0)
             {
                 return false;
             }
@@ -7881,31 +7912,15 @@ namespace TerminalAppLocalTests
             return _progressIndicatorsMatch(header, L"Header", true, true);
         };
         const auto verifyRotation = [&]() {
-            std::set<std::vector<uint8_t>> frames;
             for (int frame = 0; frame < 6; ++frame)
             {
-                Media::Imaging::RenderTargetBitmap bitmap{ nullptr };
-                winrt::Windows::Foundation::IAsyncAction render{ nullptr };
                 TestOnUIThread([&]() {
-                    bitmap = Media::Imaging::RenderTargetBitmap{};
-                    render = bitmap.RenderAsync(busy);
+                    const auto impl = winrt::get_self<winrt::TerminalApp::implementation::IndeterminateProgressRing>(busy);
+                    const auto controller = impl->_visual.TryGetAnimationController(L"RotationAngleInDegrees");
+                    VERIFY_IS_NOT_NULL(controller);
                 });
-                render.get();
-                winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Storage::Streams::IBuffer> pixels{ nullptr };
-                TestOnUIThread([&]() { pixels = bitmap.GetPixelsAsync(); });
-                const auto reader = winrt::Windows::Storage::Streams::DataReader::FromBuffer(pixels.get());
-                std::vector<uint8_t> bytes(reader.UnconsumedBufferLength());
-                reader.ReadBytes(bytes);
-                bool nonblank = false;
-                for (size_t i = 3; i < bytes.size(); i += 4)
-                {
-                    nonblank |= bytes[i] != 0;
-                }
-                VERIFY_IS_TRUE(nonblank);
-                frames.emplace(std::move(bytes));
                 Sleep(167);
             }
-            VERIFY_IS_TRUE(frames.size() >= 5);
         };
         _waitForContentTransferReviewUI(templateIsVisible);
         verifyRotation();
@@ -7971,15 +7986,24 @@ namespace TerminalAppLocalTests
                 const auto root = Media::VisualTreeHelper::GetChild(ring, 0).as<Grid>();
                 VERIFY_ARE_EQUAL(winrt::hstring{ L"SpinnerView" }, root.Name());
                 VERIFY_ARE_EQUAL(0u, VisualStateManager::GetVisualStateGroups(root).Size());
-                VERIFY_IS_NOT_NULL(root.RenderTransform().try_as<Media::RotateTransform>());
-                const auto arc = root.Children().GetAt(0).as<Shapes::Path>();
+                const auto impl = winrt::get_self<winrt::TerminalApp::implementation::IndeterminateProgressRing>(ring);
+                VERIFY_IS_NOT_NULL(impl->_visual);
+                VERIFY_ARE_EQUAL(7.5f, impl->_visual.CenterPoint().x);
+                VERIFY_ARE_EQUAL(7.5f, impl->_visual.CenterPoint().y);
+                const auto arc = impl->_visual.Shapes().GetAt(0).as<winrt::Windows::UI::Composition::CompositionSpriteShape>();
+                VERIFY_ARE_EQUAL(1.5f, arc.StrokeThickness());
+                VERIFY_ARE_EQUAL(0.75f, arc.Geometry().TrimEnd());
                 const Media::SolidColorBrush blue{ winrt::Windows::UI::Colors::Blue() };
                 const Media::SolidColorBrush green{ winrt::Windows::UI::Colors::Green() };
                 for (const auto& brush : { blue, green, blue })
                 {
                     ring.Foreground(brush);
-                    VERIFY_IS_TRUE(arc.Stroke() == brush);
+                    VERIFY_ARE_EQUAL(brush.Color(), arc.StrokeBrush().as<winrt::Windows::UI::Composition::CompositionColorBrush>().Color());
                 }
+                green.Color(winrt::Windows::UI::Colors::Red());
+                ring.Foreground(green);
+                green.Color(winrt::Windows::UI::Colors::Blue());
+                VERIFY_ARE_EQUAL(green.Color(), impl->_strokeBrush.Color());
                 const auto peer = Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(ring);
                 VERIFY_ARE_EQUAL(Automation::Peers::AutomationControlType::ProgressBar, peer.GetAutomationControlType());
                 VERIFY_IS_NULL(peer.GetPattern(Automation::Peers::PatternInterface::RangeValue));
@@ -8014,34 +8038,30 @@ namespace TerminalAppLocalTests
         const auto verifyClock = [&](const bool running) {
             _waitForContentTransferReviewUI([&]() {
                 const auto impl = winrt::get_self<winrt::TerminalApp::implementation::IndeterminateProgressRing>(ring);
-                return impl->_storyboard &&
-                       impl->_storyboard.GetCurrentState() == (running ? Media::Animation::ClockState::Active : Media::Animation::ClockState::Stopped);
+                return impl->_visual && static_cast<bool>(impl->_animation) == running &&
+                       static_cast<bool>(impl->_visual.TryGetAnimationController(L"RotationAngleInDegrees")) == running;
             });
-            std::set<int64_t> times;
             for (int sample = 0; sample < 8; ++sample)
             {
                 TestOnUIThread([&]() {
                     const auto impl = winrt::get_self<winrt::TerminalApp::implementation::IndeterminateProgressRing>(ring);
-                    const auto time = impl->_storyboard.GetCurrentTime().count();
-                    times.insert(time);
-                    VERIFY_ARE_EQUAL(running ? Media::Animation::ClockState::Active : Media::Animation::ClockState::Stopped,
-                                     impl->_storyboard.GetCurrentState());
+                    const auto controller = impl->_visual.TryGetAnimationController(L"RotationAngleInDegrees");
+                    VERIFY_ARE_EQUAL(running, static_cast<bool>(controller));
                     if (!running)
                     {
-                        VERIFY_ARE_EQUAL(0ll, time);
-                        const auto view = Media::VisualTreeHelper::GetChild(ring, 0).as<FrameworkElement>();
-                        VERIFY_ARE_EQUAL(0.0, view.RenderTransform().as<Media::RotateTransform>().Angle());
+                        VERIFY_ARE_EQUAL(0.0f, impl->_visual.RotationAngleInDegrees());
                     }
                 });
                 Sleep(173);
             }
-            VERIFY_IS_TRUE(running ? times.size() > 1 : times.size() == 1);
         };
         verifyClock(true);
         TestOnUIThread([&]() {
             const auto impl = winrt::get_self<winrt::TerminalApp::implementation::IndeterminateProgressRing>(ring);
-            impl->_storyboard.Stop();
+            const auto previousClock = impl->_animation;
+            impl->_StopAnimation();
             impl->_UpdateAnimation();
+            VERIFY_IS_FALSE(previousClock == impl->_animation);
         });
         verifyClock(true);
         TestOnUIThread([&]() { header.TabStatus().IsProgressRingActive(false); });

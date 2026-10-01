@@ -3,6 +3,7 @@
 
 #include "pch.h"
 #include <winrt/Windows.UI.Xaml.Interop.h>
+#include <winrt/Windows.UI.Xaml.Hosting.h>
 #include "IndeterminateProgressRing.h"
 
 #include "IndeterminateProgressRing.g.cpp"
@@ -11,7 +12,7 @@
 using namespace winrt;
 using namespace winrt::Windows::UI::Xaml;
 using namespace winrt::Windows::UI::Xaml::Media;
-using namespace winrt::Windows::UI::Xaml::Media::Animation;
+using namespace winrt::Windows::UI::Composition;
 
 namespace winrt::TerminalApp::implementation
 {
@@ -31,12 +32,16 @@ namespace winrt::TerminalApp::implementation
         }();
         (void)registered;
 
+        RegisterPropertyChangedCallback(Controls::Control::ForegroundProperty(), [weakThis = get_weak()](auto&&, auto&&) {
+            if (const auto self = weakThis.get())
+            {
+                self->_UpdateForeground();
+            }
+        });
         Loaded([weakThis = get_weak()](auto&&, auto&&) {
             if (const auto self = weakThis.get())
             {
                 // A recycled view needs a clock attached to its current visual tree.
-                self->_StopAnimation();
-                self->_loaded = true;
                 self->_ObserveVisibility();
                 self->_UpdateAnimation();
             }
@@ -44,9 +49,23 @@ namespace winrt::TerminalApp::implementation
         Unloaded([weakThis = get_weak()](auto&&, auto&&) {
             if (const auto self = weakThis.get())
             {
-                self->_loaded = false;
-                self->_StopAnimation();
-                self->_ClearVisibilityObservers();
+                if (self->IsLoaded())
+                {
+                    self->_ObserveVisibility();
+                    self->_UpdateAnimation();
+                }
+                else
+                {
+                    self->_StopAnimation();
+                    self->_ClearVisibilityObservers();
+                }
+            }
+        });
+        EffectiveViewportChanged([weakThis = get_weak()](auto&&, auto&&) {
+            if (const auto self = weakThis.get())
+            {
+                self->_ObserveVisibility();
+                self->_UpdateAnimation();
             }
         });
     }
@@ -57,6 +76,10 @@ namespace winrt::TerminalApp::implementation
         {
             _StopAnimation();
             _ClearVisibilityObservers();
+            if (_foreground)
+            {
+                _foreground.UnregisterPropertyChangedCallback(SolidColorBrush::ColorProperty(), _foregroundToken);
+            }
         }
         CATCH_LOG();
     }
@@ -64,21 +87,25 @@ namespace winrt::TerminalApp::implementation
     void IndeterminateProgressRing::OnApplyTemplate()
     {
         _StopAnimation();
-        _storyboard = nullptr;
+        _visual = nullptr;
+        _strokeBrush = nullptr;
         if (const auto view = GetTemplateChild(L"SpinnerView").try_as<FrameworkElement>())
         {
-            if (const auto rotation = view.RenderTransform().try_as<RotateTransform>())
-            {
-                DoubleAnimation animation;
-                animation.From(0.0);
-                animation.To(360.0);
-                animation.Duration(DurationHelper::FromTimeSpan(std::chrono::seconds{ 1 }));
-                animation.RepeatBehavior(RepeatBehaviorHelper::Forever());
-                Storyboard::SetTarget(animation, rotation);
-                Storyboard::SetTargetProperty(animation, L"Angle");
-                _storyboard = Storyboard{};
-                _storyboard.Children().Append(animation);
-            }
+            const auto compositor = Windows::UI::Xaml::Hosting::ElementCompositionPreview::GetElementVisual(view).Compositor();
+            const auto geometry = compositor.CreateEllipseGeometry();
+            geometry.Center({ 7.5f, 7.5f });
+            geometry.Radius({ 6.0f, 6.0f });
+            geometry.TrimEnd(0.75f);
+            _strokeBrush = compositor.CreateColorBrush();
+            const auto arc = compositor.CreateSpriteShape(geometry);
+            arc.StrokeThickness(1.5f);
+            arc.StrokeBrush(_strokeBrush);
+            _visual = compositor.CreateShapeVisual();
+            _visual.Size({ 15.0f, 15.0f });
+            _visual.CenterPoint({ 7.5f, 7.5f, 0.0f });
+            _visual.Shapes().Append(arc);
+            Windows::UI::Xaml::Hosting::ElementCompositionPreview::SetElementChildVisual(view, _visual);
+            _UpdateForeground();
         }
         _UpdateAnimation();
     }
@@ -122,22 +149,26 @@ namespace winrt::TerminalApp::implementation
 
     void IndeterminateProgressRing::_UpdateAnimation()
     {
-        auto visible = _loaded && IsActive() && _storyboard;
+        auto visible = IsLoaded() && IsActive() && _visual;
         if (visible)
         {
-            for (const auto& subscription : _visibilitySubscriptions)
+            for (DependencyObject current = *this; current; current = VisualTreeHelper::GetParent(current))
             {
-                const auto element = subscription.element.get();
-                if (!element || element.Visibility() != Visibility::Visible)
+                if (const auto element = current.try_as<UIElement>(); element && element.Visibility() != Visibility::Visible)
                 {
                     visible = false;
                     break;
                 }
             }
         }
-        if (visible && _storyboard.GetCurrentState() == ClockState::Stopped)
+        if (visible && !_animation)
         {
-            _storyboard.Begin();
+            _animation = _visual.Compositor().CreateScalarKeyFrameAnimation();
+            _animation.InsertKeyFrame(0.0f, 0.0f);
+            _animation.InsertKeyFrame(1.0f, 360.0f);
+            _animation.Duration(std::chrono::seconds{ 1 });
+            _animation.IterationBehavior(AnimationIterationBehavior::Forever);
+            _visual.StartAnimation(L"RotationAngleInDegrees", _animation);
         }
         else if (!visible)
         {
@@ -147,9 +178,44 @@ namespace winrt::TerminalApp::implementation
 
     void IndeterminateProgressRing::_StopAnimation()
     {
-        if (_storyboard && _storyboard.GetCurrentState() != ClockState::Stopped)
+        if (_animation)
         {
-            _storyboard.Stop();
+            _visual.StopAnimation(L"RotationAngleInDegrees");
+            _visual.RotationAngleInDegrees(0.0f);
+            _animation = nullptr;
+        }
+    }
+
+    void IndeterminateProgressRing::_UpdateForeground()
+    {
+        const auto brush = Foreground().try_as<SolidColorBrush>();
+        if (_foreground != brush)
+        {
+            if (_foreground)
+            {
+                _foreground.UnregisterPropertyChangedCallback(SolidColorBrush::ColorProperty(), _foregroundToken);
+            }
+            _foreground = brush;
+            if (_foreground)
+            {
+                _foregroundToken = _foreground.RegisterPropertyChangedCallback(SolidColorBrush::ColorProperty(), [weakThis = get_weak()](auto&&, auto&&) {
+                    if (const auto self = weakThis.get())
+                    {
+                        self->_UpdateForeground();
+                    }
+                });
+            }
+        }
+        if (_strokeBrush)
+        {
+            if (_foreground)
+            {
+                _strokeBrush.Color(_foreground.Color());
+            }
+            else
+            {
+                LOG_HR(E_INVALIDARG);
+            }
         }
     }
 
@@ -167,4 +233,5 @@ namespace winrt::TerminalApp::implementation
     {
         return Automation::Peers::AutomationControlType::ProgressBar;
     }
+
 }

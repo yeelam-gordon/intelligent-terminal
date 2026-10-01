@@ -45,5 +45,7 @@ active, loaded, and visible through its attached visual ancestry, stops on
 inactivity, determinate presentation, ancestor collapse, or unload, and observes
 the new ancestry after reattachment. No progress-model lifecycle state, timer,
 or per-frame callback is involved. `IndeterminateProgressStopsHiddenClocks`
-checks actual storyboard state/time, including old-parent isolation; compositor
+checks compositor animation attachment, including old-parent isolation; compositor
 frame variation alone does not establish that hidden clocks have stopped.
+`RenderTargetBitmap` is not an oracle for compositor transforms; unit lifecycle
+checks inspect the controller's presence, while live rendered-motion checks use desktop crops.
