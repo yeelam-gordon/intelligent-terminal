@@ -35,3 +35,11 @@ authenticated `copilot -p` smoke is separate evidence and must not be inferred
 from this fixture. Neither UIA nor `pane-status` exposes raw Core taskbar state;
 if progress is absent before moving, record that limitation and do not attribute
 it to rendering or replace the input with the persistent fixture.
+
+The shared indeterminate view owns its animation clock. It starts only while
+active, loaded, and visible through its attached visual ancestry, stops on
+inactivity, determinate presentation, ancestor collapse, or unload, and observes
+the new ancestry after reattachment. No progress-model lifecycle state, timer,
+or per-frame callback is involved. `IndeterminateProgressStopsHiddenClocks`
+checks actual storyboard state/time, including old-parent isolation; compositor
+frame variation alone does not establish that hidden clocks have stopped.

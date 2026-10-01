@@ -9,6 +9,7 @@
 #include "../TerminalApp/MinMaxCloseControl.h"
 #include "../TerminalApp/TabRowControl.h"
 #include "../TerminalApp/TabHeaderControl.h"
+#include "../TerminalApp/IndeterminateProgressRing.h"
 #include "../TerminalApp/TabStrip.h"
 #include "../TerminalApp/ShortcutActionDispatch.h"
 #include "../TerminalApp/AgentPaneContent.h"
@@ -69,7 +70,7 @@ namespace TerminalAppLocalTests
                                          const std::optional<uint32_t> value = std::nullopt)
     {
         const auto determinate = root.FindName(winrt::hstring{ std::wstring{ prefix } + L"ProgressRing" }).as<winrt::MUX::Controls::ProgressRing>();
-        const auto busy = root.FindName(winrt::hstring{ std::wstring{ prefix } + L"IndeterminateProgressRing" }).as<ProgressRing>();
+        const auto busy = root.FindName(winrt::hstring{ std::wstring{ prefix } + L"IndeterminateProgressRing" }).as<winrt::TerminalApp::IndeterminateProgressRing>();
         return Media::VisualTreeHelper::GetParent(determinate).as<UIElement>().Visibility() == (active ? Visibility::Visible : Visibility::Collapsed) &&
                determinate.Visibility() == (indeterminate ? Visibility::Collapsed : Visibility::Visible) &&
                busy.Visibility() == (indeterminate ? Visibility::Visible : Visibility::Collapsed) &&
@@ -322,6 +323,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(HorizontalTabProgressSurvivesAsyncVerticalTeardown);
         TEST_METHOD(HeaderProgressWrapperBindingPreservesRingState);
         TEST_METHOD(IndeterminateProgressUsesSharedResource);
+        TEST_METHOD(IndeterminateProgressStopsHiddenClocks);
         TEST_METHOD(TabProgressSurvivesMoveTabReorder);
         TEST_METHOD(NativeTabReorderReleasesHeaderOwnership);
         TEST_METHOD(SidebarTemplatesOwnHeaderVisuals);
@@ -7705,10 +7707,10 @@ namespace TerminalAppLocalTests
         _waitForContentTransferReviewUI([&]() {
             return _progressIndicatorsMatch(header, L"Header", true, true);
         });
-        ProgressRing busy{ nullptr };
+        winrt::TerminalApp::IndeterminateProgressRing busy{ nullptr };
         TestOnUIThread([&]() {
-            busy = header.as<FrameworkElement>().FindName(L"HeaderIndeterminateProgressRing").as<ProgressRing>();
-            const Automation::Peers::ProgressRingAutomationPeer peer{ busy };
+            busy = header.as<FrameworkElement>().FindName(L"HeaderIndeterminateProgressRing").as<winrt::TerminalApp::IndeterminateProgressRing>();
+            const auto peer = Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(busy);
             VERIFY_ARE_EQUAL(Automation::Peers::AutomationControlType::ProgressBar, peer.GetAutomationControlType());
             VERIFY_IS_NULL(peer.GetPattern(Automation::Peers::PatternInterface::RangeValue));
         });
@@ -7827,10 +7829,12 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_NOT_NULL(shared);
                 const auto style = resources.Lookup(resourceKey).as<Style>();
                 VERIFY_IS_TRUE(style == shared.Lookup(resourceKey).as<Style>());
-                ProgressRing ring;
+                winrt::TerminalApp::IndeterminateProgressRing ring;
                 ring.Style(style);
                 ring.IsActive(true);
                 VERIFY_IS_TRUE(ring.ApplyTemplate());
+                VERIFY_IS_FALSE(ring.IsTabStop());
+                VERIFY_IS_FALSE(ring.IsHitTestVisible());
                 const auto root = Media::VisualTreeHelper::GetChild(ring, 0).as<Grid>();
                 VERIFY_ARE_EQUAL(winrt::hstring{ L"SpinnerView" }, root.Name());
                 VERIFY_ARE_EQUAL(0u, VisualStateManager::GetVisualStateGroups(root).Size());
@@ -7843,13 +7847,104 @@ namespace TerminalAppLocalTests
                     ring.Foreground(brush);
                     VERIFY_IS_TRUE(arc.Stroke() == brush);
                 }
-                const Automation::Peers::ProgressRingAutomationPeer peer{ ring };
+                const auto peer = Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(ring);
                 VERIFY_ARE_EQUAL(Automation::Peers::AutomationControlType::ProgressBar, peer.GetAutomationControlType());
                 VERIFY_IS_NULL(peer.GetPattern(Automation::Peers::PatternInterface::RangeValue));
             }
-            const auto busy = header.FindName(L"HeaderIndeterminateProgressRing").as<ProgressRing>();
+            const auto busy = header.FindName(L"HeaderIndeterminateProgressRing").as<winrt::TerminalApp::IndeterminateProgressRing>();
             VERIFY_IS_TRUE(busy.Style() == header.Resources().Lookup(resourceKey).as<Style>());
         });
+    }
+
+    void TabTests::IndeterminateProgressStopsHiddenClocks()
+    {
+        winrt::TerminalApp::TabHeaderControl header{ nullptr };
+        winrt::TerminalApp::IndeterminateProgressRing ring{ nullptr };
+        Grid first{ nullptr }, second{ nullptr };
+        StackPanel host{ nullptr };
+        TestOnUIThread([&]() {
+            header = winrt::TerminalApp::TabHeaderControl{};
+            winrt::TerminalApp::TerminalTabStatus status;
+            status.IsProgressRingActive(true);
+            status.IsProgressRingIndeterminate(true);
+            header.TabStatus(status);
+            ring = header.FindName(L"HeaderIndeterminateProgressRing").as<winrt::TerminalApp::IndeterminateProgressRing>();
+            first = Grid{};
+            second = Grid{};
+            host = StackPanel{};
+            host.Children().Append(first);
+            host.Children().Append(second);
+            first.Children().Append(header);
+            Window::Current().Content(host);
+            Window::Current().Activate();
+        });
+        const auto verifyClock = [&](const bool running) {
+            _waitForContentTransferReviewUI([&]() {
+                const auto impl = winrt::get_self<winrt::TerminalApp::implementation::IndeterminateProgressRing>(ring);
+                return impl->_storyboard && impl->_running == running &&
+                       impl->_storyboard.GetCurrentState() == (running ? Media::Animation::ClockState::Active : Media::Animation::ClockState::Stopped);
+            });
+            std::set<int64_t> times;
+            for (int sample = 0; sample < 8; ++sample)
+            {
+                TestOnUIThread([&]() {
+                    const auto impl = winrt::get_self<winrt::TerminalApp::implementation::IndeterminateProgressRing>(ring);
+                    const auto time = impl->_storyboard.GetCurrentTime().count();
+                    times.insert(time);
+                    VERIFY_ARE_EQUAL(running ? Media::Animation::ClockState::Active : Media::Animation::ClockState::Stopped,
+                                     impl->_storyboard.GetCurrentState());
+                    if (!running)
+                    {
+                        VERIFY_ARE_EQUAL(0ll, time);
+                        const auto view = Media::VisualTreeHelper::GetChild(ring, 0).as<FrameworkElement>();
+                        VERIFY_ARE_EQUAL(0.0, view.RenderTransform().as<Media::RotateTransform>().Angle());
+                    }
+                });
+                Sleep(173);
+            }
+            VERIFY_IS_TRUE(running ? times.size() > 1 : times.size() == 1);
+        };
+        verifyClock(true);
+        TestOnUIThread([&]() { header.TabStatus().IsProgressRingActive(false); });
+        verifyClock(false);
+        TestOnUIThread([&]() { header.TabStatus().IsProgressRingActive(true); });
+        verifyClock(true);
+        TestOnUIThread([&]() { header.TabStatus().IsProgressRingIndeterminate(false); });
+        verifyClock(false);
+        TestOnUIThread([&]() { header.TabStatus().IsProgressRingIndeterminate(true); });
+        verifyClock(true);
+        TestOnUIThread([&]() { first.Visibility(Visibility::Collapsed); });
+        verifyClock(false);
+        TestOnUIThread([&]() { first.Visibility(Visibility::Visible); });
+        verifyClock(true);
+        TestOnUIThread([&]() { host.Visibility(Visibility::Collapsed); });
+        verifyClock(false);
+        TestOnUIThread([&]() { host.Visibility(Visibility::Visible); });
+        verifyClock(true);
+        for (int cycle = 0; cycle < 3; ++cycle)
+        {
+            TestOnUIThread([&]() {
+                first.Children().Clear();
+                second.Children().Clear();
+            });
+            _waitForContentTransferReviewUI([&]() { return !ring.IsLoaded(); });
+            verifyClock(false);
+            TestOnUIThread([&]() {
+                const auto impl = winrt::get_self<winrt::TerminalApp::implementation::IndeterminateProgressRing>(ring);
+                VERIFY_IS_TRUE(impl->_visibilitySubscriptions.empty());
+                second.Children().Append(header);
+            });
+            verifyClock(true);
+            TestOnUIThread([&]() { first.Visibility(Visibility::Collapsed); });
+            verifyClock(true);
+            TestOnUIThread([&]() { second.Visibility(Visibility::Collapsed); });
+            verifyClock(false);
+            TestOnUIThread([&]() {
+                first.Visibility(Visibility::Visible);
+                second.Visibility(Visibility::Visible);
+            });
+            verifyClock(true);
+        }
     }
 
     void TabTests::HorizontalTabProgressSurvivesAsyncVerticalTeardown()

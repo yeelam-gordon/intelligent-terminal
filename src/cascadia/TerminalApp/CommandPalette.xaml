@@ -214,7 +214,7 @@
                                           IsIndeterminate="False"
                                           Visibility="{x:Bind mtu:Converters.InvertedBooleanToVisibility(Item.(local:TabPaletteItem.TabStatus).IsProgressRingIndeterminate), Mode=OneWay}"
                                           Value="{x:Bind Item.(local:TabPaletteItem.TabStatus).ProgressValue, Mode=OneWay}" />
-                        <ProgressRing x:Name="TabIndeterminateProgressRing"
+                        <local:IndeterminateProgressRing x:Name="TabIndeterminateProgressRing"
                                       Style="{StaticResource DeclarativeSpinner}"
                                       Width="15"
                                       Height="15"

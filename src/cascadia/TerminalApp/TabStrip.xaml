@@ -475,7 +475,7 @@
                                                                       IsIndeterminate="False"
                                                                       Visibility="{x:Bind mtu:Converters.InvertedBooleanToVisibility(IsProgressRingIndeterminate), Mode=OneWay}"
                                                                       Value="{x:Bind ProgressValue, Mode=OneWay}" />
-                                                    <ProgressRing x:Name="PaneIndeterminateProgressRing"
+                                                    <local:IndeterminateProgressRing x:Name="PaneIndeterminateProgressRing"
                                                                   Style="{StaticResource DeclarativeSpinner}"
                                                                   Width="15"
                                                                   Height="15"
@@ -483,6 +483,7 @@
                                                                   MinHeight="0"
                                                                   Margin="0,0,6,0"
                                                                   VerticalAlignment="Center"
+                                                                  AutomationProperties.Name="{x:Bind AutomationName, Mode=OneWay}"
                                                                   IsActive="{x:Bind IsProgressRingActive, Mode=OneWay}"
                                                                   Visibility="{x:Bind IsProgressRingIndeterminate, Mode=OneWay}" />
                                                 </Grid>
