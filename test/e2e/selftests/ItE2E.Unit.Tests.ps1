@@ -59,6 +59,20 @@ Describe 'Wait-Until / Test-Until' -Tag 'Unit' {
 }
 
 Describe 'JSON helpers' -Tag 'Unit' {
+    It 'settings parsing does not hold a lock that blocks atomic replacement' {
+        $settingsPath = Join-Path $TestDrive 'atomic-settings.json'
+        $replacementPath = "$settingsPath.tmp"
+        [IO.File]::WriteAllText($settingsPath, '{"value":1}')
+        [IO.File]::WriteAllText($replacementPath, '{"value":2}')
+        Mock ConvertFrom-JsonC -ModuleName ItE2E {
+            [IO.File]::Move($replacementPath, $settingsPath, $true)
+            [pscustomobject]@{ value = 1 }
+        }
+
+        (Get-WtSettingsObject -App ([pscustomobject]@{ SettingsPath = $settingsPath })).value | Should -Be 1
+        (Get-Content -LiteralPath $settingsPath -Raw) | Should -Be '{"value":2}'
+    }
+
     It 'ConvertFrom-JsonSafe returns $null on garbage' {
         ConvertFrom-JsonSafe -InputObject 'not json {' | Should -BeNullOrEmpty
         ConvertFrom-JsonSafe -InputObject '' | Should -BeNullOrEmpty
