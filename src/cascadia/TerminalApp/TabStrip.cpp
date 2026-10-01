@@ -58,6 +58,7 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
+        _iconPath = iconPath;
         if (iconPath.empty())
         {
             MUX::Controls::FontIconSource fallback;
@@ -70,7 +71,6 @@ namespace winrt::TerminalApp::implementation
         {
             IconSource(::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(iconPath, false));
         }
-        _iconPath = iconPath;
     }
 
     WUX::Controls::IconElement TabStripPaneItem::Icon() const
@@ -80,7 +80,7 @@ namespace winrt::TerminalApp::implementation
 
     WUX::Controls::IconElement TabStripPaneItem::CreateIcon(IInspectable const& source) const
     {
-        auto element = ::Microsoft::Terminal::UI::AgentIcons::ElementForIconSource(source.as<MUX::Controls::IconSource>());
+        auto element = ::Microsoft::Terminal::UI::AgentIcons::ElementForIconSource(source.as<MUX::Controls::IconSource>(), _iconPath);
         element.Width(16);
         element.Height(16);
         return element;
@@ -149,17 +149,27 @@ namespace winrt::TerminalApp::implementation
 
     WUX::Controls::IconElement TabStripDisplayItem::CreateIcon(IInspectable const& source) const
     {
-        return ::Microsoft::Terminal::UI::AgentIcons::ElementForIconSource(source.as<MUX::Controls::IconSource>());
+        return ::Microsoft::Terminal::UI::AgentIcons::ElementForIconSource(source.as<MUX::Controls::IconSource>(), _iconPath.value_or(winrt::hstring{}));
     }
 
     void TabStripDisplayItem::IconSource(IInspectable const& value)
     {
+        _setIconSource(value, std::nullopt);
+    }
+
+    void TabStripDisplayItem::SyncIcon(hstring const& iconPath, MUX::Controls::IconSource const& source)
+    {
+        _setIconSource(source, iconPath);
+    }
+
+    void TabStripDisplayItem::_setIconSource(IInspectable const& value, std::optional<winrt::hstring> iconPath)
+    {
         const auto source = value.try_as<MUX::Controls::IconSource>();
         THROW_HR_IF(E_INVALIDARG, !source);
-        if (_iconSource != source)
+        if (_iconSource != source || _iconPath != iconPath)
         {
             _iconSource = source;
-            _iconPath.reset();
+            _iconPath = std::move(iconPath);
             PropertyChanged.raise(*this, WUX::Data::PropertyChangedEventArgs{ L"IconSource" });
             PropertyChanged.raise(*this, WUX::Data::PropertyChangedEventArgs{ L"Icon" });
         }
@@ -197,13 +207,12 @@ namespace winrt::TerminalApp::implementation
             MUX::Controls::FontIconSource fallback;
             fallback.FontFamily(WUX::Media::FontFamily{ L"Segoe Fluent Icons" });
             fallback.Glyph(L"\xE756");
-            IconSource(fallback);
+            SyncIcon(iconPath, fallback);
         }
         else
         {
-            IconSource(::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(iconPath, false));
+            SyncIcon(iconPath, ::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(iconPath, false));
         }
-        _iconPath = iconPath;
     }
 
     void TabStripDisplayItem::UpdatePresentation(bool railCollapsed, bool verticalPresentation)
@@ -571,7 +580,7 @@ namespace winrt::TerminalApp::implementation
             const auto source = display.Tab().IconSource();
             if (source)
             {
-                display.IconSource(source);
+                winrt::get_self<TabStripDisplayItem>(display)->SyncIcon(iconPath, source);
             }
             else if (const auto empty = display.IconSource().try_as<MUX::Controls::BitmapIconSource>();
                      !empty || empty.UriSource())

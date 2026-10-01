@@ -430,6 +430,9 @@ Net effect: UT shrinks the manual matrix to "did the wiring and UI connect", not
 
 **Feature definition:** Agent state, session routing, and autofix routing are per-tab and per-window. Moving tabs/windows should not lose or cross-route agent context.
 
+- [ ] `C364` `[new]` `[E2E]` **OSC progress survives context-menu moves and layout switches:** One-shot OSC3 in pane A survives consecutive Up/Up/Down/Down tab-menu moves and repeated context-menu layout round trips; six rendered frames animate in the owning row/header, while the same-profile OSC0 sibling remains clear and profile icons stay unclipped. _(#1043; E2E: `Feature.PaneProgress`.)_
+- [ ] `C365` `[new]` `[E2E]` **Move menu order follows tab layout:** The real right-click Move submenu places Up above Down in Sidebar and Right above Left in Horizontal after layout round trips; direction actions move the same tab to the expected index. _(#1043; E2E: `Feature.PaneProgress`.)_
+- [ ] `C366` `[new]` `[E2E]` **Native prompt-mode agent identity restores the profile icon:** Owned native-hook Working/Ended identity replaces then restores the complete profile icon with OSC3 and OSC0. Published coverage uses deterministic native CLI transport; actual authenticated Copilot prompt-mode branding and CLI exit require separate quota-approved Dev validation. _(#1043; E2E: `Feature.PaneProgress`.)_
 - [ ] `C159` `[E2E]` **Split pane does not break chat:** Splitting the terminal pane keeps agent pane chat usable.
 - [ ] `C160` `[UT~]` `[E2E]` **Split pane target selection is correct:** Agent insert/run/autofix targets the intended non-agent pane. _(UT: routing core.)_
 - [ ] `C161` `[UT~]` `[E2E]` **Multiple tabs work:** Each tab has its own agent pane/session state. _(UT: per-tab state.)_

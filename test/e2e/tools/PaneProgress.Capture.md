@@ -1,0 +1,37 @@
+# Pane progress render evidence
+
+`Feature.PaneProgress.Tests.ps1` has three deterministic release cases
+(C364-C366) and a separate literal one-shot, idle-prompt case. The latter sends
+`$ESC=[char]27;$BEL=[char]7;[Console]::Write("$ESC]9;4;3;0$BEL")`
+once, without a child command or sleeping fixture. It requires the final
+PowerShell prompt and pre-action progress before the exact right-click route.
+The lifecycle case separately uses a gated, persistent shell fixture.
+
+Render assertions capture the actual desktop compositor with
+`System.Drawing.Graphics.CopyFromScreen`, scoped to the foreground owned window
+and freshly queried UIA ring/icon rectangles. Six ring crops must differ.
+`PrintWindow` is not a substitute: it can return stale XAML icon pixels while
+the compositor already shows the correct Copilot glyph. The Default input
+desktop and foreground ownership are prerequisites; their absence skips rather
+than fabricates render proof. No terminal buffer is written to artifacts.
+
+Tab IDs are positional indices, not stable identities. After each menu move,
+the suite verifies the original pane session ID at the expected active index
+and refreshes the index before querying its two panes. Exact current parent-tab
+text, rather than a prefix or child-pane match, selects the right-click target.
+
+Run through `Invoke-ItE2EReport.ps1` with explicit `ITE2E_PACKAGE=Dev`,
+`ITE2E_EXPECTED_APP_SHA256`, `ITE2E_EXPECTED_WTA_SHA256`, and a unique
+`ITE2E_ARTIFACT_ROOT`. Obtain hashes from the intended source build receipt,
+not arbitrary installed binaries. The selected package must be inactive.
+Settings/state are backed up and restored by ItE2E. Case tags
+`PaneProgressLiteral`, `PaneProgressLifecycle`, `PaneProgressMenu`, and
+`PaneProgressNative` allow independent runs through the same report driver.
+
+C366 uses real packaged native-hook transport and a fixture-owned Copilot
+session, not model output or a real Copilot invocation. Working/Ended snapshots,
+scoped hook events, exit status and profile-icon rasters are retained. A real
+authenticated `copilot -p` smoke is separate evidence and must not be inferred
+from this fixture. Neither UIA nor `pane-status` exposes raw Core taskbar state;
+if progress is absent before moving, record that limitation and do not attribute
+it to rendering or replace the input with the persistent fixture.

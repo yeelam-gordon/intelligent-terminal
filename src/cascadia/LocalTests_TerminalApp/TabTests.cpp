@@ -8241,8 +8241,10 @@ namespace TerminalAppLocalTests
             const auto secondPaneIcon = paneVisual(secondPaneRoot).as<PathIcon>();
             VERIFY_IS_FALSE(firstPaneIcon == secondPaneIcon);
             VERIFY_IS_TRUE(firstPaneIcon.Parent() != secondPaneIcon.Parent());
-            VERIFY_IS_TRUE(firstPaneIcon.Data() == secondPaneIcon.Data());
-            VERIFY_IS_TRUE(firstPaneIcon.Data() == pane.IconSource().as<winrt::MUX::Controls::PathIconSource>().Data());
+            VERIFY_IS_NOT_NULL(firstPaneIcon.Data());
+            VERIFY_IS_NOT_NULL(secondPaneIcon.Data());
+            VERIFY_IS_FALSE(firstPaneIcon.Data() == secondPaneIcon.Data());
+            VERIFY_IS_FALSE(firstPaneIcon.Data() == pane.IconSource().as<winrt::MUX::Controls::PathIconSource>().Data());
             VERIFY_IS_TRUE(pane.Icon() != pane.Icon());
             VERIFY_IS_TRUE(_progressIndicatorsMatch(firstPaneRoot, L"Pane", true, true));
             VERIFY_IS_TRUE(_progressIndicatorsMatch(secondPaneRoot, L"Pane", true, true));
@@ -8278,7 +8280,9 @@ namespace TerminalAppLocalTests
             const auto firstAgentIcon = firstRoot.FindName(L"TabIconPresenter").as<ContentPresenter>().Content().as<PathIcon>();
             const auto secondAgentIcon = secondRoot.FindName(L"TabIconPresenter").as<ContentPresenter>().Content().as<PathIcon>();
             VERIFY_IS_FALSE(firstAgentIcon == secondAgentIcon);
-            VERIFY_IS_TRUE(firstAgentIcon.Data() == secondAgentIcon.Data());
+            VERIFY_IS_NOT_NULL(firstAgentIcon.Data());
+            VERIFY_IS_NOT_NULL(secondAgentIcon.Data());
+            VERIFY_IS_FALSE(firstAgentIcon.Data() == secondAgentIcon.Data());
             const auto binaryPath = wil::ExpandEnvironmentStringsW<std::wstring>(L"%SystemRoot%\\System32\\cmd.exe");
             strip.SetTabPresentation(tab, native.Title(), winrt::hstring{ binaryPath });
             host.UpdateLayout();
@@ -9656,6 +9660,20 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(Visibility::Visible, display.IconVisibility());
             const auto copilotSource = display.IconSource();
             VERIFY_IS_NOT_NULL(copilotSource.as<winrt::MUX::Controls::PathIconSource>().Data());
+            page->UpdateLayout();
+            const auto row = page->_tabStrip.ContainerFromIndex(page->_GetFocusedTabIndex().value()).as<ListViewItem>().ContentTemplateRoot().as<FrameworkElement>();
+            const auto iconPresenter = row.FindName(L"TabIconPresenter").as<ContentPresenter>();
+            const auto realizedCopilot = iconPresenter.Content().as<PathIcon>();
+            VERIFY_IS_NOT_NULL(realizedCopilot.Data());
+            VERIFY_IS_FALSE(realizedCopilot.Data() == copilotSource.as<winrt::MUX::Controls::PathIconSource>().Data());
+            VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
+                "session-agent-icon",
+                winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(paneSessionId)),
+                "copilot",
+                uint64_t{ 1235 },
+                "Idle"));
+            page->UpdateLayout();
+            VERIFY_IS_TRUE(iconPresenter.Content() == realizedCopilot);
             VERIFY_IS_TRUE(page->_ApplyAgentSessionStatusDelta(
                 "session-agent-icon",
                 winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(paneSessionId)),
@@ -10615,12 +10633,23 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(TabLayout::Horizontal, tab->_switchTabLayoutTarget);
             VERIFY_ARE_EQUAL(winrt::hstring{ L"Move down" }, tab->_moveRightMenuItem.Text());
             VERIFY_ARE_EQUAL(winrt::hstring{ L"Move up" }, tab->_moveLeftMenuItem.Text());
+            VERIFY_ARE_EQUAL(3u, tab->_moveSubMenu.Items().Size());
+            VERIFY_IS_TRUE(tab->_moveSubMenu.Items().GetAt(1) == tab->_moveLeftMenuItem);
+            VERIFY_IS_TRUE(tab->_moveSubMenu.Items().GetAt(2) == tab->_moveRightMenuItem);
 
             tab->SetVerticalTabLayout(false);
             VERIFY_ARE_EQUAL(winrt::hstring{ L"Switch to sidebar" }, tab->_switchTabLayoutMenuItem.Text());
             VERIFY_ARE_EQUAL(TabLayout::Vertical, tab->_switchTabLayoutTarget);
             VERIFY_ARE_EQUAL(winrt::hstring{ L"Move right" }, tab->_moveRightMenuItem.Text());
             VERIFY_ARE_EQUAL(winrt::hstring{ L"Move left" }, tab->_moveLeftMenuItem.Text());
+            VERIFY_ARE_EQUAL(3u, tab->_moveSubMenu.Items().Size());
+            VERIFY_IS_TRUE(tab->_moveSubMenu.Items().GetAt(1) == tab->_moveRightMenuItem);
+            VERIFY_IS_TRUE(tab->_moveSubMenu.Items().GetAt(2) == tab->_moveLeftMenuItem);
+
+            tab->SetVerticalTabLayout(true);
+            VERIFY_ARE_EQUAL(3u, tab->_moveSubMenu.Items().Size());
+            VERIFY_IS_TRUE(tab->_moveSubMenu.Items().GetAt(1) == tab->_moveLeftMenuItem);
+            VERIFY_IS_TRUE(tab->_moveSubMenu.Items().GetAt(2) == tab->_moveRightMenuItem);
         });
     }
 

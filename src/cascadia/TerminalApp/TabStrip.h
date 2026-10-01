@@ -148,6 +148,7 @@ namespace winrt::TerminalApp::implementation
     public:
         void SyncTabPresentation(bool railCollapsed, bool verticalPresentation);
         void SyncIcon(winrt::hstring const& iconPath);
+        void SyncIcon(winrt::hstring const& iconPath, winrt::Microsoft::UI::Xaml::Controls::IconSource const& source);
         void UpdatePresentation(bool railCollapsed, bool verticalPresentation);
         bool HeaderProgressProjectedToPaneRows() const noexcept { return _headerProgressProjectedToPaneRows; }
         void HeaderProgressProjectedToPaneRows(bool value) noexcept { _headerProgressProjectedToPaneRows = value; }
@@ -160,6 +161,7 @@ namespace winrt::TerminalApp::implementation
         TerminalApp::TabHeaderPresentation _header{ nullptr };
         winrt::Microsoft::UI::Xaml::Controls::IconSource _iconSource{ nullptr };
         bool _headerProgressProjectedToPaneRows{ false };
+        void _setIconSource(winrt::Windows::Foundation::IInspectable const& value, std::optional<winrt::hstring> iconPath);
     };
 
     struct TabStripPaneEventArgs : TabStripPaneEventArgsT<TabStripPaneEventArgs>

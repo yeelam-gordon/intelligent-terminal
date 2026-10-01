@@ -2002,12 +2002,11 @@ namespace winrt::TerminalApp::implementation
         }
 
         // Create a sub-menu for our extended move tab items.
-        Controls::MenuFlyoutSubItem moveSubMenu;
-        moveSubMenu.Text(RS_(L"TabMoveSubMenu"));
-        moveSubMenu.Items().Append(_moveToNewWindowMenuItem);
-        moveSubMenu.Items().Append(_moveRightMenuItem);
-        moveSubMenu.Items().Append(_moveLeftMenuItem);
-        flyout.Items().Append(moveSubMenu);
+        _moveSubMenu.Text(RS_(L"TabMoveSubMenu"));
+        _moveSubMenu.Items().Append(_moveToNewWindowMenuItem);
+        _moveSubMenu.Items().Append(_isVerticalTabLayout ? _moveLeftMenuItem : _moveRightMenuItem);
+        _moveSubMenu.Items().Append(_isVerticalTabLayout ? _moveRightMenuItem : _moveLeftMenuItem);
+        flyout.Items().Append(_moveSubMenu);
     }
 
     // Method Description:
@@ -2100,6 +2099,14 @@ namespace winrt::TerminalApp::implementation
 
         _moveRightMenuItem.Text(vertical ? RS_(L"TabMoveDown") : RS_(L"TabMoveRight"));
         _moveLeftMenuItem.Text(vertical ? RS_(L"TabMoveUp") : RS_(L"TabMoveLeft"));
+        uint32_t leftIndex{};
+        const auto expectedLeftIndex = vertical ? 1u : 2u;
+        const auto moveItems = _moveSubMenu.Items();
+        if (moveItems.IndexOf(_moveLeftMenuItem, leftIndex) && leftIndex != expectedLeftIndex)
+        {
+            moveItems.RemoveAt(leftIndex);
+            moveItems.InsertAt(expectedLeftIndex, _moveLeftMenuItem);
+        }
 
         _switchTabLayoutTarget = vertical ? TabLayout::Horizontal : TabLayout::Vertical;
         const auto switchLabel = vertical ? RS_(L"SwitchToHorizontalTabsText") : RS_(L"SwitchToVerticalTabsText");

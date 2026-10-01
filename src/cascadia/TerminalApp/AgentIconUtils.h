@@ -187,7 +187,8 @@ namespace Microsoft::Terminal::UI::AgentIcons
         return source;
     }
 
-    inline winrt::Windows::UI::Xaml::Controls::IconElement ElementForIconSource(const winrt::Microsoft::UI::Xaml::Controls::IconSource& source)
+    inline winrt::Windows::UI::Xaml::Controls::IconElement ElementForIconSource(const winrt::Microsoft::UI::Xaml::Controls::IconSource& source,
+                                                                            const winrt::hstring& iconPath = {})
     {
         namespace MUX = winrt::Microsoft::UI::Xaml::Controls;
         namespace WUX = winrt::Windows::UI::Xaml::Controls;
@@ -214,7 +215,9 @@ namespace Microsoft::Terminal::UI::AgentIcons
         else if (const auto path = source.try_as<MUX::PathIconSource>())
         {
             WUX::PathIcon icon;
-            icon.Data(path.Data());
+            // A Geometry cannot belong to both the source and a realized icon.
+            const auto geometry = GeometryForIconPath(iconPath);
+            icon.Data(geometry ? geometry : path.Data());
             icon.Width(16);
             icon.Height(16);
             element = icon;
