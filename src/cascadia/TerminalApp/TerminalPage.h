@@ -341,6 +341,7 @@ namespace winrt::TerminalApp::implementation
         bool _isRightToLeft{ false };
         bool _changingTabLayout{ false };
         bool _hasTitlebarHost{ false };
+        bool _verticalTitlebarKeyHandlerInstalled{ false };
         uint64_t _tabLayoutGeneration{ 0 };
         std::optional<winrt::Microsoft::Terminal::Settings::Model::TabLayout> _pendingTabLayout;
         std::optional<winrt::Microsoft::Terminal::Settings::Model::TabLayout> _tabLayoutTransitionTarget;
@@ -348,6 +349,7 @@ namespace winrt::TerminalApp::implementation
         bool _tabLayoutTransitionPreviousVertical{ false };
         bool _isVerticalRailVisible{ true };
         bool _isVerticalRailCollapsed{ false };
+        winrt::weak_ref<Microsoft::Terminal::Control::TermControl> _sidebarHotkeyReturnControl;
         TerminalApp::TabStripFilterMode _tabFilterMode{ TerminalApp::TabStripFilterMode::AllTabs };
         bool _tabSearchActive{ false };
         winrt::hstring _tabSearchQuery;
@@ -361,6 +363,7 @@ namespace winrt::TerminalApp::implementation
         struct _SidebarHistoryEntryState
         {
             bool railWasCollapsed{ false };
+            bool tabSearchHadFocus{ false };
             winrt::weak_ref<Microsoft::Terminal::Control::TermControl> sourceControl;
         };
         std::optional<_SidebarHistoryEntryState> _historyEntryState;
@@ -1304,6 +1307,7 @@ namespace winrt::TerminalApp::implementation
         void _ApplyPendingTabLayout();
         void _InstallVerticalRailSplitter();
         void _SetVerticalRailVisibility(bool visible);
+        void _ToggleSidebarHotkey();
         void _OnVerticalRailCollapseRequested(const IInspectable& sender, const IInspectable& eventArgs);
         void _CancelRailSplitterDrag();
         void _SetRailSplitterCursor();

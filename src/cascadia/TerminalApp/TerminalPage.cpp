@@ -712,6 +712,10 @@ namespace winrt::TerminalApp::implementation
                 const auto wasSearchActive = page->_tabSearchActive;
                 page->_tabSearchActive = sender.SearchActive();
                 page->_tabSearchQuery = sender.SearchQuery();
+                if (wasSearchActive != page->_tabSearchActive)
+                {
+                    page->_sidebarHotkeyReturnControl = {};
+                }
                 page->_ApplyTabListProjection(nullptr, false);
                 page->_suppressTabFocusRequests = false;
                 if (!wasSearchActive && page->_IsTabSearchEffective())
@@ -5772,6 +5776,12 @@ namespace winrt::TerminalApp::implementation
 
             if (const auto content = winrt::get_self<implementation::TabRowControl>(_tabRow)->VerticalTitleBarContent())
             {
+                if (_hasTitlebarHost && !_verticalTitlebarKeyHandlerInstalled)
+                {
+                    // Hosted chrome is detached from TabRow, so its keys cannot reach TabRow.KeyUp.
+                    content.KeyDown({ get_weak(), &TerminalPage::_KeyDownHandler });
+                    _verticalTitlebarKeyHandlerInstalled = true;
+                }
                 if (_hasTitlebarHost)
                 {
                     SetTitleBarContent.raise(*this, content);
@@ -6081,6 +6091,7 @@ namespace winrt::TerminalApp::implementation
         {
             _CloseSidebarHistory(false);
             _ClearTabSearch();
+            _sidebarHotkeyReturnControl = {};
         }
 
         _changingTabLayout = false;
@@ -6180,6 +6191,14 @@ namespace winrt::TerminalApp::implementation
 
     WUX::Controls::Control TerminalPage::_SidebarFocusedControl() const
     {
+        if (_tabRow)
+        {
+            const auto railToggle = winrt::get_self<implementation::TabRowControl>(_tabRow)->VerticalRailToggleButton();
+            if (railToggle && railToggle.FocusState() != FocusState::Unfocused)
+            {
+                return railToggle;
+            }
+        }
         if (const auto root = _tabStrip ? _tabStrip.XamlRoot() : nullptr)
         {
             const auto focused = WUX::Input::FocusManager::GetFocusedElement(root);
@@ -6230,6 +6249,11 @@ namespace winrt::TerminalApp::implementation
         {
             _historyEntryState.emplace();
             _historyEntryState->railWasCollapsed = _isVerticalRailCollapsed;
+            if (_tabSearchActive && _tabStrip)
+            {
+                _historyEntryState->tabSearchHadFocus =
+                    _SidebarFocusedControl() == winrt::get_self<implementation::TabStrip>(_tabStrip)->SearchTextBox();
+            }
             if (const auto control = _GetActiveControl())
             {
                 _historyEntryState->sourceControl = winrt::make_weak(control);
@@ -6249,6 +6273,7 @@ namespace winrt::TerminalApp::implementation
         {
             _CloseSidebarHistory(false);
             _ClearTabSearch();
+            _sidebarHotkeyReturnControl = {};
         }
         _isVerticalRailVisible = visible;
 
@@ -6350,6 +6375,48 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    void TerminalPage::_ToggleSidebarHotkey()
+    {
+        if (!_isVerticalLayout || !_isVerticalRailVisible)
+        {
+            return;
+        }
+
+        if (!_isVerticalRailCollapsed && _SidebarFocusedControl())
+        {
+            const auto source = std::exchange(_sidebarHotkeyReturnControl, {});
+            if (!_TryFocusSidebarInput(source.get()) &&
+                !_TryFocusSidebarInput(_GetActiveControl()))
+            {
+                _FocusSidebarTerminalFallback();
+            }
+            _OnVerticalRailCollapseRequested(nullptr, nullptr);
+            return;
+        }
+
+        winrt::weak_ref<TermControl> returnControl;
+        if (const auto source = _GetActiveControl();
+            source && _IsVisibleControlInSubtree(source, _tabContent))
+        {
+            returnControl = winrt::make_weak(source);
+        }
+        _sidebarHotkeyReturnControl = {};
+
+        if (_isVerticalRailCollapsed)
+        {
+            _OnVerticalRailCollapseRequested(nullptr, nullptr);
+        }
+        _CloseSidebarHistory(false);
+        if (winrt::get_self<implementation::TabStrip>(_tabStrip)->FocusTabSearch())
+        {
+            _sidebarHotkeyReturnControl = std::move(returnControl);
+        }
+        else
+        {
+            LOG_HR(E_FAIL);
+        }
+    }
+
     void TerminalPage::_OnVerticalRailCollapseRequested(const IInspectable&, const IInspectable&)
     {
         if (!_isVerticalLayout || !_isVerticalRailVisible)
@@ -6361,6 +6428,7 @@ namespace winrt::TerminalApp::implementation
         const auto sidebarFocus = collapsing ? _SidebarFocusedControl() : nullptr;
         if (collapsing)
         {
+            _sidebarHotkeyReturnControl = {};
             _ClearTabSearch();
             _CloseSidebarHistory(false);
         }
@@ -6482,6 +6550,12 @@ namespace winrt::TerminalApp::implementation
                 }
                 _isVerticalRailCollapsed = entry->railWasCollapsed;
                 _SetVerticalRailVisibility(true);
+            }
+            if (entry && entry->tabSearchHadFocus &&
+                _isVerticalLayout && _isVerticalRailVisible && !_isVerticalRailCollapsed &&
+                winrt::get_self<implementation::TabStrip>(_tabStrip)->FocusTabSearch())
+            {
+                return;
             }
             if (!entry || !_TryFocusSidebarInput(entry->sourceControl.get()))
             {
@@ -7123,6 +7197,7 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_ClearTabSearch()
     {
+        _sidebarHotkeyReturnControl = {};
         if (!_tabSearchActive && _tabSearchQuery.empty())
         {
             return;
@@ -10450,31 +10525,36 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        const auto cmd = actionMap.GetActionByKeyChord({
+        const KeyChord chord{
             modifiers.IsCtrlPressed(),
             modifiers.IsAltPressed(),
             modifiers.IsShiftPressed(),
             modifiers.IsWinPressed(),
             vkey,
             scanCode,
-        });
+        };
+        const auto cmd = actionMap.GetActionByKeyChord(chord);
         if (!cmd)
         {
             return;
         }
 
-        if (!_actionDispatch->DoAction(cmd.ActionAndArgs()))
+        const auto action = cmd.ActionAndArgs();
+        const auto handled = action.Action() == ShortcutAction::ToggleSidebar ?
+                                 _actionDispatch->DoAction(chord, action) :
+                                 _actionDispatch->DoAction(action);
+        if (!handled)
         {
             return;
         }
 
         if (_commandPaletteIs(Visibility::Visible) &&
-            cmd.ActionAndArgs().Action() != ShortcutAction::ToggleCommandPalette)
+            action.Action() != ShortcutAction::ToggleCommandPalette)
         {
             CommandPaletteElement().Visibility(Visibility::Collapsed);
         }
         if (_suggestionsControlIs(Visibility::Visible) &&
-            cmd.ActionAndArgs().Action() != ShortcutAction::ToggleCommandPalette)
+            action.Action() != ShortcutAction::ToggleCommandPalette)
         {
             SuggestionsElement().Visibility(Visibility::Collapsed);
         }
@@ -10493,16 +10573,20 @@ namespace winrt::TerminalApp::implementation
         {
             if (const auto actionMap = _settings.ActionMap())
             {
-                if (const auto cmd = actionMap.GetActionByKeyChord({
+                const KeyChord chord{
                         modifiers.IsCtrlPressed(),
                         modifiers.IsAltPressed(),
                         modifiers.IsShiftPressed(),
                         modifiers.IsWinPressed(),
                         gsl::narrow_cast<int32_t>(vkey),
                         scanCode,
-                    }))
+                    };
+                if (const auto cmd = actionMap.GetActionByKeyChord(chord))
                 {
-                    return _actionDispatch->DoAction(cmd.ActionAndArgs());
+                    const auto action = cmd.ActionAndArgs();
+                    return action.Action() == ShortcutAction::ToggleSidebar ?
+                               _actionDispatch->DoAction(chord, action) :
+                               _actionDispatch->DoAction(action);
                 }
             }
         }
