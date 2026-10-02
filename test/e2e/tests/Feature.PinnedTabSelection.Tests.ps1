@@ -134,13 +134,22 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
                 $rows += $row
             }
             Set-WtWindowForeground -App $script:app | Should -BeTrue
+            $window = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+            $window.Current.ProcessId | Should -Be $script:app.Pid
+            $windowBounds = $window.Current.BoundingRectangle
+            $windowBounds.Height | Should -BeGreaterThan 0
             $observed = @()
             for ($index = 0; $index -lt $rows.Count; $index++) {
+                $rows[$index].Current.ControlType | Should -Be $type -Because 'capture the native TabItem or Sidebar ListItem, including its leading glyphs'
+                $rows[$index].Current.ClassName | Should -Not -Be 'TermControl'
+                $rows[$index].Current.ProcessId | Should -Be $script:app.Pid
+                $rows[$index].Current.IsOffscreen | Should -BeFalse
                 $bounds = $rows[$index].Current.BoundingRectangle
                 $bounds.Width | Should -BeGreaterThan 0
                 $bounds.Height | Should -BeGreaterThan 0
-                $bounds.Height | Should -BeLessThan 80 -Because 'capture the small tab header, never the terminal viewport'
+                $bounds.Height | Should -BeLessThan ($windowBounds.Height / 4) -Because 'the header must stay small relative to the owned window at any DPI'
                 $container.Current.BoundingRectangle.Contains($bounds) | Should -BeTrue
+                $windowBounds.Contains($bounds) | Should -BeTrue
                 $pins = @(Get-VisiblePinGlyphs -Parent $rows[$index])
                 $name = "$Phase-$($script:titles[$index])-header"
                 $bitmap = [Drawing.Bitmap]::new([int][math]::Ceiling($bounds.Width), [int][math]::Ceiling($bounds.Height))
