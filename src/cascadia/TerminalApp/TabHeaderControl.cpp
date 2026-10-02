@@ -16,7 +16,6 @@ namespace winrt::TerminalApp::implementation
     {
         Presentation(winrt::make<TabHeaderPresentation>());
         InitializeComponent();
-        HeaderProgressRingPresenter().DataContext(box_value(_showProgressRing));
 
         const auto keepRunningIcon = HeaderKeepRunningIcon();
         const auto keepRunningName = RS_(L"KeepTabRunningText");
@@ -134,7 +133,6 @@ namespace winrt::TerminalApp::implementation
         if (_showProgressRing != value)
         {
             _showProgressRing = value;
-            HeaderProgressRingPresenter().DataContext(box_value(value));
             PropertyChanged.raise(*this, Windows::UI::Xaml::Data::PropertyChangedEventArgs{ L"ShowProgressRing" });
         }
     }

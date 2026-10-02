@@ -41,7 +41,7 @@
                       Glyph="&#xE718;"
                       Visibility="{x:Bind TabStatus.IsPinned, Mode=OneWay}" />
             <Grid x:Name="HeaderProgressRingPresenter"
-                  Visibility="{Binding}">
+                  Visibility="{x:Bind ShowProgressRing, Mode=OneWay}">
                 <Grid Visibility="{x:Bind TabStatus.IsProgressRingActive, Mode=OneWay}">
                     <mux:ProgressRing x:Name="HeaderProgressRing"
                                       Width="15"
