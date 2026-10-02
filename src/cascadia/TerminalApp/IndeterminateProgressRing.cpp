@@ -188,7 +188,8 @@ namespace winrt::TerminalApp::implementation
 
     void IndeterminateProgressRing::_UpdateForeground()
     {
-        const auto brush = Foreground().try_as<SolidColorBrush>();
+        const auto foreground = Foreground();
+        const auto brush = foreground.try_as<SolidColorBrush>();
         if (_foreground != brush)
         {
             if (_foreground)
@@ -214,7 +215,11 @@ namespace winrt::TerminalApp::implementation
             }
             else
             {
-                LOG_HR(E_INVALIDARG);
+                _strokeBrush.Color(Windows::UI::Colors::Transparent());
+                if (foreground)
+                {
+                    LOG_HR(E_NOTIMPL);
+                }
             }
         }
     }

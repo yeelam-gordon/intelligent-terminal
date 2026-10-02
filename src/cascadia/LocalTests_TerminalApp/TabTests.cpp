@@ -7980,6 +7980,7 @@ namespace TerminalAppLocalTests
                 winrt::TerminalApp::IndeterminateProgressRing ring;
                 ring.Style(style);
                 ring.IsActive(true);
+                ring.Foreground(nullptr);
                 VERIFY_IS_TRUE(ring.ApplyTemplate());
                 VERIFY_IS_FALSE(ring.IsTabStop());
                 VERIFY_IS_FALSE(ring.IsHitTestVisible());
@@ -7993,6 +7994,7 @@ namespace TerminalAppLocalTests
                 const auto arc = impl->_visual.Shapes().GetAt(0).as<winrt::Windows::UI::Composition::CompositionSpriteShape>();
                 VERIFY_ARE_EQUAL(1.5f, arc.StrokeThickness());
                 VERIFY_ARE_EQUAL(0.75f, arc.Geometry().TrimEnd());
+                VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Transparent(), impl->_strokeBrush.Color());
                 const Media::SolidColorBrush blue{ winrt::Windows::UI::Colors::Blue() };
                 const Media::SolidColorBrush green{ winrt::Windows::UI::Colors::Green() };
                 for (const auto& brush : { blue, green, blue })
@@ -8000,10 +8002,25 @@ namespace TerminalAppLocalTests
                     ring.Foreground(brush);
                     VERIFY_ARE_EQUAL(brush.Color(), arc.StrokeBrush().as<winrt::Windows::UI::Composition::CompositionColorBrush>().Color());
                 }
+                ring.Foreground(nullptr);
+                VERIFY_IS_NULL(impl->_foreground);
+                VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Transparent(), impl->_strokeBrush.Color());
+                blue.Color(winrt::Windows::UI::Colors::Red());
+                VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Transparent(), impl->_strokeBrush.Color());
                 green.Color(winrt::Windows::UI::Colors::Red());
                 ring.Foreground(green);
+                VERIFY_ARE_EQUAL(green.Color(), impl->_strokeBrush.Color());
                 green.Color(winrt::Windows::UI::Colors::Blue());
                 VERIFY_ARE_EQUAL(green.Color(), impl->_strokeBrush.Color());
+                ring.Foreground(Media::LinearGradientBrush{});
+                VERIFY_IS_NULL(impl->_foreground);
+                VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Transparent(), impl->_strokeBrush.Color());
+                green.Color(winrt::Windows::UI::Colors::Red());
+                VERIFY_ARE_EQUAL(winrt::Windows::UI::Colors::Transparent(), impl->_strokeBrush.Color());
+                ring.Foreground(blue);
+                VERIFY_ARE_EQUAL(blue.Color(), impl->_strokeBrush.Color());
+                blue.Color(winrt::Windows::UI::Colors::Blue());
+                VERIFY_ARE_EQUAL(blue.Color(), impl->_strokeBrush.Color());
                 const auto peer = Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(ring);
                 VERIFY_ARE_EQUAL(Automation::Peers::AutomationControlType::ProgressBar, peer.GetAutomationControlType());
                 VERIFY_IS_NULL(peer.GetPattern(Automation::Peers::PatternInterface::RangeValue));

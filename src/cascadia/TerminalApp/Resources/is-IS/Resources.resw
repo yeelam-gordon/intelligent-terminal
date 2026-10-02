@@ -730,7 +730,7 @@
     <comment>Accessibility status for OSC 9;4 progress with an unknown percentage. No percentage is appended.</comment>
   </data>
   <data name="PaneProgressStatusPaused" xml:space="preserve">
-    <value>Í bið</value>
+    <value>Í hléi</value>
     <comment>Accessibility status for temporarily paused OSC 9;4 progress. A localized percentage is appended; this does not mean waiting for user input or approval.</comment>
   </data>
 </root>
