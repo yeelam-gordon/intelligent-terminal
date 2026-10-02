@@ -1350,7 +1350,11 @@ namespace winrt::TerminalApp::implementation
         {
             return _tabLayoutTransitionSelectedItem;
         }
-        return _isVerticalLayout ? _tabStrip.SelectedItem() : _tabView.SelectedItem();
+        if (_isVerticalLayout)
+        {
+            return _tabStrip.SelectedItem();
+        }
+        return _tabView.SelectedItem().try_as<MUX::Controls::TabViewItem>();
     }
 
     void TerminalPage::_selectedTabItem(const IInspectable& item)
