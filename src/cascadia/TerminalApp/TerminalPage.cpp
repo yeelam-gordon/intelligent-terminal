@@ -6040,12 +6040,24 @@ namespace winrt::TerminalApp::implementation
         }
 
         stage = "update close buttons";
+        const auto traceSelection = [&](const std::string_view phase) {
+            _agentPaneLog(fmt::format("selection-diagnostic {} vertical={} selectedIndex={} selectedItem={} expected={} items={}",
+                                     phase, vertical,
+                                     vertical ? _tabStrip.SelectedIndex() : _tabView.SelectedIndex(),
+                                     vertical ? _tabStrip.SelectedItem() == selectedItem : _tabView.SelectedItem() == selectedItem,
+                                     selectedItem != nullptr,
+                                     vertical ? _tabStrip.TabItems().Size() : _tabView.TabItems().Size()));
+        };
+        traceSelection("restored");
         _updateAllTabCloseButtons();
         stage = "update tab visibility";
         _UpdateTabView();
+        traceSelection("visibility");
         _ApplyTabListProjection();
+        traceSelection("projection");
         stage = "update theme";
         _updateThemeColors();
+        traceSelection("theme");
     }
 
     void TerminalPage::_CompleteTabLayoutChange(const uint64_t generation)
@@ -6098,6 +6110,8 @@ namespace winrt::TerminalApp::implementation
         _tabLayoutTransitionTarget.reset();
         _tabLayoutTransitionSelectedItem = nullptr;
         _ApplyTabListProjection();
+        _agentPaneLog(fmt::format("selection-diagnostic complete vertical={} index={} selected={}",
+                                 _isVerticalLayout, _tabStrip.SelectedIndex(), _tabStrip.SelectedItem() != nullptr));
         _ApplyPendingPinRequest();
         _EmitAgentRuntimeConfigIfChanged();
 
