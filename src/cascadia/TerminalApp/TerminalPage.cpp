@@ -5957,6 +5957,9 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_RebuildTabLayout(const bool vertical, const IInspectable& selectedItem, std::string& stage)
     {
+        _agentPaneLog(fmt::format("selection-diagnostic input vertical={} class={} mux={}",
+                                 vertical, selectedItem ? winrt::to_string(winrt::get_class_name(selectedItem)) : "null",
+                                 selectedItem.try_as<MUX::Controls::TabViewItem>() != nullptr));
         winrt::get_self<implementation::TabStrip>(_tabStrip)->SetVerticalPresentation(vertical);
 
         std::vector<IInspectable> canonicalItems;
@@ -5964,6 +5967,10 @@ namespace winrt::TerminalApp::implementation
         for (const auto& tab : _tabs)
         {
             canonicalItems.emplace_back(tab.TabViewItem());
+            _agentPaneLog(fmt::format("selection-diagnostic canonical vertical={} abiEqual={} typedEqual={}",
+                                     vertical,
+                                     winrt::get_abi(canonicalItems.back()) == winrt::get_abi(selectedItem),
+                                     tab.TabViewItem() == selectedItem.try_as<MUX::Controls::TabViewItem>()));
         }
 
         const auto horizontalItems = _tabView.TabItems();
