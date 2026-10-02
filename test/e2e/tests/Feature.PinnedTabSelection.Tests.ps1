@@ -206,6 +206,7 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
             param([string]$Title)
             Set-WtWindowForeground -App $script:app | Should -BeTrue
             Send-WtWindowKey -App $script:app -Vk 0x1B -RequireForeground -Repeat 2 | Out-Null
+            Wait-UiElement -App $script:app -Selector PinTabMenuItem -Gone -TimeoutSec 5 | Out-Null
             $before = Get-ActivePane -App $script:app
             $layout = Get-WtSetting -App $script:app -Key tabLayout
             $id = if ($layout -eq 'vertical') { 'ItemsList' } else { 'TabView' }
@@ -219,7 +220,14 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
             $matches = @($matches | Where-Object { $_.Groups['indent'].Length -eq $depth })
             $matches | Should -HaveCount 1 -Because 'right-click targets the exact parent header, never terminal text'
             Invoke-UiClick -App $script:app -Selector $matches[0].Groups['selector'].Value -Right | Out-Null
-            Wait-UiElement -App $script:app -Selector PinTabMenuItem -TimeoutSec 10 | Out-Null
+            try {
+                Wait-UiElement -App $script:app -Selector PinTabMenuItem -TimeoutSec 10 | Out-Null
+            }
+            catch {
+                Get-UiTree -App $script:app -Depth 16 |
+                    Set-Content -LiteralPath (Join-Path $script:evidence "menu-$Title-failed.tree.txt")
+                throw
+            }
             $after = Get-ActivePane -App $script:app
             @{ title = $Title; beforeMenu = $before; afterMenu = $after } |
                 ConvertTo-Json -Depth 8 -Compress | Add-Content -LiteralPath (Join-Path $script:evidence 'menus.jsonl')
