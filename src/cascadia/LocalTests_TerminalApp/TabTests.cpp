@@ -7853,7 +7853,7 @@ namespace TerminalAppLocalTests
                        _progressIndicatorsMatch(header, L"Header", true, false, value);
             });
             TestOnUIThread([&]() {
-                VERIFY_ARE_EQUAL(visible, winrt::unbox_value<bool>(wrapper.DataContext()));
+                VERIFY_ARE_EQUAL(visible, header.ShowProgressRing());
                 VERIFY_ARE_EQUAL(value, header.TabStatus().ProgressValue());
             });
         };
