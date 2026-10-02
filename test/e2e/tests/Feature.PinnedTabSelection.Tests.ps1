@@ -369,7 +369,7 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
         @{
             ownerSelection = 'PASSED'; matchedHeaderGeometry = 'PASSED'
             renderedVisualVerdict = 'REQUIRES_VISUAL_REVIEW'
-            instruction = 'Review full-header compositor crops for actual Sidebar pins and Horizontal pin absence before full C372 sign-off; geometry is not a glyph-pixel verdict.'
+            instruction = 'Review full-header compositor crops for actual Sidebar pins and Horizontal pin absence for the separate C373 MANUAL checklist item "Pinned tab glyphs render only in Sidebar"; a passing test credits C372 selection, identity, accessibility and geometry only, not this manual sign-off.'
         } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:evidence 'acceptance.json')
     }
 }
