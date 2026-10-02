@@ -55,6 +55,7 @@ namespace winrt::TerminalApp::implementation
         void MetadataAutomationName(const winrt::hstring& value) { _presentation.MetadataAutomationName(value); }
         winrt::TerminalApp::TerminalTabStatus TabStatus() const { return _presentation.TabStatus(); }
         void TabStatus(const winrt::TerminalApp::TerminalTabStatus& value) { _presentation.TabStatus(value); }
+        WINRT_OBSERVABLE_PROPERTY(bool, ShowPinnedIcon, PropertyChanged.raise, true);
 
     private:
         bool _receivedKeyDown{ false };

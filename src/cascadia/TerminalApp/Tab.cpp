@@ -96,6 +96,7 @@ namespace winrt::TerminalApp::implementation
         _UpdateMenuItemStates();
 
         _headerControl.TabStatus(_tabStatus);
+        _headerControl.ShowPinnedIcon(false);
 
         // Add an event handler for the header control to tell us when they want their title to change
         _headerControl.TitleChangeRequested([weakThis = get_weak()](auto&& title) {

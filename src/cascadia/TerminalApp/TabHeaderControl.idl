@@ -39,5 +39,6 @@ namespace TerminalApp
 
         TabHeaderPresentation Presentation { get; set; };
         Boolean ShowProgressRing { get; set; };
+        Boolean ShowPinnedIcon { get; set; };
     }
 }

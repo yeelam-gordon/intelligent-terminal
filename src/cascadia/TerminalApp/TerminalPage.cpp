@@ -6020,7 +6020,7 @@ namespace winrt::TerminalApp::implementation
                 {
                     if (winrt::get_abi(_tabStrip.SelectedItem()) != winrt::get_abi(selectedItem))
                     {
-                        _tabStrip.SelectedIndex(index);
+                        _tabStrip.SelectedItem(selectedItem);
                     }
                 }
                 else if (winrt::get_abi(_tabView.SelectedItem()) != winrt::get_abi(selectedItem))
@@ -6228,6 +6228,10 @@ namespace winrt::TerminalApp::implementation
 
     void TerminalPage::_FocusSidebarTerminalFallback()
     {
+        if (_TryFocusSidebarInput(_GetActiveControl()))
+        {
+            return;
+        }
         const auto tab = _GetFocusedTabImpl();
         const auto preferred = _SourceTerminalPaneForTab(tab);
         if (preferred && _TryFocusSidebarInput(preferred->GetTerminalControl()))

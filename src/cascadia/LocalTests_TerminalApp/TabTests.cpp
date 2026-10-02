@@ -1587,6 +1587,7 @@ namespace TerminalAppLocalTests
         TestOnUIThread([&]() {
             const auto tab = page->_GetFocusedTabImpl();
             page->_SetTabPinned(tab, true);
+            VERIFY_IS_FALSE(tab->_headerControl.ShowPinnedIcon());
             const auto badge = tab->_headerControl.FindName(L"HeaderPinnedIcon").as<FontIcon>();
             VERIFY_ARE_EQUAL(Visibility::Visible, badge.Visibility());
             const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
@@ -1607,18 +1608,43 @@ namespace TerminalAppLocalTests
         TestOnUIThread([&]() {
             const auto first = page->_GetFocusedTabImpl();
             const auto second = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));
+            const auto third = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));
+            page->_SetTabPinned(first, true);
             page->_SetTabPinned(second, true);
-            VERIFY_IS_TRUE(page->_GetTabImpl(page->_tabs.GetAt(0)) == second);
+            page->_selectedTabItem(first->TabViewItem());
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            const auto verifySelection = [&]() {
+                VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == first);
+                VERIFY_IS_TRUE(page->_GetTabImpl(page->_tabs.GetAt(0)) == first);
+                VERIFY_IS_TRUE(page->_GetTabImpl(page->_tabs.GetAt(1)) == second);
+                VERIFY_IS_TRUE(page->_GetTabImpl(page->_tabs.GetAt(2)) == third);
+                VERIFY_IS_TRUE(first->IsPinned());
+                VERIFY_IS_TRUE(second->IsPinned());
+                VERIFY_IS_FALSE(third->IsPinned());
+                if (page->_isVerticalLayout)
+                {
+                    VERIFY_IS_TRUE(page->_tabStrip.SelectedItem() == first->TabViewItem());
+                    const auto selected = strip->ItemsList().SelectedItem().as<winrt::TerminalApp::TabStripDisplayItem>();
+                    VERIFY_IS_TRUE(selected.Tab() == first->TabViewItem());
+                    VERIFY_IS_TRUE(strip->ItemsList().ItemsSource().as<IObservableVector<winrt::TerminalApp::TabStripDisplayItem>>().GetAt(0) == selected);
+                    const auto container = strip->ItemsList().ContainerFromIndex(0).as<ListViewItem>();
+                    VERIFY_IS_TRUE(container.IsSelected());
+                    const auto header = container.ContentTemplateRoot().as<FrameworkElement>()
+                                            .FindName(L"TabHeaderPresenter").as<winrt::TerminalApp::TabHeaderControl>();
+                    VERIFY_IS_TRUE(header.ShowPinnedIcon());
+                }
+            };
+            page->UpdateLayout();
+            verifySelection();
             VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Horizontal));
             page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
-            VERIFY_IS_TRUE(page->_GetTabImpl(page->_tabs.GetAt(0)) == second);
-            VERIFY_IS_TRUE(page->_tabView.TabItems().GetAt(0) == second->TabViewItem());
-            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == second);
+            page->UpdateLayout();
+            verifySelection();
+            VERIFY_IS_TRUE(page->_tabView.TabItems().GetAt(0) == first->TabViewItem());
             VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Vertical));
             page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
-            VERIFY_IS_TRUE(page->_tabStrip.TabItems().GetAt(0) == second->TabViewItem());
-            VERIFY_IS_TRUE(page->_tabStrip.TabItems().GetAt(1) == first->TabViewItem());
-            VERIFY_IS_TRUE(second->IsPinned());
+            page->UpdateLayout();
+            verifySelection();
         });
     }
 

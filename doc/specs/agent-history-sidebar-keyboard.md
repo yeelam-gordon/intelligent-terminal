@@ -130,6 +130,23 @@ are also template-owned, with retained `IconSource` data rather than shared live
 elements. Pane rows and terminal/taskbar progress remain independent of this
 presentation contract.
 
+Selection is restored by canonical tab identity mapped to the current sidebar
+descriptor, not by treating a canonical index as a display index. Existing
+focus fallback first retains the current visible terminal or Agent input, then
+uses the existing source-shell fallback; this adds no saved focus field,
+selection cache, timer, repair callback or view-model clock.
+
+Pin state remains shared model data. `TabHeaderControl.ShowPinnedIcon` is an
+appended, view-local property, defaulting to true: the canonical horizontal
+header sets it to false, while newly created sidebar headers retain the default.
+Only the horizontal visual pin glyph is hidden. Sidebar badges, accessibility
+labels, Pin/Unpin menus, ordering, first-ordinary unpin placement and cross-pin
+movement boundaries retain #1052 semantics. This does not clear `IsPinned`,
+restore original positions, introduce grouping UI or permit unrestricted
+movement across pinned/unpinned boundaries. Owned UIA visibility checks and
+small compositor header crops distinguish the views; peer absence alone is not
+proof of rendered pixel absence.
+
 Indeterminate header, pane-row, and tab-switcher progress use the shared
 `IndeterminateProgressRing` control and its style in
 `IndeterminateProgressResources.xaml`. The control owns one compositor

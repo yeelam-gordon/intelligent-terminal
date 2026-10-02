@@ -499,14 +499,14 @@ namespace winrt::TerminalApp::implementation
     {
         if (!value)
         {
-            ItemsList().SelectedIndex(-1);
+            ItemsList().SelectedItem(nullptr);
             return;
         }
 
         uint32_t index{};
         if (_tabItems.IndexOf(value, index))
         {
-            ItemsList().SelectedIndex(gsl::narrow_cast<int32_t>(index));
+            ItemsList().SelectedItem(_displayItems.GetAt(index));
         }
     }
     int32_t TabStrip::SelectedIndex()
