@@ -1807,6 +1807,20 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
+        const auto display = e.InRecycleQueue() ? nullptr : e.Item().try_as<TerminalApp::TabStripDisplayItem>();
+        if (display)
+        {
+            WUX::Data::Binding nameBinding;
+            nameBinding.Source(display.Presentation());
+            nameBinding.Path(PropertyPath{ L"AutomationName" });
+            nameBinding.Mode(WUX::Data::BindingMode::OneWay);
+            container.SetBinding(WUX::Automation::AutomationProperties::NameProperty(), nameBinding);
+        }
+        else
+        {
+            container.ClearValue(WUX::Automation::AutomationProperties::NameProperty());
+        }
+
         if (e.InRecycleQueue())
         {
             _updateDisplayItemVisuals(container.ContentTemplateRoot().try_as<FrameworkElement>(), nullptr);
@@ -1823,7 +1837,7 @@ namespace winrt::TerminalApp::implementation
             container.Visibility(Visibility::Visible);
         }
         _updateDisplayItemVisuals(container.ContentTemplateRoot().try_as<FrameworkElement>(),
-                                  e.Item().try_as<TerminalApp::TabStripDisplayItem>());
+                                  display);
     }
 
     void TabStrip::_applyRailState()

@@ -1632,6 +1632,10 @@ namespace TerminalAppLocalTests
                     VERIFY_IS_FALSE(Automation::AutomationProperties::GetName(first->TabViewItem()).empty());
                     VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetName(first->TabViewItem()),
                                      selected.Header().as<winrt::TerminalApp::TabHeaderPresentation>().AutomationName());
+                    const auto nameBinding = container.GetBindingExpression(Automation::AutomationProperties::NameProperty());
+                    VERIFY_IS_NOT_NULL(nameBinding);
+                    VERIFY_IS_TRUE(nameBinding.ParentBinding().Source().as<winrt::TerminalApp::TabHeaderPresentation>() ==
+                                   selected.Header().as<winrt::TerminalApp::TabHeaderPresentation>());
                     VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetName(first->TabViewItem()),
                                      Automation::AutomationProperties::GetName(container));
                     const auto header = container.ContentTemplateRoot().as<FrameworkElement>()

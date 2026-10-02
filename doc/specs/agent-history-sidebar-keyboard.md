@@ -132,8 +132,10 @@ presentation contract.
 
 The localized tab accessibility name is computed once alongside pin and rich
 metadata state, stored in the shared presentation, and projected to the native
-tab and selectable sidebar row. The row binds to observable presentation data,
-not a nested attached-property path on the hidden horizontal control.
+tab and selectable sidebar row. The existing container-realization handler
+installs a one-way binding to observable presentation data and clears it on
+recycle. UWP does not evaluate bindings in style setters; the row does not bind
+through a nested attached-property path on the hidden horizontal control.
 
 Selection is restored by canonical tab identity mapped to the current sidebar
 descriptor, not by treating a canonical index as a display index. Existing
