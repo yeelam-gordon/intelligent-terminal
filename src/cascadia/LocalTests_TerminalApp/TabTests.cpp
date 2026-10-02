@@ -1606,6 +1606,10 @@ namespace TerminalAppLocalTests
     {
         const auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
         TestOnUIThread([&]() {
+            const winrt::TerminalApp::XamlMetaDataProvider metadata;
+            const auto presentationType = metadata.GetXamlType(L"TerminalApp.TabHeaderPresentation");
+            VERIFY_IS_NOT_NULL(presentationType);
+            VERIFY_IS_NOT_NULL(presentationType.GetMember(L"AutomationName"));
             const auto first = page->_GetFocusedTabImpl();
             const auto second = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));
             const auto third = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));

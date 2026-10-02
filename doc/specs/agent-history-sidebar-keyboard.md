@@ -136,6 +136,9 @@ tab and selectable sidebar row. The existing container-realization handler
 installs a one-way binding to observable presentation data and clears it on
 recycle. UWP does not evaluate bindings in style setters; the row does not bind
 through a nested attached-property path on the hidden horizontal control.
+The C++ presentation is marked `bindable` so runtime binding can resolve its
+properties through generated XAML metadata; compiled `x:Bind` alone does not
+provide that runtime lookup contract.
 
 Selection is restored by canonical tab identity mapped to the current sidebar
 descriptor, not by treating a canonical index as a display index. Existing

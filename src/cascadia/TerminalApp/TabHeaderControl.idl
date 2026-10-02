@@ -4,6 +4,7 @@ import "TerminalTabStatus.idl";
 
 namespace TerminalApp
 {
+    [bindable]
     [default_interface] runtimeclass TabHeaderPresentation : Windows.UI.Xaml.Data.INotifyPropertyChanged
     {
         String Title;
