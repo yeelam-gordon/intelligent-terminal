@@ -648,6 +648,7 @@ namespace winrt::TerminalApp::implementation
             name += L", ";
             name += _richTabAccessibilityText;
         }
+        _headerControl.Presentation().AutomationName(name);
         Automation::AutomationProperties::SetName(TabViewItem(), name);
     }
 

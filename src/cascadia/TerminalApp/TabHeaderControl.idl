@@ -12,6 +12,7 @@ namespace TerminalApp
         TerminalTabStatus TabStatus;
         String MetadataText;
         String MetadataAutomationName;
+        String AutomationName;
     };
 
     delegate void TitleChangeRequestedArgs(String title);

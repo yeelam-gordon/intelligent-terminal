@@ -1629,6 +1629,9 @@ namespace TerminalAppLocalTests
                     VERIFY_IS_TRUE(strip->ItemsList().ItemsSource().as<IObservableVector<winrt::TerminalApp::TabStripDisplayItem>>().GetAt(0) == selected);
                     const auto container = strip->ItemsList().ContainerFromIndex(0).as<ListViewItem>();
                     VERIFY_IS_TRUE(container.IsSelected());
+                    VERIFY_IS_FALSE(Automation::AutomationProperties::GetName(first->TabViewItem()).empty());
+                    VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetName(first->TabViewItem()),
+                                     selected.Header().as<winrt::TerminalApp::TabHeaderPresentation>().AutomationName());
                     VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetName(first->TabViewItem()),
                                      Automation::AutomationProperties::GetName(container));
                     const auto header = container.ContentTemplateRoot().as<FrameworkElement>()

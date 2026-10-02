@@ -130,6 +130,11 @@ are also template-owned, with retained `IconSource` data rather than shared live
 elements. Pane rows and terminal/taskbar progress remain independent of this
 presentation contract.
 
+The localized tab accessibility name is computed once alongside pin and rich
+metadata state, stored in the shared presentation, and projected to the native
+tab and selectable sidebar row. The row binds to observable presentation data,
+not a nested attached-property path on the hidden horizontal control.
+
 Selection is restored by canonical tab identity mapped to the current sidebar
 descriptor, not by treating a canonical index as a display index. Existing
 focus fallback first retains the current visible terminal or Agent input, then
