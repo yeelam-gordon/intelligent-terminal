@@ -3,6 +3,8 @@
 
 #include "pch.h"
 
+#include <winrt/Microsoft.Terminal.UI.h>
+
 #include "../TerminalApp/TerminalPage.h"
 #include "../TerminalApp/TerminalWindow.h"
 #include "../TerminalApp/SettingsLoadEventArgs.h"
@@ -13,6 +15,7 @@
 #include "../TerminalApp/TabStrip.h"
 #include "../TerminalApp/ShortcutActionDispatch.h"
 #include "../TerminalApp/AgentPaneContent.h"
+#include "../TerminalApp/AgentIconUtils.h"
 #include "../TerminalApp/AgentPaneDragStash.h"
 #include "../TerminalApp/Tab.h"
 #include "../TerminalApp/CommandPalette.h"
@@ -8462,6 +8465,153 @@ namespace TerminalAppLocalTests
     void TabTests::SidebarTemplatesOwnHeaderVisuals()
     {
         TestOnUIThread([&]() {
+            namespace AgentIcons = ::Microsoft::Terminal::UI::AgentIcons;
+            winrt::MUX::Controls::PathIconSource blankSource;
+            VERIFY_IS_NULL(AgentIcons::ElementForIconSource(blankSource).as<PathIcon>().Data());
+            VERIFY_IS_NULL(AgentIcons::ElementForIconSource(blankSource).as<PathIcon>().Data());
+            VERIFY_IS_NULL(blankSource.Data());
+            const auto realizeTwice = [](const winrt::MUX::Controls::PathIconSource& source) {
+                const auto original = source.Data();
+                const auto first = AgentIcons::ElementForIconSource(source).as<PathIcon>();
+                const auto second = AgentIcons::ElementForIconSource(source).as<PathIcon>();
+                VERIFY_IS_FALSE(first == second);
+                VERIFY_IS_TRUE(source.Data() == original);
+                VERIFY_IS_FALSE(first.Data() == original);
+                VERIFY_IS_FALSE(second.Data() == original);
+                VERIFY_IS_FALSE(first.Data() == second.Data());
+                return std::pair{ first, second };
+            };
+            Media::EllipseGeometry ellipse;
+            ellipse.Center({ 5, 7 });
+            ellipse.RadiusX(3);
+            ellipse.RadiusY(4);
+            PathIcon legacy;
+            legacy.Data(ellipse);
+            const auto legacySource = AgentIcons::SourceForIconElement(legacy).as<winrt::MUX::Controls::PathIconSource>();
+            VERIFY_IS_TRUE(legacySource.Data() == ellipse);
+            const auto [firstLegacy, secondLegacy] = realizeTwice(legacySource);
+            VERIFY_IS_TRUE(legacy.Data() == ellipse);
+            for (const auto& icon : { firstLegacy, secondLegacy })
+            {
+                const auto copy = icon.Data().as<Media::EllipseGeometry>();
+                VERIFY_IS_TRUE(copy.Center() == ellipse.Center());
+                VERIFY_ARE_EQUAL(ellipse.RadiusX(), copy.RadiusX());
+                VERIFY_ARE_EQUAL(ellipse.RadiusY(), copy.RadiusY());
+            }
+
+            Media::RectangleGeometry rectangle;
+            rectangle.Rect({ 2, 3, 8, 9 });
+            winrt::WUX::Controls::PathIconSource wuxSource;
+            wuxSource.Data(rectangle);
+            winrt::WUX::Controls::IconSourceElement sourceElement;
+            sourceElement.IconSource(wuxSource);
+            const auto adaptedSource = AgentIcons::SourceForIconElement(sourceElement).as<winrt::MUX::Controls::PathIconSource>();
+            VERIFY_IS_TRUE(adaptedSource.Data() == rectangle);
+            const auto [firstRectangle, secondRectangle] = realizeTwice(adaptedSource);
+            VERIFY_IS_TRUE(wuxSource.Data() == rectangle);
+            VERIFY_IS_TRUE(sourceElement.IconSource() == wuxSource);
+            VERIFY_IS_TRUE(firstRectangle.Data().as<Media::RectangleGeometry>().Rect() == rectangle.Rect());
+            VERIFY_IS_TRUE(secondRectangle.Data().as<Media::RectangleGeometry>().Rect() == rectangle.Rect());
+
+            Media::PolyLineSegment polyLine;
+            polyLine.Points().Append({ 3, 4 });
+            polyLine.Points().Append({ 7, 9 });
+            Media::ArcSegment arc;
+            arc.Point({ 11, 12 });
+            arc.Size({ 4, 6 });
+            arc.RotationAngle(30);
+            arc.IsLargeArc(true);
+            arc.SweepDirection(Media::SweepDirection::Clockwise);
+            Media::PathFigure figure;
+            figure.StartPoint({ 1, 2 });
+            figure.IsClosed(true);
+            figure.IsFilled(false);
+            figure.Segments().Append(polyLine);
+            figure.Segments().Append(arc);
+            Media::PathGeometry path;
+            path.FillRule(Media::FillRule::Nonzero);
+            path.Figures().Append(figure);
+            Media::CompositeTransform transform;
+            transform.ScaleX(2);
+            transform.ScaleY(3);
+            transform.SkewX(17);
+            transform.Rotation(23);
+            transform.CenterX(4);
+            transform.CenterY(6);
+            transform.TranslateX(10);
+            transform.TranslateY(-8);
+            path.Transform(transform);
+            Media::GeometryGroup nested;
+            nested.FillRule(Media::FillRule::Nonzero);
+            nested.Children().Append(path);
+            Media::GeometryGroup group;
+            group.FillRule(Media::FillRule::EvenOdd);
+            group.Children().Append(nested);
+            winrt::MUX::Controls::PathIconSource directSource;
+            directSource.Data(group);
+            const auto [firstGroup, secondGroup] = realizeTwice(directSource);
+            const auto firstNested = firstGroup.Data().as<Media::GeometryGroup>().Children().GetAt(0).as<Media::GeometryGroup>();
+            const auto secondNested = secondGroup.Data().as<Media::GeometryGroup>().Children().GetAt(0).as<Media::GeometryGroup>();
+            VERIFY_IS_FALSE(firstNested == secondNested);
+            VERIFY_IS_TRUE(nested.Children().GetAt(0) == path);
+            VERIFY_IS_TRUE(path.Figures().GetAt(0) == figure);
+            VERIFY_IS_TRUE(figure.Segments().GetAt(0) == polyLine);
+            VERIFY_IS_TRUE(path.Transform() == transform);
+            for (const auto& icon : { firstGroup, secondGroup })
+            {
+                const auto copiedGroup = icon.Data().as<Media::GeometryGroup>();
+                VERIFY_ARE_EQUAL(group.FillRule(), copiedGroup.FillRule());
+                VERIFY_IS_FALSE(group.Children() == copiedGroup.Children());
+                const auto copiedNested = copiedGroup.Children().GetAt(0).as<Media::GeometryGroup>();
+                VERIFY_IS_FALSE(nested == copiedNested);
+                VERIFY_ARE_EQUAL(nested.FillRule(), copiedNested.FillRule());
+                VERIFY_IS_FALSE(nested.Children() == copiedNested.Children());
+                const auto copiedPath = copiedNested.Children().GetAt(0).as<Media::PathGeometry>();
+                VERIFY_IS_FALSE(path == copiedPath);
+                VERIFY_ARE_EQUAL(path.FillRule(), copiedPath.FillRule());
+                VERIFY_IS_FALSE(path.Figures() == copiedPath.Figures());
+                const auto copiedFigure = copiedPath.Figures().GetAt(0);
+                VERIFY_IS_FALSE(figure == copiedFigure);
+                VERIFY_IS_TRUE(figure.StartPoint() == copiedFigure.StartPoint());
+                VERIFY_ARE_EQUAL(figure.IsClosed(), copiedFigure.IsClosed());
+                VERIFY_ARE_EQUAL(figure.IsFilled(), copiedFigure.IsFilled());
+                VERIFY_IS_FALSE(figure.Segments() == copiedFigure.Segments());
+                const auto copiedPolyLine = copiedFigure.Segments().GetAt(0).as<Media::PolyLineSegment>();
+                VERIFY_IS_FALSE(polyLine == copiedPolyLine);
+                VERIFY_IS_FALSE(polyLine.Points() == copiedPolyLine.Points());
+                VERIFY_ARE_EQUAL(polyLine.Points().Size(), copiedPolyLine.Points().Size());
+                for (uint32_t i = 0; i < polyLine.Points().Size(); ++i)
+                {
+                    VERIFY_IS_TRUE(polyLine.Points().GetAt(i) == copiedPolyLine.Points().GetAt(i));
+                }
+                const auto copiedArc = copiedFigure.Segments().GetAt(1).as<Media::ArcSegment>();
+                VERIFY_IS_FALSE(arc == copiedArc);
+                VERIFY_IS_TRUE(arc.Point() == copiedArc.Point());
+                VERIFY_IS_TRUE(arc.Size() == copiedArc.Size());
+                VERIFY_ARE_EQUAL(arc.RotationAngle(), copiedArc.RotationAngle());
+                VERIFY_ARE_EQUAL(arc.IsLargeArc(), copiedArc.IsLargeArc());
+                VERIFY_ARE_EQUAL(arc.SweepDirection(), copiedArc.SweepDirection());
+                VERIFY_IS_FALSE(transform == copiedPath.Transform());
+                const winrt::Windows::Foundation::Point points[]{ { 0, 0 }, { 1, 0 }, { 0, 1 }, { 7, 9 } };
+                for (const auto point : points)
+                {
+                    const auto expected = transform.TransformPoint(point);
+                    const auto actual = copiedPath.Transform().TransformPoint(point);
+                    VERIFY_IS_TRUE(std::abs(expected.X - actual.X) < 0.0001f);
+                    VERIFY_IS_TRUE(std::abs(expected.Y - actual.Y) < 0.0001f);
+                }
+            }
+            const auto firstCopiedPath = firstNested.Children().GetAt(0).as<Media::PathGeometry>();
+            const auto secondCopiedPath = secondNested.Children().GetAt(0).as<Media::PathGeometry>();
+            VERIFY_IS_FALSE(firstNested.Children() == secondNested.Children());
+            VERIFY_IS_FALSE(firstCopiedPath == secondCopiedPath);
+            VERIFY_IS_FALSE(firstCopiedPath.Transform() == secondCopiedPath.Transform());
+            VERIFY_IS_FALSE(firstCopiedPath.Figures() == secondCopiedPath.Figures());
+            VERIFY_IS_FALSE(firstCopiedPath.Figures().GetAt(0) == secondCopiedPath.Figures().GetAt(0));
+            VERIFY_IS_FALSE(firstCopiedPath.Figures().GetAt(0).Segments() == secondCopiedPath.Figures().GetAt(0).Segments());
+            VERIFY_IS_FALSE(firstCopiedPath.Figures().GetAt(0).Segments().GetAt(0).as<Media::PolyLineSegment>().Points() ==
+                            secondCopiedPath.Figures().GetAt(0).Segments().GetAt(0).as<Media::PolyLineSegment>().Points());
+
             winrt::TerminalApp::TabStrip strip;
             winrt::MUX::Controls::TabViewItem tab;
             winrt::TerminalApp::TabHeaderControl native;

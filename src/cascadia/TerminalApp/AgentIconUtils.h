@@ -187,6 +187,145 @@ namespace Microsoft::Terminal::UI::AgentIcons
         return source;
     }
 
+    inline winrt::Windows::UI::Xaml::Media::Geometry SnapshotGeometry(const winrt::Windows::UI::Xaml::Media::Geometry& geometry)
+    {
+        namespace Media = winrt::Windows::UI::Xaml::Media;
+        if (!geometry)
+        {
+            return nullptr;
+        }
+        Media::Geometry snapshot{ nullptr };
+        if (const auto ellipse = geometry.try_as<Media::EllipseGeometry>())
+        {
+            Media::EllipseGeometry copy;
+            copy.Center(ellipse.Center());
+            copy.RadiusX(ellipse.RadiusX());
+            copy.RadiusY(ellipse.RadiusY());
+            snapshot = copy;
+        }
+        else if (const auto line = geometry.try_as<Media::LineGeometry>())
+        {
+            Media::LineGeometry copy;
+            copy.StartPoint(line.StartPoint());
+            copy.EndPoint(line.EndPoint());
+            snapshot = copy;
+        }
+        else if (const auto rectangle = geometry.try_as<Media::RectangleGeometry>())
+        {
+            Media::RectangleGeometry copy;
+            copy.Rect(rectangle.Rect());
+            snapshot = copy;
+        }
+        else if (const auto group = geometry.try_as<Media::GeometryGroup>())
+        {
+            Media::GeometryGroup copy;
+            copy.FillRule(group.FillRule());
+            for (const auto& child : group.Children())
+            {
+                copy.Children().Append(SnapshotGeometry(child));
+            }
+            snapshot = copy;
+        }
+        else if (const auto path = geometry.try_as<Media::PathGeometry>())
+        {
+            Media::PathGeometry copy;
+            copy.FillRule(path.FillRule());
+            for (const auto& figure : path.Figures())
+            {
+                Media::PathFigure copiedFigure;
+                copiedFigure.StartPoint(figure.StartPoint());
+                copiedFigure.IsClosed(figure.IsClosed());
+                copiedFigure.IsFilled(figure.IsFilled());
+                for (const auto& segment : figure.Segments())
+                {
+                    Media::PathSegment copiedSegment{ nullptr };
+                    if (const auto arc = segment.try_as<Media::ArcSegment>())
+                    {
+                        Media::ArcSegment value;
+                        value.Point(arc.Point());
+                        value.Size(arc.Size());
+                        value.RotationAngle(arc.RotationAngle());
+                        value.IsLargeArc(arc.IsLargeArc());
+                        value.SweepDirection(arc.SweepDirection());
+                        copiedSegment = value;
+                    }
+                    else if (const auto bezier = segment.try_as<Media::BezierSegment>())
+                    {
+                        Media::BezierSegment value;
+                        value.Point1(bezier.Point1());
+                        value.Point2(bezier.Point2());
+                        value.Point3(bezier.Point3());
+                        copiedSegment = value;
+                    }
+                    else if (const auto lineSegment = segment.try_as<Media::LineSegment>())
+                    {
+                        Media::LineSegment value;
+                        value.Point(lineSegment.Point());
+                        copiedSegment = value;
+                    }
+                    else if (const auto polyBezier = segment.try_as<Media::PolyBezierSegment>())
+                    {
+                        Media::PolyBezierSegment value;
+                        for (const auto& point : polyBezier.Points())
+                        {
+                            value.Points().Append(point);
+                        }
+                        copiedSegment = value;
+                    }
+                    else if (const auto polyLine = segment.try_as<Media::PolyLineSegment>())
+                    {
+                        Media::PolyLineSegment value;
+                        for (const auto& point : polyLine.Points())
+                        {
+                            value.Points().Append(point);
+                        }
+                        copiedSegment = value;
+                    }
+                    else if (const auto polyQuadraticBezier = segment.try_as<Media::PolyQuadraticBezierSegment>())
+                    {
+                        Media::PolyQuadraticBezierSegment value;
+                        for (const auto& point : polyQuadraticBezier.Points())
+                        {
+                            value.Points().Append(point);
+                        }
+                        copiedSegment = value;
+                    }
+                    else if (const auto quadraticBezier = segment.try_as<Media::QuadraticBezierSegment>())
+                    {
+                        Media::QuadraticBezierSegment value;
+                        value.Point1(quadraticBezier.Point1());
+                        value.Point2(quadraticBezier.Point2());
+                        copiedSegment = value;
+                    }
+                    else
+                    {
+                        THROW_HR_MSG(E_NOTIMPL, "Unsupported icon path segment");
+                    }
+                    copiedFigure.Segments().Append(copiedSegment);
+                }
+                copy.Figures().Append(copiedFigure);
+            }
+            snapshot = copy;
+        }
+        else
+        {
+            THROW_HR_MSG(E_NOTIMPL, "Unsupported icon geometry");
+        }
+        if (const auto transform = geometry.Transform())
+        {
+            // Snapshot the evaluated affine transform, not its bindings or animations.
+            const auto origin = transform.TransformPoint({ 0, 0 });
+            const auto x = transform.TransformPoint({ 1, 0 });
+            const auto y = transform.TransformPoint({ 0, 1 });
+            Media::MatrixTransform copy;
+            copy.Matrix({ static_cast<double>(x.X) - origin.X, static_cast<double>(x.Y) - origin.Y,
+                          static_cast<double>(y.X) - origin.X, static_cast<double>(y.Y) - origin.Y,
+                          origin.X, origin.Y });
+            snapshot.Transform(copy);
+        }
+        return snapshot;
+    }
+
     inline winrt::Windows::UI::Xaml::Controls::IconElement ElementForIconSource(const winrt::Microsoft::UI::Xaml::Controls::IconSource& source,
                                                                             const winrt::hstring& iconPath = {})
     {
@@ -215,9 +354,9 @@ namespace Microsoft::Terminal::UI::AgentIcons
         else if (const auto path = source.try_as<MUX::PathIconSource>())
         {
             WUX::PathIcon icon;
-            // A Geometry cannot belong to both the source and a realized icon.
+            // Each realized PathIcon needs its own Geometry; source adapters retain caller data.
             const auto geometry = GeometryForIconPath(iconPath);
-            icon.Data(geometry ? geometry : path.Data());
+            icon.Data(geometry ? geometry : SnapshotGeometry(path.Data()));
             icon.Width(16);
             icon.Height(16);
             element = icon;
