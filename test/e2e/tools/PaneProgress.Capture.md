@@ -14,7 +14,9 @@ nonuniform sampling delays avoid aliasing the one-second rotation.
 `PrintWindow` is not a substitute: it can return stale XAML icon pixels while
 the compositor already shows the correct Copilot glyph. The Default input
 desktop and foreground ownership are prerequisites; their absence skips rather
-than fabricates render proof. No terminal buffer is written to artifacts.
+than fabricates render proof. No raw terminal-buffer export is written, but full-window
+PNG artifacts retain visible terminal text. Capture only fixture-owned windows
+with non-sensitive contents, and review screenshots before sharing them.
 
 Tab IDs are positional indices, not stable identities. After each menu move,
 the suite verifies the original pane session ID at the expected active index
