@@ -253,7 +253,7 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
                     if ($script:requestedLayout -eq 'vertical') {
                         $selected = if ($parents.Count -eq 1) {
                             $pattern = $parents[0].GetCurrentPattern([Windows.Automation.SelectionPattern]::Pattern)
-                            @($pattern.GetSelection())
+                            @($pattern.Current.GetSelection())
                         } else { @() }
                         $observation.selected = @($selected | ForEach-Object { $_.Current.Name })
                         $selectionReady = $selected.Count -eq 1 -and
