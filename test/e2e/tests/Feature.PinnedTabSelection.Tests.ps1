@@ -205,6 +205,20 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
         function Open-OwnedTabMenu {
             param([string]$Title)
             Set-WtWindowForeground -App $script:app | Should -BeTrue
+            $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+            $terminalCondition = [Windows.Automation.PropertyCondition]::new(
+                [Windows.Automation.AutomationElement]::ClassNameProperty, 'TermControl')
+            $terminals = @($root.FindAll([Windows.Automation.TreeScope]::Descendants, $terminalCondition) | Where-Object {
+                -not $_.Current.IsOffscreen -and $_.Current.ProcessId -eq $script:app.Pid
+            })
+            $terminals | Should -HaveCount 1
+            $terminalBounds = $terminals[0].Current.BoundingRectangle
+            $terminalBounds.Width | Should -BeGreaterThan 0
+            $terminalBounds.Height | Should -BeGreaterThan 0
+            # Leave the previous header so its tooltip cannot cover the next right-click.
+            [ItE2E.ItWtWin32Input]::SetCursorPos(
+                [int]($terminalBounds.X + $terminalBounds.Width / 2),
+                [int]($terminalBounds.Y + $terminalBounds.Height / 2)) | Should -BeTrue
             Send-WtWindowKey -App $script:app -Vk 0x1B -RequireForeground -Repeat 2 | Out-Null
             Wait-UiElement -App $script:app -Selector PinTabMenuItem -Gone -TimeoutSec 5 | Out-Null
             $before = Get-ActivePane -App $script:app
@@ -212,7 +226,8 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
             $id = if ($layout -eq 'vertical') { 'ItemsList' } else { 'TabView' }
             $parents = @(Get-OwnedContainer $id)
             $parents | Should -HaveCount 1
-            @(Get-HeaderText -Parent $parents[0] -Title $Title) | Should -HaveCount 1
+            $titleHeaders = @(Get-HeaderText -Parent $parents[0] -Title $Title)
+            $titleHeaders | Should -HaveCount 1
             $tree = Get-UiTree -App $script:app -Selector $id -Depth 12
             $matches = @([regex]::Matches($tree, '(?m)^(?<indent>[ \t]*)(?<selector>lbl-textview-\S+|TextView) Text "' + [regex]::Escape($Title) + '"'))
             $matches.Count | Should -BeGreaterThan 0
@@ -220,6 +235,11 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
             $matches = @($matches | Where-Object { $_.Groups['indent'].Length -eq $depth })
             $matches | Should -HaveCount 1 -Because 'right-click targets the exact parent header, never terminal text'
             Invoke-UiClick -App $script:app -Selector $matches[0].Groups['selector'].Value -Right | Out-Null
+            @{
+                title = $Title; targetBounds = $titleHeaders[0].Current.BoundingRectangle.ToString()
+                cursor = [ItE2E.ItWtWin32Input]::GetCursorPosition()
+                foreground = [ItE2E.ItWtWin32Input]::GetForegroundWindow().ToInt64()
+            } | ConvertTo-Json -Compress | Add-Content -LiteralPath (Join-Path $script:evidence 'menu-pointer.jsonl')
             try {
                 Wait-UiElement -App $script:app -Selector PinTabMenuItem -TimeoutSec 10 | Out-Null
             }
