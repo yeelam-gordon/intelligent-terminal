@@ -143,9 +143,13 @@ Only the horizontal visual pin glyph is hidden. Sidebar badges, accessibility
 labels, Pin/Unpin menus, ordering, first-ordinary unpin placement and cross-pin
 movement boundaries retain #1052 semantics. This does not clear `IsPinned`,
 restore original positions, introduce grouping UI or permit unrestricted
-movement across pinned/unpinned boundaries. Owned UIA visibility checks and
-small compositor header crops distinguish the views; peer absence alone is not
-proof of rendered pixel absence.
+movement across pinned/unpinned boundaries. The primary layout round trip
+verifies canonical owner and the sidebar selection pattern before secondary
+visual checks. Matched same-profile title-leading offsets measure reserved pin
+space; FontIcon peer counts are diagnostic only because UWP may not expose
+those peers. Small compositor crops include the full header and leading glyphs.
+Actual Sidebar pin presence and Horizontal pin absence require independent
+visual review; neither geometry nor peer absence proves rendered pixels.
 
 Indeterminate header, pane-row, and tab-switcher progress use the shared
 `IndeterminateProgressRing` control and its style in

@@ -112,8 +112,22 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
                 $Parent.Current.BoundingRectangle.Contains($bounds)
             })
         }
+        function Assert-PinGeometry {
+            param($Headers, [string]$Layout, [bool[]]$Pinned)
+            $reference = $Headers[2]
+            $reference.textHeight | Should -BeGreaterThan 0
+            for ($index = 0; $index -lt $Headers.Count; $index++) {
+                $delta = ($Headers[$index].titleOffset - $reference.titleOffset) / $reference.textHeight
+                if ($Layout -eq 'vertical' -and $Pinned[$index]) {
+                    $delta | Should -BeGreaterThan 0 -Because 'a pinned Sidebar header reserves extra leading space compared with the same-profile ordinary Gamma header'
+                }
+                else {
+                    [math]::Abs($delta) | Should -BeLessThan 0.5 -Because 'Horizontal and ordinary Sidebar headers share the leading slot within half the rendered text height'
+                }
+            }
+        }
         function Assert-PinPresentation {
-            param([string]$Phase, [string]$Layout, [int[]]$Expected, [bool[]]$Pinned = @($true, $true, $false))
+            param([string]$Phase, [string]$Layout, [bool[]]$Pinned = @($true, $true, $false))
             $id = if ($Layout -eq 'vertical') { 'ItemsList' } else { 'TabView' }
             $containers = @(Get-OwnedContainer $id)
             $containers | Should -HaveCount 1
@@ -151,7 +165,10 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
                 $container.Current.BoundingRectangle.Contains($bounds) | Should -BeTrue
                 $windowBounds.Contains($bounds) | Should -BeTrue
                 $pins = @(Get-VisiblePinGlyphs -Parent $rows[$index])
-                $name = "$Phase-$($script:titles[$index])-header"
+                $text = @(Get-HeaderText -Parent $rows[$index] -Title $script:titles[$index])
+                $text | Should -HaveCount 1
+                $textBounds = $text[0].Current.BoundingRectangle
+                $name = "$Phase-$index-header"
                 $bitmap = [Drawing.Bitmap]::new([int][math]::Ceiling($bounds.Width), [int][math]::Ceiling($bounds.Height))
                 $graphics = [Drawing.Graphics]::FromImage($bitmap)
                 try {
@@ -160,7 +177,8 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
                 }
                 finally { $graphics.Dispose(); $bitmap.Dispose() }
                 $observed += @{
-                    title = $script:titles[$index]; visiblePinGlyphs = $pins.Count; expected = $Expected[$index]
+                    title = $script:titles[$index]; visiblePinPeersDiagnostic = $pins.Count
+                    titleOffset = $textBounds.Left - $bounds.Left; textHeight = $textBounds.Height
                     automationName = $rows[$index].Current.Name
                     accessiblePinned = $rows[$index].Current.Name -match '(?:^|,\s*)Pinned(?:,|$)'
                     bounds = $bounds.ToString(); capture = "$name.png"; backend = 'Desktop compositor CopyFromScreen'
@@ -168,13 +186,14 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
             }
             @{
                 layout = $Layout; headers = $observed
-                oracle = 'Owned, on-screen FontIcon peers named Pinned; crops require independent rendered-visual review, not pixel inference from peer absence.'
+                oracle = 'Same-profile title-leading offsets measure reserved layout space; FontIcon peers are diagnostic only and may be absent in UWP.'
+                renderedVisualVerdict = 'REQUIRES_VISUAL_REVIEW'
             } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $script:evidence "$Phase-pins.json")
             for ($index = 0; $index -lt $observed.Count; $index++) {
-                $observed[$index].visiblePinGlyphs | Should -Be $Expected[$index] -Because 'only the per-view pin glyph changes; empty Sidebar peer exposure must fail, not credit Horizontal absence'
                 $observed[$index].accessiblePinned | Should -Be $Pinned[$index] -Because 'hiding the horizontal glyph must not remove the tab accessibility label'
             }
-            @(Get-VisiblePinGlyphs -Parent $container) | Should -HaveCount (($Expected | Measure-Object -Sum).Sum)
+            Assert-PinGeometry -Headers $observed -Layout $Layout -Pinned $Pinned
+            $observed
         }
         function Assert-CanonicalTabs {
             $tabs = @(Get-CanonicalTabs)
@@ -307,7 +326,7 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
             Assert-PinMenu -Title $title -Pinned $true
         }
         Assert-CanonicalTabs
-        Assert-PinPresentation -Phase 'sidebar-before' -Layout vertical -Expected @(1, 1, 0)
+        # Complete the primary owner/selection regression before any secondary visual oracle.
         foreach ($layout in @('horizontal', 'vertical')) {
             Set-WtPaneFocus -App $script:app -SessionId $script:sessions[0]
             (Open-OwnedTabMenu $script:titles[0]) | Should -Be $script:sessions[0]
@@ -315,8 +334,22 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
             Invoke-UiElement -App $script:app -Selector $label | Out-Null
             # Never force focus after the switch: persistence alone is not readiness.
             Assert-LayoutReady $layout
-            $expectedPins = if ($layout -eq 'horizontal') { @(0, 0, 0) } else { @(1, 1, 0) }
-            Assert-PinPresentation -Phase "$layout-after" -Layout $layout -Expected $expectedPins
+            foreach ($title in $script:titles[0..1]) { Assert-PinMenu -Title $title -Pinned $true }
+            Assert-PinMenu -Title $script:titles[2] -Pinned $false
+            Assert-CanonicalTabs
+        }
+        @{
+            ownerSelection = 'PASSED'; layouts = @('horizontal', 'vertical'); sessions = $script:sessions
+            secondaryGeometry = 'NOT_YET_CHECKED'; renderedVisualVerdict = 'REQUIRES_VISUAL_REVIEW'
+        } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $script:evidence 'primary-layout.json')
+        $baseline = @(Assert-PinPresentation -Phase 'sidebar-before' -Layout vertical)
+        foreach ($layout in @('horizontal', 'vertical')) {
+            Set-WtPaneFocus -App $script:app -SessionId $script:sessions[0]
+            (Open-OwnedTabMenu $script:titles[0]) | Should -Be $script:sessions[0]
+            $label = if ($layout -eq 'horizontal') { 'Switch to horizontal tabs' } else { 'Switch to sidebar' }
+            Invoke-UiElement -App $script:app -Selector $label | Out-Null
+            Assert-LayoutReady $layout
+            Assert-PinPresentation -Phase "$layout-after" -Layout $layout | Out-Null
             foreach ($title in $script:titles[0..1]) { Assert-PinMenu -Title $title -Pinned $true }
             Assert-PinMenu -Title $script:titles[2] -Pinned $false
             Assert-CanonicalTabs
@@ -330,6 +363,13 @@ Describe 'Feature: pinned tab selection' -Tag @('Feature', 'PinnedTabSelection')
         Assert-PinMenu -Title $script:titles[2] -Pinned $false
         # #1052 retains first-ordinary placement, not original-position restoration.
         Assert-CanonicalTabs
-        Assert-PinPresentation -Phase 'sidebar-unpin' -Layout vertical -Expected @(1, 0, 0) -Pinned @($true, $false, $false)
+        $unpinned = @(Assert-PinPresentation -Phase 'sidebar-unpin' -Layout vertical -Pinned @($true, $false, $false))
+        ($baseline[1].titleOffset - $baseline[2].titleOffset) |
+            Should -BeGreaterThan ($unpinned[1].titleOffset - $unpinned[2].titleOffset) -Because 'unpinning Beta removes its extra leading slot relative to the unchanged Gamma control'
+        @{
+            ownerSelection = 'PASSED'; matchedHeaderGeometry = 'PASSED'
+            renderedVisualVerdict = 'REQUIRES_VISUAL_REVIEW'
+            instruction = 'Review full-header compositor crops for actual Sidebar pins and Horizontal pin absence before full C372 sign-off; geometry is not a glyph-pixel verdict.'
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:evidence 'acceptance.json')
     }
 }
