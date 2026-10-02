@@ -1645,7 +1645,7 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(page->_tabView.TabItems().GetAt(0) == first->TabViewItem());
             page->_tabView.SelectedItem(first->TabViewItem().as<FrameworkElement>());
             VERIFY_IS_TRUE(page->_selectedTabItem().as<winrt::MUX::Controls::TabViewItem>() == first->TabViewItem());
-            VERIFY_IS_TRUE(winrt::get_abi(page->_selectedTabItem()) == winrt::get_abi(IInspectable{ first->TabViewItem() }));
+            VERIFY_IS_TRUE(winrt::get_abi(page->_selectedTabItem()) == winrt::get_abi(winrt::Windows::Foundation::IInspectable{ first->TabViewItem() }));
             VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Vertical));
             page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
             page->UpdateLayout();
