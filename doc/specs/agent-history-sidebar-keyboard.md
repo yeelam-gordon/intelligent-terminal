@@ -162,7 +162,7 @@ flowchart LR
 
 The benefit is stable visual ownership through moves/layout changes, correct
 command/selection ownership, and locally managed animation lifetime. This is
-a focused presentation boundary, not a full application MVVM rewrite or a
+a focused presentation boundary, not a full application architecture rewrite or a
 reason to add speculative framework layers. The contracts below remain the
 implementation reference.
 
