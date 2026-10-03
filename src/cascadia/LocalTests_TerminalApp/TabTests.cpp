@@ -8543,15 +8543,15 @@ namespace TerminalAppLocalTests
 
             Media::RectangleGeometry rectangle;
             rectangle.Rect({ 2, 3, 8, 9 });
-            winrt::WUX::Controls::PathIconSource wuxSource;
-            wuxSource.Data(rectangle);
-            winrt::WUX::Controls::IconSourceElement sourceElement;
-            sourceElement.IconSource(wuxSource);
+            winrt::Windows::UI::Xaml::Controls::PathIconSource windowsPathIconSource;
+            windowsPathIconSource.Data(rectangle);
+            winrt::Windows::UI::Xaml::Controls::IconSourceElement sourceElement;
+            sourceElement.IconSource(windowsPathIconSource);
             const auto adaptedSource = AgentIcons::SourceForIconElement(sourceElement).as<winrt::MUX::Controls::PathIconSource>();
             VERIFY_IS_TRUE(adaptedSource.Data() == rectangle);
             const auto [firstRectangle, secondRectangle] = realizeTwice(adaptedSource);
-            VERIFY_IS_TRUE(wuxSource.Data() == rectangle);
-            VERIFY_IS_TRUE(sourceElement.IconSource() == wuxSource);
+            VERIFY_IS_TRUE(windowsPathIconSource.Data() == rectangle);
+            VERIFY_IS_TRUE(sourceElement.IconSource() == windowsPathIconSource);
             VERIFY_IS_TRUE(firstRectangle.Data().as<Media::RectangleGeometry>().Rect() == rectangle.Rect());
             VERIFY_IS_TRUE(secondRectangle.Data().as<Media::RectangleGeometry>().Rect() == rectangle.Rect());
 
