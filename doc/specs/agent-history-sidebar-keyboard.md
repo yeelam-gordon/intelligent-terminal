@@ -121,6 +121,51 @@ counts as inside the sidebar for the keybinding's focus policy.
 
 ## Tab-header ownership and rename focus
 
+### Presentation design principles
+
+The problem with transferring a live header between layouts is that data,
+visual ownership, edit state, and rendering lifetime become coupled. The
+principle-led change is to share the information while each view keeps its
+own controls:
+
+1. **Share data, not controls.** Titles, status, rich metadata, and accessibility
+   text have one shared source; Horizontal and Sidebar realizations own their
+   own headers and icons.
+2. **Change presentation, not meaning.** Layout-specific visibility does not
+   change progress or pin state. Selection and commands follow stable tab/pane
+   identity, not a temporary display index.
+3. **Let the view own rendering lifetime.** The visible control owns its clock
+   and reconciles actual attachment/visibility. Do not put clocks in shared
+   models or add per-move animation repair callbacks.
+
+**Before:** one live header is sequentially attached/restored or reparented.
+
+```mermaid
+flowchart LR
+    H["One live header control"]
+    T["Horizontal tabs"]
+    S["Sidebar"]
+    H -->|"attach / restore"| T
+    H -->|"detach / reparent"| S
+```
+
+**After:** the same information is read by independently owned views.
+
+```mermaid
+flowchart LR
+    D["Shared presentation data"]
+    T["Horizontal tabs: own header"]
+    S["Sidebar: own header"]
+    D -->|"read data"| T
+    D -->|"read data"| S
+```
+
+The benefit is stable visual ownership through moves/layout changes, correct
+command/selection ownership, and locally managed animation lifetime. This is
+a focused presentation boundary, not a full application MVVM rewrite or a
+reason to add speculative framework layers. The contracts below remain the
+implementation reference.
+
 The tab owns a data-only `TabHeaderPresentation` and the existing aggregate
 `TerminalTabStatus`. The canonical horizontal `TabViewItem` permanently retains
 its native `TabHeaderControl`. Each sidebar row template creates a separate
