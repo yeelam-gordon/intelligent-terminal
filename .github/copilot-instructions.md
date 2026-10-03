@@ -105,13 +105,6 @@ The codebase has two main products sharing foundational components:
 
 ## Key Conventions
 
-### TerminalApp presentation ownership
-For tab, pane, and header UI changes, read `doc\specs\agent-history-sidebar-keyboard.md`,
-especially **Presentation design principles**, before changing ownership or binding.
-- **Share data, not controls:** keep shared presentation values in data objects; let each view own its headers, icons, and visuals.
-- **Change presentation, not meaning:** preserve tab/pane identity and state while applying distinct Horizontal and Sidebar display policies.
-- **Let the view own rendering lifetime:** keep animation clocks and attachment/visibility handling in the owning view, not the shared model or per-move repair callbacks.
-
 ### C++ Style
 - Follow existing code style when modifying existing files. Use Modern C++ and the [C++ Core Guidelines](https://github.com/isocpp/CppCoreGuidelines) for new code.
 - Use **WIL** (Windows Implementation Library) smart pointers and result macros (`RETURN_IF_FAILED`, `RETURN_IF_WIN32_BOOL_FALSE`, `LOG_IF_FAILED`, etc.) instead of raw Win32 error handling.
