@@ -14,6 +14,7 @@
 // proxy/stub (NOT WinRT MBM), so activation/marshaling never hits the combase
 // WinRT activation catalog.
 #include "ITerminalProtocol.h"
+#include "../../cascadia/inc/TerminalProtocolProxyRegistration.h"
 
 #include <CLI/CLI.hpp>
 
@@ -101,8 +102,22 @@ static winrt::com_ptr<ITerminalProtocol> ConnectToTerminal(bool* outAuthenticate
         return nullptr;
     }
 
+    wil::unique_hmodule proxyDll;
+    auto hr = Microsoft::Terminal::Protocol::LoadAndVerifyLocalProxyDll(proxyDll);
+    if (SUCCEEDED(hr))
+    {
+        // Set the process-local proxy factory used by activation and callbacks.
+        hr = Microsoft::Terminal::Protocol::RegisterProcessLocalProxyFactory(proxyDll);
+    }
+    if (FAILED(hr))
+    {
+        if (!quiet)
+            fprintf(stderr, "[wtcli] Failed to load or register protocol proxy: 0x%08X\n", static_cast<uint32_t>(hr));
+        return nullptr;
+    }
+
     winrt::com_ptr<ITerminalProtocol> server;
-    auto hr = CoCreateInstance(cls, nullptr, CLSCTX_LOCAL_SERVER, __uuidof(ITerminalProtocol), server.put_void());
+    hr = CoCreateInstance(cls, nullptr, CLSCTX_LOCAL_SERVER, __uuidof(ITerminalProtocol), server.put_void());
     if (FAILED(hr))
     {
         if (!quiet)
@@ -376,6 +391,9 @@ static HRESULT SupportsCapability(ITerminalProtocol* server, const std::string_v
 int wmain(int argc, wchar_t** argv)
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    const auto unregisterProxy = wil::scope_exit([]() noexcept {
+        LOG_IF_FAILED(Microsoft::Terminal::Protocol::UnregisterTerminalProtocolProxy());
+    });
 
     CLI::App app{ "wtcli - Windows Terminal CLI" };
     app.require_subcommand(0, 1);
