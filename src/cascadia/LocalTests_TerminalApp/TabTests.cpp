@@ -13609,6 +13609,11 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_TRUE(page->_tabs.GetAt(expectedIndex) == *owner);
                 VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == owner);
                 VERIFY_IS_TRUE(page->_selectedTabItem() == owner->TabViewItem());
+                uint32_t contentIndex{};
+                VERIFY_IS_TRUE(page->_tabContent.Children().IndexOf(owner->Content(), contentIndex), L"The selected owning tab's content must be attached to the content host after movement.");
+                VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(contentIndex) == owner->Content());
+                VERIFY_ARE_EQUAL(1.0, owner->Content().Opacity());
+                VERIFY_IS_TRUE(owner->Content().IsHitTestVisible());
                 VERIFY_IS_TRUE(owner->GetRootPane() == root);
                 VERIFY_IS_TRUE(owner->GetActivePane() == active);
                 VERIFY_IS_TRUE(strip->DisplayItemForTab(owner->TabViewItem()) == display);
@@ -13645,6 +13650,13 @@ namespace TerminalAppLocalTests
             {
                 display.IsExpanded(expanded);
                 page->_selectedTabItem(first->TabViewItem());
+                page->UpdateLayout();
+                VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == first);
+                uint32_t contentIndex{};
+                VERIFY_IS_TRUE(page->_tabContent.Children().IndexOf(first->Content(), contentIndex), L"The other tab's content must be attached before dispatching the unselected owner's action.");
+                VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(contentIndex) == first->Content());
+                VERIFY_ARE_EQUAL(1.0, first->Content().Opacity());
+                VERIFY_IS_TRUE(first->Content().IsHitTestVisible());
                 VERIFY_IS_TRUE(owner->_moveLeftMenuItem.IsEnabled());
                 VERIFY_IS_FALSE(owner->_moveRightMenuItem.IsEnabled());
                 VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Backward } }));
@@ -13754,6 +13766,17 @@ namespace TerminalAppLocalTests
                 owner->SuppressAgentPrewarm();
                 other->SuppressAgentPrewarm();
                 page->_ApplyTabListProjection();
+                page->_selectedTabItem(owner->TabViewItem());
+                page->_selectedTabItem(other->TabViewItem());
+                // TestHost does not reliably deliver the initial selection event.
+                page->_OnSelectionChangedCore();
+                page->UpdateLayout();
+                VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == other);
+                uint32_t contentIndex{};
+                VERIFY_IS_TRUE(page->_tabContent.Children().IndexOf(other->Content(), contentIndex), L"The other tab's content must be attached before dispatching the unselected owner's action.");
+                VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(contentIndex) == other->Content());
+                VERIFY_ARE_EQUAL(1.0, other->Content().Opacity());
+                VERIFY_IS_TRUE(other->Content().IsHitTestVisible());
                 VERIFY_IS_FALSE(page->_IsTabListPositionOperationBlocked());
                 VERIFY_ARE_EQUAL(winrt::hstring{ vertical ? L"Move up" : L"Move left" }, owner->_moveLeftMenuItem.Text());
                 VERIFY_ARE_EQUAL(winrt::hstring{ vertical ? L"Move down" : L"Move right" }, owner->_moveRightMenuItem.Text());
@@ -13764,10 +13787,20 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_TRUE(page->_tabs.GetAt(0) == *other);
                 VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *owner);
                 VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == owner);
+                page->UpdateLayout();
+                VERIFY_IS_TRUE(page->_tabContent.Children().IndexOf(owner->Content(), contentIndex), L"The selected owning tab's content must be attached to the content host after movement.");
+                VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(contentIndex) == owner->Content());
+                VERIFY_ARE_EQUAL(1.0, owner->Content().Opacity());
+                VERIFY_IS_TRUE(owner->Content().IsHitTestVisible());
                 VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Backward } }));
                 VERIFY_IS_TRUE(page->_tabs.GetAt(0) == *owner);
                 VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *other);
                 VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == owner);
+                page->UpdateLayout();
+                VERIFY_IS_TRUE(page->_tabContent.Children().IndexOf(owner->Content(), contentIndex), L"The selected owning tab's content must remain attached to the content host after movement.");
+                VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(contentIndex) == owner->Content());
+                VERIFY_ARE_EQUAL(1.0, owner->Content().Opacity());
+                VERIFY_IS_TRUE(owner->Content().IsHitTestVisible());
             });
         }
     }

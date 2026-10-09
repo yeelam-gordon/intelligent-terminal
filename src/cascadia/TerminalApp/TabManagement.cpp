@@ -2610,6 +2610,10 @@ namespace winrt::TerminalApp::implementation
 
             _mutatingTabCollections = false;
             endMutation.release();
+            if (selectMoved && previouslySelected != tabViewItem)
+            {
+                _OnSelectionChangedCore();
+            }
             _UpdateTabView();
             _ApplyTabListProjection(tab);
 

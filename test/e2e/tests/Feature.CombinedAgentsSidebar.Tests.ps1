@@ -1810,6 +1810,77 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             $items | Should -HaveCount 1
             $items[0]
         }
+        function Get-MoveDisplay {
+            $process = Get-Process -Id $script:app.Pid -ErrorAction Stop
+            if (-not $script:app.Launched -or -not $script:app.OwnedProcess -or
+                $script:app.OwnedProcess.HasExited -or $script:app.OwnedProcess.Id -ne $process.Id -or
+                $process.StartTime -ne $script:app.OwnedProcess.StartTime -or
+                $process.Path -ne (Join-Path $script:app.InstallLocation 'WindowsTerminal.exe')) {
+                throw 'Displayed owner requires the original owned process lease.'
+            }
+            $hwnd = [IntPtr][long]$script:app.Hwnd
+            if ([ItE2E.ItWtWin32Input]::GetAncestor($hwnd, 2) -ne $hwnd -or
+                [ItE2E.ItWtWin32Input]::GetWindowProcessId($hwnd) -ne $script:app.Pid) {
+                throw 'Displayed owner requires the exact owned root HWND.'
+            }
+            $window = [Windows.Automation.AutomationElement]::FromHandle($hwnd)
+            if (-not $window -or $window.Current.ProcessId -ne $script:app.Pid) {
+                throw 'Displayed owner UIA root belongs to another process.'
+            }
+            $windowBounds = $window.Current.BoundingRectangle
+            if ($window.Current.IsOffscreen -or $windowBounds.Width -le 0 -or $windowBounds.Height -le 0 -or
+                @($windowBounds.X, $windowBounds.Y, $windowBounds.Width, $windowBounds.Height | Where-Object {
+                    [double]::IsNaN($_) -or [double]::IsInfinity($_)
+                }).Count) { return }
+            $marker = "PID=$($launch.pid)"
+            $condition = [Windows.Automation.PropertyCondition]::new(
+                [Windows.Automation.AutomationElement]::ClassNameProperty, 'TermControl')
+            $matches = @(
+                foreach ($control in $window.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)) {
+                    if ($control.Current.ProcessId -ne $script:app.Pid) {
+                        throw 'Displayed owner refuses a foreign terminal peer.'
+                    }
+                    $bounds = $control.Current.BoundingRectangle
+                    if ($control.Current.IsOffscreen -or $bounds.Width -le 0 -or $bounds.Height -le 0 -or
+                        @($bounds.X, $bounds.Y, $bounds.Width, $bounds.Height | Where-Object {
+                            [double]::IsNaN($_) -or [double]::IsInfinity($_)
+                        }).Count) { continue }
+                    $pattern = $control.GetCurrentPattern([Windows.Automation.TextPattern]::Pattern)
+                    if (-not $pattern.DocumentRange.FindText($marker, $false, $false)) { continue }
+                    $range = & (Get-Module ItE2E) {
+                        param($documentRange, $text)
+                        Find-ItExactTextRange -DocumentRange $documentRange -Text $text
+                    } $pattern.DocumentRange $marker
+                    $rectangles = @($range.GetBoundingRectangles())
+                    if ($rectangles.Count -eq 0 -or $rectangles.Count % 4 -ne 0) { continue }
+                    $visible = $true
+                    for ($i = 0; $i -lt $rectangles.Count; $i += 4) {
+                        $x, $y, $width, $height = $rectangles[$i..($i + 3)]
+                        if (@($x, $y, $width, $height | Where-Object {
+                            [double]::IsNaN($_) -or [double]::IsInfinity($_)
+                        }).Count -or $width -le 0 -or $height -le 0) { $visible = $false; break }
+                        foreach ($clip in @($bounds, $windowBounds)) {
+                            if ($x -lt $clip.Left -or $y -lt $clip.Top -or
+                                $x + $width -gt $clip.Right -or $y + $height -gt $clip.Bottom) {
+                                $visible = $false
+                            }
+                        }
+                    }
+                    if ($visible) {
+                        @{
+                            marker = $range.GetText(-1); fixture_pid = $launch.pid; hwnd = $script:app.Hwnd
+                            process_id = $control.Current.ProcessId; class = $control.Current.ClassName
+                            control = $control.Current.Name; runtime_id = @($control.GetRuntimeId())
+                            range_rectangles = $rectangles
+                            control_bounds = @($bounds.X, $bounds.Y, $bounds.Width, $bounds.Height)
+                            window_bounds = @($windowBounds.X, $windowBounds.Y, $windowBounds.Width, $windowBounds.Height)
+                        }
+                    }
+                }
+            )
+            if ($matches.Count -gt 1) { throw 'Displayed owner marker is ambiguous across terminal peers.' }
+            if ($matches.Count -eq 1) { $matches[0] }
+        }
         function Assert-MoveIdentity {
             $current = @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId (Get-MoveOwner).tab_id)
             @($current.session_id) | Should -Be @($panes.session_id)
@@ -1824,6 +1895,17 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 $_.session_id -eq $fixture.SessionId -and
                     ([string]$_.pane_session_id).Trim('{}') -eq ([string]$owner.session_id).Trim('{}')
             }) | Should -HaveCount 1
+            # COM selection alone does not prove that the owner terminal was rehosted.
+            $observation = @{ Error = $null; Display = $null }
+            Wait-Until -TimeoutSec 10 -Because 'the actual visible owner terminal contains its fixture marker' -Condition {
+                try {
+                    $observation.Display = Get-MoveDisplay
+                    return [bool]$observation.Display
+                }
+                catch { $observation.Error = $_; return $true }
+            } | Out-Null
+            if ($observation.Error) { throw $observation.Error }
+            $observation.Display
         }
         try {
             Set-CombinedView $false
@@ -1850,6 +1932,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             Wait-Until -TimeoutSec 20 -Condition { Test-Path $fixture.Log } | Out-Null
             $launch = Get-Content $fixture.Log | Select-Object -First 1 | ConvertFrom-Json
             $launch.session_id | Should -Be $fixture.SessionId
+            $launch.pid | Should -BeGreaterThan 0
             $panes = @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId (Get-MoveOwner).tab_id)
             $panes | Should -HaveCount 2
             $identities = @($panes | ForEach-Object {
@@ -1906,12 +1989,13 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                         (Get-MoveGroup).Current.BoundingRectangle.Top | Should -BeLessThan $beforeY
                         Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence "tab-move-$expanded-after.png") | Out-Null
                     }
-                    Assert-MoveIdentity
+                    $display = Assert-MoveIdentity
                     @{
                         action = $step.Action; expanded = $expanded; canonical_shell_order = @(Get-MoveOrder)
                         owner_shell = $owner.session_id; owner_tab_index = (Get-MoveOwner).tab_id
                         active_pane = Get-ActivePane -App $script:app; panes = $identities
                         helper = $helper; native_session = $fixture.SessionId; group = $groupState
+                        displayed_owner = $display
                         header_top = (Get-MoveGroup).Current.BoundingRectangle.Top
                     } | ConvertTo-Json -Depth 6 -Compress |
                         Add-Content -LiteralPath (Join-Path $script:evidence 'tab-move.jsonl')
@@ -1930,7 +2014,9 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 @(Get-MoveOrder) | Should -Be $before
                 (Get-ActivePane -App $script:app).session_id | Should -Be $active
                 Get-MoveGroupState | Should -Be $groupState
-                Assert-MoveIdentity
+                $display = Assert-MoveIdentity
+                @{ query = $query; displayed_owner = $display } | ConvertTo-Json -Depth 6 -Compress |
+                    Add-Content -LiteralPath (Join-Path $script:evidence 'tab-move.jsonl')
             }
             Set-CombinedQuery $script:history[0].title
             Wait-Until -TimeoutSec 10 -Condition { @(Get-CombinedRows Recent).Count -eq 1 } | Out-Null
