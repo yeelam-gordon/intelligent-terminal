@@ -98,6 +98,7 @@ Describe 'Feature Settings editor language direction' -Tag 'Feature', 'SettingsR
                 firstWindowPreference = 'defaultProfile'
                 minimizeToNotificationArea = $false
                 alwaysShowNotificationIcon = $false
+                showTokenUsageAndCost = $true
                 'aiIntegration.coordinator.enabled' = $false
             } -State @{ sidebarLayoutMigrationCompleted = $true; sidebarIntroductionShown = $true }
             Open-WtSettings -App $app -TimeoutSec 25 | Out-Null
@@ -113,10 +114,21 @@ Describe 'Feature Settings editor language direction' -Tag 'Feature', 'SettingsR
                 $onRight | Should -Be $expectedOnRight -Because "$selector must follow $Language layout"
             }
             Invoke-SettingsNav -App $app -NavItem AIAgentsNavItem | Out-Null
-            Invoke-SettingsNav -App $app -NavItem LaunchNavItem | Out-Null
+            (Get-UiElement -App $app -Selector ShowTokenUsageAndCostToggle).toggleState | Should -Be 'on'
+            Invoke-UiElement -App $app -Selector ShowTokenUsageAndCostToggle | Out-Null
             Invoke-UiElement -App $app -Selector SaveButton -TimeoutSec 15 | Out-Null
+            Wait-Until -TimeoutSec 8 -Because 'Save must persist the changed preference' -Condition {
+                (Get-WtSettingsObject -App $app).showTokenUsageAndCost -eq $false
+            } | Out-Null
             Assert-Setting -App $app -Key language -Value $Language
+            Invoke-UiElement -App $app -Selector ShowTokenUsageAndCostToggle | Out-Null
+            (Get-UiElement -App $app -Selector ShowTokenUsageAndCostToggle).toggleState | Should -Be 'on'
             Invoke-UiElement -App $app -Selector ResetButton -TimeoutSec 15 | Out-Null
+            Wait-Until -TimeoutSec 8 -Because 'Discard must restore the saved preference' -Condition {
+                (Get-UiElement -App $app -Selector ShowTokenUsageAndCostToggle).toggleState -eq 'off'
+            } | Out-Null
+            Assert-Setting -App $app -Key showTokenUsageAndCost -Value $false
+            Invoke-SettingsNav -App $app -NavItem LaunchNavItem | Out-Null
         }
         finally {
             if ($app) { Stop-Terminal -App $app | Out-Null }
