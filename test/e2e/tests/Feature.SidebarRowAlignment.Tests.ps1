@@ -145,7 +145,7 @@ namespace ItE2E {
             $token = [guid]::NewGuid().ToString('N')
             $inputPath = Join-Path $script:evidence "$token.json"
             $receiptPath = Join-Path $script:evidence "$token.receipt.json"
-            ConvertTo-Json -InputObject $Events -Depth 8 | Set-Content -LiteralPath $inputPath
+            ConvertTo-Json -InputObject $Events -Depth 8 | Set-Content -LiteralPath $inputPath -ErrorAction Stop
             $quote = { param($Text) "'" + $Text.Replace("'", "''") + "'" }
             $command = "& $(& $quote $script:hookFixture) -InputPath $(& $quote $inputPath)" +
                 " -ReceiptPath $(& $quote $receiptPath) -WtcliPath $(& $quote $script:app.WtcliPath)"

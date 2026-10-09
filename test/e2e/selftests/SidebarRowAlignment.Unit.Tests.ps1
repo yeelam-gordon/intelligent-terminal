@@ -86,6 +86,64 @@ BeforeAll {
 AfterAll { Remove-Item -LiteralPath $script:root -Recurse -Force }
 
 Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
+    It 'submits hooks only after input publication succeeds (<WriteFails>, <StrictMode>)' -TestCases @(
+        @{ WriteFails = $true; StrictMode = 'Off' },
+        @{ WriteFails = $true; StrictMode = 'Latest' },
+        @{ WriteFails = $false; StrictMode = 'Latest' }
+    ) {
+        param($WriteFails, $StrictMode)
+        $helper = $script:ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Send-AlignmentHooks'
+        }, $true)
+        if (-not $helper) { throw 'The alignment suite is missing Send-AlignmentHooks.' }
+        . ([scriptblock]::Create($helper.Extent.Text))
+        $script:evidence = $script:root
+        $script:hookFixture = 'fictitious-hook-fixture'
+        $script:app = [pscustomobject]@{ WtcliPath = 'fictitious-wtcli' }
+        $script:pane = '00000000-0000-0000-0000-000000000001'
+        $script:inputWriteFails = $WriteFails
+        $script:inputWriteReturned = 0
+        $script:hookInputSent = 0
+        $script:hookEnterSent = 0
+        $script:hookWaitEntered = 0
+        function Set-Content {
+            [CmdletBinding()]
+            param($LiteralPath, [Parameter(ValueFromPipeline)]$Value)
+            process {
+                if ($script:inputWriteFails) { Write-Error 'input-write sentinel' }
+                $script:inputWriteReturned++
+            }
+        }
+        function Send-WtInput { param($App, $SessionId, $Text) $script:hookInputSent++ }
+        function Send-WtKeys { param($App, $SessionId, $Keys) $script:hookEnterSent++ }
+        function Wait-Until { param($TimeoutSec, $Because, $Condition) $script:hookWaitEntered++ }
+        function Get-Content {
+            param($LiteralPath, [switch]$Raw)
+            '{"events":1,"pane_session_id":"00000000-0000-0000-0000-000000000001"}'
+        }
+        $invoke = {
+            & {
+                if ($StrictMode -eq 'Off') { Set-StrictMode -Off } else { Set-StrictMode -Version Latest }
+                $ErrorActionPreference = 'Continue'
+                Send-AlignmentHooks -Events @(@{ event = 'fictitious-hook' })
+            }
+        }
+        if ($WriteFails) {
+            $invoke | Should -Throw '*input-write sentinel*'
+            $script:inputWriteReturned | Should -Be 0
+            $script:hookInputSent | Should -Be 0
+            $script:hookEnterSent | Should -Be 0
+            $script:hookWaitEntered | Should -Be 0
+        }
+        else {
+            & $invoke
+            $script:inputWriteReturned | Should -Be 1
+            $script:hookInputSent | Should -Be 1
+            $script:hookEnterSent | Should -Be 1
+            $script:hookWaitEntered | Should -Be 1
+        }
+    }
     It 'reports missing extracted helpers with their actionable names' {
         $tokens = $null
         $errors = $null
