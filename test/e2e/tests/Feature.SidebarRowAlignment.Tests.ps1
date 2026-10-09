@@ -22,7 +22,7 @@ Describe 'Feature: Sidebar row alignment' -Tag @('Feature', 'SidebarRowAlignment
         $script:app = $null
         $script:ownsConfigBackup = $false
         $script:runtimeBackedUp = $false
-        if ((Get-ItTestPackage) -ne 'Dev') { throw 'Explicit inactive Dev is required.' }
+        if ((Get-ItTestPackage) -ne 'Dev') { throw 'Explicit Dev package selection is required.' }
         $script:target = Resolve-ItApp -Package Dev
         if (@(Get-WtProcessesForApp -App $script:target -IncludePackageExecutables).Count) {
             throw 'Close Dev before running alignment; existing processes are never adopted.'
