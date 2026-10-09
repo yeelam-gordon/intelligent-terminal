@@ -17,6 +17,48 @@ BeforeAll {
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Resolve-AlignmentMarker'
     }, $true)
     . ([scriptblock]::Create($markerFunction.Extent.Text))
+    function Get-AlignmentChecklistBaseline {
+        param([string]$BaseRef = $env:ITE2E_CHECKLIST_BASE_REF)
+        if ([string]::IsNullOrEmpty($BaseRef)) { $BaseRef = 'origin/main' }
+        $repo = Join-Path $PSScriptRoot '..\..\..'
+        $commit = @(& git -C $repo rev-parse --verify --end-of-options "$BaseRef^{commit}" 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $commit.Count -ne 1) {
+            throw "Cannot resolve checklist base '$BaseRef'; fetch the actual PR target or set ITE2E_CHECKLIST_BASE_REF."
+        }
+        $mergeBase = @(& git -C $repo merge-base --all HEAD $commit[0] 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $mergeBase.Count -ne 1) {
+            throw "Cannot identify one checklist merge-base with '$BaseRef'."
+        }
+        $head = @(& git -C $repo rev-parse --verify HEAD 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $head.Count -ne 1 -or $mergeBase[0] -eq $head[0]) {
+            throw "Checklist baseline must precede candidate HEAD; verify ITE2E_CHECKLIST_BASE_REF ('$BaseRef')."
+        }
+        $content = @(& git -C $repo show "$($mergeBase[0]):doc/release-check-list.md" 2>$null)
+        if ($LASTEXITCODE -ne 0) { throw "Cannot read checklist baseline at $($mergeBase[0])." }
+        $rows = @($content | Where-Object { $_ -match '^- \[[ x]\] `C\d+`' })
+        if (-not $rows.Count) { throw "Checklist baseline at $($mergeBase[0]) contains no stable-ID rows." }
+        Write-Host "Checklist baseline: $BaseRef -> merge-base $($mergeBase[0]); $($rows.Count) prior rows."
+        $rows
+    }
+    function Assert-AlignmentChecklistPreserved {
+        param([string[]]$Candidate, [string[]]$Baseline)
+        $baselineCounts = @{}
+        $candidateCounts = @{}
+        foreach ($pair in @(@($Baseline, $baselineCounts), @($Candidate, $candidateCounts))) {
+            foreach ($line in $pair[0]) {
+                if ($line -match '^- \[[ x]\] `(?<id>C\d+)`') {
+                    $id = $Matches.id
+                    $pair[1][$id] = [int]$pair[1][$id] + 1
+                }
+            }
+        }
+        if (-not $baselineCounts.Count) { throw 'An independent nonempty checklist baseline is required.' }
+        foreach ($id in $baselineCounts.Keys) {
+            if ([int]$candidateCounts[$id] -ne $baselineCounts[$id]) {
+                throw "Prior checklist ID occurrence count changed: $id (expected $($baselineCounts[$id]), actual $([int]$candidateCounts[$id]))."
+            }
+        }
+    }
     function New-AlignmentResult {
         param([string]$Result)
         $path = Join-Path $script:root "$Result.xml"
@@ -108,7 +150,7 @@ Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
         $text | Should -Not -Match 'icon.*=.*(?:26|18)\s*\*'
         $text | Should -Match 'Get-FileHash -LiteralPath \$script:target.SettingsPath'
     }
-    It 'allocates one stable exact-title checklist ID and preserves existing IDs' {
+    It 'allocates one stable exact-title ID and preserves prior checklist ID occurrence counts' {
         $path = Join-Path $PSScriptRoot '..\..\..\doc\release-check-list.md'
         $lines = @(Get-Content -LiteralPath $path)
         $matched = @($lines | Where-Object { $_.Contains("**$($script:title):") })
@@ -117,10 +159,44 @@ Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
         $matched[0] -match '`(?<id>C\d+)`' | Should -BeTrue
         $id = $Matches.id
         @($lines | Where-Object { $_.Contains('`' + $id + '`') }) | Should -HaveCount 1
-        $baseline = & git -C (Join-Path $PSScriptRoot '..\..\..') show HEAD:doc/release-check-list.md
-        foreach ($line in $baseline) {
-            if ($line -match '^- \[[ x]\] `C\d+`') { $lines | Should -Contain $line }
-        }
+        $baseline = @(Get-AlignmentChecklistBaseline)
+        Assert-AlignmentChecklistPreserved -Candidate $lines -Baseline $baseline
+    }
+    It 'rejects in-memory committed removal and ID replacement against the independent PR base' {
+        $baseline = @(Get-AlignmentChecklistBaseline)
+        $candidate = @(Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\..\doc\release-check-list.md'))
+        $prior = $baseline[0]
+        $prior | Should -Match '`C\d+`'
+        $index = [Array]::IndexOf($candidate, $prior)
+        $index | Should -BeGreaterOrEqual 0
+        $removed = @(for ($i = 0; $i -lt $candidate.Count; $i++) { if ($i -ne $index) { $candidate[$i] } })
+        { Assert-AlignmentChecklistPreserved -Candidate $removed -Baseline $baseline } |
+            Should -Throw '*Prior checklist ID occurrence count changed*'
+        $replacement = $prior -replace '`C\d+`', '`C999999`'
+        $changed = @($candidate)
+        $changed[$index] = $replacement
+        { Assert-AlignmentChecklistPreserved -Candidate $changed -Baseline $baseline } |
+            Should -Throw '*Prior checklist ID occurrence count changed*'
+        $wording = @($candidate)
+        $wording[$index] = ($prior -replace '^- \[[ x]\]', '- [x]') + ' Updated wording.'
+        { Assert-AlignmentChecklistPreserved -Candidate $wording -Baseline $baseline } | Should -Not -Throw
+        { Assert-AlignmentChecklistPreserved -Candidate $candidate -Baseline @() } |
+            Should -Throw '*nonempty checklist baseline*'
+    }
+    It 'counts repeated prior IDs rather than treating checklist preservation as set membership' {
+        $prior = @('- [ ] `C001` First item', '- [ ] `C001` Second item')
+        { Assert-AlignmentChecklistPreserved -Candidate $prior[0] -Baseline $prior } |
+            Should -Throw '*expected 2, actual 1*'
+        { Assert-AlignmentChecklistPreserved -Candidate ($prior + $prior[0]) -Baseline $prior } |
+            Should -Throw '*expected 2, actual 3*'
+        { Assert-AlignmentChecklistPreserved -Candidate ($prior + '- [ ] `C002` New item') -Baseline $prior } |
+            Should -Not -Throw
+    }
+    It 'refuses a missing or candidate-HEAD baseline rather than silently passing' {
+        { Get-AlignmentChecklistBaseline -BaseRef 'refs/heads/ite2e-nonexistent-checklist-base' } |
+            Should -Throw '*Cannot resolve checklist base*'
+        { Get-AlignmentChecklistBaseline -BaseRef HEAD } |
+            Should -Throw '*baseline must precede candidate HEAD*'
     }
     It 'maps synthetic success to full and incremental reports without claiming live acceptance' {
         $xml = New-AlignmentResult Success
