@@ -62,6 +62,65 @@ Describe 'Sidebar hook receipt publication' -Tag Unit {
         @(Get-ChildItem -LiteralPath $script:receiptRoot -Filter '*.pending') | Should -HaveCount 0
     }
 
+    It 'preserves the original write failure when staging <CleanupFault> fails' -TestCases @(
+        @{ CleanupFault = 'remove' },
+        @{ CleanupFault = 'lookup' }
+    ) {
+        param($CleanupFault)
+        $directory = Join-Path $script:receiptRoot "failed-$CleanupFault"
+        New-Item -ItemType Directory -Path $directory | Out-Null
+        $final = Join-Path $directory 'receipt.json'
+        $script:publicationException = [IO.IOException]::new('Original publication failure')
+        $script:pendingReceipt = $null
+        Mock Set-Content {
+            $script:pendingReceipt = $LiteralPath
+            [IO.File]::WriteAllText($LiteralPath, '{"events":')
+            throw $script:publicationException
+        }
+        if ($CleanupFault -eq 'remove') {
+            Mock Remove-Item { throw [IO.IOException]::new('Staging cleanup failure') } -ParameterFilter {
+                $LiteralPath.EndsWith('.pending')
+            }
+        }
+        else {
+            Mock Test-Path { throw [IO.IOException]::new('Staging lookup failure') } -ParameterFilter {
+                $LiteralPath.EndsWith('.pending')
+            }
+        }
+        $failure = $null
+        try { Write-SidebarHookReceipt -ReceiptPath $final -EventCount 1 -PaneSessionId 'fixture-pane' }
+        catch { $failure = $_ }
+        $failure | Should -Not -BeNullOrEmpty
+        $failure.Exception | Should -BeOfType ([AggregateException])
+        $failure.Exception.InnerExceptions | Should -HaveCount 2
+        [object]::ReferenceEquals($failure.Exception.InnerExceptions[0], $script:publicationException) | Should -BeTrue
+        $failure.Exception.InnerExceptions[1].Message | Should -Match 'Staging (cleanup|lookup) failure'
+        [IO.File]::Exists($final) | Should -BeFalse
+        [IO.File]::Exists($script:pendingReceipt) | Should -BeTrue
+    }
+
+    It 'preserves a failed move and the existing final receipt when staging removal fails' {
+        $directory = Join-Path $script:receiptRoot 'failed-move'
+        New-Item -ItemType Directory -Path $directory | Out-Null
+        $final = Join-Path $directory 'receipt.json'
+        [IO.File]::WriteAllText($final, 'original receipt')
+        $hash = (Get-FileHash -LiteralPath $final).Hash
+        Mock Remove-Item { throw [IO.IOException]::new('Staging cleanup failure') } -ParameterFilter {
+            $LiteralPath.EndsWith('.pending')
+        }
+        $failure = $null
+        try { Write-SidebarHookReceipt -ReceiptPath $final -EventCount 1 -PaneSessionId 'fixture-pane' }
+        catch { $failure = $_ }
+        $failure | Should -Not -BeNullOrEmpty
+        $failure.Exception | Should -BeOfType ([AggregateException])
+        $failure.Exception.InnerExceptions | Should -HaveCount 2
+        $failure.Exception.InnerExceptions[0].GetBaseException() | Should -BeOfType ([IO.IOException])
+        $failure.Exception.InnerExceptions[1].Message | Should -Match 'Staging cleanup failure'
+        (Get-FileHash -LiteralPath $final).Hash | Should -Be $hash
+        @(Get-ChildItem -LiteralPath $directory -Filter 'receipt.json.*.pending') |
+            Should -HaveCount 1
+    }
+
     It 'publishes unique receipts independently with non-ASCII file data' {
         $pane = 'fixture-' + [char]0x00E9 + [char]0x4E2D
         foreach ($count in @(0, 2)) {

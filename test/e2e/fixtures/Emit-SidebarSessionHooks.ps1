@@ -13,14 +13,28 @@ function Write-SidebarHookReceipt {
         [Parameter(Mandatory)][string]$PaneSessionId
     )
     $pendingPath = $ReceiptPath + '.' + [guid]::NewGuid().ToString('N') + '.pending'
+    $publicationFailure = $null
     try {
         @{ events = $EventCount; pane_session_id = $PaneSessionId } |
             ConvertTo-Json -Compress | Set-Content -LiteralPath $pendingPath -ErrorAction Stop
         [IO.File]::Move($pendingPath, $ReceiptPath)
     }
+    catch {
+        $publicationFailure = $_
+        throw
+    }
     finally {
-        if (Test-Path -LiteralPath $pendingPath) {
-            Remove-Item -LiteralPath $pendingPath -ErrorAction Stop
+        try {
+            if (Test-Path -LiteralPath $pendingPath -ErrorAction Stop) {
+                Remove-Item -LiteralPath $pendingPath -ErrorAction Stop
+            }
+        }
+        catch {
+            if ($publicationFailure) {
+                throw [AggregateException]::new('Sidebar receipt publication and staging cleanup failed.',
+                    [Exception[]]@($publicationFailure.Exception, $_.Exception))
+            }
+            throw
         }
     }
 }
