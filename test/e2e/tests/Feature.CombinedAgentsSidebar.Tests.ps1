@@ -1762,10 +1762,12 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             })
         }
         function Get-MoveOwner {
-            @(Get-WtTabs -App $script:app -WindowId $script:app.WindowId | Where-Object {
+            $matches = @(Get-WtTabs -App $script:app -WindowId $script:app.WindowId | Where-Object {
                 @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId $_.tab_id |
                     Where-Object session_id -eq $owner.session_id).Count -eq 1
-            })[0]
+            })
+            $matches | Should -HaveCount 1
+            $matches[0]
         }
         function Get-MoveGroup {
             $rows = @(Get-CombinedRows Live | Where-Object {
