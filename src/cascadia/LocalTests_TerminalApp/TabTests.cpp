@@ -13716,6 +13716,8 @@ namespace TerminalAppLocalTests
         {
             const auto page = _commonSetup(nullptr, nullptr, std::nullopt, vertical);
             TestOnUIThread([&]() {
+                VERIFY_IS_TRUE(page->_ApplyTabLayout(vertical ? TabLayout::Vertical : TabLayout::Horizontal));
+                page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
                 const auto owner = page->_GetFocusedTabImpl();
                 const auto other = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));
                 owner->SuppressAgentPrewarm();
