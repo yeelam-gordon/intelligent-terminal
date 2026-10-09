@@ -11,11 +11,13 @@ BeforeAll {
         param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-AlignmentDelta'
     }, $true)
+    if (-not $function) { throw 'The alignment suite is missing Assert-AlignmentDelta.' }
     . ([scriptblock]::Create($function.Extent.Text))
     $markerFunction = $script:ast.Find({
         param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Resolve-AlignmentMarker'
     }, $true)
+    if (-not $markerFunction) { throw 'The alignment suite is missing Resolve-AlignmentMarker.' }
     . ([scriptblock]::Create($markerFunction.Extent.Text))
     function Get-AlignmentChecklistBaseline {
         param([string]$BaseRef = $env:ITE2E_CHECKLIST_BASE_REF)
@@ -84,6 +86,23 @@ BeforeAll {
 AfterAll { Remove-Item -LiteralPath $script:root -Recurse -Force }
 
 Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
+    It 'reports missing extracted helpers with their actionable names' {
+        $tokens = $null
+        $errors = $null
+        $startup = [Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PSScriptRoot 'SidebarRowAlignment.Unit.Tests.ps1'), [ref]$tokens, [ref]$errors)
+        foreach ($name in @('Assert-AlignmentDelta', 'Resolve-AlignmentMarker')) {
+            $guard = $startup.Find({
+                param($node)
+                $node -is [Management.Automation.Language.IfStatementAst] -and
+                    $node.Extent.Text.Contains("throw 'The alignment suite is missing $name.'")
+            }, $true)
+            $guard | Should -Not -BeNullOrEmpty
+            $function = $null
+            $markerFunction = $null
+            { & ([scriptblock]::Create($guard.Extent.Text)) } | Should -Throw "*missing $name*"
+        }
+    }
     It 'reuses a validated run-scoped marker for matched baseline and candidate titles' {
         $marker = 'row-align-20261009-a1b2c3'
         Resolve-AlignmentMarker $marker | Should -Be $marker
