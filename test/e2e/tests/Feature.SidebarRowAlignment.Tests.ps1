@@ -310,7 +310,10 @@ namespace ItE2E {
                 $_.Current.BoundingRectangle.Top -ge ($recentTitle.Current.BoundingRectangle.Bottom - $scale)
         } | Sort-Object { $_.Current.BoundingRectangle.Left })
         $metadata.Count | Should -BeGreaterThan 0
-        $historyIcon = @($parts | Where-Object { $_.Current.AutomationId -eq 'HistoryProviderIcon' -and -not $_.Current.IsOffscreen })
+        $historyIcon = @($parts | Where-Object {
+            $_.Current.AutomationId -eq 'HistoryProviderIcon' -and -not $_.Current.IsOffscreen -and
+                $_.Current.BoundingRectangle.Width -gt 0
+        })
         $liveIcon = @(Get-AlignmentRawParts $live | Where-Object {
             $_.Current.AutomationId -eq 'TabIconPresenter' -and -not $_.Current.IsOffscreen -and
                 $_.Current.BoundingRectangle.Width -gt 0

@@ -162,6 +162,53 @@ Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
         $text | Should -Not -Match 'icon.*=.*(?:26|18)\s*\*'
         $text | Should -Match 'Get-FileHash -LiteralPath \$script:target.SettingsPath'
     }
+    It 'requires one measurable peer on both sides before recording icon geometry' {
+        $assignments = @{}
+        foreach ($name in @('historyIcon', 'liveIcon', 'iconsVerified')) {
+            $assignment = $script:ast.Find({
+                param($node)
+                $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+                    $node.Left -is [Management.Automation.Language.VariableExpressionAst] -and
+                    $node.Left.VariablePath.UserPath -eq $name
+            }, $true)
+            $assignment | Should -Not -BeNullOrEmpty
+            $assignments[$name] = $assignment
+        }
+        $historyFilter = $assignments.historyIcon.Find({
+            param($node)
+            $node -is [Management.Automation.Language.ScriptBlockExpressionAst]
+        }, $true).ScriptBlock.GetScriptBlock()
+        $liveFilter = $assignments.liveIcon.Find({
+            param($node)
+            $node -is [Management.Automation.Language.ScriptBlockExpressionAst]
+        }, $true).ScriptBlock.GetScriptBlock()
+        $verified = [scriptblock]::Create($assignments.iconsVerified.Right.Extent.Text)
+        foreach ($case in @(
+            @{ HistoryWidth = 16; LiveWidth = 16; HistoryCount = 1; LiveCount = 1; Expected = $true }
+            @{ HistoryWidth = 0; LiveWidth = 16; HistoryCount = 1; LiveCount = 1; Expected = $false }
+            @{ HistoryWidth = 16; LiveWidth = 0; HistoryCount = 1; LiveCount = 1; Expected = $false }
+            @{ HistoryWidth = 16; LiveWidth = 16; HistoryCount = 0; LiveCount = 1; Expected = $false }
+            @{ HistoryWidth = 16; LiveWidth = 16; HistoryCount = 1; LiveCount = 0; Expected = $false }
+            @{ HistoryWidth = 16; LiveWidth = 16; HistoryCount = 2; LiveCount = 1; Expected = $false }
+            @{ HistoryWidth = 16; LiveWidth = 16; HistoryCount = 1; LiveCount = 2; Expected = $false }
+        )) {
+            $historyPeers = @(for ($i = 0; $i -lt $case.HistoryCount; $i++) {
+                [pscustomobject]@{ Current = [pscustomobject]@{
+                    AutomationId = 'HistoryProviderIcon'; IsOffscreen = $false
+                    BoundingRectangle = [pscustomobject]@{ Width = $case.HistoryWidth }
+                } }
+            })
+            $livePeers = @(for ($i = 0; $i -lt $case.LiveCount; $i++) {
+                [pscustomobject]@{ Current = [pscustomobject]@{
+                    AutomationId = 'TabIconPresenter'; IsOffscreen = $false
+                    BoundingRectangle = [pscustomobject]@{ Width = $case.LiveWidth }
+                } }
+            })
+            $historyIcon = @($historyPeers | Where-Object $historyFilter)
+            $liveIcon = @($livePeers | Where-Object $liveFilter)
+            (& $verified) | Should -Be $case.Expected
+        }
+    }
     It 'allocates one stable exact-title ID and preserves prior checklist ID occurrence counts' {
         $path = Join-Path $PSScriptRoot '..\..\..\doc\release-check-list.md'
         $lines = @(Get-Content -LiteralPath $path)
