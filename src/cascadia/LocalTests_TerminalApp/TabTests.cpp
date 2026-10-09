@@ -8918,7 +8918,7 @@ namespace TerminalAppLocalTests
             for (const auto state : { "loading", "error" })
             {
                 page->_tabStrip.HistoryError(L"");
-                page->_tabStrip.HistoryRefreshError(L"");
+                strip->HistoryRefreshError(L"");
                 page->_tabStrip.HistoryLoading(false);
                 strip->CommitHistorySnapshot(cached, true);
                 page->_historyRefreshInFlight = true;
@@ -8931,7 +8931,7 @@ namespace TerminalAppLocalTests
                 filters.ShowRecentAgentSessions(true);
                 VERIFY_IS_TRUE(strip->_agentFilterTelemetryPending);
                 page->_tabStrip.HistoryError(L"");
-                page->_tabStrip.HistoryRefreshError(L"");
+                strip->HistoryRefreshError(L"");
                 page->_tabStrip.HistoryLoading(false);
                 VERIFY_IS_TRUE(strip->_agentFilterTelemetryPending);
                 filters.ShowRecentAgentSessions(false);
@@ -11888,14 +11888,45 @@ namespace TerminalAppLocalTests
 
     void TabTests::TabProgressSurvivesMoveTabReorder()
     {
+        UIElement previousContent{ nullptr };
+        TestOnUIThread([&]() { previousContent = Window::Current().Content(); });
+        const auto cleanup = wil::scope_exit([&]() {
+            TestOnUIThread([&]() { Window::Current().Content(previousContent); });
+        });
         const auto first = winrt::make_self<TestConnection>(
             winrt::guid{ L"{6239a42c-aaaa-49a3-80bd-e8fdd045186d}" },
             winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
         const auto second = winrt::make_self<TestConnection>(
             winrt::guid{ L"{6239a42c-bbbb-49a3-80bd-e8fdd045186d}" },
             winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
-        auto page = _commonSetup(*first);
+        Grid host{ nullptr };
+        TestOnUIThread([&]() {
+            host = Grid{};
+            host.Width(1000);
+            host.Height(1000);
+        });
+        auto page = _commonSetup(nullptr, host);
         winrt::com_ptr<winrt::TerminalApp::implementation::Tab> progressTab;
+        TestOnUIThread([&]() {
+            VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Horizontal));
+            page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
+            const auto initialTab = page->_tabs.GetAt(0);
+            const auto firstPane = page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *first);
+            VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(firstPane));
+            page->_RemoveTab(initialTab);
+            host.UpdateLayout();
+            progressTab = page->_GetFocusedTabImpl();
+            VERIFY_IS_NOT_NULL(progressTab);
+        });
+        _waitForContentTransferReviewUI([&]() {
+            const winrt::Windows::Foundation::Size availableSpace{
+                static_cast<float>(page->_tabContent.ActualWidth()),
+                static_cast<float>(page->_tabContent.ActualHeight())
+            };
+            return page->IsLoaded() && !page->_changingTabLayout && !page->_isVerticalLayout &&
+                   availableSpace.Width > 0 && availableSpace.Height > 0 &&
+                   progressTab->PreCalculateCanSplit(SplitDirection::Right, 0.5f, availableSpace).has_value();
+        });
 
         const auto headerForProgressTab = [&]() {
             if (!progressTab)
