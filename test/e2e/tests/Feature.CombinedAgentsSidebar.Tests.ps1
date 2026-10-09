@@ -2280,7 +2280,16 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                         $_.session_id -eq $sid -and $_.status -eq 'Working'
                     }).Count -eq 1
                 } | Out-Null
-                $liveRow = Wait-Until -TimeoutSec 10 -Because 'the owned current tab shows newer Active metadata' -Condition {
+                $newerWorking = @((Get-CombinedSnapshot).sessions | Where-Object session_id -eq $sid)
+                $newerWorking.Count | Should -Be 1
+                $newerWorking[0].status | Should -Be 'Working'
+                $newerWorkingJson = $newerWorking[0] | ConvertTo-Json -Depth 12 -Compress
+                Set-WtPaneFocus -App $script:app -SessionId $missingTab.session_id
+                $distinctSource = Get-ActivePane -App $script:app
+                ([string]$distinctSource.session_id).Trim('{}') | Should -Be ([string]$missingTab.session_id).Trim('{}')
+                ([string]$distinctSource.session_id).Trim('{}') | Should -Not -Be $resumePane.Trim('{}')
+                [string]$distinctSource.window_id | Should -Be $window
+                $liveRow = Wait-Until -TimeoutSec 10 -Because 'the resumed live tab row shows newer Active metadata while another source is active' -Condition {
                     $rows = @(Get-CombinedRows Live | Where-Object {
                         (Get-CombinedRowText $_).Contains($receipt.title) -and
                             (Get-CombinedRowText $_) -match '\bActive\b' -and -not $_.Current.IsOffscreen
@@ -2290,10 +2299,32 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 Set-WtWindowForeground -App $script:app -Attempts 3 -DelayMs 150 | Should -BeTrue
                 $liveRow.SetFocus()
                 $liveRow.Current.HasKeyboardFocus | Should -BeTrue
+                $beforeEnter = Get-ActivePane -App $script:app
+                ([string]$beforeEnter.session_id).Trim('{}') | Should -Be ([string]$distinctSource.session_id).Trim('{}') -Because 'focusing the live Sidebar row must not activate its terminal source before Enter'
+                [string]$beforeEnter.window_id | Should -Be ([string]$distinctSource.window_id)
+                [string]$beforeEnter.tab_id | Should -Be ([string]$distinctSource.tab_id)
                 Send-WtWindowKey -App $script:app -Vk 0x0D -RequireForeground | Out-Null
-                Start-Sleep -Milliseconds 500
+                Wait-Until -TimeoutSec 10 -Because 'physical live-row Enter activates the exact resumed pane in its existing owner window and tab' -Condition {
+                    $active = Get-ActivePane -App $script:app
+                    ([string]$active.session_id).Trim('{}') -eq $resumePane.Trim('{}') -and
+                        [string]$active.window_id -eq $window -and
+                        [string]$active.tab_id -eq [string]$context.pane.tab_id
+                } | Out-Null
                 $current = @((Get-CombinedSnapshot).sessions | Where-Object session_id -eq $sid)
+                $current.Count | Should -Be 1
                 $current[0].status | Should -Be 'Working' -Because 'a subsequent activation must preserve newer activity'
+                ($current[0] | ConvertTo-Json -Depth 12 -Compress) | Should -Be $newerWorkingJson -Because 'live-row activation must preserve the complete newer registry state'
+                $activeRows = @(Get-CombinedRows Live | Where-Object {
+                    (Get-CombinedRowText $_).Contains($receipt.title) -and -not $_.Current.IsOffscreen
+                })
+                $activeRows.Count | Should -Be 1
+                @($activeRows[0].FindAll(
+                    [Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) |
+                    Where-Object {
+                        $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text -and
+                            $_.Current.Name -match '\bActive\b' -and -not $_.Current.IsOffscreen -and
+                            $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.BoundingRectangle.Height -gt 0
+                    }).Count | Should -BeGreaterThan 0 -Because 'newer Working remains visibly rendered as Active after the proven focus transition'
                 @(Get-Content $fixture.Log | ForEach-Object { $_ | ConvertFrom-Json } |
                     Where-Object mode -eq resume) | Should -HaveCount 1
             }
