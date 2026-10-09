@@ -142,6 +142,52 @@ Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
             $script:ast.Extent.Text | Should -Match ([regex]::Escape($required))
         }
     }
+    It 'backs up and restores every hashed hidden and system runtime file' {
+        $copies = @($script:ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'Copy-Item' -and
+                $node.Extent.Text.Contains('$script:runtimePath') -and
+                $node.Extent.Text.Contains('$script:runtimeBackup')
+        }, $true))
+        $copies | Should -HaveCount 2
+        $copies[0].CommandElements[2].Extent.Text | Should -Be '$script:runtimePath'
+        $copies[1].CommandElements[2].Extent.Text | Should -Be '$script:runtimeBackup'
+        $script:runtimePath = [IO.Path]::GetFullPath((Join-Path $script:root 'runtime-copy-source'))
+        $script:runtimeBackup = [IO.Path]::GetFullPath((Join-Path $script:root 'runtime-copy-backup'))
+        $nested = Join-Path $script:runtimePath 'hidden-directory'
+        New-Item -ItemType Directory -Path $nested | Out-Null
+        $hiddenSystem = [IO.FileAttributes]::Hidden -bor [IO.FileAttributes]::System
+        $files = @(
+            @{ Path = 'visible.json'; Attributes = [IO.FileAttributes]::Normal }
+            @{ Path = 'hidden.json'; Attributes = $hiddenSystem -bor [IO.FileAttributes]::ReadOnly }
+            @{ Path = 'hidden-directory\child.json'; Attributes = $hiddenSystem }
+        )
+        $hashes = @{}
+        foreach ($file in $files) {
+            $path = Join-Path $script:runtimePath $file.Path
+            [IO.File]::WriteAllText($path, '{"text":"runtime snapshot"}', [Text.UTF8Encoding]::new($false))
+            [IO.File]::SetAttributes($path, $file.Attributes)
+            $hashes[$file.Path] = (Get-FileHash -LiteralPath $path).Hash
+        }
+        [IO.File]::SetAttributes($nested, $hiddenSystem -bor [IO.FileAttributes]::Directory)
+        [IO.File]::SetAttributes($script:runtimePath, $hiddenSystem -bor [IO.FileAttributes]::Directory)
+        @(Get-ChildItem -LiteralPath $script:runtimePath -File -Recurse -Force) | Should -HaveCount $files.Count
+        & ([scriptblock]::Create($copies[0].Extent.Text))
+        foreach ($file in $files) {
+            (Get-FileHash -LiteralPath (Join-Path $script:runtimeBackup $file.Path)).Hash |
+                Should -Be $hashes[$file.Path]
+        }
+        Remove-Item -LiteralPath $script:runtimePath -Recurse -Force
+        & ([scriptblock]::Create($copies[1].Extent.Text))
+        @(Get-ChildItem -LiteralPath $script:runtimePath -File -Recurse -Force) | Should -HaveCount $files.Count
+        foreach ($file in $files) {
+            $path = Join-Path $script:runtimePath $file.Path
+            (Get-FileHash -LiteralPath $path).Hash | Should -Be $hashes[$file.Path]
+            $preservedAttributes = $file.Attributes -band ($hiddenSystem -bor [IO.FileAttributes]::ReadOnly)
+            ([IO.File]::GetAttributes($path) -band $preservedAttributes) | Should -Be $preservedAttributes
+        }
+    }
     It 'detects the pre-fix ten-DIP title and six-DIP icon deltas at multiple DPI scales' {
         foreach ($scale in @(1.0, 1.25, 1.5, 2.0)) {
             { Assert-AlignmentDelta (50 * $scale) (40 * $scale) $scale } | Should -Throw
