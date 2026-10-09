@@ -248,7 +248,7 @@ namespace ItE2E {
             wta_sha256 = $env:ITE2E_EXPECTED_WTA_SHA256; pane_id = $script:pane
             sessions = @(Read-AlignmentSessions)
             loaded_app = @($loadedApp | Select-Object FileName)
-        } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $script:evidence 'package.json')
+        } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $script:evidence 'package.json') -ErrorAction Stop
     }
 
     AfterAll {
@@ -366,7 +366,7 @@ namespace ItE2E {
             $b = $historyIcon[0].Current.BoundingRectangle
             $receipt.icon_center_delta_dip = (($a.Left + $a.Width / 2) - ($b.Left + $b.Width / 2)) / $scale
         }
-        $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $script:evidence 'geometry.json')
+        $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $script:evidence 'geometry.json') -ErrorAction Stop
         Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence 'alignment.png') | Out-Null
         # Use one screen origin, not each row's local indentation (which hides the regression).
         Assert-AlignmentDelta ($liveTitle.Current.BoundingRectangle.Left - $viewport.Left) `
@@ -390,7 +390,7 @@ namespace ItE2E {
         $selected = $recent.Current.BoundingRectangle
         Assert-AlignmentDelta $selected.Left $receipt.recent_row.left $scale
         Assert-AlignmentDelta $selected.Right $receipt.recent_row.right $scale
-        Get-AlignmentRect $recent | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:evidence 'selected-bounds.json')
+        Get-AlignmentRect $recent | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:evidence 'selected-bounds.json') -ErrorAction Stop
         Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence 'selected.png') | Out-Null
         Set-UiValue -App $script:app -Selector SearchTextBox -Value "$script:marker-unmatched" | Out-Null
         Wait-Until -TimeoutSec 10 -Because 'a nonmatching query excludes both real owned fixtures' -Condition {

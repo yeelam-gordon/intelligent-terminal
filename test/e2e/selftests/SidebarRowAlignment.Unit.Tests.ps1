@@ -86,6 +86,69 @@ BeforeAll {
 AfterAll { Remove-Item -LiteralPath $script:root -Recurse -Force }
 
 Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
+    It 'requires successful evidence publication (<File>, <FailWrite>)' -TestCases @(
+        @{ File = 'package.json'; FailWrite = $true },
+        @{ File = 'geometry.json'; FailWrite = $true },
+        @{ File = 'selected-bounds.json'; FailWrite = $true },
+        @{ File = 'package.json'; FailWrite = $false },
+        @{ File = 'geometry.json'; FailWrite = $false },
+        @{ File = 'selected-bounds.json'; FailWrite = $false }
+    ) {
+        param($File, $FailWrite)
+        $writes = @($script:ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'Set-Content' -and $node.Extent.Text.Contains("'$File'")
+        }, $true))
+        $writes.Count | Should -Be 1
+        $pipeline = $writes[0].Parent
+        while ($pipeline -and $pipeline -isnot [Management.Automation.Language.PipelineAst]) {
+            $pipeline = $pipeline.Parent
+        }
+        if (-not $pipeline) { throw "The alignment suite is missing the $File publication pipeline." }
+        $operation = [scriptblock]::Create($pipeline.Extent.Text)
+        $script:evidence = $script:root
+        $script:app = [pscustomobject]@{ Package = 'Dev'; Version = 'fictitious-version' }
+        $script:pane = 'fictitious-pane'
+        $head = '0123456789abcdef0123456789abcdef01234567'
+        $loadedApp = @([pscustomobject]@{ FileName = 'fictitious-TerminalApp.dll' })
+        $receipt = @{ fixture_marker = 'fictitious-marker' }
+        $recent = [pscustomobject]@{ Element = 'fictitious-row' }
+        $script:evidenceWriteFails = $FailWrite
+        $script:evidenceWriteReturned = $false
+        $script:evidenceAccepted = 0
+        $script:publishedEvidence = $null
+        function Read-AlignmentSessions { [pscustomobject]@{ session_id = 'fictitious-session' } }
+        function Get-AlignmentRect { param($Element) [pscustomobject]@{ left = 10; right = 20 } }
+        function Set-Content {
+            [CmdletBinding()]
+            param($LiteralPath, [Parameter(ValueFromPipeline)]$Value)
+            process {
+                if ($script:evidenceWriteFails) { Write-Error 'evidence-write sentinel' }
+                $script:publishedEvidence = $Value
+                $script:evidenceWriteReturned = $true
+            }
+        }
+        $invoke = {
+            & {
+                $ErrorActionPreference = 'Continue'
+                & $operation
+                $script:evidenceAccepted++
+            }
+        }
+        if ($FailWrite) {
+            $invoke | Should -Throw '*evidence-write sentinel*'
+            $script:evidenceWriteReturned | Should -BeFalse
+            $script:evidenceAccepted | Should -Be 0
+            $script:publishedEvidence | Should -BeNullOrEmpty
+        }
+        else {
+            & $invoke
+            $script:evidenceWriteReturned | Should -BeTrue
+            $script:evidenceAccepted | Should -Be 1
+            ($script:publishedEvidence | ConvertFrom-Json) | Should -Not -BeNullOrEmpty
+        }
+    }
     It 'validates HEAD command results before receipt comparison (<Case>)' -TestCases @(
         @{ Case = 'empty'; Lines = @(); ExitCode = 0; Valid = $false },
         @{ Case = 'failed empty'; Lines = @(); ExitCode = 128; Valid = $false },
