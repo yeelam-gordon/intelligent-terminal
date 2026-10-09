@@ -1769,8 +1769,17 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         }
         function Get-MoveGroup {
             $rows = @(Get-CombinedRows Live | Where-Object {
-                (Get-CombinedRowText $_).Contains($title) -and
-                    @(Get-CombinedRawChildren $_ | Where-Object { $_.Current.AutomationId -eq 'TabGroupToggleButton' }).Count -eq 1
+                $parts = @(Get-CombinedRawChildren $_)
+                $toggles = @($parts | Where-Object { $_.Current.AutomationId -eq 'TabGroupToggleButton' })
+                if ($toggles.Count -ne 1) { return $false }
+                $toggle = $toggles[0].Current.BoundingRectangle
+                @($parts | Where-Object {
+                    $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text -and
+                        $_.Current.Name -eq $title -and -not $_.Current.IsOffscreen -and
+                        $_.Current.BoundingRectangle.Height -gt 0 -and
+                        ($_.Current.BoundingRectangle.Top + $_.Current.BoundingRectangle.Height / 2) -ge $toggle.Top -and
+                        ($_.Current.BoundingRectangle.Top + $_.Current.BoundingRectangle.Height / 2) -le $toggle.Bottom
+                }).Count -eq 1
             })
             $rows | Should -HaveCount 1
             $rows[0]
