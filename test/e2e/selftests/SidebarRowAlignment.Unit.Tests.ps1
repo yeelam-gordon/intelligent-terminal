@@ -12,6 +12,11 @@ BeforeAll {
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-AlignmentDelta'
     }, $true)
     . ([scriptblock]::Create($function.Extent.Text))
+    $markerFunction = $script:ast.Find({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Resolve-AlignmentMarker'
+    }, $true)
+    . ([scriptblock]::Create($markerFunction.Extent.Text))
     function New-AlignmentResult {
         param([string]$Result)
         $path = Join-Path $script:root "$Result.xml"
@@ -25,6 +30,47 @@ BeforeAll {
 AfterAll { Remove-Item -LiteralPath $script:root -Recurse -Force }
 
 Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
+    It 'reuses a validated run-scoped marker for matched baseline and candidate titles' {
+        $marker = 'row-align-20261009-a1b2c3'
+        Resolve-AlignmentMarker $marker | Should -Be $marker
+        Resolve-AlignmentMarker $marker | Should -Be (Resolve-AlignmentMarker $marker)
+        Resolve-AlignmentMarker '' | Should -Match '^row-align-[a-f0-9]{8}$'
+        foreach ($invalid in @('short', '../baseline', 'row align fixture', 'fixture_123', '-fixture-123',
+            "fixture-123`n", ('a' * 65))) {
+            { Resolve-AlignmentMarker $invalid } | Should -Throw
+        }
+        $script:ast.Extent.Text | Should -Match 'Resolve-AlignmentMarker \$env:ITE2E_ALIGNMENT_MARKER'
+        $script:ast.Extent.Text | Should -Match '\$script:liveTitle = "\$script:marker-live"'
+        $script:ast.Extent.Text | Should -Match '\$script:historyTitle = "\$script:marker-history"'
+        $script:ast.Extent.Text | Should -Match 'if \(Test-Path -LiteralPath \$script:evidence\)'
+        $script:ast.Extent.Text | Should -Match 'Alignment evidence already exists'
+    }
+    It 'persists actual geometry and screenshot before the unchanged baseline-failing oracle' {
+        $case = $script:ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'It'
+        }, $true)
+        $commands = @($case.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst]
+        }, $true))
+        $geometry = @($commands | Where-Object {
+            $_.GetCommandName() -eq 'Set-Content' -and $_.Extent.Text.Contains("'geometry.json'")
+        })
+        $screenshot = @($commands | Where-Object {
+            $_.GetCommandName() -eq 'Save-UiScreenshot' -and $_.Extent.Text.Contains("'alignment.png'")
+        })
+        $firstOracle = @($commands | Where-Object { $_.GetCommandName() -eq 'Assert-AlignmentDelta' })[0]
+        $geometry | Should -HaveCount 1
+        $screenshot | Should -HaveCount 1
+        $geometry[0].Extent.EndOffset | Should -BeLessThan $firstOracle.Extent.StartOffset
+        $screenshot[0].Extent.EndOffset | Should -BeLessThan $firstOracle.Extent.StartOffset
+        $case.Extent.Text | Should -Match 'title_delta_dip'
+        $case.Extent.Text | Should -Match 'fixture_marker'
+        $case.Extent.Text | Should -Match 'icon_center_delta_dip'
+        $case.Extent.Text | Should -Not -Match 'if.*baseline|ExpectedFailure|Set-ItResult|Set-ItResult -Skipped'
+        { Assert-AlignmentDelta 50 40 1 } | Should -Throw
+    }
     It 'parses one exact-title real-package case without forbidden fixture setup' {
         $script:parseErrors | Should -BeNullOrEmpty
         $cases = @($script:ast.FindAll({

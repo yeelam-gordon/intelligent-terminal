@@ -4,6 +4,17 @@
 # or settings writes. Raw icon bounds are optional evidence, not glyph proof.
 Describe 'Feature: Sidebar row alignment' -Tag @('Feature', 'SidebarRowAlignment') {
     BeforeAll {
+        function Resolve-AlignmentMarker {
+            param([AllowNull()][AllowEmptyString()][string]$Value)
+            if ([string]::IsNullOrEmpty($Value)) {
+                return 'row-align-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+            }
+            if ($Value -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9-]{7,63}\z') {
+                throw 'ITE2E_ALIGNMENT_MARKER must be a unique run-scoped 8-64 character alphanumeric/hyphen identifier.'
+            }
+            $Value
+        }
+        $script:marker = Resolve-AlignmentMarker $env:ITE2E_ALIGNMENT_MARKER
         Import-Module (Join-Path $PSScriptRoot '..\ItE2E\ItE2E.psd1') -Force
         . (Join-Path $PSScriptRoot 'helpers\SidebarSessionCleanup.ps1')
         Add-Type -AssemblyName UIAutomationClient
@@ -38,8 +49,10 @@ Describe 'Feature: Sidebar row alignment' -Tag @('Feature', 'SidebarRowAlignment
             }
         }
         $root = if ($env:ITE2E_ARTIFACT_ROOT) { $env:ITE2E_ARTIFACT_ROOT } else { Join-Path $PSScriptRoot '..\artifacts' }
-        $script:marker = 'row-align-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
         $script:evidence = Join-Path ([IO.Path]::GetFullPath($root)) $script:marker
+        if (Test-Path -LiteralPath $script:evidence) {
+            throw 'Alignment evidence already exists; use a distinct artifact root for each matched capture.'
+        }
         New-Item -ItemType Directory -Path $script:evidence | Out-Null
         $script:runtimePath = Join-Path $script:target.LocalStateDir 'IntelligentTerminal'
         $script:runtimeBackup = Join-Path $script:evidence 'original-runtime'
@@ -304,11 +317,15 @@ namespace ItE2E {
         })
         $iconsVerified = $liveIcon.Count -eq 1 -and $historyIcon.Count -eq 1
         $receipt = @{
+            fixture_marker = $script:marker; live_title_text = $script:liveTitle; recent_title_text = $script:historyTitle
+            source_commit = $env:ITE2E_SOURCE_COMMIT; app_sha256 = $env:ITE2E_EXPECTED_APP_SHA256
+            wta_sha256 = $env:ITE2E_EXPECTED_WTA_SHA256
             coordinate_space = 'physical screen; offsets share ItemsList origin'; dip_scale = $scale
             items_list = Get-AlignmentRect $list; live_row = Get-AlignmentRect $live; recent_row = Get-AlignmentRect $recent
             live_title = Get-AlignmentRect $liveTitle; recent_title = Get-AlignmentRect $recentTitle
             history_metadata = Get-AlignmentRect $metadata[0]
             title_delta_dip = ($liveTitle.Current.BoundingRectangle.Left - $recentTitle.Current.BoundingRectangle.Left) / $scale
+            metadata_delta_dip = ($metadata[0].Current.BoundingRectangle.Left - $recentTitle.Current.BoundingRectangle.Left) / $scale
             icon_geometry_verified = $iconsVerified
             icon_limitation = 'Raw provider control bounds are not compositor glyph proof; absent peers require native transforms and independent visual sign-off.'
             compositor_signoff = 'pending independent review of alignment.png and selected.png'
@@ -316,6 +333,9 @@ namespace ItE2E {
         if ($iconsVerified) {
             $receipt.live_icon = Get-AlignmentRect $liveIcon[0]
             $receipt.history_icon = Get-AlignmentRect $historyIcon[0]
+            $a = $liveIcon[0].Current.BoundingRectangle
+            $b = $historyIcon[0].Current.BoundingRectangle
+            $receipt.icon_center_delta_dip = (($a.Left + $a.Width / 2) - ($b.Left + $b.Width / 2)) / $scale
         }
         $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $script:evidence 'geometry.json')
         Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence 'alignment.png') | Out-Null
