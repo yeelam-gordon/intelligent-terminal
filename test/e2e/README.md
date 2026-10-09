@@ -146,9 +146,10 @@ evidence; no live acceptance is claimed here.
 Focused hermetic fixture validation (no Terminal launch, package lookup, agent
 credentials or live hook): `ResumeMetadataFixture.Unit.Tests.ps1` compiles the
 native shim using the same VS/encoded-command build path as the live suite.
-Its four cases cover opted-in exact ACP request capture, unchanged capture-off
-behavior, native hook suppression until release, timeout forwarding, and failure
-without a hook on an unreleased gate. The hook endpoint is a local stub, so
+Its five cases cover opted-in exact ACP request capture, unchanged capture-off
+behavior, completed JSONL framing with strict corruption handling, native hook
+suppression until release, timeout forwarding, and failure without a hook on an
+unreleased gate. The hook endpoint is a local stub, so
 synthetic fixture pane IDs are never evidence of product session binding.
 Build and generated files stay under the owned artifact directory and are
 removed after validation. Run:

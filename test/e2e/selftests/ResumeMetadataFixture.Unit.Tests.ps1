@@ -113,6 +113,66 @@ exit 0
         finally { Stop-ResumeFixtureProcess $fixture }
     }
 
+    It 'the actual received-request condition commits only newline-framed records and rejects completed corruption' {
+        $feature = Join-Path $PSScriptRoot '..\tests\Feature.CombinedAgentsSidebar.Tests.ps1'
+        $parseErrors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseFile($feature, [ref]$null, [ref]$parseErrors)
+        $parseErrors | Should -BeNullOrEmpty
+        $conditions = @($ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'Wait-Until' -and
+                $node.Extent.Text.Contains("'the real assistant request reaches the ACP fixture'")
+        }, $true))
+        $conditions.Count | Should -Be 1
+        $elements = $conditions[0].CommandElements
+        $parameter = @($elements | Where-Object {
+            $_ -is [Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -eq 'Condition'
+        })
+        $parameter.Count | Should -Be 1
+        $body = $elements[[Array]::IndexOf($elements, $parameter[0]) + 1].ScriptBlock
+        $body | Should -BeOfType ([Management.Automation.Language.ScriptBlockAst])
+        $readerCondition = [scriptblock]::Create($body.EndBlock.Extent.Text)
+        $script:requestLog = Join-Path $script:root 'split-requests.jsonl'
+        $marker = 'SCROLL_TURN_90_exact'
+        $first = @{ session_id = 'first'; text = "unrelated`nα" } | ConvertTo-Json -Compress
+        $secondText = "$marker`n" + '{"agent_session_id":"native-exact"}'
+        $second = @{ session_id = 'second'; text = $secondText } | ConvertTo-Json -Compress
+        $utf8 = [Text.UTF8Encoding]::new($false)
+        $writer = [IO.FileStream]::new($script:requestLog, [IO.FileMode]::Create,
+            [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+        try {
+            @(& $readerCondition).Count | Should -Be 0
+            $prefix = $first + "`r`n`n" + $second.Substring(0, 12)
+            $bytes = $utf8.GetBytes($prefix)
+            $writer.Write($bytes, 0, $bytes.Length)
+            $writer.Flush()
+            $marker = 'unrelated'
+            $received = & $readerCondition
+            $received.session_id | Should -Be 'first'
+            $received.text | Should -Be "unrelated`nα"
+            $marker = 'SCROLL_TURN_90_exact'
+            @(& $readerCondition).Count | Should -Be 0
+            $bytes = $utf8.GetBytes($second.Substring(12))
+            $writer.Write($bytes, 0, $bytes.Length)
+            $writer.Flush()
+            @(& $readerCondition).Count | Should -Be 0 -Because 'valid JSON without LF is not committed'
+            $writer.WriteByte(10)
+            $writer.Flush()
+            $received = & $readerCondition
+            $received.session_id | Should -Be 'second'
+            $received.text | Should -Be $secondText
+            $bytes = $utf8.GetBytes('{broken')
+            $writer.Write($bytes, 0, $bytes.Length)
+            $writer.Flush()
+            (& $readerCondition).text | Should -Be $secondText -Because 'unfinished corruption is deferred'
+            $writer.WriteByte(10)
+            $writer.Flush()
+            { & $readerCondition } | Should -Throw -Because 'all completed records are parsed even after a matching record'
+        }
+        finally { $writer.Dispose() }
+    }
+
     It 'native shim holds the hook until gate release and forwards the configured timeout' {
         $fixture = Start-ResumeFixtureProcess -Executable $script:shim -Arguments @('--resume', $script:sid)
         try {

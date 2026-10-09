@@ -1035,8 +1035,26 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                     Send-AgentPrompt -App $script:app -PaneSessionId $assistant.PaneSessionId -Text $text | Out-Null
                     $received = Wait-Until -TimeoutSec 20 -Because 'the real assistant request reaches the ACP fixture' -Condition {
                         if (Test-Path $script:requestLog) {
-                            @(Get-Content $script:requestLog | ForEach-Object { $_ | ConvertFrom-Json } |
-                                Where-Object { $_.text.Contains($marker) }) | Select-Object -First 1
+                            $stream = [IO.File]::Open($script:requestLog, [IO.FileMode]::Open,
+                                [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+                            $snapshot = [IO.MemoryStream]::new()
+                            try {
+                                $stream.CopyTo($snapshot)
+                                $bytes = $snapshot.ToArray()
+                            }
+                            finally {
+                                $snapshot.Dispose()
+                                $stream.Dispose()
+                            }
+                            $lastLf = [Array]::LastIndexOf($bytes, [byte]10)
+                            if ($lastLf -ge 0) {
+                                $completed = [Text.UTF8Encoding]::new($false, $true).GetString($bytes, 0, $lastLf + 1)
+                                $records = @(foreach ($line in $completed.Split("`n")) {
+                                    $line = $line.TrimEnd("`r")
+                                    if ($line.Length -gt 0) { $line | ConvertFrom-Json -ErrorAction Stop }
+                                })
+                                $records | Where-Object { $_.text.Contains($marker) } | Select-Object -First 1
+                            }
                         }
                     }
                     $received.session_id | Should -Be $assistant.AcpSessionId
