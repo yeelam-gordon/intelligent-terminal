@@ -20,6 +20,7 @@ Describe 'Feature §1/§6 Settings editor UI (opened via Ctrl+, accelerator)' -T
         $script:app = Start-Terminal -Package (Get-ItTestPackage) -PassFre $true -Settings @{
             acpAgent = 'custom:qwen'; acpCustomCommand = 'copilot --acp --stdio'
         }
+
         # Try to open Settings once; if the window can't take foreground, mark the suite skippable.
         $script:settingsOpen = $false
         try { Open-WtSettings -App $script:app -TimeoutSec 20 | Out-Null; $script:settingsOpen = $true }
@@ -73,5 +74,52 @@ Describe 'Feature §1/§6 Settings editor UI (opened via Ctrl+, accelerator)' -T
             (Get-WtSettingsObject -App $script:app).showTokenUsageAndCost -eq $false
         } | Out-Null
         Assert-Setting -App $script:app -Key 'showTokenUsageAndCost' -Value $false
+    }
+}
+
+Describe 'Feature Settings editor language direction' -Tag 'Feature', 'SettingsRtl' -Skip:(-not $script:Ready) {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot '..\ItE2E\ItE2E.psd1') -Force
+    }
+
+    It 'Settings follows UI direction: <Language>' -ForEach @(
+        @{ Language = 'ar-SA'; Rtl = $true }
+        @{ Language = 'he-IL'; Rtl = $true }
+        @{ Language = 'qps-plocm'; Rtl = $true }
+        @{ Language = 'en-US'; Rtl = $false }
+    ) {
+        $app = $null
+        try {
+            $app = Start-Terminal -Package (Get-ItTestPackage) -TimeoutSec 60 -Settings @{
+                language = $Language
+                tabLayout = 'horizontal'
+                initialCols = 120
+                initialRows = 35
+                firstWindowPreference = 'defaultProfile'
+                minimizeToNotificationArea = $false
+                alwaysShowNotificationIcon = $false
+                'aiIntegration.coordinator.enabled' = $false
+            } -State @{ sidebarLayoutMigrationCompleted = $true; sidebarIntroductionShown = $true }
+            Open-WtSettings -App $app -TimeoutSec 25 | Out-Null
+            $settingsRoot = Get-UiElement -App $app -Selector SettingsNav
+            $settingsRoot | Should -Not -BeNullOrEmpty
+            $center = $settingsRoot.x + $settingsRoot.width / 2
+            foreach ($selector in 'SettingsSearchBox', 'DefaultTerminal', 'SaveButton', 'ResetButton') {
+                $element = Get-UiElement -App $app -Selector $selector
+                $element | Should -Not -BeNullOrEmpty -Because "$selector must be visible"
+                $element.isOffscreen | Should -BeFalse
+                $onRight = $element.x + $element.width / 2 -gt $center
+                $expectedOnRight = if ($selector -eq 'SettingsSearchBox') { $Rtl } else { -not $Rtl }
+                $onRight | Should -Be $expectedOnRight -Because "$selector must follow $Language layout"
+            }
+            Invoke-SettingsNav -App $app -NavItem AIAgentsNavItem | Out-Null
+            Invoke-SettingsNav -App $app -NavItem LaunchNavItem | Out-Null
+            Invoke-UiElement -App $app -Selector SaveButton -TimeoutSec 15 | Out-Null
+            Assert-Setting -App $app -Key language -Value $Language
+            Invoke-UiElement -App $app -Selector ResetButton -TimeoutSec 15 | Out-Null
+        }
+        finally {
+            if ($app) { Stop-Terminal -App $app | Out-Null }
+        }
     }
 }
