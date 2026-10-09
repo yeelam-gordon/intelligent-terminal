@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)][string]$LogPath,
     [string]$ReleasePromptPath,
     [string]$HistoryPath,
+    [string]$RequestLogPath,
     [switch]$SupportsImages
 )
 
@@ -111,6 +112,11 @@ while ($true) {
         'session/prompt' {
             $sessionId = [string]$request.params.sessionId
             $promptText = (@($request.params.prompt) | Where-Object type -eq 'text' | ForEach-Object text) -join "`n"
+            if ($RequestLogPath) {
+                @{ session_id = $sessionId; text = $promptText; prompt = @($request.params.prompt) } |
+                    ConvertTo-Json -Depth 20 -Compress |
+                    Add-Content -LiteralPath $RequestLogPath -Encoding utf8
+            }
             $marker = [regex]::Match($promptText, 'SCROLL_TURN_\d{2}_[a-f0-9]{32}').Value
             if (-not $marker) {
                 throw 'prompt did not contain a completed-turn scroll marker'

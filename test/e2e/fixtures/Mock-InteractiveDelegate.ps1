@@ -6,7 +6,8 @@ param(
     [switch]$Resume,
     [string]$SessionId,
     [string]$WtcliPath,
-    [string]$SessionStartGate
+    [string]$SessionStartGate,
+    [int]$SessionStartTimeoutSec = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,7 +34,7 @@ if ($Canonical) {
         @{ pane_session_id = $env:WT_SESSION; session_id = $session; title = $title; phase = 'before-hook' } |
             ConvertTo-Json -Compress |
             Set-Content -LiteralPath "$SessionStartGate.waiting-$session.json"
-        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(60)
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds($SessionStartTimeoutSec)
         while (-not (Test-Path -LiteralPath $SessionStartGate)) {
             if ([DateTimeOffset]::UtcNow -ge $deadline) { throw 'Session-start gate was not released.' }
             Start-Sleep -Milliseconds 100

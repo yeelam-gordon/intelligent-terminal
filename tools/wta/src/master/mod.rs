@@ -8091,6 +8091,16 @@ async fn execute_session_activation(
                         .registry
                         .assign_resume_pane_identity(&parsed.identity, pane_session_id.clone())
                         .await
+                        && !state
+                            .registry
+                            .lookup_identity(&parsed.identity)
+                            .await
+                            .is_some_and(|current| {
+                                current.pane_session_id.as_deref().is_some_and(|pane| {
+                                    crate::agent_sessions::pane_key(pane)
+                                        == crate::agent_sessions::pane_key(&pane_session_id)
+                                })
+                            })
                     {
                         return respond!(
                             "resume_cli",
@@ -8102,6 +8112,7 @@ async fn execute_session_activation(
                             Unknown
                         );
                     }
+                    broadcast_session_status_change(state, None).await;
                     if let Some(binding) = crate::wt_protocol_events::resumed_pane_binding_event(
                         &provider_id,
                         row.session_id.0.as_ref(),

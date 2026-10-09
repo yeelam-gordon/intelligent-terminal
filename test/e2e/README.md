@@ -39,7 +39,7 @@ authenticated ACP agents. Available suites (results depend on the selected packa
 | `Feature.SidebarSessionScroll.Tests.ps1` | Real shell hooks update the same visible Agents row through Idle/Active/Waiting for input/Idle without changing the search query or scrolling unchanged history order; status filters and genuine activity-time reordering still update. All three cases gate C374. Deterministic seeded rows, no model quota or test settings changes; teardown closes only recorded fixture pane GUIDs in the verified logical window after rechecking HWND/PID, never the shared process or unrelated windows/tabs. Original state is recovered only after the package is inactive, even on screenshot/settings failure; unrelated package activity or unconfirmed ownership/inactivity retains backups and fails explicitly. Changed, missing or unreadable settings and their recovery backup are retained and fail explicitly. Requires inactive Dev, Sidebar mode, completed FRE, and exact-build App/WTA hashes | 3 |
 | `Feature.PaneProgress.Tests.ps1` | PR #1043: one-shot OSC progress across real tab right-click moves/layout round trips, shared group-chevron/icon slot and aligned top-level titles, layout-specific Move submenu order/direction, and fixture-owned native hook identity/icon restoration with OSC3/OSC0; six-frame rendered ring evidence, no model quota | 4 checklist cases plus literal one-shot coverage (explicit Dev, exact-source `ITE2E_EXPECTED_APP_SHA256` / `ITE2E_EXPECTED_WTA_SHA256`, inactive package and interactive desktop required) |
 | `Feature.PinnedTabSelection.Tests.ps1` | PRs #1043/#1052: the primary two-pinned-plus-one-ordinary Horizontal/Sidebar round trip first verifies Alpha's active shell, exactly one selected Alpha Sidebar row, terminal focus, canonical order, shell identities and retained pin menus. A separate visual round trip verifies canonical accessibility labels and matched same-profile title-leading offsets; Beta unpin removes its extra Sidebar slot and keeps first-ordinary positioning. FontIcon peers are diagnostic only. A passing test credits C372's automated selection, identity, accessibility and geometry contracts. Full-header compositor crops and `acceptance.json` leave actual Sidebar glyph presence/Horizontal absence pending independent sign-off under the separate C373 MANUAL item **Pinned tab glyphs render only in Sidebar**, which has no automated coverage mapping | 1 (deterministic ACP fixture, no model quota; explicit Dev, exact-source `ITE2E_EXPECTED_APP_SHA256` / `ITE2E_EXPECTED_WTA_SHA256`, inactive package and interactive desktop required) |
-| `Feature.CombinedAgentsSidebar.Tests.ps1` | Updated Sidebar UX: static Tabs text; standard independent Agents only/Recent agent sessions toggles; four rendered scope combinations; global search; clear/close and collapse-preference restoration; toggle-during-search; UIA checked states and foreground-gated Ctrl+Shift+G/R. Only visible owned ItemsList descendants count. Existing native CLI resume (Recent preference On/Off), live/group actions, metadata, identity, retention, ownership, scroll, expansion events, focus, mutations and resize protections remain. C367/C381/C397/C408 retain their IDs; C382/C383 remain retired. Explicit feature-head Dev hashes and inactive package required; deterministic ACP history/provider-labelled cmd tabs, no model quota. Fresh hash-backed settings/state/runtime snapshots restore only after package inactivity. Authored, not live accepted | 32 |
+| `Feature.CombinedAgentsSidebar.Tests.ps1` | Updated Sidebar UX: static Tabs text; standard independent Agents only/Recent agent sessions toggles; four rendered scope combinations; global search; clear/close and collapse-preference restoration; toggle-during-search; UIA checked states and foreground-gated Ctrl+Shift+G/R. Only visible owned ItemsList descendants count. Existing native CLI resume (Recent preference On/Off), live/group actions, metadata, identity, retention, ownership, scroll, expansion events, focus, mutations and resize protections remain. Native ended-session resume additionally asserts structural invalidation, actual pane binding and rendered Idle before a held birth hook, with unrelated-history and newer-Working reactivation controls. C367/C381/C397/C408 retain their IDs; C382/C383 remain retired. Explicit feature-head Dev hashes and inactive package required; deterministic ACP history/provider-labelled cmd tabs, no model quota. Fresh hash-backed settings/state/runtime snapshots restore only after package inactivity. Authored, not live accepted | 33 |
 | `Feature.AgentsModeActions.Tests.ps1` | Original plus opens the configured default profile across filters, search and layout; splits retain the source profile without view-specific delegation, assistant panes stay fixed, and explicit native-provider fixtures retain held-hook identity; exact Dev hashes, no provider prompts | 7 |
 | `Feature.SidebarRelativeTime.Tests.ps1` | PR #1070: six-unit English/Arabic compact ages, readable RTL geometry, and provider accessibility; deterministic history fixture | 2 |
 | `Feature.SidebarUpgrade.Tests.ps1` | Superseding PM/UX: persisted once-only Horizontal migration and later explicit Horizontal restart, independently pending introduction, absent flags/fresh FRE gate, real palette collapse deferral, exact-shell owned second-window suppression, actual rendered tip/restart suppression; real state.json sharing fault, visible warning, Horizontal memory/disk rollback and released-lock retry. No ACL/registry changes, provider quota or callback fault proxies; exact Dev hashes and inactive package required | 6 (authored, not live accepted) |
@@ -114,6 +114,49 @@ are unchanged.
 Its 300-second bound applies to the new scope/search context, not the longer
 native-action regression suite. Nonlive discovery and synthetic report checks
 are not package acceptance.
+
+`Native history resume publishes Idle before hooks` extends the existing native
+resume/ownership fixture rather than introducing another startup harness.
+The external fixture exits normally; master admission/stop crosses the existing
+RPC boundary without inventing a pane binding. Physical Enter launches the
+native resume shim, whose actual `WT_SESSION` receipt precedes its gated hook.
+A single owned listener starts before the modifier controls and Enter and requires the product's structural
+`session_registry_changed` event, then registry and rendered Idle agree on the
+real pane. Rendered status is read from the uniquely titled actual native tab's
+visible metadata, not a duplicate Recent row: represented session identities
+can intentionally be excluded from Recent. The event itself is global, so it is not used as sole routing proof.
+Unrelated Historical state and binding remain unchanged. Releasing the hook and
+establishing Working protects subsequent focus-only activation from an Idle
+reset or duplicate launch. The existing modified-Enter controls still run.
+This case opts into a 180-second native gate deadline; other fixtures retain
+their existing 60-second default. Before release, ordinary planner input and
+typed `/fix` reach the deterministic ACP fixture, which optionally records the
+actual received text blocks under the owned local evidence directory. Structured
+Terminal Context JSON and Shell Context must contain the selected native ID,
+not the assistant's ACP ID; deterministic ACK rendering verifies chat completion,
+not routing. A second genuinely launched native fixture supplies its own ID,
+and a new ordinary shell must omit `agent_session_id` in both request paths.
+Neither IDs nor context JSON are inserted into user prompts. Request captures
+remain local and are not public PR assets.
+This authored case does **not** credit automatic-error-triggered Autofix,
+Attention/Error races, saved-layout origin, or multi-window collision isolation.
+Those require their existing related suites and additional candidate-head live
+evidence; no live acceptance is claimed here.
+
+Focused hermetic fixture validation (no Terminal launch, package lookup, agent
+credentials or live hook): `ResumeMetadataFixture.Unit.Tests.ps1` compiles the
+native shim using the same VS/encoded-command build path as the live suite.
+Its four cases cover opted-in exact ACP request capture, unchanged capture-off
+behavior, native hook suppression until release, timeout forwarding, and failure
+without a hook on an unreleased gate. The hook endpoint is a local stub, so
+synthetic fixture pane IDs are never evidence of product session binding.
+Build and generated files stay under the owned artifact directory and are
+removed after validation. Run:
+
+```powershell
+Import-Module Pester -MinimumVersion 5.0.0
+Invoke-Pester test\e2e\selftests\ResumeMetadataFixture.Unit.Tests.ps1 -Output Detailed
+```
 
 SearchTextBox assertions use `Get-UiValue -ValuePattern` to read the real UIA
 value, including empty text. The default display-text helper retains winapp's
