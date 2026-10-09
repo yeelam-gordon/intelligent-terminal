@@ -256,30 +256,51 @@ namespace ItE2E {
         catch { $cleanupFailure = $_ }
         # The existing primitive writes this receipt only after owned-pane closure
         # and package inactivity. Screenshot failure must not prevent safe recovery.
-        $recovery = if ($script:evidence -and (Test-Path -LiteralPath (Join-Path $script:evidence 'cleanup.json'))) {
-            Get-Content -LiteralPath (Join-Path $script:evidence 'cleanup.json') -Raw | ConvertFrom-Json
-        }
-        if ($script:ownsConfigBackup -and $script:runtimeBackedUp -and
-            $recovery.settings_preserved -and $recovery.state_preserved) {
-            if (@(Get-WtProcessesForApp -App $script:target -IncludePackageExecutables).Count) {
-                throw 'Dev active: runtime recovery snapshot retained.'
-            }
-            foreach ($relative in $script:runtimeHashes.Keys) {
-                (Get-FileHash -LiteralPath (Join-Path $script:runtimeBackup $relative)).Hash |
-                    Should -Be $script:runtimeHashes[$relative]
-            }
-            if (Test-Path -LiteralPath $script:runtimePath) { Remove-Item -LiteralPath $script:runtimePath -Recurse -Force }
-            if ($script:runtimeExisted) {
-                Copy-Item -LiteralPath $script:runtimeBackup -Destination $script:runtimePath -Recurse
+        $runtimeRecoveryFailure = $null
+        if ($script:ownsConfigBackup -and $script:runtimeBackedUp) {
+            try {
+                if (-not $script:evidence -or
+                    -not (Test-Path -LiteralPath (Join-Path $script:evidence 'cleanup.json'))) {
+                    throw 'Runtime recovery receipt is missing; the snapshot is retained.'
+                }
+                $recovery = Get-Content -LiteralPath (Join-Path $script:evidence 'cleanup.json') -Raw -ErrorAction Stop |
+                    ConvertFrom-Json -NoEnumerate -ErrorAction Stop
+                if ($recovery -isnot [pscustomobject]) {
+                    throw 'Runtime recovery receipt is not an object; the snapshot is retained.'
+                }
+                $settingsPreserved = $recovery.PSObject.Properties['settings_preserved']
+                $statePreserved = $recovery.PSObject.Properties['state_preserved']
+                if (-not $settingsPreserved -or -not $statePreserved -or
+                    $settingsPreserved.Value -isnot [bool] -or $statePreserved.Value -isnot [bool] -or
+                    -not $settingsPreserved.Value -or -not $statePreserved.Value) {
+                    throw 'Runtime recovery requires boolean successful preservation flags; the snapshot is retained.'
+                }
+                if (@(Get-WtProcessesForApp -App $script:target -IncludePackageExecutables).Count) {
+                    throw 'Dev active: runtime recovery snapshot retained.'
+                }
                 foreach ($relative in $script:runtimeHashes.Keys) {
-                    (Get-FileHash -LiteralPath (Join-Path $script:runtimePath $relative)).Hash |
+                    (Get-FileHash -LiteralPath (Join-Path $script:runtimeBackup $relative)).Hash |
                         Should -Be $script:runtimeHashes[$relative]
                 }
+                if (Test-Path -LiteralPath $script:runtimePath) { Remove-Item -LiteralPath $script:runtimePath -Recurse -Force }
+                if ($script:runtimeExisted) {
+                    Copy-Item -LiteralPath $script:runtimeBackup -Destination $script:runtimePath -Recurse
+                    foreach ($relative in $script:runtimeHashes.Keys) {
+                        (Get-FileHash -LiteralPath (Join-Path $script:runtimePath $relative)).Hash |
+                            Should -Be $script:runtimeHashes[$relative]
+                    }
+                }
+                @{ restored = $true; hashes = $script:runtimeHashes } | ConvertTo-Json -Depth 8 |
+                    Set-Content -LiteralPath (Join-Path $script:evidence 'runtime-cleanup.json')
             }
-            @{ restored = $true; hashes = $script:runtimeHashes } | ConvertTo-Json -Depth 8 |
-                Set-Content -LiteralPath (Join-Path $script:evidence 'runtime-cleanup.json')
+            catch { $runtimeRecoveryFailure = $_ }
+        }
+        if ($cleanupFailure -and $runtimeRecoveryFailure) {
+            throw [AggregateException]::new('Original cleanup failure and runtime recovery failure; snapshot retained.',
+                [Exception[]]@($cleanupFailure.Exception, $runtimeRecoveryFailure.Exception))
         }
         if ($cleanupFailure) { throw $cleanupFailure }
+        if ($runtimeRecoveryFailure) { throw $runtimeRecoveryFailure }
     }
 
     It 'Sidebar live and recent titles align' {
