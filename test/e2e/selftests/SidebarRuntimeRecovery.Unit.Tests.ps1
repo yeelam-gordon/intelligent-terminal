@@ -40,6 +40,11 @@ BeforeDiscovery {
         @{ Fault = 'restored-hash-error'; Message = 'restored hash sentinel' }
         @{ Fault = 'restored-hash-mismatch'; Message = 'Expected' }
         @{ Fault = 'output'; Message = 'output sentinel' }
+        @{ Fault = 'backup-hash-nonterminating'; Message = 'nonterminating backup-hash sentinel' }
+        @{ Fault = 'remove-nonterminating'; Message = 'nonterminating remove sentinel' }
+        @{ Fault = 'copy-nonterminating'; Message = 'nonterminating copy sentinel' }
+        @{ Fault = 'restored-hash-nonterminating'; Message = 'nonterminating restored-hash sentinel' }
+        @{ Fault = 'output-nonterminating'; Message = 'nonterminating output sentinel' }
         @{ Fault = 'valid'; Message = '' }
     )
 }
@@ -82,14 +87,17 @@ BeforeAll {
         throw 'Unmocked filesystem read is forbidden.'
     }
     function Get-FileHash {
+        [CmdletBinding()]
         param($LiteralPath)
         throw 'Unmocked filesystem hash is forbidden.'
     }
     function Remove-Item {
+        [CmdletBinding()]
         param($LiteralPath, [switch]$Recurse, [switch]$Force)
         throw 'Unmocked filesystem removal is forbidden.'
     }
     function Copy-Item {
+        [CmdletBinding()]
         param($LiteralPath, $Destination, [switch]$Recurse)
         throw 'Unmocked filesystem copy is forbidden.'
     }
@@ -101,6 +109,7 @@ BeforeAll {
     function Invoke-ActualRecovery {
         param([string]$Strict)
         try {
+            $ErrorActionPreference = 'Continue'
             if ($Strict -eq 'Off') { Set-StrictMode -Off }
             else { Set-StrictMode -Version Latest }
             & $script:actualAfterAll
@@ -130,6 +139,7 @@ Describe 'Actual sidebar runtime AfterAll: StrictMode <Strict>, primary <Primary
         $script:originalException = [InvalidOperationException]::new('original screenshot sentinel')
         $script:readException = [IO.IOException]::new('receipt read sentinel')
         $script:events = [Collections.Generic.List[string]]::new()
+        $script:boundErrorActions = @{}
 
         Mock Invoke-SidebarSessionCleanup {
             $script:events.Add('cleanup')
@@ -160,39 +170,60 @@ Describe 'Actual sidebar runtime AfterAll: StrictMode <Strict>, primary <Primary
             if ($script:fault -eq 'active') { [pscustomobject]@{ Id = 123 } }
         }
         Mock Get-FileHash {
-            param($LiteralPath)
+            param($LiteralPath, $ErrorAction)
             $phase = if ($LiteralPath -eq "$script:runtimeBackup\sessions\original.json") { 'backup' }
                 elseif ($LiteralPath -eq "$script:runtimePath\sessions\original.json") { 'restored' }
                 else { throw "Unexpected hash path: $LiteralPath" }
             $script:events.Add("$phase-hash")
+            $script:boundErrorActions["$phase-hash"] = $ErrorAction
+            if ($script:fault -eq "$phase-hash-nonterminating") {
+                Write-Error "nonterminating $phase-hash sentinel"
+                $script:events.Add('continued-after-fault')
+            }
             if ($script:fault -eq "$phase-hash-error") { throw "$phase hash sentinel" }
             $hash = if ($script:fault -eq "$phase-hash-mismatch") { 'CORRUPT' } else { 'NONEMPTY-HASH-SENTINEL' }
             [pscustomobject]@{ Hash = $hash }
         }
         Mock Remove-Item {
-            param($LiteralPath, [switch]$Recurse, [switch]$Force)
+            param($LiteralPath, [switch]$Recurse, [switch]$Force, $ErrorAction)
             $LiteralPath | Should -Be $script:runtimePath
             $Recurse | Should -BeTrue
             $Force | Should -BeTrue
             $script:events.Add('remove')
+            $script:boundErrorActions['remove'] = $ErrorAction
+            if ($script:fault -eq 'remove-nonterminating') {
+                Write-Error 'nonterminating remove sentinel'
+                $script:events.Add('continued-after-fault')
+            }
             if ($script:fault -eq 'remove') { throw 'remove sentinel' }
         }
         Mock Copy-Item {
-            param($LiteralPath, $Destination, [switch]$Recurse)
+            param($LiteralPath, $Destination, [switch]$Recurse, $ErrorAction)
             $LiteralPath | Should -Be $script:runtimeBackup
             $Destination | Should -Be $script:runtimePath
             $Recurse | Should -BeTrue
             $script:events.Add('copy')
+            $script:boundErrorActions['copy'] = $ErrorAction
+            if ($script:fault -eq 'copy-nonterminating') {
+                Write-Error 'nonterminating copy sentinel'
+                $script:events.Add('continued-after-fault')
+            }
             if ($script:fault -eq 'copy') { throw 'copy sentinel' }
         }
         Mock Set-Content {
-            param($LiteralPath, $Value)
+            param($LiteralPath, $Value, $ErrorAction)
             $LiteralPath | Should -Be "$script:evidence\runtime-cleanup.json"
             $receipt = $Value | ConvertFrom-Json
             $receipt.restored | Should -BeTrue
             $receipt.hashes.'sessions\original.json' | Should -Be 'NONEMPTY-HASH-SENTINEL'
             $script:events.Add('output')
+            $script:boundErrorActions['output'] = $ErrorAction
+            if ($script:fault -eq 'output-nonterminating') {
+                Write-Error 'nonterminating output sentinel'
+                $script:events.Add('continued-after-fault')
+            }
             if ($script:fault -eq 'output') { throw 'output sentinel' }
+            $script:events.Add('receipt-written')
         }
     }
 
@@ -212,6 +243,11 @@ Describe 'Actual sidebar runtime AfterAll: StrictMode <Strict>, primary <Primary
         if ($_.ContainsKey('Json')) { $script:json = $Json }
         if ($Fault -eq 'no-evidence') { $script:evidence = '' }
         $failure = Invoke-ActualRecovery $Strict
+        if ($Fault -like '*-nonterminating') {
+            $phase = $Fault -replace '-nonterminating$', ''
+            $script:boundErrorActions[$phase] | Should -Be 'Stop' -Because (
+                'actual recovery events: ' + ($script:events -join ','))
+        }
 
         if ($Fault -eq 'valid') {
             if ($Primary) {
@@ -240,10 +276,10 @@ Describe 'Actual sidebar runtime AfterAll: StrictMode <Strict>, primary <Primary
         $receiptRejected = $_.ContainsKey('Reads')
         $discover = if ($receiptRejected) { 0 } else { 1 }
         $backupHash = if ($receiptRejected -or $Fault -in @('active', 'discovery')) { 0 } else { 1 }
-        $remove = if (-not $backupHash -or $Fault -in @('backup-hash-error', 'backup-hash-mismatch')) { 0 } else { 1 }
-        $copy = if (-not $remove -or $Fault -eq 'remove') { 0 } else { 1 }
-        $restoredHash = if (-not $copy -or $Fault -eq 'copy') { 0 } else { 1 }
-        $output = if (-not $restoredHash -or $Fault -in @('restored-hash-error', 'restored-hash-mismatch')) { 0 } else { 1 }
+        $remove = if (-not $backupHash -or $Fault -in @('backup-hash-error', 'backup-hash-mismatch', 'backup-hash-nonterminating')) { 0 } else { 1 }
+        $copy = if (-not $remove -or $Fault -in @('remove', 'remove-nonterminating')) { 0 } else { 1 }
+        $restoredHash = if (-not $copy -or $Fault -in @('copy', 'copy-nonterminating')) { 0 } else { 1 }
+        $output = if (-not $restoredHash -or $Fault -in @('restored-hash-error', 'restored-hash-mismatch', 'restored-hash-nonterminating')) { 0 } else { 1 }
         $reads = if ($receiptRejected) { $Reads } else { 1 }
         Should -Invoke Get-Content -Exactly -Times $reads
         Should -Invoke Get-WtProcessesForApp -Exactly -Times $discover
@@ -256,8 +292,10 @@ Describe 'Actual sidebar runtime AfterAll: StrictMode <Strict>, primary <Primary
         Should -Invoke Remove-Item -Exactly -Times $remove
         Should -Invoke Copy-Item -Exactly -Times $copy
         Should -Invoke Set-Content -Exactly -Times $output
+        $script:events | Should -Not -Contain 'continued-after-fault'
+        if ($Fault -ne 'valid') { $script:events | Should -Not -Contain 'receipt-written' }
         if ($Fault -eq 'valid') {
-            ($script:events -join ',') | Should -Be 'cleanup,read,discovery,backup-hash,remove,copy,restored-hash,output'
+            ($script:events -join ',') | Should -Be 'cleanup,read,discovery,backup-hash,remove,copy,restored-hash,output,receipt-written'
         }
     }
 

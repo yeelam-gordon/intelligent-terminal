@@ -65,7 +65,7 @@ Describe 'Feature: Sidebar row alignment' -Tag @('Feature', 'SidebarRowAlignment
             }
             Copy-Item -LiteralPath $script:runtimePath -Destination $script:runtimeBackup -Recurse
             foreach ($relative in $script:runtimeHashes.Keys) {
-                (Get-FileHash -LiteralPath (Join-Path $script:runtimeBackup $relative)).Hash |
+                (Get-FileHash -LiteralPath (Join-Path $script:runtimeBackup $relative) -ErrorAction Stop).Hash |
                     Should -Be $script:runtimeHashes[$relative]
             }
         }
@@ -279,19 +279,19 @@ namespace ItE2E {
                     throw 'Dev active: runtime recovery snapshot retained.'
                 }
                 foreach ($relative in $script:runtimeHashes.Keys) {
-                    (Get-FileHash -LiteralPath (Join-Path $script:runtimeBackup $relative)).Hash |
+                    (Get-FileHash -LiteralPath (Join-Path $script:runtimeBackup $relative) -ErrorAction Stop).Hash |
                         Should -Be $script:runtimeHashes[$relative]
                 }
-                if (Test-Path -LiteralPath $script:runtimePath) { Remove-Item -LiteralPath $script:runtimePath -Recurse -Force }
+                if (Test-Path -LiteralPath $script:runtimePath) { Remove-Item -LiteralPath $script:runtimePath -Recurse -Force -ErrorAction Stop }
                 if ($script:runtimeExisted) {
-                    Copy-Item -LiteralPath $script:runtimeBackup -Destination $script:runtimePath -Recurse
+                    Copy-Item -LiteralPath $script:runtimeBackup -Destination $script:runtimePath -Recurse -ErrorAction Stop
                     foreach ($relative in $script:runtimeHashes.Keys) {
-                        (Get-FileHash -LiteralPath (Join-Path $script:runtimePath $relative)).Hash |
+                        (Get-FileHash -LiteralPath (Join-Path $script:runtimePath $relative) -ErrorAction Stop).Hash |
                             Should -Be $script:runtimeHashes[$relative]
                     }
                 }
                 @{ restored = $true; hashes = $script:runtimeHashes } | ConvertTo-Json -Depth 8 |
-                    Set-Content -LiteralPath (Join-Path $script:evidence 'runtime-cleanup.json')
+                    Set-Content -LiteralPath (Join-Path $script:evidence 'runtime-cleanup.json') -ErrorAction Stop
             }
             catch { $runtimeRecoveryFailure = $_ }
         }
