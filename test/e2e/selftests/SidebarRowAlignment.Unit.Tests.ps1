@@ -19,25 +19,37 @@ BeforeAll {
     . ([scriptblock]::Create($markerFunction.Extent.Text))
     function Get-AlignmentChecklistBaseline {
         param([string]$BaseRef = $env:ITE2E_CHECKLIST_BASE_REF)
-        if ([string]::IsNullOrEmpty($BaseRef)) { $BaseRef = 'origin/main' }
+        $useDefault = [string]::IsNullOrEmpty($BaseRef)
+        if ($useDefault) { $BaseRef = 'origin/main' }
         $repo = Join-Path $PSScriptRoot '..\..\..'
         $commit = @(& git -C $repo rev-parse --verify --end-of-options "$BaseRef^{commit}" 2>$null)
         if ($LASTEXITCODE -ne 0 -or $commit.Count -ne 1) {
             throw "Cannot resolve checklist base '$BaseRef'; fetch the actual PR target or set ITE2E_CHECKLIST_BASE_REF."
         }
-        $mergeBase = @(& git -C $repo merge-base --all HEAD $commit[0] 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $mergeBase.Count -ne 1) {
-            throw "Cannot identify one checklist merge-base with '$BaseRef'."
-        }
         $head = @(& git -C $repo rev-parse --verify HEAD 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $head.Count -ne 1 -or $mergeBase[0] -eq $head[0]) {
+        if ($LASTEXITCODE -ne 0 -or $head.Count -ne 1) { throw 'Cannot resolve candidate HEAD; fetch the source history.' }
+        $baselineKind = 'merge-base'
+        if ($useDefault -and $commit[0] -eq $head[0]) {
+            $mergeBase = @(& git -C $repo rev-parse --verify 'HEAD^1' 2>$null)
+            if ($LASTEXITCODE -ne 0 -or $mergeBase.Count -ne 1) {
+                throw 'Cannot resolve checklist first-parent baseline; fetch complete source history (including HEAD^1).'
+            }
+            $baselineKind = 'first parent'
+        }
+        else {
+            $mergeBase = @(& git -C $repo merge-base --all HEAD $commit[0] 2>$null)
+            if ($LASTEXITCODE -ne 0 -or $mergeBase.Count -ne 1) {
+                throw "Cannot identify one checklist merge-base with '$BaseRef'; fetch the PR target history."
+            }
+        }
+        if ($mergeBase[0] -eq $head[0]) {
             throw "Checklist baseline must precede candidate HEAD; verify ITE2E_CHECKLIST_BASE_REF ('$BaseRef')."
         }
         $content = @(& git -C $repo show "$($mergeBase[0]):doc/release-check-list.md" 2>$null)
-        if ($LASTEXITCODE -ne 0) { throw "Cannot read checklist baseline at $($mergeBase[0])." }
+        if ($LASTEXITCODE -ne 0) { throw "Cannot read checklist baseline at $($mergeBase[0]); fetch complete source history." }
         $rows = @($content | Where-Object { $_ -match '^- \[[ x]\] `C\d+`' })
         if (-not $rows.Count) { throw "Checklist baseline at $($mergeBase[0]) contains no stable-ID rows." }
-        Write-Host "Checklist baseline: $BaseRef -> merge-base $($mergeBase[0]); $($rows.Count) prior rows."
+        Write-Host "Checklist baseline: $BaseRef -> $baselineKind $($mergeBase[0]); $($rows.Count) prior rows."
         $rows
     }
     function Assert-AlignmentChecklistPreserved {
@@ -197,6 +209,32 @@ Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
             Should -Throw '*Cannot resolve checklist base*'
         { Get-AlignmentChecklistBaseline -BaseRef HEAD } |
             Should -Throw '*baseline must precede candidate HEAD*'
+    }
+    It 'uses an independent first parent on main after merge and still detects removed IDs' {
+        Mock git {
+            $global:LASTEXITCODE = 0
+            if ($args -contains 'show') {
+                ($args -join ' ') | Should -Match ('2{40}:doc/release-check-list.md')
+                return @('- [ ] `C001` Original', '- [ ] `C002` Retained')
+            }
+            if ($args -contains 'HEAD^1') { return ('2' * 40) }
+            return ('1' * 40)
+        }
+        $baseline = @(Get-AlignmentChecklistBaseline -BaseRef '')
+        $baseline | Should -HaveCount 2
+        { Assert-AlignmentChecklistPreserved -Candidate $baseline -Baseline $baseline } | Should -Not -Throw
+        { Assert-AlignmentChecklistPreserved -Candidate $baseline[1] -Baseline $baseline } |
+            Should -Throw '*C001*expected 1, actual 0*'
+        Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains 'HEAD^1' }
+        Should -Invoke git -Times 0 -Exactly -ParameterFilter { $args -contains 'merge-base' }
+    }
+    It 'fails with fetch guidance when the main first parent is unavailable' {
+        Mock git {
+            $global:LASTEXITCODE = 0
+            if ($args -contains 'HEAD^1') { $global:LASTEXITCODE = 1; return }
+            return ('1' * 40)
+        }
+        { Get-AlignmentChecklistBaseline -BaseRef '' } | Should -Throw '*fetch complete source history*'
     }
     It 'maps synthetic success to full and incremental reports without claiming live acceptance' {
         $xml = New-AlignmentResult Success

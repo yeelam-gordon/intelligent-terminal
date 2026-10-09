@@ -114,10 +114,12 @@ must also match width, DPI, window bounds, scroll, selection and pointer state.
 The alignment selftest preserves prior checklist ID occurrence counts, allowing
 wording/checkbox updates and new IDs, while rejecting removed/replaced prior IDs,
 against the merge-base of HEAD and `origin/main` by default. For a PR targeting
-another branch, set `ITE2E_CHECKLIST_BASE_REF` to its fetched target ref; this
-fork-review PR uses `fork/dev/yeelam/loop-sidebar-row-alignment-review-base`,
-not `fork/main`. Missing, unreadable, empty or candidate-HEAD baselines fail
-explicitly; the selftest prints the resolved merge-base and prior-row count.
+another branch, set `ITE2E_CHECKLIST_BASE_REF` to its fetched target ref (for
+example `origin/release`). When the default `origin/main` equals HEAD after
+merge, HEAD's first parent supplies the independent baseline instead.
+Explicit candidate-HEAD overrides remain rejected. Missing history, unreadable
+or empty baselines fail explicitly with fetch guidance; the selftest prints the
+resolved baseline and prior-row count.
 
 The updated combined-sidebar scope/search cases reuse that suite's owned Dev
 startup, deterministic history fixture, native resume fixtures and teardown.
