@@ -27,7 +27,12 @@ Describe 'Feature: Sidebar row alignment' -Tag @('Feature', 'SidebarRowAlignment
         if (@(Get-WtProcessesForApp -App $script:target -IncludePackageExecutables).Count) {
             throw 'Close Dev before running alignment; existing processes are never adopted.'
         }
-        $head = (& git -C (Join-Path $PSScriptRoot '..\..\..') rev-parse HEAD).Trim()
+        $headLines = @(& git -C (Join-Path $PSScriptRoot '..\..\..') rev-parse --verify HEAD)
+        if ($headLines.Count -ne 1 -or $LASTEXITCODE -ne 0 -or
+            $headLines[0] -notmatch '\A[0-9a-fA-F]{40}\z') {
+            throw 'Cannot resolve candidate HEAD for exact-source build provenance.'
+        }
+        $head = $headLines[0]
         if (-not $env:ITE2E_SOURCE_COMMIT -or
             $env:ITE2E_SOURCE_COMMIT -notmatch ('^' + [regex]::Escape($head) + '(?:$|[-+ ])')) {
             throw 'ITE2E_SOURCE_COMMIT must identify HEAD from the exact-source build receipt.'

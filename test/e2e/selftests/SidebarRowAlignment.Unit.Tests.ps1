@@ -86,6 +86,31 @@ BeforeAll {
 AfterAll { Remove-Item -LiteralPath $script:root -Recurse -Force }
 
 Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
+    It 'validates HEAD command results before receipt comparison (<Case>)' -TestCases @(
+        @{ Case = 'empty'; Lines = @(); ExitCode = 0; Valid = $false },
+        @{ Case = 'failed empty'; Lines = @(); ExitCode = 128; Valid = $false },
+        @{ Case = 'multiple'; Lines = @('0123456789abcdef0123456789abcdef01234567', '0123456789abcdef0123456789abcdef01234567'); ExitCode = 0; Valid = $false },
+        @{ Case = 'malformed'; Lines = @('not-a-hash'); ExitCode = 0; Valid = $false },
+        @{ Case = 'failed with hash'; Lines = @('0123456789abcdef0123456789abcdef01234567'); ExitCode = 128; Valid = $false },
+        @{ Case = 'valid'; Lines = @('0123456789abcdef0123456789abcdef01234567'); ExitCode = 0; Valid = $true }
+    ) {
+        param($Case, $Lines, $ExitCode, $Valid)
+        $guard = $script:ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.IfStatementAst] -and
+                $node.Extent.Text.Contains("throw 'Cannot resolve candidate HEAD for exact-source build provenance.'")
+        }, $true)
+        if (-not $guard) { throw 'The alignment suite is missing its HEAD result guard.' }
+        $headLines = @($Lines | Where-Object { $null -ne $_ })
+        $LASTEXITCODE = $ExitCode
+        $check = [scriptblock]::Create($guard.Extent.Text)
+        if ($Valid) {
+            { & $check } | Should -Not -Throw
+        }
+        else {
+            { & $check } | Should -Throw '*Cannot resolve candidate HEAD for exact-source build provenance.*'
+        }
+    }
     It 'submits hooks only after input publication succeeds (<WriteFails>, <StrictMode>)' -TestCases @(
         @{ WriteFails = $true; StrictMode = 'Off' },
         @{ WriteFails = $true; StrictMode = 'Latest' },
