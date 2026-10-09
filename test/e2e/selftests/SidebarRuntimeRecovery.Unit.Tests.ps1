@@ -47,6 +47,23 @@ BeforeDiscovery {
         @{ Fault = 'output-nonterminating'; Message = 'nonterminating output sentinel' }
         @{ Fault = 'valid'; Message = '' }
     )
+    $startupCases = @(
+        @{ Fault = ''; Runtime = 'missing' }
+        @{ Fault = ''; Runtime = 'empty' }
+        @{ Fault = ''; Runtime = 'nonempty' }
+        @{ Fault = 'evidence-path'; Runtime = 'nonempty' }
+        @{ Fault = 'new-item'; Runtime = 'nonempty' }
+        @{ Fault = 'runtime-path'; Runtime = 'nonempty' }
+        @{ Fault = 'enumeration'; Runtime = 'empty' }
+        @{ Fault = 'enumeration'; Runtime = 'nonempty' }
+        @{ Fault = 'original-hash'; Runtime = 'nonempty' }
+        @{ Fault = 'copy'; Runtime = 'empty' }
+        @{ Fault = 'copy'; Runtime = 'nonempty' }
+        @{ Fault = 'backup-hash'; Runtime = 'nonempty' }
+        @{ Fault = 'manifest'; Runtime = 'missing' }
+        @{ Fault = 'manifest'; Runtime = 'empty' }
+        @{ Fault = 'manifest'; Runtime = 'nonempty' }
+    )
 }
 
 BeforeAll {
@@ -63,6 +80,36 @@ BeforeAll {
     $body = $blocks[0].CommandElements[1].ScriptBlock.Extent.Text
     $script:actualAfterAll = [scriptblock]::Create($body.Substring(1, $body.Length - 2))
     $script:afterAllText = $body
+    $startupBlocks = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'BeforeAll'
+    }, $true))
+    if ($startupBlocks.Count -ne 1) { throw 'Expected exactly one actual alignment BeforeAll.' }
+    $statements = @($startupBlocks[0].CommandElements[1].ScriptBlock.EndBlock.Statements)
+    $starts = @($statements | Where-Object {
+        $_ -is [Management.Automation.Language.IfStatementAst] -and
+            $_.Extent.Text -match '^if \(Test-Path -LiteralPath \$script:evidence'
+    })
+    $ends = @($statements | Where-Object {
+        $_.Extent.Text -match '^\$script:runtimeBackedUp = \$true$|original-hashes\.json'
+    } | Sort-Object { $_.Extent.EndOffset })
+    if ($starts.Count -ne 1 -or $ends.Count -ne 2) { throw 'Cannot isolate the actual startup snapshot statements.' }
+    $snapshotStatements = @($statements | Where-Object {
+        $_.Extent.StartOffset -ge $starts[0].Extent.StartOffset -and
+            $_.Extent.EndOffset -le $ends[-1].Extent.EndOffset
+    })
+    $script:actualSnapshot = [scriptblock]::Create(
+        ($snapshotStatements | ForEach-Object { $_.Extent.Text }) -join "`n")
+    $snapshotCommands = @($script:actualSnapshot.Ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.CommandAst]
+    }, $true))
+    foreach ($command in $snapshotCommands) {
+        if ($command.GetCommandName() -notin @('Test-Path', 'New-Item', 'Out-Null', 'Join-Path',
+            'Get-ChildItem', 'Get-FileHash', 'Copy-Item', 'Should', 'ConvertTo-Json', 'Set-Content')) {
+            throw "Unexpected command in startup snapshot: $($command.GetCommandName())"
+        }
+    }
 
     # Only these two commands are unavailable without the live framework.
     function Invoke-SidebarSessionCleanup {
@@ -78,6 +125,7 @@ BeforeAll {
         throw 'Unmocked path resolution is forbidden.'
     }
     function Test-Path {
+        [CmdletBinding()]
         param($LiteralPath)
         throw 'Unmocked filesystem probe is forbidden.'
     }
@@ -106,6 +154,28 @@ BeforeAll {
         param($LiteralPath, [Parameter(ValueFromPipeline)]$Value)
         process { throw 'Unmocked filesystem write is forbidden.' }
     }
+    function New-Item {
+        [CmdletBinding()]
+        param($ItemType, $Path)
+        throw 'Unmocked filesystem creation is forbidden.'
+    }
+    function Get-ChildItem {
+        [CmdletBinding()]
+        param($LiteralPath, [switch]$File, [switch]$Recurse, [switch]$Force)
+        throw 'Unmocked filesystem enumeration is forbidden.'
+    }
+    function Invoke-ActualSnapshot {
+        param([string]$Strict)
+        try {
+            $ErrorActionPreference = 'Continue'
+            if ($Strict -eq 'Off') { Set-StrictMode -Off }
+            else { Set-StrictMode -Version Latest }
+            & $script:actualSnapshot
+            $null
+        }
+        catch { $_ }
+        finally { Set-StrictMode -Off }
+    }
     function Invoke-ActualRecovery {
         param([string]$Strict)
         try {
@@ -117,6 +187,122 @@ BeforeAll {
         }
         catch { $_ }
         finally { Set-StrictMode -Off }
+    }
+}
+
+Describe 'Actual sidebar startup snapshot: StrictMode <Strict>' -Tag Unit -ForEach @(
+    @{ Strict = 'Off' }; @{ Strict = 'Latest' }
+) {
+    BeforeEach {
+        $script:evidence = 'Z:\fictitious-owned\evidence'
+        $script:target = [pscustomobject]@{ LocalStateDir = 'Z:\fictitious-owned\state' }
+        $script:runtimePath = 'Z:\fictitious-owned\state\IntelligentTerminal'
+        $script:runtimeBackup = 'Z:\fictitious-owned\evidence\original-runtime'
+        $script:runtimeBackedUp = $false
+        $script:runtimeExisted = $false
+        $script:runtimeHashes = @{}
+        $script:settingsHash = 'SETTINGS-SENTINEL'
+        $script:stateHash = 'STATE-SENTINEL'
+        $script:startupFault = ''
+        $script:startupRuntime = 'nonempty'
+        $script:startupEvents = [Collections.Generic.List[string]]::new()
+        $script:startupBindings = @{}
+        function Write-StartupFault {
+            param($Phase)
+            if ($script:startupFault -eq $Phase) {
+                Write-Error "startup $Phase sentinel"
+                $script:startupEvents.Add('continued-after-fault')
+            }
+        }
+        Mock Join-Path { param($Path, $ChildPath) "$Path\$ChildPath" }
+        Mock Test-Path {
+            param($LiteralPath, $ErrorAction)
+            $phase = if ($LiteralPath -eq $script:evidence) { 'evidence-path' }
+                elseif ($LiteralPath -eq $script:runtimePath) { 'runtime-path' }
+                else { throw "Unexpected startup probe: $LiteralPath" }
+            $script:startupBindings[$phase] = $ErrorAction
+            $script:startupEvents.Add($phase)
+            Write-StartupFault $phase
+            if ($phase -eq 'evidence-path') { $false } else { $script:startupRuntime -ne 'missing' }
+        }
+        Mock New-Item {
+            param($ItemType, $Path, $ErrorAction)
+            $ItemType | Should -Be 'Directory'
+            $Path | Should -Be $script:evidence
+            $script:startupBindings['new-item'] = $ErrorAction
+            $script:startupEvents.Add('new-item')
+            Write-StartupFault 'new-item'
+        }
+        Mock Get-ChildItem {
+            param($LiteralPath, [switch]$File, [switch]$Recurse, [switch]$Force, $ErrorAction)
+            $LiteralPath | Should -Be $script:runtimePath
+            $File | Should -BeTrue
+            $Recurse | Should -BeTrue
+            $Force | Should -BeTrue
+            $script:startupBindings['enumeration'] = $ErrorAction
+            $script:startupEvents.Add('enumeration')
+            Write-StartupFault 'enumeration'
+            if ($script:startupRuntime -eq 'nonempty') {
+                [pscustomobject]@{ FullName = "$script:runtimePath\original.json" }
+            }
+        }
+        Mock Get-FileHash {
+            param($LiteralPath, $ErrorAction)
+            $phase = if ($LiteralPath -eq "$script:runtimePath\original.json") { 'original-hash' }
+                elseif ($LiteralPath -eq "$script:runtimeBackup\original.json") { 'backup-hash' }
+                else { throw "Unexpected startup hash: $LiteralPath" }
+            $script:startupBindings[$phase] = $ErrorAction
+            $script:startupEvents.Add($phase)
+            Write-StartupFault $phase
+            [pscustomobject]@{ Hash = 'NONEMPTY-HASH-SENTINEL' }
+        }
+        Mock Copy-Item {
+            param($LiteralPath, $Destination, [switch]$Recurse, $ErrorAction)
+            $LiteralPath | Should -Be $script:runtimePath
+            $Destination | Should -Be $script:runtimeBackup
+            $Recurse | Should -BeTrue
+            $script:startupBindings['copy'] = $ErrorAction
+            $script:startupEvents.Add('copy')
+            Write-StartupFault 'copy'
+        }
+        Mock Set-Content {
+            param($LiteralPath, $Value, $ErrorAction)
+            $LiteralPath | Should -Be "$script:evidence\original-hashes.json"
+            $script:runtimeBackedUp | Should -BeFalse
+            $script:startupBindings['manifest'] = $ErrorAction
+            $script:startupEvents.Add('manifest')
+            Write-StartupFault 'manifest'
+            $manifest = $Value | ConvertFrom-Json
+            $manifest.settings | Should -Be $script:settingsHash
+            $manifest.state | Should -Be $script:stateHash
+            $script:startupEvents.Add('manifest-written')
+        }
+    }
+
+    It 'keeps eligibility fail-closed for fault <Fault> and runtime <Runtime>' -ForEach $startupCases {
+        $script:startupFault = $Fault
+        $script:startupRuntime = $Runtime
+        $failure = Invoke-ActualSnapshot $Strict
+        if ($Fault) {
+            $failure.Exception.Message | Should -Match "startup $Fault sentinel"
+            $script:runtimeBackedUp | Should -BeFalse
+            $script:startupEvents | Should -Not -Contain 'manifest-written'
+            $script:startupEvents[-1] | Should -Be $Fault
+            $script:startupBindings[$Fault] | Should -Be 'Stop'
+        }
+        else {
+            $failure | Should -BeNullOrEmpty
+            $script:runtimeBackedUp | Should -BeTrue
+            $script:startupEvents[-1] | Should -Be 'manifest-written'
+            $expected = 'evidence-path,new-item,runtime-path'
+            if ($Runtime -eq 'empty') { $expected += ',enumeration,copy' }
+            if ($Runtime -eq 'nonempty') { $expected += ',enumeration,original-hash,copy,backup-hash' }
+            ($script:startupEvents -join ',') | Should -Be "$expected,manifest,manifest-written"
+            $script:runtimeExisted | Should -Be ($Runtime -ne 'missing')
+            $script:runtimeHashes.Count | Should -Be $(if ($Runtime -eq 'nonempty') { 1 } else { 0 })
+        }
+        $script:startupEvents | Should -Not -Contain 'continued-after-fault'
+        foreach ($bound in $script:startupBindings.Values) { $bound | Should -Be 'Stop' }
     }
 }
 

@@ -115,7 +115,7 @@ Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
         $script:ast.Extent.Text | Should -Match 'Resolve-AlignmentMarker \$env:ITE2E_ALIGNMENT_MARKER'
         $script:ast.Extent.Text | Should -Match '\$script:liveTitle = "\$script:marker-live"'
         $script:ast.Extent.Text | Should -Match '\$script:historyTitle = "\$script:marker-history"'
-        $script:ast.Extent.Text | Should -Match 'if \(Test-Path -LiteralPath \$script:evidence\)'
+        $script:ast.Extent.Text | Should -Match 'if \(Test-Path -LiteralPath \$script:evidence -ErrorAction Stop\)'
         $script:ast.Extent.Text | Should -Match 'Alignment evidence already exists'
     }
     It 'persists actual geometry and screenshot before the unchanged baseline-failing oracle' {

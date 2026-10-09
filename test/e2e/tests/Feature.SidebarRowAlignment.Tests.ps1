@@ -50,28 +50,28 @@ Describe 'Feature: Sidebar row alignment' -Tag @('Feature', 'SidebarRowAlignment
         }
         $root = if ($env:ITE2E_ARTIFACT_ROOT) { $env:ITE2E_ARTIFACT_ROOT } else { Join-Path $PSScriptRoot '..\artifacts' }
         $script:evidence = Join-Path ([IO.Path]::GetFullPath($root)) $script:marker
-        if (Test-Path -LiteralPath $script:evidence) {
+        if (Test-Path -LiteralPath $script:evidence -ErrorAction Stop) {
             throw 'Alignment evidence already exists; use a distinct artifact root for each matched capture.'
         }
-        New-Item -ItemType Directory -Path $script:evidence | Out-Null
+        New-Item -ItemType Directory -Path $script:evidence -ErrorAction Stop | Out-Null
         $script:runtimePath = Join-Path $script:target.LocalStateDir 'IntelligentTerminal'
         $script:runtimeBackup = Join-Path $script:evidence 'original-runtime'
-        $script:runtimeExisted = Test-Path -LiteralPath $script:runtimePath
+        $script:runtimeExisted = Test-Path -LiteralPath $script:runtimePath -ErrorAction Stop
         $script:runtimeHashes = @{}
         if ($script:runtimeExisted) {
-            foreach ($file in Get-ChildItem -LiteralPath $script:runtimePath -File -Recurse -Force) {
+            foreach ($file in Get-ChildItem -LiteralPath $script:runtimePath -File -Recurse -Force -ErrorAction Stop) {
                 $relative = [IO.Path]::GetRelativePath($script:runtimePath, $file.FullName)
-                $script:runtimeHashes[$relative] = (Get-FileHash -LiteralPath $file.FullName).Hash
+                $script:runtimeHashes[$relative] = (Get-FileHash -LiteralPath $file.FullName -ErrorAction Stop).Hash
             }
-            Copy-Item -LiteralPath $script:runtimePath -Destination $script:runtimeBackup -Recurse
+            Copy-Item -LiteralPath $script:runtimePath -Destination $script:runtimeBackup -Recurse -ErrorAction Stop
             foreach ($relative in $script:runtimeHashes.Keys) {
                 (Get-FileHash -LiteralPath (Join-Path $script:runtimeBackup $relative) -ErrorAction Stop).Hash |
                     Should -Be $script:runtimeHashes[$relative]
             }
         }
-        $script:runtimeBackedUp = $true
         @{ settings = $script:settingsHash; state = $script:stateHash; runtime = $script:runtimeHashes } |
-            ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $script:evidence 'original-hashes.json')
+            ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $script:evidence 'original-hashes.json') -ErrorAction Stop
+        $script:runtimeBackedUp = $true
 
         if (-not ('ItE2E.RowAlignmentActivation' -as [type])) {
             Add-Type -TypeDefinition @'
