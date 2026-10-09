@@ -13572,6 +13572,7 @@ namespace TerminalAppLocalTests
             const auto root = owner->GetRootPane();
             const auto active = owner->GetActivePane();
             const auto panes = owner->GetVisiblePaneSnapshot();
+            const auto sessionBindings = page->_paneAgentSessions;
             const auto verifyOwner = [&](uint32_t expectedIndex) {
                 page->UpdateLayout();
                 VERIFY_IS_TRUE(page->_tabs.GetAt(expectedIndex) == *owner);
@@ -13591,6 +13592,11 @@ namespace TerminalAppLocalTests
                     VERIFY_ARE_EQUAL(panes[i].SessionId, current[i].SessionId);
                     VERIFY_ARE_EQUAL(panes[i].IsActive, current[i].IsActive);
                     VERIFY_IS_TRUE(page->_paneAgentSessions.contains(current[i].SessionId));
+                    const auto& originalBinding = sessionBindings.at(panes[i].SessionId);
+                    const auto& currentBinding = page->_paneAgentSessions.at(current[i].SessionId);
+                    VERIFY_ARE_EQUAL(originalBinding.sessionId, currentBinding.sessionId);
+                    VERIFY_ARE_EQUAL(originalBinding.agent, currentBinding.agent);
+                    VERIFY_ARE_EQUAL(originalBinding.resumeCommandline, currentBinding.resumeCommandline);
                 }
                 VERIFY_ARE_EQUAL(page->_tabs.Size(), page->_tabStrip.TabItems().Size());
                 VERIFY_ARE_EQUAL(page->_tabs.Size(), strip->ItemsList().Items().Size());
