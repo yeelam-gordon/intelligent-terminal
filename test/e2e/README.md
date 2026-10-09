@@ -101,6 +101,17 @@ authenticated ACP agents. Available suites (results depend on the selected packa
 | `Feature.AgentPaneMove.Tests.ps1` | PR #429: `/move` stays per-tab, preserves global position, and restores agent input focus | 1 |
 
 **Coverage and results are tracked by stable checklist IDs and generated release reports.**
+For matched Sidebar alignment baseline/candidate captures, optionally set
+`ITE2E_ALIGNMENT_MARKER` to the same unique run-scoped 8–64 character identifier
+(letters, digits and hyphens, beginning with a letter or digit). Use distinct
+`ITE2E_ARTIFACT_ROOT` directories for baseline and candidate; existing evidence
+is never overwritten. Without this option each run generates a fresh marker.
+The source receipt must still match each run's actual worktree HEAD and exact
+deployed App/WTA hashes. `geometry.json` and `alignment.png` are saved before the
+unchanged 1-DIP alignment oracle: a pre-fix baseline must fail, not count as
+acceptance. Marker reuse matches fixture titles/search only; the coordinator
+must also match width, DPI, window bounds, scroll, selection and pointer state.
+
 The updated combined-sidebar scope/search cases reuse that suite's owned Dev
 startup, deterministic history fixture, native resume fixtures and teardown.
 The related action, session-refresh, delegated-identity, provider-appearance,
