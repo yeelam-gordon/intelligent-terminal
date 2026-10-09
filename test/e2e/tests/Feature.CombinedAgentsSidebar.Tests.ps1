@@ -1928,12 +1928,27 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             $active = (Get-ActivePane -App $script:app).session_id
             Set-WtWindowForeground -App $script:app | Should -BeTrue
             Invoke-UiClick -App $script:app -Selector $script:history[0].title -Right | Out-Null
-            Start-Sleep -Milliseconds 750
-            $window = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
-            @(Get-CombinedRawChildren $window | Where-Object {
-                -not $_.Current.IsOffscreen -and $_.Current.ControlType -eq [Windows.Automation.ControlType]::MenuItem -and
-                    $_.Current.Name -in @('Move tab', 'Move up', 'Move down')
-            }) | Should -HaveCount 0 -Because 'a recent-session row is not an owning-tab move target'
+            $menuObservation = @{ Error = $null }
+            $unexpectedMoveMenu = Test-Until -TimeoutSec 3 -IntervalSec 0.1 -Condition {
+                try {
+                    $window = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+                    foreach ($element in @(Get-CombinedRawChildren $window)) {
+                        $current = $element.get_Current()
+                        if (-not $current.get_IsOffscreen() -and
+                            $current.get_ControlType() -eq [Windows.Automation.ControlType]::MenuItem -and
+                            $current.get_Name() -in @('Move tab', 'Move up', 'Move down')) {
+                            return $true
+                        }
+                    }
+                    return $false
+                }
+                catch {
+                    $menuObservation.Error = $_
+                    return $true
+                }
+            }
+            if ($menuObservation.Error) { throw $menuObservation.Error }
+            $unexpectedMoveMenu | Should -BeFalse -Because 'a recent-session row is not an owning-tab move target'
             @(Get-MoveOrder) | Should -Be $before
             (Get-ActivePane -App $script:app).session_id | Should -Be $active
             @((Get-CombinedSnapshot).sessions.session_id) | Should -Be $historyOrder
