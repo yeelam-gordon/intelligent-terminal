@@ -86,6 +86,32 @@ BeforeAll {
 AfterAll { Remove-Item -LiteralPath $script:root -Recurse -Force }
 
 Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
+    It 'preserves the master-pipe read error before trimming its result' {
+        $assignment = $script:ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+                $node.Left.Extent.Text -eq '$script:pipe'
+        }, $true)
+        if (-not $assignment) { throw 'The alignment suite is missing its master-pipe read.' }
+        $script:app = [pscustomobject]@{ LocalStateDir = $script:root }
+        $script:pipe = 'unmodified-pipe'
+        $script:pipeReadReturned = $false
+        function Get-Content {
+            [CmdletBinding()]
+            param($LiteralPath, [switch]$Raw)
+            Write-Error 'master-pipe read sentinel'
+            $script:pipeReadReturned = $true
+        }
+        $read = [scriptblock]::Create($assignment.Extent.Text)
+        {
+            & {
+                $ErrorActionPreference = 'Continue'
+                & $read
+            }
+        } | Should -Throw '*master-pipe read sentinel*'
+        $script:pipeReadReturned | Should -BeFalse
+        $script:pipe | Should -Be 'unmodified-pipe'
+    }
     It 'requires successful evidence publication (<File>, <FailWrite>)' -TestCases @(
         @{ File = 'package.json'; FailWrite = $true },
         @{ File = 'geometry.json'; FailWrite = $true },
