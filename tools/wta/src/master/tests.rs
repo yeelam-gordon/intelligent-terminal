@@ -11579,11 +11579,12 @@ async fn sidebar_cli_resume_accepts_a_matching_hook_binding_without_resetting_ac
     tokio::time::timeout(
         Duration::from_secs(15),
         tokio::task::LocalSet::new().run_until(async {
-            for status in [
-                AgentStatus::Idle,
-                AgentStatus::Working,
-                AgentStatus::Attention,
-                AgentStatus::Error,
+            for (status, remove_target) in [
+                (AgentStatus::Idle, false),
+                (AgentStatus::Working, false),
+                (AgentStatus::Attention, false),
+                (AgentStatus::Error, false),
+                (AgentStatus::Idle, true),
             ] {
                 let wt = Arc::new(PausedCreate {
                     entered: tokio::sync::Notify::new(),
@@ -11632,10 +11633,22 @@ async fn sidebar_cli_resume_accepts_a_matching_hook_binding_without_resetting_ac
                 current.attention_reason = Some("current-attention".into());
                 current.last_error = Some("current-error".into());
                 state.registry.upsert(current.clone()).await;
+                if remove_target {
+                    state.registry.remove_identity(&identity).await;
+                }
                 wt.release.notify_one();
                 let response = caller.await.unwrap().unwrap();
                 let receipt =
                     crate::session_registry::parse_session_activate_response(&response.0).unwrap();
+                if remove_target {
+                    assert!(
+                        !receipt.accepted,
+                        "a vanished target must not count as a matching binding"
+                    );
+                    assert!(state.registry.lookup_identity(&identity).await.is_none());
+                    assert!(wt.focused.lock().unwrap().is_empty());
+                    continue;
+                }
                 assert!(
                     receipt.accepted,
                     "matching hook binding must succeed for {status:?}: {receipt:?}"
