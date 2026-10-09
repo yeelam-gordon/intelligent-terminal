@@ -377,6 +377,9 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabExpandedGroupKeepsHeaderProgressForAgentSource);
         TEST_METHOD(VerticalTabExpandedGroupKeepsHeaderProgressForHiddenWinningPane);
         TEST_METHOD(VerticalTabRepeatedMovesPreserveCollections);
+        TEST_METHOD(AgentScopeMoveTabDispatchPreservesOwner);
+        TEST_METHOD(AgentScopeMoveTabSearchAndPinBoundaries);
+        TEST_METHOD(MoveTabDispatchPreservesOrdinaryLayouts);
         TEST_METHOD(VerticalTabSelectionPreservesPresentation);
         TEST_METHOD(VerticalTabIconChangesUpdatePresentation);
         TEST_METHOD(RunningAgentIconOverridesProfileIcon);
@@ -13528,6 +13531,206 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(display.PaneItems().GetAt(0) == firstPane);
             VERIFY_IS_TRUE(display.PaneItems().GetAt(1) == secondPane);
         });
+    }
+
+    void TabTests::AgentScopeMoveTabDispatchPreservesOwner()
+    {
+        using Page = winrt::TerminalApp::implementation::TerminalPage;
+        using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
+        const auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        TestOnUIThread([&]() {
+            page->_historyRefreshInFlight = true;
+            page->Width(1200);
+            page->Height(600);
+            const auto first = page->_GetFocusedTabImpl();
+            first->SuppressAgentPrewarm();
+            const auto shellConnection = winrt::make_self<TestConnection>(winrt::guid{ L"{6239a42c-eeee-49a3-80bd-e8fdd0451901}" }, State::Connected);
+            const auto shell = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *shellConnection)));
+            shell->SuppressAgentPrewarm();
+            const auto ownerConnection = winrt::make_self<TestConnection>(winrt::guid{ L"{6239a42c-eeee-49a3-80bd-e8fdd0451902}" }, State::Connected);
+            const auto owner = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *ownerConnection)));
+            owner->SuppressAgentPrewarm();
+            const auto splitConnection = winrt::make_self<TestConnection>(winrt::guid{ L"{6239a42c-eeee-49a3-80bd-e8fdd0451903}" }, State::Connected);
+            VERIFY_IS_TRUE(page->_SplitPane(owner, SplitDirection::Right, 0.5f, page->_MakeTerminalPane(NewTerminalArgs{}, nullptr, *splitConnection), false));
+            const auto bindAgent = [&](const auto& tab) {
+                page->_paneAgentSessions.insert_or_assign(tab->GetActivePane()->GetSessionId(), Page::_PaneAgentSession{ L"move-agent", L"copilot", L"" });
+            };
+            bindAgent(first);
+            bindAgent(owner);
+            page->_paneAgentSessions.insert_or_assign(ownerConnection->SessionId(), Page::_PaneAgentSession{ L"move-owner", L"copilot", L"" });
+            page->_paneAgentSessions.insert_or_assign(splitConnection->SessionId(), Page::_PaneAgentSession{ L"move-split", L"claude", L"" });
+            page->_tabStrip.SidebarFilters().ShowAgentsOnly(true);
+            page->_ApplyTabListProjection();
+            page->UpdateLayout();
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            const auto display = strip->DisplayItemForTab(owner->TabViewItem());
+            const auto shellDisplay = strip->DisplayItemForTab(shell->TabViewItem());
+            VERIFY_IS_TRUE(display.IsGroup());
+            VERIFY_ARE_EQUAL(2u, display.PaneItems().Size());
+            const auto firstRow = display.PaneItems().GetAt(0);
+            const auto secondRow = display.PaneItems().GetAt(1);
+            const auto root = owner->GetRootPane();
+            const auto active = owner->GetActivePane();
+            const auto panes = owner->GetVisiblePaneSnapshot();
+            const auto verifyOwner = [&](uint32_t expectedIndex) {
+                page->UpdateLayout();
+                VERIFY_IS_TRUE(page->_tabs.GetAt(expectedIndex) == *owner);
+                VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == owner);
+                VERIFY_IS_TRUE(page->_selectedTabItem() == owner->TabViewItem());
+                VERIFY_IS_TRUE(owner->GetRootPane() == root);
+                VERIFY_IS_TRUE(owner->GetActivePane() == active);
+                VERIFY_IS_TRUE(strip->DisplayItemForTab(owner->TabViewItem()) == display);
+                VERIFY_IS_TRUE(display.IsGroup());
+                VERIFY_IS_TRUE(display.PaneItems().GetAt(0) == firstRow);
+                VERIFY_IS_TRUE(display.PaneItems().GetAt(1) == secondRow);
+                const auto current = owner->GetVisiblePaneSnapshot();
+                VERIFY_ARE_EQUAL(panes.size(), current.size());
+                for (size_t i = 0; i < panes.size(); ++i)
+                {
+                    VERIFY_ARE_EQUAL(panes[i].ContentId, current[i].ContentId);
+                    VERIFY_ARE_EQUAL(panes[i].SessionId, current[i].SessionId);
+                    VERIFY_ARE_EQUAL(panes[i].IsActive, current[i].IsActive);
+                    VERIFY_IS_TRUE(page->_paneAgentSessions.contains(current[i].SessionId));
+                }
+                VERIFY_ARE_EQUAL(page->_tabs.Size(), page->_tabStrip.TabItems().Size());
+                VERIFY_ARE_EQUAL(page->_tabs.Size(), strip->ItemsList().Items().Size());
+                for (uint32_t i = 0; i < page->_tabs.Size(); ++i)
+                {
+                    const auto item = page->_tabs.GetAt(i).TabViewItem();
+                    VERIFY_IS_TRUE(page->_tabStrip.TabItems().GetAt(i) == item);
+                    VERIFY_IS_TRUE(strip->ItemsList().Items().GetAt(i).as<winrt::TerminalApp::TabStripDisplayItem>().Tab() == item);
+                }
+                VERIFY_IS_FALSE(page->_IsTabVisibleInProjection(shell, shellDisplay));
+                VERIFY_ARE_EQUAL(shellConnection->SessionId(), shell->GetActivePane()->GetSessionId());
+            };
+
+            for (const auto expanded : { true, false })
+            {
+                display.IsExpanded(expanded);
+                page->_selectedTabItem(first->TabViewItem());
+                VERIFY_IS_TRUE(owner->_moveLeftMenuItem.IsEnabled());
+                VERIFY_IS_FALSE(owner->_moveRightMenuItem.IsEnabled());
+                VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Backward } }));
+                verifyOwner(1);
+                VERIFY_IS_TRUE(page->_tabs.GetAt(2) == *shell);
+                VERIFY_IS_TRUE(owner->_moveLeftMenuItem.IsEnabled());
+                VERIFY_IS_TRUE(owner->_moveRightMenuItem.IsEnabled());
+                VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Backward } }));
+                verifyOwner(0);
+                VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *first);
+                VERIFY_IS_FALSE(owner->_moveLeftMenuItem.IsEnabled());
+                VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Backward } }));
+                verifyOwner(0);
+                for (uint32_t index = 1; index <= 2; ++index)
+                {
+                    VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Forward } }));
+                    verifyOwner(index);
+                }
+                VERIFY_ARE_EQUAL(expanded, display.IsExpanded());
+                VERIFY_IS_TRUE(page->_tabs.GetAt(0) == *first);
+                VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *shell);
+            }
+        });
+    }
+
+    void TabTests::AgentScopeMoveTabSearchAndPinBoundaries()
+    {
+        using Page = winrt::TerminalApp::implementation::TerminalPage;
+        const auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        TestOnUIThread([&]() {
+            page->_historyRefreshInFlight = true;
+            page->Width(1200);
+            page->Height(600);
+            page->UpdateLayout();
+            const auto pinned = page->_GetFocusedTabImpl();
+            const auto owner = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));
+            const auto last = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));
+            for (const auto& tab : { pinned, owner, last })
+            {
+                tab->SuppressAgentPrewarm();
+                page->_paneAgentSessions.insert_or_assign(tab->GetActivePane()->GetSessionId(), Page::_PaneAgentSession{ L"boundary-agent", L"copilot", L"" });
+            }
+            page->_SetTabPinned(pinned, true);
+            page->_tabStrip.SidebarFilters().ShowAgentsOnly(true);
+            page->_ApplyTabListProjection();
+            const auto selected = page->_selectedTabItem();
+            VERIFY_IS_FALSE(pinned->_moveLeftMenuItem.IsEnabled());
+            VERIFY_IS_FALSE(pinned->_moveRightMenuItem.IsEnabled());
+            VERIFY_IS_FALSE(owner->_moveLeftMenuItem.IsEnabled());
+            VERIFY_IS_TRUE(owner->_moveRightMenuItem.IsEnabled());
+            VERIFY_IS_FALSE(last->_moveRightMenuItem.IsEnabled());
+            VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Backward } }));
+            VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*pinned, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Forward } }));
+            VERIFY_IS_TRUE(page->_tabs.GetAt(0) == *pinned);
+            VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *owner);
+            VERIFY_IS_TRUE(page->_selectedTabItem() == selected);
+            VERIFY_IS_FALSE(owner->_pinMenuItem.IsEnabled());
+            VERIFY_IS_FALSE(owner->_closeOtherTabsMenuItem.IsEnabled());
+            VERIFY_IS_FALSE(owner->_closeTabsAfterMenuItem.IsEnabled());
+            VERIFY_IS_FALSE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::CloseOtherTabs, nullptr }));
+            VERIFY_IS_FALSE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::CloseTabsAfter, nullptr }));
+            page->_RequestPinTab(owner, true);
+            VERIFY_IS_FALSE(owner->IsPinned());
+            page->_TabDragStarted(page->_tabStrip, nullptr);
+            VERIFY_IS_FALSE(page->_rearranging);
+            VERIFY_IS_FALSE(page->_tabDragReorderAuthorized);
+
+            page->_tabStrip.SearchActive(true);
+            for (const auto query : { L"", L"boundary" })
+            {
+                page->_tabStrip.SearchQuery(query);
+                page->_ApplyTabListProjection();
+                VERIFY_IS_TRUE(page->_IsTabSearchEffective());
+                VERIFY_IS_FALSE(owner->_moveLeftMenuItem.IsEnabled());
+                VERIFY_IS_FALSE(owner->_moveRightMenuItem.IsEnabled());
+                VERIFY_IS_FALSE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Forward } }));
+                VERIFY_IS_TRUE(page->_MoveTab(owner, MoveTabArgs{ L"", MoveTabDirection::Forward }));
+                VERIFY_IS_TRUE(page->_tabs.GetAt(0) == *pinned);
+                VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *owner);
+                VERIFY_IS_TRUE(page->_tabs.GetAt(2) == *last);
+                VERIFY_IS_TRUE(page->_selectedTabItem() == selected);
+                // A same-window destination exercises the transfer branch without detaching content.
+                VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ winrt::to_hstring(page->WindowProperties().WindowId()), MoveTabDirection::Forward } }));
+                VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *owner);
+            }
+            page->_tabStrip.SearchQuery(L"");
+            VERIFY_IS_TRUE(page->_IsTabSearchEffective());
+            page->_tabStrip.SearchActive(false);
+            page->_ApplyTabListProjection();
+            VERIFY_IS_TRUE(owner->_moveRightMenuItem.IsEnabled());
+            VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Forward } }));
+            VERIFY_IS_TRUE(page->_tabs.GetAt(2) == *owner);
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == owner);
+        });
+    }
+
+    void TabTests::MoveTabDispatchPreservesOrdinaryLayouts()
+    {
+        for (const auto vertical : { false, true })
+        {
+            const auto page = _commonSetup(nullptr, nullptr, std::nullopt, vertical);
+            TestOnUIThread([&]() {
+                const auto owner = page->_GetFocusedTabImpl();
+                const auto other = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));
+                owner->SuppressAgentPrewarm();
+                other->SuppressAgentPrewarm();
+                page->_ApplyTabListProjection();
+                VERIFY_IS_FALSE(page->_IsTabListPositionOperationBlocked());
+                VERIFY_ARE_EQUAL(winrt::hstring{ vertical ? L"Move up" : L"Move left" }, owner->_moveLeftMenuItem.Text());
+                VERIFY_ARE_EQUAL(winrt::hstring{ vertical ? L"Move down" : L"Move right" }, owner->_moveRightMenuItem.Text());
+                VERIFY_IS_TRUE(owner->_moveSubMenu.Items().GetAt(vertical ? 1 : 2) == owner->_moveLeftMenuItem);
+                VERIFY_IS_TRUE(owner->_moveSubMenu.Items().GetAt(vertical ? 2 : 1) == owner->_moveRightMenuItem);
+                VERIFY_IS_TRUE(owner->_moveRightMenuItem.IsEnabled());
+                VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Forward } }));
+                VERIFY_IS_TRUE(page->_tabs.GetAt(0) == *other);
+                VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *owner);
+                VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == owner);
+                VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Backward } }));
+                VERIFY_IS_TRUE(page->_tabs.GetAt(0) == *owner);
+                VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *other);
+                VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == owner);
+            });
+        }
     }
 
     void TabTests::VerticalTabRepeatedMovesPreserveCollections()

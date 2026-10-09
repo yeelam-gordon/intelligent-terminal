@@ -2468,10 +2468,10 @@ namespace winrt::TerminalApp::implementation
         _closeTabsAfterMenuItem.IsEnabled(!_tabListPositionOperationsRestricted && tabIndex < numOfTabs - 1);
 
         // enabled if not left-most tab
-        _moveLeftMenuItem.IsEnabled(!_tabListPositionOperationsRestricted && tabIndex > (IsPinned() ? 0u : _pinnedTabCount));
+        _moveLeftMenuItem.IsEnabled(!_tabMoveRestricted && tabIndex > (IsPinned() ? 0u : _pinnedTabCount));
 
         // enabled if not last tab
-        _moveRightMenuItem.IsEnabled(!_tabListPositionOperationsRestricted && tabIndex + 1 < (IsPinned() ? _pinnedTabCount : numOfTabs));
+        _moveRightMenuItem.IsEnabled(!_tabMoveRestricted && tabIndex + 1 < (IsPinned() ? _pinnedTabCount : numOfTabs));
     }
 
     void Tab::UpdateTabViewIndex(const uint32_t idx, const uint32_t numTabs, const uint32_t pinnedCount)

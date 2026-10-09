@@ -2172,7 +2172,7 @@ namespace winrt::TerminalApp::implementation
             const auto visible = _IsTabVisibleInProjection(tabImpl, display);
             if (tabImpl)
             {
-                tabImpl->SetTabListPositionOperationsRestricted(positionOperationsBlocked);
+                tabImpl->SetTabListPositionOperationsRestricted(positionOperationsBlocked, _IsTabSearchEffective());
                 tabImpl->SetTabPointerInteractionRestricted(_IsCollapsedVerticalRail());
             }
             if (display)
