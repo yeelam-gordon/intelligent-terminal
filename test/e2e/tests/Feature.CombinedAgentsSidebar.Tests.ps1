@@ -1800,7 +1800,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             $items[0]
         }
         function Assert-MoveIdentity {
-            $current = @(Get-WtPanes -App $script:app -TabId (Get-MoveOwner).tab_id)
+            $current = @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId (Get-MoveOwner).tab_id)
             @($current.session_id) | Should -Be @($panes.session_id)
             foreach ($identity in $identities) {
                 (Get-WtPaneStatus -App $script:app -SessionId $identity.sid).pid | Should -Be $identity.pid
@@ -1839,7 +1839,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             Wait-Until -TimeoutSec 20 -Condition { Test-Path $fixture.Log } | Out-Null
             $launch = Get-Content $fixture.Log | Select-Object -First 1 | ConvertFrom-Json
             $launch.session_id | Should -Be $fixture.SessionId
-            $panes = @(Get-WtPanes -App $script:app -TabId (Get-MoveOwner).tab_id)
+            $panes = @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId (Get-MoveOwner).tab_id)
             $panes | Should -HaveCount 2
             $identities = @($panes | ForEach-Object {
                 @{ sid = $_.session_id; pid = (Get-WtPaneStatus -App $script:app -SessionId $_.session_id).pid }
@@ -1959,7 +1959,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 Send-WtWindowKey -App $script:app -Vk 0x1B -RequireForeground -Repeat 2 | Out-Null
                 foreach ($pane in $created) {
                     $present = @(Get-WtTabs -App $script:app -WindowId $script:app.WindowId | ForEach-Object {
-                        Get-WtPanes -App $script:app -TabId $_.tab_id
+                        Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId $_.tab_id
                     } | Where-Object session_id -eq $pane.session_id)
                     if ($present.Count -eq 1) {
                         Invoke-WtCli -App $script:app -Arguments @('kill-pane', '-t', $pane.session_id) | Out-Null
