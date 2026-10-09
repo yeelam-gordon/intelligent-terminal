@@ -120,6 +120,11 @@ merge, HEAD's first parent supplies the independent baseline instead.
 Explicit candidate-HEAD overrides remain rejected. Missing history, unreadable
 or empty baselines fail explicitly with fetch guidance; the selftest prints the
 resolved baseline and prior-row count.
+The shared Sidebar shell-hook fixture publishes a receipt only after every hook
+succeeds and its JSON is closed, using a unique same-directory staging file and
+no-overwrite rename. Alignment and scroll consumers can then treat final-file
+existence as completion. Use fresh receipt paths; failed publication preserves
+existing final files and cleans only its owned staging file.
 
 The updated combined-sidebar scope/search cases reuse that suite's owned Dev
 startup, deterministic history fixture, native resume fixtures and teardown.
