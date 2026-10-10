@@ -179,7 +179,19 @@ exit 0
                 $_ -is [Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -eq $name
             })
             $parameter.Count | Should -Be 1
-            $value = $elements[[Array]::IndexOf($elements, $parameter[0]) + 1].SafeGetValue()
+            $expression = $elements[[Array]::IndexOf($elements, $parameter[0]) + 1]
+            $savedDiagnostic = $env:ITE2E_NATIVE_RESUME_DIAGNOSTIC
+            try {
+                $env:ITE2E_NATIVE_RESUME_DIAGNOSTIC = '0'
+                $value = & ([scriptblock]::Create($expression.Extent.Text))
+                if ($name -eq 'ForEach') {
+                    $env:ITE2E_NATIVE_RESUME_DIAGNOSTIC = '1'
+                    $diagnostic = @(& ([scriptblock]::Create($expression.Extent.Text)))
+                    $diagnostic.Count | Should -Be 1
+                    $diagnostic[0].CaseTitle | Should -Be 'Diagnostic native no-hook resume without modifier controls'
+                }
+            }
+            finally { $env:ITE2E_NATIVE_RESUME_DIAGNOSTIC = $savedDiagnostic }
             if ($name -eq 'Tag') {
                 $value | Should -Be 'NativeSessionResume'
             } else {

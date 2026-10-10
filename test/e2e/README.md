@@ -15,6 +15,14 @@ Normal Dev/Store behavior and pipeline configuration stay unchanged.
 Separate apps can use HWND-scoped UIA actions; shared foreground input,
 clipboard, policy, and agent configuration still need serialization. Check the
 suite's requirements rather than assuming all UI tests are parallel-safe.
+Native resume cases retain per-modifier launch/count evidence and the original
+failure stack independently of cleanup failures. If activation fails before the
+test records its resumed pane, cleanup uses the fixture's exact session/PID
+receipt, executable path, and owning window rather than adopting other processes.
+`ITE2E_NATIVE_RESUME_DIAGNOSTIC=1` selects a separately named no-hook diagnostic
+without modifier probes; it never credits C390/C425. Normal runs retain all
+three modifier negative controls. Native modifier probes retain physical key
+state samples before Enter, while still held after Enter, and after release.
 The live smoke proved separate hosts, package-local CLIs, and sidebar search
 invoke/filter/clear. It did not validate concurrent full suites or mark release
 checklist items complete.

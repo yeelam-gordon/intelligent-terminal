@@ -50,15 +50,28 @@ Describe 'Combined sidebar initialization order' -Tag 'Unit' {
         }, $true))
         $definition.Count | Should -Be 1
         . ([scriptblock]::Create($definition[0].Extent.Text))
-        $script:app = [pscustomobject]@{}
+        $script:app = [pscustomobject]@{ Pid = 1234 }
         $script:filterState = @{ AgentsOnlyFilterMenuItem = $false; RecentAgentSessionsFilterMenuItem = $false }
         $script:filterToggles = [Collections.Generic.List[string]]::new()
+        $script:filterPeerReads = 0
+        function Wait-Until {
+            param($TimeoutSec, $Because, $Condition)
+            foreach ($attempt in 1..3) {
+                $result = & $Condition
+                if ($result) { return $result }
+            }
+            throw $Because
+        }
         function Get-CombinedFilterState { $script:filterState.Clone() }
         function Invoke-UiClick { param($App, $Selector) }
         function Assert-CombinedHeaderCue { param($Kind) $Kind | Should -Be 'Tabs' }
         function Get-CombinedElement {
             param($Id)
-            $peer = [pscustomobject]@{ Id = $Id }
+            $script:filterPeerReads += 1
+            if ($script:filterPeerReads -eq 1) { return $null }
+            $peer = [pscustomobject]@{
+                Id = $Id; Current = [pscustomobject]@{ IsOffscreen = $false; ProcessId = 1234 }
+            }
             $peer | Add-Member ScriptMethod GetCurrentPattern {
                 param($Pattern)
                 if ($Pattern -ne [Windows.Automation.TogglePattern]::Pattern) { throw 'Unsupported Pattern.' }
@@ -79,5 +92,6 @@ Describe 'Combined sidebar initialization order' -Tag 'Unit' {
         $script:filterToggles[0] | Should -Be 'AgentsOnlyFilterMenuItem'
         $script:filterToggles[1] | Should -Be 'AgentsOnlyFilterMenuItem'
         $script:filterToggles[2] | Should -Be 'RecentAgentSessionsFilterMenuItem'
+        $script:filterPeerReads | Should -Be 4 -Because 'the first reopened flyout peer is not immediately available'
     }
 }
