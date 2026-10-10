@@ -594,7 +594,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 if ($state[$entry.Id] -ne $entry.Value) {
                     Invoke-UiClick -App $script:app -Selector FilterTabsButton | Out-Null
                     $item = Get-CombinedElement $entry.Id
-                    $item.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+                    $item.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
                 }
             }
             $state = Get-CombinedFilterState
