@@ -1881,10 +1881,10 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                         Find-ItExactTextRange -DocumentRange $documentRange -Text $text
                     } $document $marker
                     $rectangles = @($range.GetBoundingRectangles())
-                    if ($rectangles.Count -eq 0 -or $rectangles.Count % 4 -ne 0) { continue }
+                    if ($rectangles.Count -eq 0) { continue }
                     $visible = $true
-                    for ($i = 0; $i -lt $rectangles.Count; $i += 4) {
-                        $x, $y, $width, $height = $rectangles[$i..($i + 3)]
+                    foreach ($rectangle in $rectangles) {
+                        $x, $y, $width, $height = $rectangle.X, $rectangle.Y, $rectangle.Width, $rectangle.Height
                         if (@($x, $y, $width, $height | Where-Object {
                             [double]::IsNaN($_) -or [double]::IsInfinity($_)
                         }).Count -or $width -le 0 -or $height -le 0) { $visible = $false; break }
@@ -1900,7 +1900,10 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                             marker = $range.GetText(-1); fixture_pid = $launch.pid; hwnd = $script:app.Hwnd
                             process_id = $control.Current.ProcessId; class = $control.Current.ClassName
                             control = $control.Current.Name; runtime_id = @($control.GetRuntimeId())
-                            range_rectangles = $rectangles
+                            # Keep evidence as flat x/y/width/height tuples; the managed UIA API returns Rect[].
+                            range_rectangles = @(foreach ($rectangle in $rectangles) {
+                                $rectangle.X; $rectangle.Y; $rectangle.Width; $rectangle.Height
+                            })
                             control_bounds = @($bounds.X, $bounds.Y, $bounds.Width, $bounds.Height)
                             window_bounds = @($windowBounds.X, $windowBounds.Y, $windowBounds.Width, $windowBounds.Height)
                         }

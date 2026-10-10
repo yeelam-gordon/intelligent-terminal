@@ -7,6 +7,21 @@ BeforeAll {
 
 Describe 'Combined owning-tab exact displayed marker' -Tag 'Unit' {
     BeforeAll {
+        Add-Type -AssemblyName PresentationFramework, UIAutomationClient, UIAutomationTypes
+        Add-Type -ReferencedAssemblies ([System.Windows.Rect].Assembly.Location) @'
+namespace CombinedDisplayMock {
+    public class TextRange {
+        public string Text = "PID=8765";
+        public System.Windows.Rect[] Rectangles = { new System.Windows.Rect(110, 120, 60, 20) };
+        public bool Error;
+        public string GetText(int length) {
+            if (Error) { throw new System.Exception("range-read-error"); }
+            return Text;
+        }
+        public System.Windows.Rect[] GetBoundingRectangles() { return Rectangles; }
+    }
+}
+'@
         Add-Type @'
 namespace CombinedDisplayMock {
     public static class ItWtWin32Input {
@@ -45,11 +60,7 @@ namespace CombinedDisplayMock {
                 Left = $X; Top = $Y; Right = $X + $Width; Bottom = $Y + $Height }
         }
         function New-DisplayPeer([string]$Text) {
-            $range = [pscustomobject]@{ Text = 'PID=8765'; Rectangles = @(110, 120, 60, 20); Error = $false }
-            $range | Add-Member ScriptMethod GetText { param($Length)
-                if ($this.Error) { throw 'range-read-error' }; $this.Text
-            }
-            $range | Add-Member ScriptMethod GetBoundingRectangles { $this.Rectangles }
+            $range = [CombinedDisplayMock.TextRange]::new()
             $document = [pscustomobject]@{ Text = $Text; Range = $range; Reads = 0; Finds = 0; Error = $false; NoHit = $false }
             $document | Add-Member ScriptMethod GetText { param($Length)
                 $Length | Should -Be -1
@@ -104,7 +115,13 @@ namespace CombinedDisplayMock {
         $peer.DocumentGets | Should -Be 1
     }
     It 'keeps a matching document on the real exact helper and captured range' {
-        (Get-MoveDisplay).marker | Should -Be 'PID=8765'
+        [System.Windows.Automation.Text.TextPatternRange].GetMethod('GetBoundingRectangles').ReturnType |
+            Should -Be ([System.Windows.Rect[]])
+        $peer.Document.Range.GetBoundingRectangles() | Should -BeOfType ([System.Windows.Rect])
+        $peer.Document.Range.GetBoundingRectangles().GetType() | Should -Be ([System.Windows.Rect[]])
+        $display = Get-MoveDisplay
+        $display.marker | Should -Be 'PID=8765'
+        $display.range_rectangles | Should -Be @(110, 120, 60, 20)
         $peer.DocumentGets | Should -Be 1
         $peer.Document.Reads | Should -Be 1
         $peer.Document.Finds | Should -Be 2
@@ -128,14 +145,58 @@ namespace CombinedDisplayMock {
         $peer.Document.Finds | Should -Be 1
     }
     It 'rejects matching marker with <Kind> rectangles' -ForEach @(
-        @{ Kind = 'zero'; Rectangles = @(110, 120, 0, 20) },
-        @{ Kind = 'outside control'; Rectangles = @(50, 120, 60, 20) },
-        @{ Kind = 'outside window'; Rectangles = @(110, 620, 60, 20) },
-        @{ Kind = 'NaN'; Rectangles = @([double]::NaN, 120, 60, 20) }
+        @{ Kind = 'zero'; Bounds = ,@(110, 120, 0, 20) },
+        @{ Kind = 'outside control'; Bounds = ,@(50, 120, 60, 20) },
+        @{ Kind = 'outside window'; Bounds = ,@(110, 620, 60, 20) },
+        @{ Kind = 'NaN'; Bounds = ,@([double]::NaN, 120, 60, 20) },
+        @{ Kind = 'infinite X'; Bounds = ,@([double]::PositiveInfinity, 120, 60, 20) },
+        @{ Kind = 'infinite height'; Bounds = ,@(110, 120, 60, [double]::PositiveInfinity) },
+        @{ Kind = 'zero height'; Bounds = ,@(110, 120, 60, 0) },
+        @{ Kind = 'negative position'; Bounds = ,@(-110, 120, 60, 20) },
+        @{ Kind = 'right overflow'; Bounds = ,@(490, 120, 60, 20) },
+        @{ Kind = 'bottom overflow'; Bounds = ,@(110, 390, 60, 20) },
+        @{ Kind = 'empty collection'; Bounds = @() },
+        @{ Kind = 'invalid wrapped segment'; Bounds = @(@(110, 120, 60, 20), @(490, 140, 60, 20)) }
     ) {
-        $peer.Document.Range.Rectangles = $Rectangles
+        $peer.Document.Range.Rectangles = [System.Windows.Rect[]]@(
+            foreach ($bound in $Bounds) { [System.Windows.Rect]::new($bound[0], $bound[1], $bound[2], $bound[3]) }
+        )
         Get-MoveDisplay | Should -BeNullOrEmpty
         $peer.Document.Finds | Should -Be 2
+    }
+    It 'rejects the actual empty Rect with negative infinite dimensions' {
+        $peer.Document.Range.Rectangles = [System.Windows.Rect[]]@([System.Windows.Rect]::Empty)
+        Get-MoveDisplay | Should -BeNullOrEmpty
+    }
+    It 'accepts all contained wrapped segments and serializes ordered flat tuples' {
+        $peer.Document.Range.Rectangles = [System.Windows.Rect[]]@(
+            [System.Windows.Rect]::new(110, 120, 60, 20),
+            [System.Windows.Rect]::new(100, 140, 40, 20)
+        )
+        $display = Get-MoveDisplay
+        $display.marker | Should -Be 'PID=8765'
+        $display.range_rectangles | Should -Be @(110, 120, 60, 20, 100, 140, 40, 20)
+        $roundTrip = $display | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+        $roundTrip.range_rectangles | Should -Be $display.range_rectangles
+    }
+    It 'accepts full containment at the control boundary with negative screen coordinates' {
+        $displayWindow.Current.BoundingRectangle = [System.Windows.Rect]::new(-800, -600, 800, 600)
+        $peer.Current.BoundingRectangle = [System.Windows.Rect]::new(-500, -400, 400, 300)
+        $peer.Document.Range.Rectangles = [System.Windows.Rect[]]@([System.Windows.Rect]::new(-500, -400, 400, 300))
+        (Get-MoveDisplay).marker | Should -Be 'PID=8765'
+    }
+    It 'rejects a range inside its control but outside the owned window' {
+        $displayWindow.Current.BoundingRectangle = [System.Windows.Rect]::new(0, 0, 100, 100)
+        Get-MoveDisplay | Should -BeNullOrEmpty
+    }
+    It 'accepts the two wrapped rectangles observed in the live failure' {
+        $displayWindow.Current.BoundingRectangle = [System.Windows.Rect]::new(0, 0, 900, 650)
+        $peer.Current.BoundingRectangle = [System.Windows.Rect]::new(328, 41, 280, 278)
+        $peer.Document.Range.Rectangles = [System.Windows.Rect[]]@(
+            [System.Windows.Rect]::new(516, 106, 63, 19),
+            [System.Windows.Rect]::new(336, 125, 27, 19)
+        )
+        (Get-MoveDisplay).range_rectangles | Should -Be @(516, 106, 63, 19, 336, 125, 27, 19)
     }
     It 'retains unique-owner rejection across two matching terminals' {
         $displayWindow.Peers = @($peer, (New-DisplayPeer 'PID=8765'))
