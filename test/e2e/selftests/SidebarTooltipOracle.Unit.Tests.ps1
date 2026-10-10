@@ -4,6 +4,7 @@ Describe 'Sidebar tooltip physical oracle' -Tag Unit {
         . (Join-Path $PSScriptRoot '..\tests\helpers\SidebarTooltipOracle.ps1')
         . (Join-Path $PSScriptRoot '..\tests\helpers\TestTerminalCleanup.ps1')
         Import-Module (Join-Path $PSScriptRoot '..\ItE2E\ItE2E.psd1') -Force
+        $script:desktopRuntime = Initialize-SidebarTooltipDesktop
         function Get-TooltipUnitMarker { 'original suite context' }
         $script:tooltipUnitScope = 'suite script marker'
         function Rect($l, $t, $r, $b) { @{ Left=$l; Top=$t; Right=$r; Bottom=$b } }
@@ -84,8 +85,8 @@ Describe 'Sidebar tooltip physical oracle' -Tag Unit {
             $dll=Join-Path $dir 'fixture.bin';$xml=Join-Path $dir 'results.xml'
             Set-Content $dll 'unit-only artifact'
             Set-Content $xml '<test-results><test-case name="TabTests::VerticalTabTooltipsTrackOwnerGeometry" result="Success" executed="True"/><test-case name="TabTests::VerticalTabTooltipsExposeStableShortcuts" result="Success" executed="True"/></test-results>'
-            $receipt=@{sourceHead='source';appSHA256='app';hosted=$true;testDllPath=$dll;testDllSHA256=(Get-FileHash $dll).Hash
-                resultsXml=$xml;resultsSHA256=(Get-FileHash $xml).Hash}
+            $receipt=@{sourceHead='source';appSHA256='app';hosted=$true;testDllPath=$dll;testDllSHA256=(Get-FileHash -LiteralPath $dll).Hash
+                resultsXml=$xml;resultsSHA256=(Get-FileHash -LiteralPath $xml).Hash}
             { Assert-SidebarTooltipNativeReceipt $receipt source app } | Should -Not -Throw
             { Assert-SidebarTooltipNativeReceipt $receipt foreign app } | Should -Throw
             foreach ($hosted in @($false,$null,'false','true',1)) {
@@ -95,19 +96,19 @@ Describe 'Sidebar tooltip physical oracle' -Tag Unit {
             $receipt.hosted=$true
             foreach ($executed in @('', ' executed="False"', ' executed="false"', ' executed="unknown"')) {
                 Set-Content $xml "<test-results><test-case name=`"TabTests::VerticalTabTooltipsTrackOwnerGeometry`" result=`"Success`"$executed/><test-case name=`"TabTests::VerticalTabTooltipsExposeStableShortcuts`" result=`"Success`" executed=`"True`"/></test-results>"
-                $receipt.resultsSHA256=(Get-FileHash $xml).Hash
+                $receipt.resultsSHA256=(Get-FileHash -LiteralPath $xml).Hash
                 { Assert-SidebarTooltipNativeReceipt $receipt source app } | Should -Throw
             }
             Set-Content $xml '<test-run><test-case name="TabTests::VerticalTabTooltipsTrackOwnerGeometry" result="Passed" duration="0.1"/><test-case name="TabTests::VerticalTabTooltipsExposeStableShortcuts" result="Passed" duration="0.2"/></test-run>'
-            $receipt.resultsSHA256=(Get-FileHash $xml).Hash
+            $receipt.resultsSHA256=(Get-FileHash -LiteralPath $xml).Hash
             { Assert-SidebarTooltipNativeReceipt $receipt source app } | Should -Not -Throw
             foreach ($duration in @('', ' duration="NaN"', ' duration="-1"', ' duration="invalid"')) {
                 Set-Content $xml "<test-run><test-case name=`"TabTests::VerticalTabTooltipsTrackOwnerGeometry`" result=`"Passed`"$duration/><test-case name=`"TabTests::VerticalTabTooltipsExposeStableShortcuts`" result=`"Passed`" duration=`"0.2`"/></test-run>"
-                $receipt.resultsSHA256=(Get-FileHash $xml).Hash
+                $receipt.resultsSHA256=(Get-FileHash -LiteralPath $xml).Hash
                 { Assert-SidebarTooltipNativeReceipt $receipt source app } | Should -Throw
             }
             Set-Content $xml '<test-results><test-case name="TabTests::VerticalTabTooltipsTrackOwnerGeometry" result="Skipped" executed="False"/></test-results>'
-            $receipt.resultsSHA256=(Get-FileHash $xml).Hash
+            $receipt.resultsSHA256=(Get-FileHash -LiteralPath $xml).Hash
             { Assert-SidebarTooltipNativeReceipt $receipt source app } | Should -Throw
         }
         finally { Remove-Item -LiteralPath $dir -Recurse -Force }
@@ -125,8 +126,8 @@ Describe 'Sidebar tooltip physical oracle' -Tag Unit {
                 try {$bytes=[IO.File]::ReadAllBytes($installed);$stream.Write($bytes,0,$bytes.Length)}
                 finally {$stream.Dispose()}
             } finally {$zip.Dispose()}
-            $hash=(Get-FileHash $path).Hash
-            $entries=@(@{file='TerminalApp.dll';hash=(Get-FileHash $installed).Hash;installed=$installed})
+            $hash=(Get-FileHash -LiteralPath $path).Hash
+            $entries=@(@{file='TerminalApp.dll';hash=(Get-FileHash -LiteralPath $installed).Hash;installed=$installed})
             {Assert-SidebarTooltipArchive $path $hash $entries} | Should -Not -Throw
             {Assert-SidebarTooltipArchive $path ('0'*64) $entries} | Should -Throw
             {Assert-SidebarTooltipArchive $path $hash @(@{file='wta.exe';hash=$entries[0].hash;installed=$installed})} | Should -Throw
@@ -297,20 +298,45 @@ Describe 'Sidebar tooltip physical oracle' -Tag Unit {
                     $stream=$zip.CreateEntry($name).Open()
                     try {$bytes=[IO.File]::ReadAllBytes($installed);$stream.Write($bytes,0,$bytes.Length)}
                     finally {$stream.Dispose()}
-                    $hash=(Get-FileHash $installed).Hash
+                    $hash=(Get-FileHash -LiteralPath $installed).Hash
                     $hashes+=@{file=$name;hash=$hash;installed=$installed;corresponding=$true}
                     $registered+=@{File=$name;SHA256=$hash;PackagedPath=$installed}
                 }
             } finally {$zip.Dispose()}
-            $archiveHash=(Get-FileHash $path).Hash
+            $archiveHash=(Get-FileHash -LiteralPath $path).Hash
             @{SourceHead=$source;Identity=@{PFN=$pfn};ImmutableMsix=$path;MsixSHA256=$archiveHash;Hashes=$registered} |
                 ConvertTo-Json -Depth 6 | Set-Content $registrationPath
             $receipt=@{sourceHead=$source;installedIdentity=@{PFN=$pfn};hashes=$hashes
                 baselineOriginalMsix=@{path=$path;sha256=$archiveHash;registerReceiptPath=$registrationPath
-                    registerReceiptSHA256=(Get-FileHash $registrationPath).Hash}}
+                    registerReceiptSHA256=(Get-FileHash -LiteralPath $registrationPath).Hash}}
             {Assert-SidebarTooltipOriginalArchive $receipt} | Should -Not -Throw
             $receipt.sourceHead='b'*40
             {Assert-SidebarTooltipOriginalArchive $receipt} | Should -Throw
         } finally {Remove-Item -LiteralPath $dir -Recurse -Force}
+    }
+    It 'selects the highest installed servicing version only for the running CLR major' {
+        $lines=@(
+            'Microsoft.WindowsDesktop.App 9.0.9 [C:\dotnet\shared\Microsoft.WindowsDesktop.App]',
+            'Microsoft.WindowsDesktop.App 10.0.2 [C:\dotnet\shared\Microsoft.WindowsDesktop.App]',
+            'Microsoft.WindowsDesktop.App 10.0.12 [C:\dotnet\shared\Microsoft.WindowsDesktop.App]',
+            'Microsoft.WindowsDesktop.App 11.0.1 [C:\dotnet\shared\Microsoft.WindowsDesktop.App]',
+            'Microsoft.NETCore.App 10.0.99 [C:\dotnet\shared\Microsoft.NETCore.App]'
+        )
+        Select-SidebarTooltipDesktopRuntime $lines 10 | Should -BeExactly 'C:\dotnet\shared\Microsoft.WindowsDesktop.App\10.0.12'
+        Select-SidebarTooltipDesktopRuntime $lines 9 | Should -BeExactly 'C:\dotnet\shared\Microsoft.WindowsDesktop.App\9.0.9'
+        {Select-SidebarTooltipDesktopRuntime $lines 8} | Should -Throw '*major 8*'
+        {Select-SidebarTooltipDesktopRuntime @() 10} | Should -Throw
+    }
+    It 'verifies native evidence using literal bracket-containing paths' {
+        $dir=Join-Path $TestDrive 'native[fixture]'
+        [IO.Directory]::CreateDirectory($dir) | Out-Null
+        $dll=Join-Path $dir 'tests[fixture].dll';$xml=Join-Path $dir 'results[fixture].xml'
+        [IO.File]::WriteAllText($dll,'unit-only hash bytes')
+        [IO.File]::WriteAllText($xml,'<test-results><test-case name="TabTests::VerticalTabTooltipsTrackOwnerGeometry" result="Success" executed="True"/><test-case name="TabTests::VerticalTabTooltipsExposeStableShortcuts" result="Success" executed="True"/></test-results>')
+        $receipt=@{sourceHead='source';appSHA256='app';hosted=$true;testDllPath=$dll
+            testDllSHA256=(Get-FileHash -LiteralPath $dll).Hash;resultsXml=$xml;resultsSHA256=(Get-FileHash -LiteralPath $xml).Hash}
+        {Assert-SidebarTooltipNativeReceipt $receipt source app} | Should -Not -Throw
+        [IO.File]::WriteAllText($dll,'changed bytes')
+        {Assert-SidebarTooltipNativeReceipt $receipt source app} | Should -Throw
     }
 }

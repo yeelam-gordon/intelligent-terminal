@@ -6,10 +6,7 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
         . (Join-Path $PSScriptRoot 'helpers\SidebarTooltipOracle.ps1')
         . (Join-Path $PSScriptRoot 'helpers\TestTerminalCleanup.ps1')
         Assert-SidebarTooltipCommands (Join-Path $PSScriptRoot 'Feature.SidebarTooltipPlacement.Tests.ps1')
-        $desktop = 'C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App\10.0.12'
-        foreach ($name in @('WindowsBase', 'UIAutomationTypes', 'UIAutomationClient')) {
-            [void][Reflection.Assembly]::LoadFrom((Join-Path $desktop "$name.dll"))
-        }
+        $desktop = Initialize-SidebarTooltipDesktop
         & (Get-Module ItE2E) { Initialize-WtWin32Input }
         $script:package = Get-ItTestPackage
         if ($script:package -eq 'Store') { throw 'This regression requires an explicitly selected exact-source Dev/private package.' }
@@ -26,7 +23,7 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
         $script:baselineMode = $env:ITE2E_TOOLTIP_BASELINE -eq '1'
         if ($script:baselineMode) { Assert-SidebarTooltipOriginalArchive $receipt }
         foreach ($pair in @(@('TerminalApp.dll', $env:ITE2E_EXPECTED_APP_SHA256), @('wta.exe', $env:ITE2E_EXPECTED_WTA_SHA256))) {
-            if ((Get-FileHash (Join-Path $script:target.InstallLocation $pair[0])).Hash -ne $pair[1]) { throw "Exact-source payload mismatch: $($pair[0])" }
+            if ((Get-FileHash -LiteralPath (Join-Path $script:target.InstallLocation $pair[0])).Hash -ne $pair[1]) { throw "Exact-source payload mismatch: $($pair[0])" }
             $entry = @($receipt.hashes | Where-Object file -eq $pair[0])
             if ($entry.Count -ne 1 -or $entry[0].hash -ne $pair[1] -or -not $entry[0].corresponding -or
                 (-not $script:baselineMode -and (Get-FileHash -LiteralPath $entry[0].ownSourceOutput).Hash -ne $pair[1]) -or
@@ -42,7 +39,7 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
         New-Item -ItemType Directory $script:evidence | Out-Null
         $receipt | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $script:evidence 'build-receipt.json')
         $script:horizontalSamples = [Collections.Generic.List[object]]::new()
-        $script:nativeHash = (Get-FileHash "$env:WINDIR\System32\Windows.UI.Xaml.dll").Hash
+        $script:nativeHash = (Get-FileHash -LiteralPath "$env:WINDIR\System32\Windows.UI.Xaml.dll").Hash
         if (-not $script:baselineMode) {
             if (-not $env:ITE2E_TOOLTIP_NATIVE_RECEIPT -or -not $env:ITE2E_TOOLTIP_BASELINE_RECEIPT) {
                 throw 'Supply hosted native lifecycle and actual original-build Horizontal baseline receipts.'
@@ -55,18 +52,18 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
                 throw 'Original immutable source/native baseline is missing or incomplete.'
             }
             $baseBuild = Get-Content $script:baseline.buildReceipt -Raw | ConvertFrom-Json
-            if ((Get-FileHash $script:baseline.buildReceipt).Hash -ne $script:baseline.buildReceiptSHA256 -or
+            if ((Get-FileHash -LiteralPath $script:baseline.buildReceipt).Hash -ne $script:baseline.buildReceiptSHA256 -or
                 $baseBuild.sourceHead -cne $script:baseline.sourceHead) { throw 'Baseline build provenance mismatch.' }
             if ($baseBuild.baselineOriginalMsix) { Assert-SidebarTooltipOriginalArchive $baseBuild }
             foreach ($file in @('TerminalApp.dll','wta.exe')) {
                 $entry = @($baseBuild.hashes | Where-Object file -eq $file)
                 if ($entry.Count -ne 1 -or -not $entry[0].corresponding -or
-                    (Get-FileHash $entry[0].installed).Hash -ne $entry[0].hash) { throw 'Immutable baseline payload changed.' }
+                    (Get-FileHash -LiteralPath $entry[0].installed).Hash -ne $entry[0].hash) { throw 'Immutable baseline payload changed.' }
             }
             $baseApp = @($baseBuild.hashes | Where-Object file -eq 'TerminalApp.dll')[0]
             foreach ($sample in $script:baseline.samples) {
                 if ($sample.Source -cne $script:baseline.sourceHead -or $sample.AppHash -ne $baseApp.hash -or
-                    (Get-FileHash $sample.InputReceipt).Hash -ne $sample.InputReceiptSHA256) { throw 'Baseline observation provenance changed.' }
+                    (Get-FileHash -LiteralPath $sample.InputReceipt).Hash -ne $sample.InputReceiptSHA256) { throw 'Baseline observation provenance changed.' }
                 Assert-SidebarTooltipInputReceipt @{path=$sample.InputReceipt;sha256=$sample.InputReceiptSHA256} `
                     $sample.Pid $sample.RunToken (Join-Path ([IO.Path]::GetDirectoryName($baseApp.installed)) 'WindowsTerminal.exe')
             }
@@ -564,7 +561,7 @@ public static class TooltipMonitor {
             @{
                 sourceHead=$env:ITE2E_SOURCE_COMMIT; nativeHash=$script:nativeHash
                 buildReceipt=(Join-Path $script:evidence 'build-receipt.json')
-                buildReceiptSHA256=(Get-FileHash (Join-Path $script:evidence 'build-receipt.json')).Hash
+                buildReceiptSHA256=(Get-FileHash -LiteralPath (Join-Path $script:evidence 'build-receipt.json')).Hash
                 samples=@($script:horizontalSamples.ToArray())
             } | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $script:evidence 'horizontal-baseline.json')
             throw 'Baseline diagnostic captured; intentionally no release credit.'

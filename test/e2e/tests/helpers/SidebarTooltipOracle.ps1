@@ -1,3 +1,35 @@
+function Select-SidebarTooltipDesktopRuntime {
+    param([string[]]$RuntimeLines, [int]$ClrMajor)
+    $compatible = @(
+        foreach ($line in $RuntimeLines) {
+            if ($line -match '^Microsoft\.WindowsDesktop\.App ([0-9]+\.[0-9]+\.[0-9]+) \[(.+)\]$') {
+                $version = [version]$Matches[1]
+                if ($version.Major -eq $ClrMajor) {
+                    [pscustomobject]@{Version=$version;Path=(Join-Path $Matches[2] $Matches[1])}
+                }
+            }
+        }
+    )
+    if (-not $compatible.Count) { throw "Windows Desktop runtime matching PowerShell CLR major $ClrMajor is not installed." }
+    ($compatible | Sort-Object Version -Descending | Select-Object -First 1).Path
+}
+
+function Initialize-SidebarTooltipDesktop {
+    $architecture = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()
+    $root = if ($architecture -eq 'X86') { ${env:ProgramFiles(x86)} } else { $env:ProgramFiles }
+    $dotnet = Join-Path $root 'dotnet\dotnet.exe'
+    if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) { throw "Matching-architecture dotnet host unavailable: $dotnet" }
+    $result = Invoke-Native -FilePath $dotnet -Arguments @('--list-runtimes') -TimeoutSec 10
+    if ($result.ExitCode -ne 0 -or $result.TimedOut) { throw 'Bounded dotnet Desktop runtime discovery failed.' }
+    $path = Select-SidebarTooltipDesktopRuntime ($result.StdOut -split '\r?\n') ([Environment]::Version.Major)
+    foreach ($name in @('WindowsBase','UIAutomationTypes','UIAutomationClient')) {
+        $assembly = Join-Path $path "$name.dll"
+        if (-not (Test-Path -LiteralPath $assembly -PathType Leaf)) { throw "Matching Desktop assembly missing: $assembly" }
+        [void][Reflection.Assembly]::LoadFrom($assembly)
+    }
+    $path
+}
+
 function Assert-SidebarTooltipRect {
     param($Rect)
     if (-not $Rect) { throw 'Missing physical rectangle.' }
@@ -248,11 +280,11 @@ function Assert-SidebarTooltipWttReceipt {
     param($Receipt)
     if (@($Receipt.resultsFiles).Count -ne 2 -or -not $Receipt.runtimeResultsPath -or -not $Receipt.runtimeResultsSHA256 -or
         -not $Receipt.hostPackageFamilyName -or
-        (Get-FileHash $Receipt.runtimeResultsPath).Hash -ne $Receipt.runtimeResultsSHA256) {
+        (Get-FileHash -LiteralPath $Receipt.runtimeResultsPath).Hash -ne $Receipt.runtimeResultsSHA256) {
         throw 'Missing or mismatched actual WTT runtime provenance packet.'
     }
     if (-not $Receipt.recoveryPath -or -not $Receipt.recoverySHA256 -or -not $Receipt.sourceDiffSHA256 -or
-        (Get-FileHash $Receipt.recoveryPath).Hash -ne $Receipt.recoverySHA256) { throw 'Native cleanup/source snapshot receipt missing.' }
+        (Get-FileHash -LiteralPath $Receipt.recoveryPath).Hash -ne $Receipt.recoverySHA256) { throw 'Native cleanup/source snapshot receipt missing.' }
     $recovery = Get-Content $Receipt.recoveryPath -Raw | ConvertFrom-Json
     if ($recovery.Equal -isnot [bool] -or $recovery.Equal -ne $true -or
         $recovery.HEAD -cne $Receipt.sourceHead.Substring(0,40) -or
@@ -267,7 +299,7 @@ function Assert-SidebarTooltipWttReceipt {
         $files = @($Receipt.resultsFiles | Where-Object selector -ceq $selector)
         $matched = @($runs | Where-Object Target -ceq $selector)
         if ($files.Count -ne 1 -or $matched.Count -ne 1 -or -not $files[0].path -or -not $files[0].sha256 -or
-            (Get-FileHash $files[0].path).Hash -ne $files[0].sha256) { throw "WTT result missing/duplicated/hash mismatch: $selector" }
+            (Get-FileHash -LiteralPath $files[0].path).Hash -ne $files[0].sha256) { throw "WTT result missing/duplicated/hash mismatch: $selector" }
         $run = $matched[0]
         if ($null -eq $run.Exit -or $run.Exit -ne 0 -or $run.TimedOut -isnot [bool] -or $run.TimedOut -ne $false -or
             $run.RunnerPid -le 0 -or @($run.Hosts).Count -ne 1) { throw 'Native runner failed, timed out or lacks a unique created host.' }
@@ -278,7 +310,7 @@ function Assert-SidebarTooltipWttReceipt {
         foreach ($name in @('TestHostApp.exe','TerminalApp.dll','TerminalApp.LocalTests.dll')) {
             $modules = @($host.Modules | Where-Object Name -ceq $name)
             if ($modules.Count -ne 1 -or -not $modules[0].Path -or -not $modules[0].SHA256 -or
-                (Get-FileHash $modules[0].Path).Hash -ne $modules[0].SHA256) { throw "Native loaded module evidence mismatch: $name" }
+                (Get-FileHash -LiteralPath $modules[0].Path).Hash -ne $modules[0].SHA256) { throw "Native loaded module evidence mismatch: $name" }
             if (($name -eq 'TerminalApp.dll' -and $modules[0].SHA256 -ne $Receipt.appSHA256) -or
                 ($name -eq 'TerminalApp.LocalTests.dll' -and ($modules[0].SHA256 -ne $Receipt.testDllSHA256 -or
                     [IO.Path]::GetFullPath($modules[0].Path) -cne [IO.Path]::GetFullPath($Receipt.testDllPath))) -or
@@ -299,7 +331,7 @@ function Assert-SidebarTooltipNativeReceipt {
 
     if ($Receipt.resultsFiles) {
         if (-not $Receipt.testDllPath -or -not $Receipt.testDllSHA256 -or
-            (Get-FileHash $Receipt.testDllPath).Hash -ne $Receipt.testDllSHA256) { throw 'Native test DLL hash mismatch.' }
+            (Get-FileHash -LiteralPath $Receipt.testDllPath).Hash -ne $Receipt.testDllSHA256) { throw 'Native test DLL hash mismatch.' }
         Assert-SidebarTooltipWttReceipt $Receipt
         return
     }

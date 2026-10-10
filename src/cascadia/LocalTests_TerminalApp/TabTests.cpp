@@ -6296,6 +6296,12 @@ namespace TerminalAppLocalTests
     {
         winrt::TerminalApp::TabStrip strip{ nullptr };
         UIElement previousContent{ nullptr };
+        Grid firstHeader{ nullptr };
+        Grid firstAnchor{ nullptr };
+        ToolTip firstTip{ nullptr };
+        TextBlock firstText{ nullptr };
+        winrt::TerminalApp::TabStripDisplayItem replacement{ nullptr };
+        std::function<void()> verifyRetainedOwner;
         const auto layoutReady = std::make_shared<::details::Event>();
         VERIFY_IS_TRUE(layoutReady->IsValid());
         FrameworkElement::LayoutUpdated_revoker layoutRevoker;
@@ -6357,13 +6363,13 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_NOT_NULL(header);
                 return header;
             };
-            const auto firstHeader = headerAt(0);
+            firstHeader = headerAt(0);
             const auto secondHeader = headerAt(1);
-            const auto firstTip = ToolTipService::GetToolTip(firstHeader).as<ToolTip>();
+            firstTip = ToolTipService::GetToolTip(firstHeader).as<ToolTip>();
             VERIFY_IS_NOT_NULL(firstTip);
-            const auto firstText = firstTip.Content().as<TextBlock>();
+            firstText = firstTip.Content().as<TextBlock>();
             VERIFY_IS_NOT_NULL(firstText);
-            const auto firstAnchor = firstHeader.FindName(L"TabToolTipAnchor").as<Grid>();
+            firstAnchor = firstHeader.FindName(L"TabToolTipAnchor").as<Grid>();
             const auto verifyOwner = [](const Grid& owner, FlowDirection flow) {
                 const auto anchor = owner.FindName(L"TabToolTipAnchor").as<Grid>();
                 const auto tip = ToolTipService::GetToolTip(owner).as<ToolTip>();
@@ -6425,27 +6431,84 @@ namespace TerminalAppLocalTests
                     VERIFY_IS_TRUE(firstTip.Content() == firstText);
                 }
             }
-            // Rebind the realized template before its tooltip has ever opened.
-            const auto container = strip.ContainerFromIndex(0).as<ListViewItem>();
-            const auto replacement = impl->DisplayItemAt(1);
-            replacement.ToolTipText(L"Replacement tooltip\nctrl+alt+2");
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"Replacement tooltip\nctrl+alt+2" }, replacement.ToolTipText());
-            container.Content(replacement);
-            strip.UpdateLayout();
-            VERIFY_IS_TRUE(headerAt(0) == firstHeader);
-            VERIFY_IS_TRUE(firstHeader.DataContext() == replacement);
-            VERIFY_IS_TRUE(ToolTipService::GetToolTip(firstHeader) == firstTip);
-            VERIFY_IS_TRUE(ToolTipService::GetPlacementTarget(firstHeader) == firstAnchor);
-            VERIFY_IS_TRUE(firstTip.Content() == firstText);
-            VERIFY_ARE_EQUAL(replacement.ToolTipText(), firstText.Text());
-            replacement.ToolTipText(L"Rebound tooltip\nctrl+alt+2");
-            strip.UpdateLayout();
-            VERIFY_IS_TRUE(firstHeader.DataContext() == replacement);
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"Rebound tooltip\nctrl+alt+2" }, replacement.ToolTipText());
-            VERIFY_IS_TRUE(firstTip.Content() == firstText);
-            VERIFY_ARE_EQUAL(replacement.ToolTipText(), firstText.Text());
-            verifyOwner(firstHeader, FlowDirection::LeftToRight);
+            replacement = impl->DisplayItemAt(1);
+            const auto metadata = winrt::TerminalApp::XamlMetaDataProvider{};
+            const auto itemType = metadata.GetXamlType(winrt::xaml_typename<winrt::TerminalApp::TabStripDisplayItem>());
+            VERIFY_IS_NOT_NULL(itemType);
+            const auto member = itemType.GetMember(L"ToolTipText");
+            VERIFY_IS_NOT_NULL(member);
+            VERIFY_ARE_EQUAL(replacement.ToolTipText(), winrt::unbox_value<winrt::hstring>(member.GetValue(replacement)));
+            verifyRetainedOwner = [firstHeader, verifyOwner]() {
+                verifyOwner(firstHeader, FlowDirection::LeftToRight);
+            };
         });
+        const auto waitForBoundText = [&](const auto& action, const winrt::hstring& expected) {
+            const auto changed = std::make_shared<::details::Event>();
+            VERIFY_IS_TRUE(changed->IsValid());
+            int64_t token{};
+            bool subscribed{};
+            const auto revoke = wil::scope_exit([&]() {
+                LOG_IF_FAILED(RunOnUIThread([&]() {
+                    if (subscribed)
+                    {
+                        firstText.UnregisterPropertyChangedCallback(TextBlock::TextProperty(), token);
+                    }
+                }));
+            });
+            const auto check = [&]() {
+                const auto container = strip.ContainerFromIndex(0).try_as<ListViewItem>();
+                const auto root = container ? container.ContentTemplateRoot().try_as<StackPanel>() : nullptr;
+                if (root && root.Children().Size() > 0 && root.Children().GetAt(0) == firstHeader &&
+                    firstHeader.DataContext() == replacement && ToolTipService::GetToolTip(firstHeader) == firstTip &&
+                    ToolTipService::GetPlacementTarget(firstHeader) == firstAnchor && firstTip.Content() == firstText &&
+                    replacement.ToolTipText() == expected && firstText.Text() == expected)
+                {
+                    changed->Set();
+                }
+            };
+            TestOnUIThread([&]() {
+                token = firstText.RegisterPropertyChangedCallback(TextBlock::TextProperty(), [check](auto&&, auto&&) {
+                    check();
+                });
+                subscribed = true;
+                action();
+                strip.UpdateLayout();
+            });
+            TestOnUIThread(check);
+            const auto result = WaitForSingleObject(changed->m_handle, 10000);
+            TestOnUIThread([&]() {
+                const auto binding = firstText.GetBindingExpression(TextBlock::TextProperty());
+                VERIFY_IS_NOT_NULL(binding);
+                Log::Comment(NoThrowString().Format(L"Rebound binding: ElementName=%s; DataItemIsOwner=%d; ExplicitSourceIsOwner=%d; OwnerDataContextIsReplacement=%d; ModelText=%s; ActualText=%s",
+                                                    binding.ParentBinding().ElementName().c_str(),
+                                                    binding.DataItem() == firstHeader,
+                                                    binding.ParentBinding().Source() == firstHeader,
+                                                    firstHeader.DataContext() == replacement,
+                                                    replacement.ToolTipText().c_str(),
+                                                    firstText.Text().c_str()));
+            });
+            VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), result);
+            TestOnUIThread([&]() {
+                check();
+                VERIFY_IS_TRUE(firstHeader.DataContext() == replacement);
+                VERIFY_ARE_EQUAL(expected, replacement.ToolTipText());
+                VERIFY_IS_TRUE(ToolTipService::GetToolTip(firstHeader) == firstTip);
+                VERIFY_IS_TRUE(ToolTipService::GetPlacementTarget(firstHeader) == firstAnchor);
+                VERIFY_IS_TRUE(firstTip.Content() == firstText);
+                VERIFY_ARE_EQUAL(expected, firstText.Text());
+                verifyRetainedOwner();
+            });
+        };
+        // Closed popup binding updates may follow the container's dispatcher turn.
+        waitForBoundText([&]() {
+            replacement.ToolTipText(L"Replacement tooltip\nctrl+alt+2");
+            strip.ContainerFromIndex(0).as<ListViewItem>().Content(replacement);
+        },
+                         L"Replacement tooltip\nctrl+alt+2");
+        waitForBoundText([&]() {
+            replacement.ToolTipText(L"Rebound tooltip\nctrl+alt+2");
+        },
+                         L"Rebound tooltip\nctrl+alt+2");
     }
 
     void TabTests::VerticalTabSearchUiState()
