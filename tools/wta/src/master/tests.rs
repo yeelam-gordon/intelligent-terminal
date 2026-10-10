@@ -11418,14 +11418,19 @@ async fn sidebar_cli_resume_reports_creation_and_focus_failures() {
             }
         );
         assert_eq!(mock.calls().len(), call_count);
-        let events = crate::wt_protocol_events::take_test_published_events();
+        let events: Vec<serde_json::Value> =
+            crate::wt_protocol_events::take_test_published_events()
+                .into_iter()
+                .map(|event| {
+                    serde_json::from_str(&event).unwrap_or_else(|error| {
+                        panic!("invalid published event JSON: {error}: {event}")
+                    })
+                })
+                .collect();
         assert_eq!(
             events
                 .iter()
-                .filter(|event| {
-                    serde_json::from_str::<serde_json::Value>(event).unwrap()["method"]
-                        == "session_registry_changed"
-                })
+                .filter(|event| event["method"] == "session_registry_changed")
                 .count(),
             usize::from(call_count == 2),
             "only successful creation and binding publishes metadata, even if focus fails"
@@ -11523,14 +11528,17 @@ async fn sidebar_cli_resume_updates_only_selected_collision_identity() {
         .expect("colliding row remains registered");
     assert_eq!(other.status, Some(AgentStatus::Historical));
     assert!(other.pane_session_id.is_none());
-    let events = crate::wt_protocol_events::take_test_published_events();
+    let events: Vec<serde_json::Value> = crate::wt_protocol_events::take_test_published_events()
+        .into_iter()
+        .map(|event| {
+            serde_json::from_str(&event)
+                .unwrap_or_else(|error| panic!("invalid published event JSON: {error}: {event}"))
+        })
+        .collect();
     assert_eq!(
         events
             .iter()
-            .filter(|event| {
-                serde_json::from_str::<serde_json::Value>(event).unwrap()["method"]
-                    == "session_registry_changed"
-            })
+            .filter(|event| event["method"] == "session_registry_changed")
             .count(),
         1,
         "qualified collisions require structural invalidation, not a raw-ID status delta"
