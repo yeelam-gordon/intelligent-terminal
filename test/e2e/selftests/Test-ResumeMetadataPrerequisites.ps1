@@ -1,5 +1,5 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
-# Runs the actual six-case suite with only external native prerequisites mocked.
+# Runs the actual seven-case suite with only external native prerequisites mocked.
 $ErrorActionPreference = 'Stop'
 $fixture = Join-Path $PSScriptRoot 'ResumeMetadataFixture.Unit.Tests.ps1'
 $errors = $null
@@ -58,15 +58,15 @@ foreach ($scenario in @('MissingVswhere', 'NoInstallation', 'MissingVcSetup',
     $missing = $scenario -in @('MissingVswhere', 'NoInstallation', 'MissingVcSetup')
     $expectedSkipped = if ($missing) { 2 } else { 0 }
     $expectedFailed = if ($missing) { 0 } else { 2 }
-    if ($result.PassedCount -ne 4 -or $result.SkippedCount -ne $expectedSkipped -or
-        $result.FailedCount -ne $expectedFailed -or $result.TotalCount -ne 6) {
+    if ($result.PassedCount -ne 5 -or $result.SkippedCount -ne $expectedSkipped -or
+        $result.FailedCount -ne $expectedFailed -or $result.TotalCount -ne 7) {
         throw "$scenario unexpected counts: passed=$($result.PassedCount), failed=$($result.FailedCount), skipped=$($result.SkippedCount), total=$($result.TotalCount)"
     }
     $native = @($result.Tests | Where-Object { $_.ExpandedName -like '*native shim holds*' -or $_.ExpandedName -like '*unreleased native gate*' })
     if ($native.Count -ne 2 -or @($native | Where-Object Result -ne $(if ($missing) { 'Skipped' } else { 'Failed' })).Count) {
         throw "$scenario did not isolate the two native gate cases."
     }
-    Write-Host "VERIFIED $scenario`: 4 passed, $expectedFailed failed (expected), $expectedSkipped skipped."
+    Write-Host "VERIFIED $scenario`: 5 passed, $expectedFailed failed (expected), $expectedSkipped skipped."
 }
 }
 finally { Remove-Item -LiteralPath $ownedRoot -Recurse -Force }

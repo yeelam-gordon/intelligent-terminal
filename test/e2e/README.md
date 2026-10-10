@@ -163,8 +163,9 @@ evidence; no live acceptance is claimed here.
 Focused hermetic fixture validation (no Terminal launch, package lookup, agent
 credentials or live hook): `ResumeMetadataFixture.Unit.Tests.ps1` compiles the
 native shim using the same VS/encoded-command build path as the live suite.
-Its six cases cover opted-in exact ACP request capture, unchanged capture-off
-behavior, completed JSONL framing with strict corruption handling, native hook
+Its seven cases cover opted-in exact ACP request capture, unchanged capture-off
+behavior, completed JSONL framing with strict corruption handling, no-hook
+assertion helper availability, native hook
 suppression until release, stable native-resume selection, timeout forwarding,
 and failure without a hook on an
 unreleased gate. The hook endpoint is a local stub, so
