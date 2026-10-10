@@ -15,6 +15,12 @@ Describe 'Feature: Sidebar row alignment' -Tag @('Feature', 'SidebarRowAlignment
             $Value
         }
         $script:marker = Resolve-AlignmentMarker $env:ITE2E_ALIGNMENT_MARKER
+        $script:alignmentFlowDirection = if ($env:ITE2E_ALIGNMENT_FLOW_DIRECTION) {
+            $env:ITE2E_ALIGNMENT_FLOW_DIRECTION
+        } else { 'LTR' }
+        if ($script:alignmentFlowDirection -cnotin @('LTR', 'RTL')) {
+            throw 'ITE2E_ALIGNMENT_FLOW_DIRECTION must match the tested layout: LTR or RTL.'
+        }
         Import-Module (Join-Path $PSScriptRoot '..\ItE2E\ItE2E.psd1') -Force
         . (Join-Path $PSScriptRoot 'helpers\SidebarSessionCleanup.ps1')
         Add-Type -AssemblyName UIAutomationClient
@@ -207,6 +213,10 @@ namespace ItE2E {
             $r = $Element.Current.BoundingRectangle
             @{ left = $r.Left; top = $r.Top; right = $r.Right; bottom = $r.Bottom; width = $r.Width; height = $r.Height }
         }
+        function Get-AlignmentLeadingEdge {
+            param($Rectangle, [ValidateSet('LTR', 'RTL')][string]$FlowDirection)
+            if ($FlowDirection -eq 'RTL') { $Rectangle.Right } else { $Rectangle.Left }
+        }
         function Assert-AlignmentDelta {
             param([double]$First, [double]$Second, [double]$Scale)
             if ($Scale -le 0) { throw 'A valid physical-pixel/DIP scale is required.' }
@@ -320,6 +330,8 @@ namespace ItE2E {
         $scale = [ItE2E.RowAlignmentActivation]::GetDpiForWindow([IntPtr]([long]$script:app.Hwnd)) / 96.0
         $scale | Should -BeGreaterThan 0
         $viewport = $list.Current.BoundingRectangle
+        $liveLeading = Get-AlignmentLeadingEdge $liveTitle.Current.BoundingRectangle $script:alignmentFlowDirection
+        $recentLeading = Get-AlignmentLeadingEdge $recentTitle.Current.BoundingRectangle $script:alignmentFlowDirection
         foreach ($row in @($live, $recent)) {
             $r = $row.Current.BoundingRectangle
             $row.Current.IsOffscreen | Should -BeFalse
@@ -334,8 +346,12 @@ namespace ItE2E {
                 -not $_.Current.IsOffscreen -and $_.Current.BoundingRectangle.Width -gt 0 -and
                 $_.Current.Name -and $_.Current.Name -ne $script:historyTitle -and
                 $_.Current.BoundingRectangle.Top -ge ($recentTitle.Current.BoundingRectangle.Bottom - $scale)
-        } | Sort-Object { $_.Current.BoundingRectangle.Left })
+        } | Sort-Object {
+            if ($script:alignmentFlowDirection -eq 'RTL') { -$_.Current.BoundingRectangle.Right }
+            else { $_.Current.BoundingRectangle.Left }
+        })
         $metadata.Count | Should -BeGreaterThan 0
+        $metadataLeading = Get-AlignmentLeadingEdge $metadata[0].Current.BoundingRectangle $script:alignmentFlowDirection
         $historyIcon = @($parts | Where-Object {
             $_.Current.AutomationId -eq 'HistoryProviderIcon' -and -not $_.Current.IsOffscreen -and
                 $_.Current.BoundingRectangle.Width -gt 0
@@ -350,11 +366,12 @@ namespace ItE2E {
             source_commit = $env:ITE2E_SOURCE_COMMIT; app_sha256 = $env:ITE2E_EXPECTED_APP_SHA256
             wta_sha256 = $env:ITE2E_EXPECTED_WTA_SHA256
             coordinate_space = 'physical screen; offsets share ItemsList origin'; dip_scale = $scale
+            flow_direction = $script:alignmentFlowDirection
             items_list = Get-AlignmentRect $list; live_row = Get-AlignmentRect $live; recent_row = Get-AlignmentRect $recent
             live_title = Get-AlignmentRect $liveTitle; recent_title = Get-AlignmentRect $recentTitle
             history_metadata = Get-AlignmentRect $metadata[0]
-            title_delta_dip = ($liveTitle.Current.BoundingRectangle.Left - $recentTitle.Current.BoundingRectangle.Left) / $scale
-            metadata_delta_dip = ($metadata[0].Current.BoundingRectangle.Left - $recentTitle.Current.BoundingRectangle.Left) / $scale
+            title_delta_dip = ($liveLeading - $recentLeading) / $scale
+            metadata_delta_dip = ($metadataLeading - $recentLeading) / $scale
             icon_geometry_verified = $iconsVerified
             icon_limitation = 'Raw provider control bounds are not compositor glyph proof; absent peers require native transforms and independent visual sign-off.'
             compositor_signoff = 'pending independent review of alignment.png and selected.png'
@@ -369,9 +386,8 @@ namespace ItE2E {
         $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $script:evidence 'geometry.json') -ErrorAction Stop
         Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence 'alignment.png') | Out-Null
         # Use one screen origin, not each row's local indentation (which hides the regression).
-        Assert-AlignmentDelta ($liveTitle.Current.BoundingRectangle.Left - $viewport.Left) `
-            ($recentTitle.Current.BoundingRectangle.Left - $viewport.Left) $scale
-        Assert-AlignmentDelta $metadata[0].Current.BoundingRectangle.Left $recentTitle.Current.BoundingRectangle.Left $scale
+        Assert-AlignmentDelta $liveLeading $recentLeading $scale
+        Assert-AlignmentDelta $metadataLeading $recentLeading $scale
         if ($iconsVerified) {
             foreach ($icon in @($liveIcon[0], $historyIcon[0])) {
                 $icon.Current.BoundingRectangle.Width / $scale | Should -BeGreaterOrEqual 15
@@ -385,7 +401,9 @@ namespace ItE2E {
         $active = (Get-ActivePane -App $script:app).session_id
         $active | Should -Be $script:pane
         $recent.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Select()
-        $recent.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected | Should -BeTrue
+        # History interaction deliberately preserves the canonical live-tab selection.
+        $recent.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected | Should -BeFalse
+        $live.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern).Current.IsSelected | Should -BeTrue
         (Get-ActivePane -App $script:app).session_id | Should -Be $active
         $selected = $recent.Current.BoundingRectangle
         Assert-AlignmentDelta $selected.Left $receipt.recent_row.left $scale

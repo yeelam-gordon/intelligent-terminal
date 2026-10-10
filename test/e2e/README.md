@@ -111,6 +111,10 @@ deployed App/WTA hashes. `geometry.json` and `alignment.png` are saved before th
 unchanged 1-DIP alignment oracle: a pre-fix baseline must fail, not count as
 acceptance. Marker reuse matches fixture titles/search only; the coordinator
 must also match width, DPI, window bounds, scroll, selection and pointer state.
+For a mirrored Sidebar, set `ITE2E_ALIGNMENT_FLOW_DIRECTION=RTL`; the default
+is `LTR`. This must match the actual captured layout. Title and metadata
+comparisons use the logical leading edge (right in RTL), not the different
+intrinsic widths of their text. Both directions retain the same 1-DIP threshold.
 The alignment selftest preserves prior checklist ID occurrence counts, allowing
 wording/checkbox updates and new IDs, while rejecting removed/replaced prior IDs,
 against the merge-base of HEAD and `origin/main` by default. For a PR targeting

@@ -708,12 +708,22 @@ namespace TerminalAppLocalTests
     class HistoryTestView
     {
     public:
-        HistoryTestView()
+        explicit HistoryTestView(const bool usePhysicalCoordinateHost = false)
         {
             TestOnUIThread([&]() {
                 strip = winrt::TerminalApp::TabStrip{};
                 previousContent = Window::Current().Content();
-                Window::Current().Content(strip);
+                if (usePhysicalCoordinateHost)
+                {
+                    coordinateHost = Grid{};
+                    coordinateHost.FlowDirection(FlowDirection::LeftToRight);
+                    coordinateHost.Children().Append(strip);
+                    Window::Current().Content(coordinateHost);
+                }
+                else
+                {
+                    Window::Current().Content(strip);
+                }
                 Window::Current().Activate();
                 strip.HistoryActive(true);
                 strip.UpdateLayout();
@@ -724,6 +734,11 @@ namespace TerminalAppLocalTests
         {
             LOG_IF_FAILED(RunOnUIThread([&]() {
                 Window::Current().Content(previousContent);
+                if (coordinateHost)
+                {
+                    coordinateHost.Children().Clear();
+                    coordinateHost = nullptr;
+                }
                 strip = nullptr;
             }));
         }
@@ -763,6 +778,7 @@ namespace TerminalAppLocalTests
         }
 
         winrt::TerminalApp::TabStrip strip{ nullptr };
+        Grid coordinateHost{ nullptr };
 
     private:
         UIElement previousContent{ nullptr };
@@ -9848,10 +9864,11 @@ namespace TerminalAppLocalTests
 
     void TabTests::VerticalTabHistoryAlignsWithLiveRows()
     {
-        HistoryTestView view;
+        HistoryTestView view{ true };
         TestOnUIThread([&]() {
             const auto strip = view.strip;
             const auto impl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(strip);
+            const auto coordinateHost = view.coordinateHost;
             strip.Height(700);
             impl->SetVerticalPresentation(true);
 
@@ -9913,16 +9930,18 @@ namespace TerminalAppLocalTests
                     const auto historyTitleText = Media::VisualTreeHelper::GetChild(historyTitle, 0).as<TextBlock>();
                     const auto historySubtitleText = Media::VisualTreeHelper::GetChild(historySubtitle, 0).as<TextBlock>();
 
-                    // All bounds share the viewport origin, including RTL's logical leading edge.
+                    // A fixed LTR host keeps RTL transforms in physical coordinates.
+                    const auto viewport = list.TransformToVisual(coordinateHost).TransformBounds(
+                        { 0, 0, static_cast<float>(list.ActualWidth()), static_cast<float>(list.ActualHeight()) });
                     const auto bounds = [&](const FrameworkElement& element) {
                         VERIFY_IS_TRUE(element.ActualWidth() > 0);
                         VERIFY_IS_TRUE(element.ActualHeight() > 0);
-                        return element.TransformToVisual(list).TransformBounds(
+                        return element.TransformToVisual(coordinateHost).TransformBounds(
                             { 0, 0, static_cast<float>(element.ActualWidth()), static_cast<float>(element.ActualHeight()) });
                     };
                     const auto leading = [&](const FrameworkElement& element) {
                         const auto rect = bounds(element);
-                        return direction == FlowDirection::LeftToRight ? rect.X : list.ActualWidth() - rect.X - rect.Width;
+                        return direction == FlowDirection::LeftToRight ? rect.X - viewport.X : viewport.X + viewport.Width - rect.X - rect.Width;
                     };
                     const auto center = [&](const FrameworkElement& element) {
                         const auto rect = bounds(element);
@@ -9938,6 +9957,9 @@ namespace TerminalAppLocalTests
                     VERIFY_IS_TRUE(historyTitleText.IsTextTrimmed());
                     VERIFY_IS_TRUE(std::abs(center(liveIcon) - center(historyIcon)) <= tolerance);
                     VERIFY_IS_TRUE(std::abs(center(groupSlot) - center(historyIcon)) <= tolerance);
+                    Log::Comment(NoThrowString().Format(L"Alignment direction=%d width=%.1f header=%.2f liveText=%.2f historyText=%.2f liveIcon=%.2f historyIcon=%.2f",
+                                                       static_cast<int>(direction), width, leading(header), leading(titleText),
+                                                       leading(historyTitleText), center(liveIcon), center(historyIcon)));
                     VERIFY_IS_TRUE(std::abs(leading(header) - leading(historyTitleText)) <= tolerance);
                     VERIFY_IS_TRUE(std::abs(leading(titleText) - leading(historyTitleText)) <= tolerance);
                     VERIFY_IS_TRUE(std::abs(leading(metadataText) - leading(historySubtitleText)) <= tolerance);

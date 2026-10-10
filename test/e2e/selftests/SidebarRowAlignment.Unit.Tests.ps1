@@ -86,6 +86,46 @@ BeforeAll {
 AfterAll { Remove-Item -LiteralPath $script:root -Recurse -Force }
 
 Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
+    It 'compares logical leading edges rather than intrinsic text widths (<Direction>)' -TestCases @(
+        @{ Direction = 'LTR'; Expected = 100 },
+        @{ Direction = 'RTL'; Expected = 300 }
+    ) {
+        param($Direction, $Expected)
+        $function = $script:ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq 'Get-AlignmentLeadingEdge'
+        }, $true)
+        if (-not $function) { throw 'The alignment suite is missing Get-AlignmentLeadingEdge.' }
+        . ([scriptblock]::Create($function.Extent.Text))
+        $rectangle = [pscustomobject]@{ Left = 100; Right = 300 }
+        Get-AlignmentLeadingEdge $rectangle $Direction | Should -Be $Expected
+        if ($Direction -eq 'RTL') {
+            $narrow = [pscustomobject]@{ Left = 180; Right = 300 }
+            Get-AlignmentLeadingEdge $narrow $Direction | Should -Be (
+                Get-AlignmentLeadingEdge $rectangle $Direction)
+        }
+    }
+    It 'selects metadata nearest its logical leading side (<Direction>)' -TestCases @(
+        @{ Direction = 'LTR'; Expected = 'left' },
+        @{ Direction = 'RTL'; Expected = 'right' }
+    ) {
+        param($Direction, $Expected)
+        $command = $script:ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'Sort-Object' -and
+                $node.Extent.Text.Contains('$script:alignmentFlowDirection')
+        }, $true)
+        if (-not $command) { throw 'The alignment suite is missing logical metadata ordering.' }
+        $sort = $command.CommandElements[1].ScriptBlock.GetScriptBlock()
+        $script:alignmentFlowDirection = $Direction
+        $parts = @(
+            [pscustomobject]@{ Id = 'left'; Current = [pscustomobject]@{ BoundingRectangle = [pscustomobject]@{ Left = 10; Right = 30 } } },
+            [pscustomobject]@{ Id = 'right'; Current = [pscustomobject]@{ BoundingRectangle = [pscustomobject]@{ Left = 40; Right = 90 } } }
+        )
+        @($parts | Sort-Object $sort)[0].Id | Should -Be $Expected
+    }
     It 'preserves the master-pipe read error before trimming its result' {
         $assignment = $script:ast.Find({
             param($node)
@@ -391,8 +431,9 @@ Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
     }
     It 'uses one viewport origin and never substitutes slot geometry for missing icon peers' {
         $text = $script:ast.Extent.Text
-        $text | Should -Match 'liveTitle.Current.BoundingRectangle.Left - \$viewport.Left'
-        $text | Should -Match 'recentTitle.Current.BoundingRectangle.Left - \$viewport.Left'
+        $text | Should -Match 'Get-AlignmentLeadingEdge \$liveTitle.Current.BoundingRectangle'
+        $text | Should -Match 'Get-AlignmentLeadingEdge \$recentTitle.Current.BoundingRectangle'
+        $text | Should -Match 'Assert-AlignmentDelta \$liveLeading \$recentLeading \$scale'
         $text | Should -Match 'RawViewWalker'
         $text | Should -Match 'if \(\$iconsVerified\)'
         $text | Should -Match 'else \{ Write-Warning \$receipt.icon_limitation \}'
