@@ -485,6 +485,38 @@ Describe 'Actual sidebar runtime AfterAll: StrictMode <Strict>, primary <Primary
         }
     }
 
+    It 'fails closed on a nonterminating <Probe> recovery path probe' -TestCases @(
+        @{ Probe = 'receipt' },
+        @{ Probe = 'runtime' }
+    ) {
+        param($Probe)
+        $script:failingProbe = if ($Probe -eq 'receipt') { "$script:evidence\cleanup.json" } else { $script:runtimePath }
+        $script:probeReturned = $false
+        $script:probeErrorAction = $null
+        Mock Test-Path {
+            param($LiteralPath, $ErrorAction)
+            if ($LiteralPath -eq $script:failingProbe) {
+                $script:probeErrorAction = $ErrorAction
+                Write-Error 'recovery path probe sentinel'
+                $script:probeReturned = $true
+                return $false
+            }
+            $true
+        }
+        $failure = Invoke-ActualRecovery $Strict
+        $failure | Should -Not -BeNullOrEmpty
+        if ($Primary) {
+            [object]::ReferenceEquals($failure.Exception.InnerExceptions[0], $script:originalException) | Should -BeTrue
+            $failure.Exception.InnerExceptions[1].Message | Should -Match 'recovery path probe sentinel'
+        }
+        else { $failure.Exception.Message | Should -Match 'recovery path probe sentinel' }
+        $script:probeReturned | Should -BeFalse
+        $script:probeErrorAction | Should -Be 'Stop'
+        Should -Invoke Remove-Item -Exactly -Times 0
+        Should -Invoke Copy-Item -Exactly -Times 0
+        Should -Invoke Set-Content -Exactly -Times 0
+    }
+
     It 'ignores receipts for unowned or incomplete backups (<Owned>, <Backed>)' -ForEach @(
         @{ Owned = $false; Backed = $true }
         @{ Owned = $true; Backed = $false }

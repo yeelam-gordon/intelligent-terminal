@@ -86,6 +86,33 @@ BeforeAll {
 AfterAll { Remove-Item -LiteralPath $script:root -Recurse -Force }
 
 Describe 'Sidebar row alignment nonlive contracts' -Tag Unit {
+    It 'preserves the actual hook receipt read error at the assignment boundary' {
+        $assignment = $script:ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+                $node.Extent.Text -match '^\$receipt = Get-Content'
+        }, $true)
+        if (-not $assignment) { throw 'The alignment suite is missing its hook receipt read.' }
+        $receiptPath = Join-Path $script:root 'fictitious-receipt.json'
+        $receipt = [pscustomobject]@{ unchanged = $true }
+        $original = $receipt
+        $script:receiptReadReturned = $false
+        function Get-Content {
+            [CmdletBinding()]
+            param($LiteralPath, [switch]$Raw)
+            Write-Error 'hook receipt read sentinel'
+            $script:receiptReadReturned = $true
+        }
+        $read = [scriptblock]::Create($assignment.Extent.Text)
+        {
+            & {
+                $ErrorActionPreference = 'Continue'
+                . $read
+            }
+        } | Should -Throw '*hook receipt read sentinel*'
+        $script:receiptReadReturned | Should -BeFalse
+        [object]::ReferenceEquals($receipt, $original) | Should -BeTrue
+    }
     It 'compares logical leading edges rather than intrinsic text widths (<Direction>)' -TestCases @(
         @{ Direction = 'LTR'; Expected = 100 },
         @{ Direction = 'RTL'; Expected = 300 }

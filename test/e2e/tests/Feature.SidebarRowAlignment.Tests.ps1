@@ -165,7 +165,7 @@ namespace ItE2E {
             Wait-Until -TimeoutSec 45 -Because 'shell hooks complete through the packaged COM bridge' -Condition {
                 Test-Path -LiteralPath $receiptPath
             } | Out-Null
-            $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+            $receipt = Get-Content -LiteralPath $receiptPath -Raw -ErrorAction Stop | ConvertFrom-Json
             $receipt.events | Should -Be $Events.Count
             $receipt.pane_session_id.Trim('{}').ToLowerInvariant() | Should -Be $script:pane.Trim('{}').ToLowerInvariant()
         }
@@ -275,7 +275,7 @@ namespace ItE2E {
         if ($script:ownsConfigBackup -and $script:runtimeBackedUp) {
             try {
                 if (-not $script:evidence -or
-                    -not (Test-Path -LiteralPath (Join-Path $script:evidence 'cleanup.json'))) {
+                    -not (Test-Path -LiteralPath (Join-Path $script:evidence 'cleanup.json') -ErrorAction Stop)) {
                     throw 'Runtime recovery receipt is missing; the snapshot is retained.'
                 }
                 $recovery = Get-Content -LiteralPath (Join-Path $script:evidence 'cleanup.json') -Raw -ErrorAction Stop |
@@ -297,7 +297,7 @@ namespace ItE2E {
                     (Get-FileHash -LiteralPath (Join-Path $script:runtimeBackup $relative) -ErrorAction Stop).Hash |
                         Should -Be $script:runtimeHashes[$relative]
                 }
-                if (Test-Path -LiteralPath $script:runtimePath) { Remove-Item -LiteralPath $script:runtimePath -Recurse -Force -ErrorAction Stop }
+                if (Test-Path -LiteralPath $script:runtimePath -ErrorAction Stop) { Remove-Item -LiteralPath $script:runtimePath -Recurse -Force -ErrorAction Stop }
                 if ($script:runtimeExisted) {
                     Copy-Item -LiteralPath $script:runtimeBackup -Destination $script:runtimePath -Recurse -ErrorAction Stop
                     foreach ($relative in $script:runtimeHashes.Keys) {
