@@ -48,6 +48,9 @@ int wmain(int argc, wchar_t** argv)
 #ifdef ITE2E_SHIM_SESSION_START_GATE
     command += L" -SessionStartGate \"" + std::wstring{ ITE2E_SHIM_SESSION_START_GATE } + L"\"";
 #endif
+#ifdef ITE2E_SHIM_SESSION_START_TIMEOUT
+    command += L" -SessionStartTimeoutSec " + std::wstring{ ITE2E_SHIM_SESSION_START_TIMEOUT };
+#endif
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
