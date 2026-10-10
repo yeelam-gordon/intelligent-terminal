@@ -13047,7 +13047,7 @@ namespace winrt::TerminalApp::implementation
         }
 
         const auto direction = args.Direction();
-        if (direction != MoveTabDirection::None && !_IsTabListPositionOperationBlocked())
+        if (direction != MoveTabDirection::None && !_IsTabSearchEffective())
         {
             // Use the requested tab, if provided. Otherwise, use the currently
             // focused tab.

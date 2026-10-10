@@ -2173,7 +2173,7 @@ namespace winrt::TerminalApp::implementation
             const auto visible = _IsTabVisibleInProjection(tabImpl, display);
             if (tabImpl)
             {
-                tabImpl->SetTabListPositionOperationsRestricted(positionOperationsBlocked);
+                tabImpl->SetTabListPositionOperationsRestricted(positionOperationsBlocked, _IsTabSearchEffective());
                 tabImpl->SetTabPointerInteractionRestricted(_IsCollapsedVerticalRail());
             }
             if (display)
@@ -2611,6 +2611,12 @@ namespace winrt::TerminalApp::implementation
 
             _mutatingTabCollections = false;
             endMutation.release();
+            // Selection events were suppressed during mutation; complete a real tab switch now.
+            // Reordering the selected tab or pinning must not repeat selection side effects.
+            if (selectMoved && previouslySelected != tabViewItem)
+            {
+                _OnSelectionChangedCore();
+            }
             _UpdateTabView();
             _ApplyTabListProjection(tab);
 

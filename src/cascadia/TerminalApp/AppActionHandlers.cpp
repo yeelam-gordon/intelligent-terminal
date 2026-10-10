@@ -943,7 +943,7 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto& realArgs = actionArgs.ActionArgs().try_as<MoveTabArgs>())
         {
-            if (_IsTabListPositionOperationBlocked() && realArgs.Window().empty())
+            if (_IsTabSearchEffective() && realArgs.Window().empty())
             {
                 actionArgs.Handled(false);
                 return;

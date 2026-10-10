@@ -131,9 +131,10 @@ namespace winrt::TerminalApp::implementation
         // Returns the Pane node hosting the AgentPaneContent, or nullptr.
         std::shared_ptr<Pane> FindAgentPane() const;
         bool IsAgentTab() const;
-        void SetTabListPositionOperationsRestricted(bool restricted)
+        void SetTabListPositionOperationsRestricted(bool restricted, bool tabMoveRestricted)
         {
             _tabListPositionOperationsRestricted = restricted;
+            _tabMoveRestricted = tabMoveRestricted;
             _EnableMenuItems();
             _UpdatePinMenuItem();
         }
@@ -302,6 +303,7 @@ namespace winrt::TerminalApp::implementation
         winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _switchTabLayoutMenuItem{};
         winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _closeOtherTabsMenuItem{};
         bool _tabListPositionOperationsRestricted{ false };
+        bool _tabMoveRestricted{ false };
         bool _tabPointerInteractionRestricted{ false };
         winrt::Windows::UI::Xaml::Controls::MenuFlyout _contextMenuFlyout{ nullptr };
         winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _closeTabsAfterMenuItem{};

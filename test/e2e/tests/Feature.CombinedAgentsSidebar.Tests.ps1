@@ -1,6 +1,27 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 
 BeforeAll {
+function Wait-CombinedCliLaunchRecord {
+    param([Parameter(Mandatory)][string]$Path, [int]$TimeoutSec = 20)
+    $captured = @{ Line = $null; ReadError = $null }
+    Wait-Until -TimeoutSec $TimeoutSec -Because 'the first native fixture JSONL record is complete' -Condition {
+        try {
+            if (-not (Test-Path -LiteralPath $Path -ErrorAction Stop)) { return $false }
+            $snapshot = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+            if ($null -eq $snapshot) { return $false }
+            $end = $snapshot.IndexOf("`n")
+            if ($end -lt 0) { return $false }
+            if ($end -gt 0 -and $snapshot[$end - 1] -eq "`r") { $end-- }
+            $captured.Line = $snapshot.Substring(0, $end)
+        } catch {
+            # Wait-Until catches predicate exceptions; carry read failures out explicitly.
+            $captured.ReadError = $_
+        }
+        return $true
+    } | Out-Null
+    if ($captured.ReadError) { throw $captured.ReadError }
+    $captured.Line
+}
 function Invoke-CombinedCheckedCleanup {
     param($PrimaryFailure, [Parameter(Mandatory)][scriptblock]$Action)
     try { & $Action }
@@ -545,7 +566,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 }
             }
         function Get-CombinedFilterState {
-            Invoke-UiClick -App $script:app -Selector FilterTabsButton | Out-Null
+            Invoke-UiElement -App $script:app -Selector FilterTabsButton | Out-Null
             try {
                 $state = @{}
                 foreach ($id in @('AgentsOnlyFilterMenuItem', 'RecentAgentSessionsFilterMenuItem')) {
@@ -571,9 +592,14 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             )) {
                 $state = Get-CombinedFilterState
                 if ($state[$entry.Id] -ne $entry.Value) {
-                    Invoke-UiClick -App $script:app -Selector FilterTabsButton | Out-Null
-                    $item = Get-CombinedElement $entry.Id
-                    $item.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+                    Invoke-UiElement -App $script:app -Selector FilterTabsButton | Out-Null
+                    $item = Wait-Until -TimeoutSec 30 -Because "$($entry.Id) is visible in the owned filter flyout" -Condition {
+                        $peer = Get-CombinedElement $entry.Id
+                        if ($peer -and -not $peer.Current.IsOffscreen) { $peer }
+                    }
+                    $item.Current.ProcessId | Should -Be $script:app.Pid
+                    $item.Current.ControlType | Should -Be ([Windows.Automation.ControlType]::MenuItem)
+                    $item.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
                 }
             }
             $state = Get-CombinedFilterState
@@ -1750,6 +1776,327 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         }
     }
 
+    It 'Agents view moves whole owning tabs without changing sessions' {
+        $fixture = New-CombinedCliFixture 'tab-move'
+        $created = [Collections.Generic.List[object]]::new()
+        $owner = $null
+        $primaryFailure = $null
+        $title = "$script:marker-tab-move"
+        function Get-MoveOrder {
+            @(Get-WtTabs -App $script:app -WindowId $script:app.WindowId | ForEach-Object {
+                @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId $_.tab_id)[0].session_id
+            })
+        }
+        function Get-MoveOwner {
+            $matches = @(Get-WtTabs -App $script:app -WindowId $script:app.WindowId | Where-Object {
+                @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId $_.tab_id |
+                    Where-Object session_id -eq $owner.session_id).Count -eq 1
+            })
+            $matches | Should -HaveCount 1
+            $matches[0]
+        }
+        function Get-MoveGroup {
+            $rows = @(Get-CombinedRows Live | Where-Object {
+                $parts = @(Get-CombinedRawChildren $_)
+                $toggles = @($parts | Where-Object { $_.Current.AutomationId -eq 'TabGroupToggleButton' })
+                if ($toggles.Count -ne 1) { return $false }
+                $toggle = $toggles[0].Current.BoundingRectangle
+                @($parts | Where-Object {
+                    $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text -and
+                        $_.Current.Name -eq $title -and -not $_.Current.IsOffscreen -and
+                        $_.Current.BoundingRectangle.Height -gt 0 -and
+                        ($_.Current.BoundingRectangle.Top + $_.Current.BoundingRectangle.Height / 2) -ge $toggle.Top -and
+                        ($_.Current.BoundingRectangle.Top + $_.Current.BoundingRectangle.Height / 2) -le $toggle.Bottom
+                }).Count -eq 1
+            })
+            $rows | Should -HaveCount 1
+            $rows[0]
+        }
+        function Get-MoveGroupState {
+            $parts = @(Get-CombinedRawChildren (Get-MoveGroup))
+            [ordered]@{
+                toggle = @($parts | Where-Object { $_.Current.AutomationId -eq 'TabGroupToggleButton' })[0].Current.Name
+                children = @($parts | Where-Object {
+                    $_.Current.AutomationId -eq 'PaneActivateButton' -and -not $_.Current.IsOffscreen
+                } | ForEach-Object { $_.Current.Name })
+            } | ConvertTo-Json -Compress
+        }
+        function Open-MoveMenu {
+            Invoke-TestTabHeaderContextMenu -App $script:app -PaneSessionId $owner.session_id -Title $title
+            Invoke-UiElement -App $script:app -Selector 'Move tab' | Out-Null
+            Wait-UiElement -App $script:app -Selector 'Move up' | Out-Null
+        }
+        function Get-MoveMenuItem {
+            param([string]$Name)
+            $window = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+            $condition = [Windows.Automation.PropertyCondition]::new(
+                [Windows.Automation.AutomationElement]::NameProperty, $Name)
+            $items = @($window.FindAll([Windows.Automation.TreeScope]::Descendants, $condition) |
+                Where-Object { -not $_.Current.IsOffscreen -and $_.Current.ControlType -eq [Windows.Automation.ControlType]::MenuItem })
+            $items | Should -HaveCount 1
+            $items[0]
+        }
+        function Get-MoveDisplay {
+            $process = Get-Process -Id $script:app.Pid -ErrorAction Stop
+            if (-not $script:app.Launched -or -not $script:app.OwnedProcess -or
+                $script:app.OwnedProcess.HasExited -or $script:app.OwnedProcess.Id -ne $process.Id -or
+                $process.StartTime -ne $script:app.OwnedProcess.StartTime -or
+                $process.Path -ne (Join-Path $script:app.InstallLocation 'WindowsTerminal.exe')) {
+                throw 'Displayed owner requires the original owned process lease.'
+            }
+            $hwnd = [IntPtr][long]$script:app.Hwnd
+            if ([ItE2E.ItWtWin32Input]::GetAncestor($hwnd, 2) -ne $hwnd -or
+                [ItE2E.ItWtWin32Input]::GetWindowProcessId($hwnd) -ne $script:app.Pid) {
+                throw 'Displayed owner requires the exact owned root HWND.'
+            }
+            $window = [Windows.Automation.AutomationElement]::FromHandle($hwnd)
+            if (-not $window -or $window.Current.ProcessId -ne $script:app.Pid) {
+                throw 'Displayed owner UIA root belongs to another process.'
+            }
+            $windowBounds = $window.Current.BoundingRectangle
+            if ($window.Current.IsOffscreen -or $windowBounds.Width -le 0 -or $windowBounds.Height -le 0 -or
+                @($windowBounds.X, $windowBounds.Y, $windowBounds.Width, $windowBounds.Height | Where-Object {
+                    [double]::IsNaN($_) -or [double]::IsInfinity($_)
+                }).Count) { return }
+            $marker = "PID=$($launch.pid)"
+            $condition = [Windows.Automation.PropertyCondition]::new(
+                [Windows.Automation.AutomationElement]::ClassNameProperty, 'TermControl')
+            $matches = @(
+                foreach ($control in $window.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)) {
+                    if ($control.Current.ProcessId -ne $script:app.Pid) {
+                        throw 'Displayed owner refuses a foreign terminal peer.'
+                    }
+                    $bounds = $control.Current.BoundingRectangle
+                    if ($control.Current.IsOffscreen -or $bounds.Width -le 0 -or $bounds.Height -le 0 -or
+                        @($bounds.X, $bounds.Y, $bounds.Width, $bounds.Height | Where-Object {
+                            [double]::IsNaN($_) -or [double]::IsInfinity($_)
+                        }).Count) { continue }
+                    $pattern = $control.GetCurrentPattern([Windows.Automation.TextPattern]::Pattern)
+                    $document = $pattern.DocumentRange
+                    $documentText = $document.GetText(-1)
+                    if ($documentText.IndexOf($marker, [StringComparison]::Ordinal) -lt 0) { continue }
+                    if (-not $document.FindText($marker, $false, $false)) { continue }
+                    $range = & (Get-Module ItE2E) {
+                        param($documentRange, $text)
+                        Find-ItExactTextRange -DocumentRange $documentRange -Text $text
+                    } $document $marker
+                    $rectangles = @($range.GetBoundingRectangles())
+                    if ($rectangles.Count -eq 0) { continue }
+                    $visible = $true
+                    foreach ($rectangle in $rectangles) {
+                        $x, $y, $width, $height = $rectangle.X, $rectangle.Y, $rectangle.Width, $rectangle.Height
+                        if (@($x, $y, $width, $height | Where-Object {
+                            [double]::IsNaN($_) -or [double]::IsInfinity($_)
+                        }).Count -or $width -le 0 -or $height -le 0) { $visible = $false; break }
+                        foreach ($clip in @($bounds, $windowBounds)) {
+                            if ($x -lt $clip.Left -or $y -lt $clip.Top -or
+                                $x + $width -gt $clip.Right -or $y + $height -gt $clip.Bottom) {
+                                $visible = $false
+                            }
+                        }
+                    }
+                    if ($visible) {
+                        @{
+                            marker = $range.GetText(-1); fixture_pid = $launch.pid; hwnd = $script:app.Hwnd
+                            process_id = $control.Current.ProcessId; class = $control.Current.ClassName
+                            control = $control.Current.Name; runtime_id = @($control.GetRuntimeId())
+                            # Keep evidence as flat x/y/width/height tuples; the managed UIA API returns Rect[].
+                            range_rectangles = @(foreach ($rectangle in $rectangles) {
+                                $rectangle.X; $rectangle.Y; $rectangle.Width; $rectangle.Height
+                            })
+                            control_bounds = @($bounds.X, $bounds.Y, $bounds.Width, $bounds.Height)
+                            window_bounds = @($windowBounds.X, $windowBounds.Y, $windowBounds.Width, $windowBounds.Height)
+                        }
+                    }
+                }
+            )
+            if ($matches.Count -gt 1) { throw 'Displayed owner marker is ambiguous across terminal peers.' }
+            if ($matches.Count -eq 1) { $matches[0] }
+        }
+        function Assert-MoveIdentity {
+            $current = @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId (Get-MoveOwner).tab_id)
+            @($current.session_id) | Should -Be @($panes.session_id)
+            foreach ($identity in $identities) {
+                (Get-WtPaneStatus -App $script:app -SessionId $identity.sid).pid | Should -Be $identity.pid
+            }
+            $retained = Get-AgentPaneSession -App $script:app -PaneSessionId $helper.PaneSessionId
+            $retained.AcpSessionId | Should -Be $helper.AcpSessionId
+            $retained.HelperProcessId | Should -Be $helper.HelperProcessId
+            @(Get-Content $fixture.Log) | Should -HaveCount 1
+            @((Get-CombinedSnapshot).sessions | Where-Object {
+                $_.session_id -eq $fixture.SessionId -and
+                    ([string]$_.pane_session_id).Trim('{}') -eq ([string]$owner.session_id).Trim('{}')
+            }) | Should -HaveCount 1
+            # COM selection alone does not prove that the owner terminal was rehosted.
+            $observation = @{ Error = $null; Display = $null }
+            Wait-Until -TimeoutSec 10 -Because 'the actual visible owner terminal contains its fixture marker' -Condition {
+                try {
+                    $observation.Display = Get-MoveDisplay
+                    return [bool]$observation.Display
+                }
+                catch { $observation.Error = $_; return $true }
+            } | Out-Null
+            if ($observation.Error) { throw $observation.Error }
+            $observation.Display
+        }
+        try {
+            Set-CombinedView $false
+            $helperIds = @(Get-AgentPaneSessions -App $script:app).PaneSessionId
+            $neighbor = Invoke-WtCli -App $script:app -Arguments @(
+                'new-tab', '-c', 'cmd.exe /d /k', '-n', "$title-neighbor", '--agent-provider', 'copilot')
+            $created.Add($neighbor)
+            $neighborHelper = Wait-NewAgentPaneSession -App $script:app -ExcludePaneSessionId $helperIds -TimeoutSec 40
+            Wait-AgentReady -App $script:app -PaneSessionId $neighborHelper.PaneSessionId -TimeoutSec 40 | Should -BeTrue
+            $helperIds = @(Get-AgentPaneSessions -App $script:app).PaneSessionId
+            $ordinary = New-WtTab -App $script:app -Command 'cmd.exe /d /k' -Title "$title-ordinary"
+            $created.Add($ordinary)
+            $ordinaryHelper = Wait-NewAgentPaneSession -App $script:app -ExcludePaneSessionId $helperIds -TimeoutSec 40
+            $helperIds = @(Get-AgentPaneSessions -App $script:app).PaneSessionId
+            $owner = New-WtTab -App $script:app -Command "`"$($fixture.Shim)`" --session-id $($fixture.SessionId)" `
+                -Cwd $fixture.Folder -Title $title
+            $created.Add($owner)
+            $helper = Wait-NewAgentPaneSession -App $script:app -ExcludePaneSessionId $helperIds -TimeoutSec 40
+            Wait-AgentReady -App $script:app -PaneSessionId $helper.PaneSessionId -TimeoutSec 40 | Should -BeTrue
+            $split = Split-WtPane -App $script:app -SessionId $owner.session_id -Direction right `
+                -Command 'pwsh.exe -NoLogo -NoProfile -NoExit'
+            $created.Add($split)
+            $launch = Wait-CombinedCliLaunchRecord -Path $fixture.Log -TimeoutSec 20 |
+                ConvertFrom-Json -ErrorAction Stop
+            $launch.session_id | Should -Be $fixture.SessionId
+            $launch.pid | Should -BeGreaterThan 0
+            $panes = @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId (Get-MoveOwner).tab_id)
+            $panes | Should -HaveCount 2
+            $identities = @($panes | ForEach-Object {
+                @{ sid = $_.session_id; pid = (Get-WtPaneStatus -App $script:app -SessionId $_.session_id).pid }
+            })
+            (Get-WtPaneStatus -App $script:app -SessionId $owner.session_id).pid | Should -Be $launch.native_pid
+            (Get-Process -Id $launch.native_pid -ErrorAction Stop).Path | Should -Be $fixture.Shim
+            Wait-Until -TimeoutSec 20 -Because 'the native hook owns its original shell before any move' -Condition {
+                @((Get-CombinedSnapshot).sessions | Where-Object {
+                    $_.session_id -eq $fixture.SessionId -and
+                        ([string]$_.pane_session_id).Trim('{}') -eq ([string]$owner.session_id).Trim('{}')
+                }).Count -eq 1
+            } | Out-Null
+            Set-CombinedFilters -AgentsOnly $true -Recent $false
+            Assert-CombinedSearchState $false
+            $scroll = Get-CombinedScroll ItemsList
+            if ($scroll.Current.VerticallyScrollable) {
+                $scroll.SetScrollPercent([Windows.Automation.ScrollPattern]::NoScroll, 100)
+            }
+            @((Get-CombinedRows Live) | Where-Object {
+                (Get-CombinedRowText $_).Contains("$title-ordinary")
+            }) | Should -HaveCount 0
+            $original = @(Get-MoveOrder)
+            $original[-3..-1] | Should -Be @($neighbor.session_id, $ordinary.session_id, $owner.session_id)
+            foreach ($expanded in @($true, $false)) {
+                $toggle = @(Get-CombinedRawChildren (Get-MoveGroup) |
+                    Where-Object { $_.Current.AutomationId -eq 'TabGroupToggleButton' })[0]
+                if (($toggle.Current.Name -match 'Collapse') -ne $expanded) {
+                    $toggle.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+                }
+                Wait-Until -TimeoutSec 5 -Condition {
+                    $peer = @(Get-CombinedRawChildren (Get-MoveGroup) |
+                        Where-Object { $_.Current.AutomationId -eq 'TabGroupToggleButton' })[0]
+                    ($peer.Current.Name -match 'Collapse') -eq $expanded
+                } | Out-Null
+                $groupState = Get-MoveGroupState
+                $beforeY = (Get-MoveGroup).Current.BoundingRectangle.Top
+                Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence "tab-move-$expanded-before.png") | Out-Null
+                foreach ($step in @(
+                    @{ Action = 'Move up'; Tail = @($neighbor.session_id, $owner.session_id, $ordinary.session_id) },
+                    @{ Action = 'Move up'; Tail = @($owner.session_id, $neighbor.session_id, $ordinary.session_id) },
+                    @{ Action = 'Move down'; Tail = @($neighbor.session_id, $owner.session_id, $ordinary.session_id) },
+                    @{ Action = 'Move down'; Tail = @($neighbor.session_id, $ordinary.session_id, $owner.session_id) }
+                )) {
+                    Set-WtPaneFocus -App $script:app -SessionId $neighbor.session_id
+                    Open-MoveMenu
+                    (Get-MoveMenuItem $step.Action).Current.IsEnabled | Should -BeTrue
+                    Invoke-UiElement -App $script:app -Selector $step.Action | Out-Null
+                    $expected = @($original | Select-Object -SkipLast 3) + $step.Tail
+                    Wait-Until -TimeoutSec 10 -Condition { (@(Get-MoveOrder) -join ',') -eq ($expected -join ',') } | Out-Null
+                    (Get-ActivePane -App $script:app).tab_id | Should -Be (Get-MoveOwner).tab_id
+                    Get-MoveGroupState | Should -Be $groupState
+                    if ($step.Tail[0] -eq $owner.session_id) {
+                        (Get-MoveGroup).Current.BoundingRectangle.Top | Should -BeLessThan $beforeY
+                        Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence "tab-move-$expanded-after.png") | Out-Null
+                    }
+                    $display = Assert-MoveIdentity
+                    @{
+                        action = $step.Action; expanded = $expanded; canonical_shell_order = @(Get-MoveOrder)
+                        owner_shell = $owner.session_id; owner_tab_index = (Get-MoveOwner).tab_id
+                        active_pane = Get-ActivePane -App $script:app; panes = $identities
+                        helper = $helper; native_session = $fixture.SessionId; group = $groupState
+                        displayed_owner = $display
+                        header_top = (Get-MoveGroup).Current.BoundingRectangle.Top
+                    } | ConvertTo-Json -Depth 6 -Compress |
+                        Add-Content -LiteralPath (Join-Path $script:evidence 'tab-move.jsonl')
+                }
+            }
+            foreach ($query in @('', $title)) {
+                Set-CombinedQuery $query
+                Get-UiValue -App $script:app -Selector SearchTextBox -ValuePattern | Should -Be $query
+                $before = @(Get-MoveOrder)
+                $active = (Get-ActivePane -App $script:app).session_id
+                Open-MoveMenu
+                foreach ($direction in @('Move up', 'Move down')) {
+                    (Get-MoveMenuItem $direction).Current.IsEnabled | Should -BeFalse
+                }
+                Send-WtWindowKey -App $script:app -Vk 0x1B -RequireForeground -Repeat 2 | Out-Null
+                @(Get-MoveOrder) | Should -Be $before
+                (Get-ActivePane -App $script:app).session_id | Should -Be $active
+                Get-MoveGroupState | Should -Be $groupState
+                $display = Assert-MoveIdentity
+                @{ query = $query; displayed_owner = $display } | ConvertTo-Json -Depth 6 -Compress |
+                    Add-Content -LiteralPath (Join-Path $script:evidence 'tab-move.jsonl')
+            }
+            Set-CombinedQuery $script:history[0].title
+            Wait-Until -TimeoutSec 10 -Condition { @(Get-CombinedRows Recent).Count -eq 1 } | Out-Null
+            $historyOrder = @((Get-CombinedSnapshot).sessions.session_id)
+            $before = @(Get-MoveOrder)
+            $active = (Get-ActivePane -App $script:app).session_id
+            Set-WtWindowForeground -App $script:app | Should -BeTrue
+            Invoke-UiClick -App $script:app -Selector $script:history[0].title -Right | Out-Null
+            $menuObservation = @{ Error = $null }
+            $unexpectedMoveMenu = Test-Until -TimeoutSec 3 -IntervalSec 0.1 -Condition {
+                try {
+                    $window = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+                    foreach ($element in @(Get-CombinedRawChildren $window)) {
+                        $current = $element.get_Current()
+                        if (-not $current.get_IsOffscreen() -and
+                            $current.get_ControlType() -eq [Windows.Automation.ControlType]::MenuItem -and
+                            $current.get_Name() -in @('Move tab', 'Move up', 'Move down')) {
+                            return $true
+                        }
+                    }
+                    return $false
+                }
+                catch {
+                    $menuObservation.Error = $_
+                    return $true
+                }
+            }
+            if ($menuObservation.Error) { throw $menuObservation.Error }
+            $unexpectedMoveMenu | Should -BeFalse -Because 'a recent-session row is not an owning-tab move target'
+            @(Get-MoveOrder) | Should -Be $before
+            (Get-ActivePane -App $script:app).session_id | Should -Be $active
+            @((Get-CombinedSnapshot).sessions.session_id) | Should -Be $historyOrder
+        }
+        catch { $primaryFailure = $_; throw }
+        finally {
+            Invoke-CombinedCheckedCleanup $primaryFailure {
+                Send-WtWindowKey -App $script:app -Vk 0x1B -RequireForeground -Repeat 2 | Out-Null
+                foreach ($pane in $created) {
+                    $present = @(Get-WtTabs -App $script:app -WindowId $script:app.WindowId | ForEach-Object {
+                        Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId $_.tab_id
+                    } | Where-Object session_id -eq $pane.session_id)
+                    if ($present.Count -eq 1) {
+                        Invoke-WtCli -App $script:app -Arguments @('kill-pane', '-t', $pane.session_id) | Out-Null
+                    }
+                }
+            }
+        }
+    }
+
     It 'History background indicator restores the whole original tab (<Status>)' -ForEach @(
         @{ Status = 'Idle' }, @{ Status = 'Working' }
     ) {
@@ -1761,8 +2108,8 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             Set-CombinedView $false
             $tab = New-WtTab -App $script:app -Command "`"$($fixture.Shim)`" --session-id $($fixture.SessionId)" `
                 -Cwd $fixture.Folder -Title "$script:marker-background-$Status"
-            Wait-Until -TimeoutSec 20 -Condition { Test-Path $fixture.Log } | Out-Null
-            $launch = Get-Content $fixture.Log | Select-Object -First 1 | ConvertFrom-Json
+            $launch = Wait-CombinedCliLaunchRecord -Path $fixture.Log -TimeoutSec 20 |
+                ConvertFrom-Json -ErrorAction Stop
             $native = Get-Process -Id $launch.native_pid -ErrorAction Stop
             $native.Path | Should -Be $fixture.Shim
             $split = Split-WtPane -App $script:app -SessionId $tab.session_id -Direction right `
@@ -1999,8 +2346,8 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             $external = [Diagnostics.Process]::Start($start)
             $externalOutput = $external.StandardOutput.ReadToEndAsync()
             $externalError = $external.StandardError.ReadToEndAsync()
-            Wait-Until -TimeoutSec 15 -Condition { Test-Path $fixture.Log } | Out-Null
-            $externalRecord = Get-Content $fixture.Log | Select-Object -First 1 | ConvertFrom-Json
+            $externalRecord = Wait-CombinedCliLaunchRecord -Path $fixture.Log -TimeoutSec 15 |
+                ConvertFrom-Json -ErrorAction Stop
             $externalRecord.mode | Should -Be 'external'
             $externalRecord.session_id | Should -Be $sid
             $externalRecord.pane_session_id | Should -BeNullOrEmpty
