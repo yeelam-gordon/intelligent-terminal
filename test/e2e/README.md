@@ -146,9 +146,10 @@ evidence; no live acceptance is claimed here.
 Focused hermetic fixture validation (no Terminal launch, package lookup, agent
 credentials or live hook): `ResumeMetadataFixture.Unit.Tests.ps1` compiles the
 native shim using the same VS/encoded-command build path as the live suite.
-Its five cases cover opted-in exact ACP request capture, unchanged capture-off
+Its six cases cover opted-in exact ACP request capture, unchanged capture-off
 behavior, completed JSONL framing with strict corruption handling, native hook
-suppression until release, timeout forwarding, and failure without a hook on an
+suppression until release, stable native-resume selection, timeout forwarding,
+and failure without a hook on an
 unreleased gate. The hook endpoint is a local stub, so
 synthetic fixture pane IDs are never evidence of product session binding.
 Build and generated files stay under the owned artifact directory and are
@@ -174,8 +175,10 @@ pwsh -NoProfile -File test\e2e\bootstrap.ps1 -Check
 ```
 
 For a focused Pester run, use `Filter.FullName` selectors
-`*Independent scope filters and global search*` and
-`*History Enter resumes an unbound native session*`. The report driver does not
+`*Independent scope filters and global search*`. To select the three native
+resume cases (C390 On/Off and C422), use `Filter.Tag = @('NativeSessionResume')`.
+`Filter.FullName` does not expand the parameterized `<CaseTitle>` at selection
+time. The report driver does not
 accept `-FullNameFilter`; use its whole-suite `-Path` option for release results.
 
 Ordinary revised Sidebar fixtures explicitly pass `-State @{

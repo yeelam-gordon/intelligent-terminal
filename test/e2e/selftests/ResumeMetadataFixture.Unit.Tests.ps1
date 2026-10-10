@@ -173,6 +173,33 @@ exit 0
         finally { $writer.Dispose() }
     }
 
+    It 'native resume cases expose a stable tag and retain their release titles' {
+        $feature = Join-Path $PSScriptRoot '..\tests\Feature.CombinedAgentsSidebar.Tests.ps1'
+        $ast = [Management.Automation.Language.Parser]::ParseFile($feature, [ref]$null, [ref]$null)
+        $definitions = @($ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'It' -and
+                $node.Extent.Text.StartsWith("It '<CaseTitle> (<RecentScope>)'")
+        }, $true))
+        $definitions.Count | Should -Be 1
+        $elements = $definitions[0].CommandElements
+        foreach ($name in @('Tag', 'ForEach')) {
+            $parameter = @($elements | Where-Object {
+                $_ -is [Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -eq $name
+            })
+            $parameter.Count | Should -Be 1
+            $value = $elements[[Array]::IndexOf($elements, $parameter[0]) + 1].SafeGetValue()
+            if ($name -eq 'Tag') {
+                $value | Should -Be 'NativeSessionResume'
+            } else {
+                @($value).Count | Should -Be 3
+                @($value | Where-Object CaseTitle -eq 'History Enter resumes an unbound native session in the current window').Count | Should -Be 2
+                @($value | Where-Object CaseTitle -eq 'Native history resume publishes Idle before hooks').Count | Should -Be 1
+            }
+        }
+    }
+
     It 'native shim holds the hook until gate release and forwards the configured timeout' {
         $fixture = Start-ResumeFixtureProcess -Executable $script:shim -Arguments @('--resume', $script:sid)
         try {

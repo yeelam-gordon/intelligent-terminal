@@ -2023,7 +2023,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         }
     }
 
-    It '<CaseTitle> (<RecentScope>)' -ForEach @(
+    It '<CaseTitle> (<RecentScope>)' -Tag 'NativeSessionResume' -ForEach @(
         @{ CaseTitle = 'History Enter resumes an unbound native session in the current window'; RecentScope = $true; HoldHook = $false }
         @{ CaseTitle = 'History Enter resumes an unbound native session in the current window'; RecentScope = $false; HoldHook = $false }
         @{ CaseTitle = 'Native history resume publishes Idle before hooks'; RecentScope = $true; HoldHook = $true }
