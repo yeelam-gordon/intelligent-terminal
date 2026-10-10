@@ -593,7 +593,12 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 $state = Get-CombinedFilterState
                 if ($state[$entry.Id] -ne $entry.Value) {
                     Invoke-UiClick -App $script:app -Selector FilterTabsButton | Out-Null
-                    $item = Get-CombinedElement $entry.Id
+                    $item = Wait-Until -TimeoutSec 30 -Because "$($entry.Id) is visible in the owned filter flyout" -Condition {
+                        $peer = Get-CombinedElement $entry.Id
+                        if ($peer -and -not $peer.Current.IsOffscreen) { $peer }
+                    }
+                    $item.Current.ProcessId | Should -Be $script:app.Pid
+                    $item.Current.ControlType | Should -Be ([Windows.Automation.ControlType]::MenuItem)
                     $item.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
                 }
             }

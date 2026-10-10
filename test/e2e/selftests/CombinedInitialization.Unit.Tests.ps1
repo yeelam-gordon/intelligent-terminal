@@ -13,14 +13,31 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
                 $node.Name -eq 'Set-CombinedFilters'
         }, $true)
         . ([scriptblock]::Create($definition.Extent.Text))
+        $core = [Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PSScriptRoot '..\ItE2E\Private\Core.ps1'), [ref]$null, [ref]$null)
+        $wait = $core.Find({ param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq 'Wait-Until'
+        }, $true)
+        . ([scriptblock]::Create($wait.Extent.Text))
         function Get-CombinedFilterState { $script:filterState.Clone() }
         function Invoke-UiClick { param($App, $Selector) }
         function Get-CombinedElement {
             param($Id)
-            $peer = [pscustomobject]@{ Id = $Id }
+            $script:peerRequests.Add($Id)
+            $script:peerReads++
+            if ($script:peerReads -le $script:pendingReads) { return $null }
+            $peer = [pscustomobject]@{
+                Id = $Id
+                Current = [pscustomobject]@{
+                    ProcessId = $script:peerPid
+                    ControlType = $script:peerType
+                    IsOffscreen = $script:peerReads -le ($script:pendingReads + $script:offscreenReads)
+                }
+            }
             $peer | Add-Member ScriptMethod GetCurrentPattern {
                 param($pattern)
-                if ($pattern -ne [Windows.Automation.TogglePattern]::Pattern) {
+                if ($script:unsupportedPattern -or $pattern -ne [Windows.Automation.TogglePattern]::Pattern) {
                     throw 'Unsupported Pattern'
                 }
                 $script:patternRequests.Add($this.Id)
@@ -47,6 +64,13 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
         $script:patternRequests = [Collections.Generic.List[string]]::new()
         $script:toggleCalls = [Collections.Generic.List[string]]::new()
         $script:ignoreToggle = $false
+        $script:peerRequests = [Collections.Generic.List[string]]::new()
+        $script:peerReads = 0
+        $script:pendingReads = 0
+        $script:offscreenReads = 0
+        $script:peerPid = 42
+        $script:peerType = [Windows.Automation.ControlType]::MenuItem
+        $script:unsupportedPattern = $false
         Mock Invoke-UiClick {
             $Selector | Should -Be FilterTabsButton
             $App.Pid | Should -Be 42
@@ -80,6 +104,55 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
         $script:ignoreToggle = $true
         { Set-CombinedFilters -AgentsOnly $AgentsOnly -Recent $Recent } | Should -Throw
         $script:toggleCalls.ToArray() | Should -Be @($Id)
+        Should -Invoke Assert-CombinedHeaderCue -Exactly -Times 0
+    }
+
+    It 'waits for the exact <Id> peer to become present and visible before toggling' -ForEach @(
+        @{ Id = 'AgentsOnlyFilterMenuItem'; AgentsOnly = $true; Recent = $false },
+        @{ Id = 'RecentAgentSessionsFilterMenuItem'; AgentsOnly = $false; Recent = $true }
+    ) {
+        $script:pendingReads = 1
+        $script:offscreenReads = 1
+        Set-CombinedFilters -AgentsOnly $AgentsOnly -Recent $Recent
+        $script:peerRequests.ToArray() | Should -Be @($Id, $Id, $Id)
+        $script:toggleCalls.ToArray() | Should -Be @($Id)
+        $script:filterState[$Id] | Should -BeTrue
+        Should -Invoke Invoke-UiClick -Exactly -Times 1
+        Should -Invoke Assert-CombinedHeaderCue -Exactly -Times 1
+    }
+
+    It 'rejects a visible peer from another process before requesting its pattern' {
+        $script:peerPid = 43
+        { Set-CombinedFilters -AgentsOnly $true -Recent $false } | Should -Throw
+        $script:patternRequests.Count | Should -Be 0
+        $script:toggleCalls.Count | Should -Be 0
+    }
+
+    It 'rejects a visible non-menu peer before requesting its pattern' {
+        $script:peerType = [Windows.Automation.ControlType]::Button
+        { Set-CombinedFilters -AgentsOnly $true -Recent $false } | Should -Throw
+        $script:patternRequests.Count | Should -Be 0
+        $script:toggleCalls.Count | Should -Be 0
+    }
+
+    It 'fails explicitly when the visible menu peer does not support TogglePattern' {
+        $script:unsupportedPattern = $true
+        { Set-CombinedFilters -AgentsOnly $true -Recent $false } | Should -Throw '*Unsupported Pattern*'
+        $script:toggleCalls.Count | Should -Be 0
+        Should -Invoke Assert-CombinedHeaderCue -Exactly -Times 0
+    }
+
+    It 'retains the 30-second bound when the peer never becomes ready' {
+        Mock Wait-Until {
+            $TimeoutSec | Should -Be 30
+            $Because | Should -Be 'AgentsOnlyFilterMenuItem is visible in the owned filter flyout'
+            & $Condition | Should -BeNullOrEmpty
+            throw 'Wait-Until timed out after 30s waiting for: AgentsOnlyFilterMenuItem'
+        }
+        $script:pendingReads = 1
+        { Set-CombinedFilters -AgentsOnly $true -Recent $false } | Should -Throw '*timed out after 30s*'
+        $script:toggleCalls.Count | Should -Be 0
+        Should -Invoke Wait-Until -Exactly -Times 1
         Should -Invoke Assert-CombinedHeaderCue -Exactly -Times 0
     }
 }
