@@ -1945,7 +1945,6 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             $ordinary = New-WtTab -App $script:app -Command 'cmd.exe /d /k' -Title "$title-ordinary"
             $created.Add($ordinary)
             $ordinaryHelper = Wait-NewAgentPaneSession -App $script:app -ExcludePaneSessionId $helperIds -TimeoutSec 40
-            Wait-AgentReady -App $script:app -PaneSessionId $ordinaryHelper.PaneSessionId -TimeoutSec 40 | Should -BeTrue
             $helperIds = @(Get-AgentPaneSessions -App $script:app).PaneSessionId
             $owner = New-WtTab -App $script:app -Command "`"$($fixture.Shim)`" --session-id $($fixture.SessionId)" `
                 -Cwd $fixture.Folder -Title $title

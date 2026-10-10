@@ -158,6 +158,41 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
 }
 
 Describe 'Combined sidebar initialization order' -Tag 'Unit' {
+    It 'keeps the C425 ordinary neighbor stashed while waiting for the two agent tabs' {
+        $case = $script:ast.Find({ param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'It' -and
+                $node.CommandElements[1].Value -eq 'Agents view moves whole owning tabs without changing sessions'
+        }, $true)
+        $case | Should -Not -BeNullOrEmpty
+        $commands = @($case.FindAll({ param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'Wait-AgentReady'
+        }, $true))
+        $commands | Should -HaveCount 2
+        $targets = @(foreach ($command in $commands) {
+            $parameter = @($command.CommandElements | Where-Object {
+                $_ -is [Management.Automation.Language.CommandParameterAst] -and
+                    $_.ParameterName -eq 'PaneSessionId'
+            })
+            $parameter | Should -HaveCount 1
+            $argument = $command.CommandElements[$command.CommandElements.IndexOf($parameter[0]) + 1]
+            $argument | Should -BeOfType ([Management.Automation.Language.MemberExpressionAst])
+            $argument.Member.Value | Should -Be PaneSessionId
+            $argument.Expression.VariablePath.UserPath
+        })
+        $targets | Should -Be @('neighborHelper', 'helper')
+        $ordinaryCapture = @($case.FindAll({ param($node)
+            $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+                $node.Left.VariablePath.UserPath -eq 'ordinaryHelper'
+        }, $true))
+        $ordinaryCapture | Should -HaveCount 1
+        @($ordinaryCapture[0].FindAll({ param($node)
+            $node -is [Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'Wait-NewAgentPaneSession'
+        }, $true)) | Should -HaveCount 1
+    }
+
     It 'file-level BeforeAll defines helpers without accessing package paths' {
         $parent = $script:ast.EndBlock.Statements | Where-Object {
             $_ -is [Management.Automation.Language.PipelineAst] -and $_.PipelineElements[0].GetCommandName() -eq 'BeforeAll'
