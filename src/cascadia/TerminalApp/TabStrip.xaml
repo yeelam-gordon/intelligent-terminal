@@ -509,7 +509,7 @@
                             <ToolTipService.ToolTip>
                                 <ToolTip FlowDirection="LeftToRight"
                                          Placement="{Binding FlowDirection, ElementName=TabHeaderGrid, Mode=OneWay, Converter={StaticResource InwardToolTipPlacementConverter}}">
-                                    <TextBlock Text="{x:Bind ToolTipText, Mode=OneWay}"
+                                    <TextBlock Text="{Binding DataContext.ToolTipText, ElementName=TabHeaderGrid, Mode=OneWay}"
                                                FlowDirection="{Binding FlowDirection, ElementName=TabHeaderGrid, Mode=OneWay}"
                                                TextWrapping="Wrap" />
                                 </ToolTip>

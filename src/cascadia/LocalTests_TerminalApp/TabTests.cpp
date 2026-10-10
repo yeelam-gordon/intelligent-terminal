@@ -6294,14 +6294,23 @@ namespace TerminalAppLocalTests
 
     void TabTests::VerticalTabTooltipsTrackOwnerGeometry()
     {
+        winrt::TerminalApp::TabStrip strip{ nullptr };
+        UIElement previousContent{ nullptr };
+        const auto layoutReady = std::make_shared<::details::Event>();
+        VERIFY_IS_TRUE(layoutReady->IsValid());
+        FrameworkElement::LayoutUpdated_revoker layoutRevoker;
+        const auto cleanup = wil::scope_exit([&]() {
+            LOG_IF_FAILED(RunOnUIThread([&]() {
+                layoutRevoker.revoke();
+                Window::Current().Content(previousContent);
+                strip = nullptr;
+            }));
+        });
         TestOnUIThread([&]() {
             const auto window = Window::Current();
             VERIFY_IS_NOT_NULL(window);
-            const auto previousContent = window.Content();
-            const auto cleanup = wil::scope_exit([&]() {
-                window.Content(previousContent);
-            });
-            winrt::TerminalApp::TabStrip strip;
+            previousContent = window.Content();
+            strip = winrt::TerminalApp::TabStrip{};
             strip.Width(240);
             strip.Height(300);
             winrt::MUX::Controls::TabViewItem first;
@@ -6317,7 +6326,26 @@ namespace TerminalAppLocalTests
             VERIFY_IS_NOT_NULL(secondDisplay);
             firstDisplay.ToolTipText(L"First owner\nctrl+alt+1");
             secondDisplay.ToolTipText(L"Second owner\nctrl+alt+2");
+            layoutRevoker = strip.LayoutUpdated(winrt::auto_revoke, [strip, layoutReady](auto&&, auto&&) {
+                for (int index = 0; index < 2; ++index)
+                {
+                    const auto container = strip.ContainerFromIndex(index).try_as<ListViewItem>();
+                    const auto root = container ? container.ContentTemplateRoot().try_as<FrameworkElement>() : nullptr;
+                    if (!root || root.ActualWidth() <= 0 || root.ActualHeight() <= 0)
+                    {
+                        return;
+                    }
+                }
+                layoutReady->Set();
+            });
             window.Content(strip);
+            window.Activate();
+            strip.UpdateLayout();
+        });
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(layoutReady->m_handle, 10000));
+        TestOnUIThread([&]() {
+            layoutRevoker.revoke();
+            const auto impl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(strip);
             strip.UpdateLayout();
             const auto headerAt = [&](int index) {
                 const auto container = strip.ContainerFromIndex(index).try_as<ListViewItem>();
@@ -6342,6 +6370,7 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_NOT_NULL(anchor);
                 VERIFY_IS_NOT_NULL(tip);
                 VERIFY_IS_NOT_NULL(tip.GetBindingExpression(ToolTip::PlacementProperty()));
+                VERIFY_IS_NOT_NULL(tip.Content().as<TextBlock>().GetBindingExpression(TextBlock::TextProperty()));
                 VERIFY_IS_NOT_NULL(tip.Content().as<TextBlock>().GetBindingExpression(FrameworkElement::FlowDirectionProperty()));
                 VERIFY_IS_TRUE(ToolTipService::GetPlacementTarget(owner) == anchor);
                 VERIFY_ARE_EQUAL(FlowDirection::LeftToRight, anchor.FlowDirection());
@@ -6398,7 +6427,9 @@ namespace TerminalAppLocalTests
             }
             // Rebind the realized template before its tooltip has ever opened.
             const auto container = strip.ContainerFromIndex(0).as<ListViewItem>();
-            const auto replacement = impl->DisplayItemForTab(second);
+            const auto replacement = impl->DisplayItemAt(1);
+            replacement.ToolTipText(L"Replacement tooltip\nctrl+alt+2");
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"Replacement tooltip\nctrl+alt+2" }, replacement.ToolTipText());
             container.Content(replacement);
             strip.UpdateLayout();
             VERIFY_IS_TRUE(headerAt(0) == firstHeader);
@@ -6409,6 +6440,8 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(replacement.ToolTipText(), firstText.Text());
             replacement.ToolTipText(L"Rebound tooltip\nctrl+alt+2");
             strip.UpdateLayout();
+            VERIFY_IS_TRUE(firstHeader.DataContext() == replacement);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"Rebound tooltip\nctrl+alt+2" }, replacement.ToolTipText());
             VERIFY_IS_TRUE(firstTip.Content() == firstText);
             VERIFY_ARE_EQUAL(replacement.ToolTipText(), firstText.Text());
             verifyOwner(firstHeader, FlowDirection::LeftToRight);
