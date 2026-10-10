@@ -1872,11 +1872,14 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                             [double]::IsNaN($_) -or [double]::IsInfinity($_)
                         }).Count) { continue }
                     $pattern = $control.GetCurrentPattern([Windows.Automation.TextPattern]::Pattern)
-                    if (-not $pattern.DocumentRange.FindText($marker, $false, $false)) { continue }
+                    $document = $pattern.DocumentRange
+                    $documentText = $document.GetText(-1)
+                    if ($documentText.IndexOf($marker, [StringComparison]::Ordinal) -lt 0) { continue }
+                    if (-not $document.FindText($marker, $false, $false)) { continue }
                     $range = & (Get-Module ItE2E) {
                         param($documentRange, $text)
                         Find-ItExactTextRange -DocumentRange $documentRange -Text $text
-                    } $pattern.DocumentRange $marker
+                    } $document $marker
                     $rectangles = @($range.GetBoundingRectangles())
                     if ($rectangles.Count -eq 0 -or $rectangles.Count % 4 -ne 0) { continue }
                     $visible = $true

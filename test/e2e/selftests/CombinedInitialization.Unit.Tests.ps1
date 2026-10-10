@@ -5,6 +5,152 @@ BeforeAll {
         (Join-Path $PSScriptRoot '..\tests\Feature.CombinedAgentsSidebar.Tests.ps1'), [ref]$null, [ref]$null)
 }
 
+Describe 'Combined owning-tab exact displayed marker' -Tag 'Unit' {
+    BeforeAll {
+        Add-Type @'
+namespace CombinedDisplayMock {
+    public static class ItWtWin32Input {
+        public static System.IntPtr GetAncestor(System.IntPtr h, int f) { return h; }
+        public static int GetWindowProcessId(System.IntPtr h) { return 42; }
+    }
+    public static class AutomationElement {
+        public static object Root;
+        public static string ClassNameProperty = "Class";
+        public static object FromHandle(System.IntPtr h) { return Root; }
+    }
+    public class PropertyCondition { public PropertyCondition(object p, string v) {} }
+    public static class TreeScope { public static string Descendants = "Descendants"; }
+    public static class TextPattern { public static string Pattern = "Text"; }
+}
+'@
+        $definition = $script:ast.Find({ param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-MoveDisplay'
+        }, $true)
+        . ([scriptblock]::Create($definition.Extent.Text.Replace(
+            'Windows.Automation.', 'CombinedDisplayMock.').Replace(
+            'ItE2E.ItWtWin32Input', 'CombinedDisplayMock.ItWtWin32Input')))
+        $ui = [Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PSScriptRoot '..\ItE2E\Public\Ui.ps1'), [ref]$null, [ref]$null)
+        $exact = $ui.Find({ param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Find-ItExactTextRange'
+        }, $true)
+        $script:displayModule = New-Module -Name ItE2E -ScriptBlock {
+            param($text)
+            . ([scriptblock]::Create($text))
+            Export-ModuleMember -Function @()
+        } -ArgumentList $exact.Extent.Text
+        Import-Module $script:displayModule -Force
+        function New-DisplayBounds($X, $Y, $Width, $Height) {
+            @{ X = $X; Y = $Y; Width = $Width; Height = $Height
+                Left = $X; Top = $Y; Right = $X + $Width; Bottom = $Y + $Height }
+        }
+        function New-DisplayPeer([string]$Text) {
+            $range = [pscustomobject]@{ Text = 'PID=8765'; Rectangles = @(110, 120, 60, 20); Error = $false }
+            $range | Add-Member ScriptMethod GetText { param($Length)
+                if ($this.Error) { throw 'range-read-error' }; $this.Text
+            }
+            $range | Add-Member ScriptMethod GetBoundingRectangles { $this.Rectangles }
+            $document = [pscustomobject]@{ Text = $Text; Range = $range; Reads = 0; Finds = 0; Error = $false; NoHit = $false }
+            $document | Add-Member ScriptMethod GetText { param($Length)
+                $Length | Should -Be -1
+                $this.Reads++
+                if ($this.Error) { throw 'document-read-error' }; $this.Text
+            }
+            $document | Add-Member ScriptMethod FindText { param($Text, $Backward, $IgnoreCase)
+                $Text | Should -Be 'PID=8765'
+                $Backward | Should -BeFalse; $IgnoreCase | Should -BeFalse
+                $this.Finds++
+                if (-not $this.NoHit) { $this.Range }
+            }
+            $peer = [pscustomobject]@{
+                Current = @{ ProcessId = 42; IsOffscreen = $false; ClassName = 'TermControl'; Name = 'Owner'
+                    BoundingRectangle = (New-DisplayBounds 100 100 400 300) }
+                Document = $document; DocumentGets = 0
+            }
+            $peer | Add-Member ScriptMethod GetCurrentPattern {
+                param($Pattern)
+                $patternObject = [pscustomobject]@{ Peer = $this }
+                $patternObject | Add-Member ScriptProperty DocumentRange {
+                    $this.Peer.DocumentGets++; $this.Peer.Document
+                }
+                $patternObject
+            }
+            $peer | Add-Member ScriptMethod GetRuntimeId { @(1, 2, 3) }
+            $peer
+        }
+    }
+    AfterAll { Remove-Module $script:displayModule }
+    BeforeEach {
+        $script:app = @{ Pid = 42; Hwnd = 123; Launched = $true; InstallLocation = 'Q:\fixture'
+            OwnedProcess = @{ Id = 42; HasExited = $false; StartTime = 123 } }
+        $script:launch = @{ pid = 8765 }
+        Mock Get-Process { @{ Id = 42; StartTime = 123; Path = 'Q:\fixture\WindowsTerminal.exe' } }
+        $script:peer = New-DisplayPeer 'banner PID=8765 tail'
+        $script:displayWindow = [pscustomobject]@{
+            Current = @{ ProcessId = 42; IsOffscreen = $false; BoundingRectangle = (New-DisplayBounds 0 0 800 600) }
+            Peers = @($script:peer)
+        }
+        $script:displayWindow | Add-Member ScriptMethod FindAll { param($Scope, $Condition) $this.Peers }
+        [CombinedDisplayMock.AutomationElement]::Root = $script:displayWindow
+    }
+    It 'does not call FindText for proven nonmatching <Text> documents' -ForEach @(
+        @{ Text = 'pwsh.exe banner' }, @{ Text = 'Agent Pane transcript' }, @{ Text = 'pid=8765' }, @{ Text = '' }
+    ) {
+        $peer.Document.Text = $Text
+        $peer.Document.Range.Error = $true
+        Get-MoveDisplay | Should -BeNullOrEmpty
+        $peer.Document.Reads | Should -Be 1
+        $peer.Document.Finds | Should -Be 0
+        $peer.DocumentGets | Should -Be 1
+    }
+    It 'keeps a matching document on the real exact helper and captured range' {
+        (Get-MoveDisplay).marker | Should -Be 'PID=8765'
+        $peer.DocumentGets | Should -Be 1
+        $peer.Document.Reads | Should -Be 1
+        $peer.Document.Finds | Should -Be 2
+    }
+    It 'surfaces document GetText failure without searching or excluding it' {
+        $peer.Document.Error = $true
+        { Get-MoveDisplay } | Should -Throw '*document-read-error*'
+        $peer.Document.Finds | Should -Be 0
+    }
+    It 'surfaces matching range GetText failure' {
+        $peer.Document.Range.Error = $true
+        { Get-MoveDisplay } | Should -Throw '*range-read-error*'
+    }
+    It 'rejects a mismatching exact range even with a matching document' {
+        $peer.Document.Range.Text = 'not the marker'
+        { Get-MoveDisplay } | Should -Throw '*does not exactly match*'
+    }
+    It 'does not accept document presence alone when FindText returns null' {
+        $peer.Document.NoHit = $true
+        Get-MoveDisplay | Should -BeNullOrEmpty
+        $peer.Document.Finds | Should -Be 1
+    }
+    It 'rejects matching marker with <Kind> rectangles' -ForEach @(
+        @{ Kind = 'zero'; Rectangles = @(110, 120, 0, 20) },
+        @{ Kind = 'outside control'; Rectangles = @(50, 120, 60, 20) },
+        @{ Kind = 'outside window'; Rectangles = @(110, 620, 60, 20) },
+        @{ Kind = 'NaN'; Rectangles = @([double]::NaN, 120, 60, 20) }
+    ) {
+        $peer.Document.Range.Rectangles = $Rectangles
+        Get-MoveDisplay | Should -BeNullOrEmpty
+        $peer.Document.Finds | Should -Be 2
+    }
+    It 'retains unique-owner rejection across two matching terminals' {
+        $displayWindow.Peers = @($peer, (New-DisplayPeer 'PID=8765'))
+        { Get-MoveDisplay } | Should -Throw '*ambiguous across terminal peers*'
+    }
+    It 'ignores the nonmatching sentinel beside one exact visible owner' {
+        $other = New-DisplayPeer 'Agent transcript without marker'
+        $other.Document.Range.Error = $true
+        $displayWindow.Peers = @($other, $peer)
+        (Get-MoveDisplay).marker | Should -Be 'PID=8765'
+        $other.Document.Finds | Should -Be 0
+        $peer.Document.Finds | Should -Be 2
+    }
+}
+
 Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
     BeforeAll {
         Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
