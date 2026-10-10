@@ -119,6 +119,10 @@ authenticated ACP agents. Available suites (results depend on the selected packa
 **Coverage and results are tracked by stable checklist IDs and generated release reports.**
 The updated combined-sidebar scope/search cases reuse that suite's owned Dev
 startup, deterministic history fixture, native resume fixtures and teardown.
+Filter setup uses the checked menu items' UI Automation Toggle pattern, not
+Invoke: these peers do not expose Invoke. The initialization selftests execute
+the actual filter-setting helper against toggle-only peers and verify that
+reapplying an unchanged scope does not toggle either item again.
 The related action, session-refresh, delegated-identity, provider-appearance,
 relative-time and opt-in telemetry suites now select scope through the same
 standard checked menu items rather than invoking the retired heading. Upgrade
