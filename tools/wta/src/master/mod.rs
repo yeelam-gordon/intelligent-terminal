@@ -8087,10 +8087,12 @@ async fn execute_session_activation(
                             Unknown
                         );
                     }
-                    if !state
+                    let binding_changed = state
                         .registry
                         .assign_resume_pane_identity(&parsed.identity, pane_session_id.clone())
-                        .await
+                        .await;
+                    // No change can mean a real hook already established the exact binding.
+                    if !binding_changed
                         && !state
                             .registry
                             .lookup_identity(&parsed.identity)

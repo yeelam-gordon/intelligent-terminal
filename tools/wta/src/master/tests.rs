@@ -11112,21 +11112,23 @@ async fn sidebar_cli_resume_binds_created_pane_for_agent_filtering() {
         "one activation publishes one structural change"
     );
 
-    let events = crate::wt_protocol_events::take_test_published_events();
+    let events: Vec<serde_json::Value> = crate::wt_protocol_events::take_test_published_events()
+        .into_iter()
+        .map(|event| {
+            serde_json::from_str(&event)
+                .unwrap_or_else(|error| panic!("invalid published event JSON: {error}: {event}"))
+        })
+        .collect();
     assert_eq!(
         events
             .iter()
-            .filter(|event| {
-                serde_json::from_str::<serde_json::Value>(event).unwrap()["method"]
-                    == "session_registry_changed"
-            })
+            .filter(|event| event["method"] == "session_registry_changed")
             .count(),
         1,
         "Terminal must refresh the resumed tab's known status without a hook"
     );
     let binding = events
         .iter()
-        .filter_map(|event| serde_json::from_str::<serde_json::Value>(event).ok())
         .find(|event| event["method"] == "pane_agent_session_changed")
         .expect("created pane binding is published to Terminal");
     assert_eq!(binding["params"]["agent"], "copilot");
