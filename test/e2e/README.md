@@ -137,6 +137,10 @@ Its physical header route requires the existing owned-process/run-token receipt;
 `tab-move.jsonl` and before/after captures record canonical order and real
 visible displacement without provider prompts. Syntax/discovery and synthetic
 full/incremental report checks do not establish live acceptance.
+`selftests\CombinedCliRecord.Unit.Tests.ps1` hermetically checks the native
+fixture's first-record readiness: incomplete JSONL waits for LF, the exact
+captured LF/CRLF record is parsed once, and completed malformed records or
+reader I/O failures fail explicitly. This does not credit live C422 acceptance.
 The report driver does not
 accept `-FullNameFilter`; use its whole-suite `-Path` option for release results.
 

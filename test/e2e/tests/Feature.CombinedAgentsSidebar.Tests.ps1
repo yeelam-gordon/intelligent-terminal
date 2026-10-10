@@ -1,6 +1,27 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 
 BeforeAll {
+function Wait-CombinedCliLaunchRecord {
+    param([Parameter(Mandatory)][string]$Path, [int]$TimeoutSec = 20)
+    $captured = @{ Line = $null; ReadError = $null }
+    Wait-Until -TimeoutSec $TimeoutSec -Because 'the first native fixture JSONL record is complete' -Condition {
+        try {
+            if (-not (Test-Path -LiteralPath $Path -ErrorAction Stop)) { return $false }
+            $snapshot = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+            if ($null -eq $snapshot) { return $false }
+            $end = $snapshot.IndexOf("`n")
+            if ($end -lt 0) { return $false }
+            if ($end -gt 0 -and $snapshot[$end - 1] -eq "`r") { $end-- }
+            $captured.Line = $snapshot.Substring(0, $end)
+        } catch {
+            # Wait-Until catches predicate exceptions; carry read failures out explicitly.
+            $captured.ReadError = $_
+        }
+        return $true
+    } | Out-Null
+    if ($captured.ReadError) { throw $captured.ReadError }
+    $captured.Line
+}
 function Invoke-CombinedCheckedCleanup {
     param($PrimaryFailure, [Parameter(Mandatory)][scriptblock]$Action)
     try { & $Action }
@@ -1929,8 +1950,8 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             $split = Split-WtPane -App $script:app -SessionId $owner.session_id -Direction right `
                 -Command 'pwsh.exe -NoLogo -NoProfile -NoExit'
             $created.Add($split)
-            Wait-Until -TimeoutSec 20 -Condition { Test-Path $fixture.Log } | Out-Null
-            $launch = Get-Content $fixture.Log | Select-Object -First 1 | ConvertFrom-Json
+            $launch = Wait-CombinedCliLaunchRecord -Path $fixture.Log -TimeoutSec 20 |
+                ConvertFrom-Json -ErrorAction Stop
             $launch.session_id | Should -Be $fixture.SessionId
             $launch.pid | Should -BeGreaterThan 0
             $panes = @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId (Get-MoveOwner).tab_id)
@@ -2077,8 +2098,8 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             Set-CombinedView $false
             $tab = New-WtTab -App $script:app -Command "`"$($fixture.Shim)`" --session-id $($fixture.SessionId)" `
                 -Cwd $fixture.Folder -Title "$script:marker-background-$Status"
-            Wait-Until -TimeoutSec 20 -Condition { Test-Path $fixture.Log } | Out-Null
-            $launch = Get-Content $fixture.Log | Select-Object -First 1 | ConvertFrom-Json
+            $launch = Wait-CombinedCliLaunchRecord -Path $fixture.Log -TimeoutSec 20 |
+                ConvertFrom-Json -ErrorAction Stop
             $native = Get-Process -Id $launch.native_pid -ErrorAction Stop
             $native.Path | Should -Be $fixture.Shim
             $split = Split-WtPane -App $script:app -SessionId $tab.session_id -Direction right `
@@ -2315,8 +2336,8 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             $external = [Diagnostics.Process]::Start($start)
             $externalOutput = $external.StandardOutput.ReadToEndAsync()
             $externalError = $external.StandardError.ReadToEndAsync()
-            Wait-Until -TimeoutSec 15 -Condition { Test-Path $fixture.Log } | Out-Null
-            $externalRecord = Get-Content $fixture.Log | Select-Object -First 1 | ConvertFrom-Json
+            $externalRecord = Wait-CombinedCliLaunchRecord -Path $fixture.Log -TimeoutSec 15 |
+                ConvertFrom-Json -ErrorAction Stop
             $externalRecord.mode | Should -Be 'external'
             $externalRecord.session_id | Should -Be $sid
             $externalRecord.pane_session_id | Should -BeNullOrEmpty
