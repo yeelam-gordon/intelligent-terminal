@@ -392,6 +392,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(AgentViewFiltersSplitPaneChildren);
         TEST_METHOD(VerticalTabSearchMatchesCommittedTitle);
         TEST_METHOD(VerticalTabTooltipsExposeStableShortcuts);
+        TEST_METHOD(VerticalTabTooltipsTrackOwnerGeometry);
         TEST_METHOD(VerticalTabSearchTracksActivePaneMetadata);
         TEST_METHOD(VerticalTabSearchUiState);
         TEST_METHOD(LiteralSearchHighlighting);
@@ -6203,6 +6204,9 @@ namespace TerminalAppLocalTests
                 }
                 return text;
             };
+            const auto sidebarTooltipText = [](const DependencyObject& owner) {
+                return std::wstring{ ToolTipService::GetToolTip(owner).as<ToolTip>().Content().as<TextBlock>().Text() };
+            };
 
             const auto horizontalTooltip = tooltipText(third->TabViewItem());
             const auto thirdContainer = page->_tabStrip.ContainerFromIndex(2).as<ListViewItem>();
@@ -6216,7 +6220,7 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(winrt::hstring{ L"Updated native automation name" }, Automation::AutomationProperties::GetName(thirdContainer));
             thirdDisplay.Presentation().AutomationName(originalName);
             VERIFY_ARE_EQUAL(originalName, Automation::AutomationProperties::GetName(thirdContainer));
-            const std::wstring verticalTooltip{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) };
+            const std::wstring verticalTooltip{ sidebarTooltipText(thirdHeader) };
             VERIFY_ARE_EQUAL(horizontalTooltip, verticalTooltip);
             VERIFY_ARE_EQUAL(winrt::hstring{ verticalTooltip }, thirdDisplay.ToolTipText());
             VERIFY_ARE_NOT_EQUAL(std::wstring::npos, verticalTooltip.find(L"Third tab"));
@@ -6230,7 +6234,7 @@ namespace TerminalAppLocalTests
 
             third->SetTabText(L"Renamed third tab");
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(tooltipText(third->TabViewItem()), std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) });
+            VERIFY_ARE_EQUAL(tooltipText(third->TabViewItem()), sidebarTooltipText(thirdHeader));
             VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetHelpText(third->TabViewItem()), thirdDisplay.ToolTipText());
 
             ::Microsoft::Terminal::RichTab::Provider::Presentation presentation;
@@ -6239,7 +6243,7 @@ namespace TerminalAppLocalTests
             presentation.accessibilityText = presentation.tooltip;
             third->SetRichTabPresentation(presentation);
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(tooltipText(third->TabViewItem()), std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) });
+            VERIFY_ARE_EQUAL(tooltipText(third->TabViewItem()), sidebarTooltipText(thirdHeader));
             VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetHelpText(third->TabViewItem()), thirdDisplay.ToolTipText());
             VERIFY_ARE_NOT_EQUAL(std::wstring::npos, std::wstring{ thirdDisplay.ToolTipText() }.find(presentation.tooltip));
 
@@ -6249,7 +6253,7 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, thirdDisplay.AcceleratorKey());
             VERIFY_ARE_NOT_EQUAL(
                 std::wstring::npos,
-                std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) }.find(L"ctrl+alt+2"));
+                sidebarTooltipText(thirdHeader).find(L"ctrl+alt+2"));
 
             page->_SelectTab(2);
             VERIFY_IS_TRUE(page->_selectedTabItem() == third->TabViewItem());
@@ -6257,7 +6261,7 @@ namespace TerminalAppLocalTests
             page->_tabStrip.IsRailCollapsed(true);
             page->UpdateLayout();
             VERIFY_ARE_EQUAL(Visibility::Collapsed, thirdHeader.FindName(L"TabHeaderPresenter").as<winrt::TerminalApp::TabHeaderControl>().Visibility());
-            VERIFY_ARE_EQUAL(tooltipText(third->TabViewItem()), std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) });
+            VERIFY_ARE_EQUAL(tooltipText(third->TabViewItem()), sidebarTooltipText(thirdHeader));
             page->_tabStrip.IsRailCollapsed(false);
 
             page->_tabSearchActive = false;
@@ -6286,6 +6290,225 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetHelpText(tenth->TabViewItem()), tenthDisplay.ToolTipText());
             VERIFY_ARE_NOT_EQUAL(std::wstring::npos, std::wstring{ tenthDisplay.ToolTipText() }.find(L"ctrl+alt+9"));
         });
+    }
+
+    void TabTests::VerticalTabTooltipsTrackOwnerGeometry()
+    {
+        winrt::TerminalApp::TabStrip strip{ nullptr };
+        UIElement previousContent{ nullptr };
+        Grid firstHeader{ nullptr };
+        Grid firstAnchor{ nullptr };
+        ToolTip firstTip{ nullptr };
+        TextBlock firstText{ nullptr };
+        winrt::TerminalApp::TabStripDisplayItem replacement{ nullptr };
+        std::function<void()> verifyRetainedOwner;
+        const auto layoutReady = std::make_shared<::details::Event>();
+        VERIFY_IS_TRUE(layoutReady->IsValid());
+        FrameworkElement::LayoutUpdated_revoker layoutRevoker;
+        const auto cleanup = wil::scope_exit([&]() {
+            LOG_IF_FAILED(RunOnUIThread([&]() {
+                layoutRevoker.revoke();
+                Window::Current().Content(previousContent);
+                strip = nullptr;
+            }));
+        });
+        TestOnUIThread([&]() {
+            const auto window = Window::Current();
+            VERIFY_IS_NOT_NULL(window);
+            previousContent = window.Content();
+            strip = winrt::TerminalApp::TabStrip{};
+            strip.Width(240);
+            strip.Height(300);
+            winrt::MUX::Controls::TabViewItem first;
+            winrt::MUX::Controls::TabViewItem second;
+            first.Header(winrt::box_value(L"First owner"));
+            second.Header(winrt::box_value(L"Second owner"));
+            strip.TabItems().Append(first);
+            strip.TabItems().Append(second);
+            const auto impl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(strip);
+            const auto firstDisplay = impl->DisplayItemForTab(first);
+            const auto secondDisplay = impl->DisplayItemForTab(second);
+            VERIFY_IS_NOT_NULL(firstDisplay);
+            VERIFY_IS_NOT_NULL(secondDisplay);
+            firstDisplay.ToolTipText(L"First owner\nctrl+alt+1");
+            secondDisplay.ToolTipText(L"Second owner\nctrl+alt+2");
+            layoutRevoker = strip.LayoutUpdated(winrt::auto_revoke, [strip, layoutReady](auto&&, auto&&) {
+                for (int index = 0; index < 2; ++index)
+                {
+                    const auto container = strip.ContainerFromIndex(index).try_as<ListViewItem>();
+                    const auto root = container ? container.ContentTemplateRoot().try_as<FrameworkElement>() : nullptr;
+                    if (!root || root.ActualWidth() <= 0 || root.ActualHeight() <= 0)
+                    {
+                        return;
+                    }
+                }
+                layoutReady->Set();
+            });
+            window.Content(strip);
+            window.Activate();
+            strip.UpdateLayout();
+        });
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(layoutReady->m_handle, 10000));
+        TestOnUIThread([&]() {
+            layoutRevoker.revoke();
+            const auto impl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(strip);
+            strip.UpdateLayout();
+            const auto headerAt = [&](int index) {
+                const auto container = strip.ContainerFromIndex(index).try_as<ListViewItem>();
+                VERIFY_IS_NOT_NULL(container);
+                const auto root = container.ContentTemplateRoot().try_as<StackPanel>();
+                VERIFY_IS_NOT_NULL(root);
+                VERIFY_IS_TRUE(root.Children().Size() > 0);
+                const auto header = root.Children().GetAt(0).try_as<Grid>();
+                VERIFY_IS_NOT_NULL(header);
+                return header;
+            };
+            firstHeader = headerAt(0);
+            const auto secondHeader = headerAt(1);
+            firstTip = ToolTipService::GetToolTip(firstHeader).as<ToolTip>();
+            VERIFY_IS_NOT_NULL(firstTip);
+            firstText = firstTip.Content().as<TextBlock>();
+            VERIFY_IS_NOT_NULL(firstText);
+            firstAnchor = firstHeader.FindName(L"TabToolTipAnchor").as<Grid>();
+            const auto verifyOwner = [](const Grid& owner, FlowDirection flow) {
+                const auto anchor = owner.FindName(L"TabToolTipAnchor").as<Grid>();
+                const auto tip = ToolTipService::GetToolTip(owner).as<ToolTip>();
+                VERIFY_IS_NOT_NULL(anchor);
+                VERIFY_IS_NOT_NULL(tip);
+                VERIFY_IS_NOT_NULL(tip.GetBindingExpression(ToolTip::PlacementProperty()));
+                VERIFY_IS_NOT_NULL(tip.Content().as<TextBlock>().GetBindingExpression(TextBlock::TextProperty()));
+                VERIFY_IS_NOT_NULL(tip.Content().as<TextBlock>().GetBindingExpression(FrameworkElement::FlowDirectionProperty()));
+                VERIFY_IS_TRUE(ToolTipService::GetPlacementTarget(owner) == anchor);
+                VERIFY_ARE_EQUAL(FlowDirection::LeftToRight, anchor.FlowDirection());
+                VERIFY_IS_FALSE(anchor.IsHitTestVisible());
+                VERIFY_IS_NULL(anchor.Background());
+                VERIFY_ARE_EQUAL(Automation::Peers::AccessibilityView::Raw, Automation::AutomationProperties::GetAccessibilityView(anchor));
+                VERIFY_ARE_EQUAL(flow, owner.FlowDirection());
+                VERIFY_ARE_EQUAL(FlowDirection::LeftToRight, tip.FlowDirection());
+                VERIFY_ARE_EQUAL(flow, tip.Content().as<TextBlock>().FlowDirection());
+                VERIFY_ARE_EQUAL(TextWrapping::Wrap, tip.Content().as<TextBlock>().TextWrapping());
+                VERIFY_ARE_EQUAL(flow == FlowDirection::RightToLeft ? Primitives::PlacementMode::Left : Primitives::PlacementMode::Right, tip.Placement());
+                VERIFY_IS_FALSE(tip.IsOpen());
+                VERIFY_IS_TRUE(owner.ActualWidth() > 0);
+                VERIFY_IS_TRUE(owner.ActualHeight() > 0);
+                const auto placementRect = tip.PlacementRect();
+                VERIFY_IS_NOT_NULL(placementRect);
+                const auto rect = placementRect.Value();
+                VERIFY_ARE_EQUAL(0.0f, rect.X);
+                VERIFY_ARE_EQUAL(0.0f, rect.Y);
+                VERIFY_ARE_EQUAL(static_cast<float>(owner.ActualWidth()), rect.Width);
+                VERIFY_ARE_EQUAL(static_cast<float>(owner.ActualHeight()), rect.Height);
+                const auto bounds = anchor.TransformToVisual(owner).TransformBounds({ 0, 0, static_cast<float>(anchor.ActualWidth()), static_cast<float>(anchor.ActualHeight()) });
+                VERIFY_IS_TRUE(std::abs(bounds.X) < 0.01f);
+                VERIFY_IS_TRUE(std::abs(bounds.Y) < 0.01f);
+                VERIFY_IS_TRUE(std::abs(bounds.Width - rect.Width) < 0.01f);
+                VERIFY_IS_TRUE(std::abs(bounds.Height - rect.Height) < 0.01f);
+            };
+            VERIFY_IS_TRUE(firstAnchor != secondHeader.FindName(L"TabToolTipAnchor").as<Grid>());
+            const auto width = firstHeader.ActualWidth();
+            const auto height = firstHeader.ActualHeight();
+            for (const auto flow : { FlowDirection::LeftToRight, FlowDirection::RightToLeft, FlowDirection::LeftToRight })
+            {
+                strip.FlowDirection(flow);
+                strip.UpdateLayout();
+                verifyOwner(firstHeader, flow);
+                verifyOwner(secondHeader, flow);
+                VERIFY_ARE_EQUAL(width, firstHeader.ActualWidth());
+                VERIFY_ARE_EQUAL(height, firstHeader.ActualHeight());
+                VERIFY_IS_TRUE(ToolTipService::GetToolTip(firstHeader) == firstTip);
+                VERIFY_IS_TRUE(firstTip.Content() == firstText);
+                VERIFY_IS_TRUE(ToolTipService::GetPlacementTarget(firstHeader) == firstAnchor);
+            }
+            for (const auto collapsed : { true, false })
+            {
+                strip.IsRailCollapsed(collapsed);
+                for (const auto resizedWidth : { 180.0, 280.0 })
+                {
+                    strip.Width(resizedWidth);
+                    strip.UpdateLayout();
+                    verifyOwner(firstHeader, FlowDirection::LeftToRight);
+                    verifyOwner(secondHeader, FlowDirection::LeftToRight);
+                    VERIFY_IS_TRUE(firstTip.Content() == firstText);
+                }
+            }
+            replacement = impl->DisplayItemAt(1);
+            const auto metadata = winrt::TerminalApp::XamlMetaDataProvider{};
+            const auto itemType = metadata.GetXamlType(winrt::xaml_typename<winrt::TerminalApp::TabStripDisplayItem>());
+            VERIFY_IS_NOT_NULL(itemType);
+            const auto member = itemType.GetMember(L"ToolTipText");
+            VERIFY_IS_NOT_NULL(member);
+            VERIFY_ARE_EQUAL(replacement.ToolTipText(), winrt::unbox_value<winrt::hstring>(member.GetValue(replacement)));
+            verifyRetainedOwner = [firstHeader, verifyOwner]() {
+                verifyOwner(firstHeader, FlowDirection::LeftToRight);
+            };
+        });
+        const auto waitForBoundText = [&](const auto& action, const winrt::hstring& expected) {
+            const auto changed = std::make_shared<::details::Event>();
+            VERIFY_IS_TRUE(changed->IsValid());
+            int64_t token{};
+            bool subscribed{};
+            const auto revoke = wil::scope_exit([&]() {
+                LOG_IF_FAILED(RunOnUIThread([&]() {
+                    if (subscribed)
+                    {
+                        firstText.UnregisterPropertyChangedCallback(TextBlock::TextProperty(), token);
+                    }
+                }));
+            });
+            const auto check = [&]() {
+                const auto container = strip.ContainerFromIndex(0).try_as<ListViewItem>();
+                const auto root = container ? container.ContentTemplateRoot().try_as<StackPanel>() : nullptr;
+                if (root && root.Children().Size() > 0 && root.Children().GetAt(0) == firstHeader &&
+                    firstHeader.DataContext() == replacement && ToolTipService::GetToolTip(firstHeader) == firstTip &&
+                    ToolTipService::GetPlacementTarget(firstHeader) == firstAnchor && firstTip.Content() == firstText &&
+                    replacement.ToolTipText() == expected && firstText.Text() == expected)
+                {
+                    changed->Set();
+                }
+            };
+            TestOnUIThread([&]() {
+                token = firstText.RegisterPropertyChangedCallback(TextBlock::TextProperty(), [check](auto&&, auto&&) {
+                    check();
+                });
+                subscribed = true;
+                action();
+                strip.UpdateLayout();
+            });
+            TestOnUIThread(check);
+            const auto result = WaitForSingleObject(changed->m_handle, 10000);
+            TestOnUIThread([&]() {
+                const auto binding = firstText.GetBindingExpression(TextBlock::TextProperty());
+                VERIFY_IS_NOT_NULL(binding);
+                Log::Comment(NoThrowString().Format(L"Rebound binding: ElementName=%s; DataItemIsOwner=%d; ExplicitSourceIsOwner=%d; OwnerDataContextIsReplacement=%d; ModelText=%s; ActualText=%s",
+                                                    binding.ParentBinding().ElementName().c_str(),
+                                                    binding.DataItem() == firstHeader,
+                                                    binding.ParentBinding().Source() == firstHeader,
+                                                    firstHeader.DataContext() == replacement,
+                                                    replacement.ToolTipText().c_str(),
+                                                    firstText.Text().c_str()));
+            });
+            VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), result);
+            TestOnUIThread([&]() {
+                check();
+                VERIFY_IS_TRUE(firstHeader.DataContext() == replacement);
+                VERIFY_ARE_EQUAL(expected, replacement.ToolTipText());
+                VERIFY_IS_TRUE(ToolTipService::GetToolTip(firstHeader) == firstTip);
+                VERIFY_IS_TRUE(ToolTipService::GetPlacementTarget(firstHeader) == firstAnchor);
+                VERIFY_IS_TRUE(firstTip.Content() == firstText);
+                VERIFY_ARE_EQUAL(expected, firstText.Text());
+                verifyRetainedOwner();
+            });
+        };
+        // Closed popup binding updates may follow the container's dispatcher turn.
+        waitForBoundText([&]() {
+            replacement.ToolTipText(L"Replacement tooltip\nctrl+alt+2");
+            strip.ContainerFromIndex(0).as<ListViewItem>().Content(replacement);
+        },
+                         L"Replacement tooltip\nctrl+alt+2");
+        waitForBoundText([&]() {
+            replacement.ToolTipText(L"Rebound tooltip\nctrl+alt+2");
+        },
+                         L"Rebound tooltip\nctrl+alt+2");
     }
 
     void TabTests::VerticalTabSearchUiState()
@@ -9033,7 +9256,7 @@ namespace TerminalAppLocalTests
             for (const auto state : { "loading", "error" })
             {
                 page->_tabStrip.HistoryError(L"");
-                page->_tabStrip.HistoryRefreshError(L"");
+                strip->HistoryRefreshError(L"");
                 page->_tabStrip.HistoryLoading(false);
                 strip->CommitHistorySnapshot(cached, true);
                 page->_historyRefreshInFlight = true;
@@ -9046,7 +9269,7 @@ namespace TerminalAppLocalTests
                 filters.ShowRecentAgentSessions(true);
                 VERIFY_IS_TRUE(strip->_agentFilterTelemetryPending);
                 page->_tabStrip.HistoryError(L"");
-                page->_tabStrip.HistoryRefreshError(L"");
+                strip->HistoryRefreshError(L"");
                 page->_tabStrip.HistoryLoading(false);
                 VERIFY_IS_TRUE(strip->_agentFilterTelemetryPending);
                 filters.ShowRecentAgentSessions(false);

@@ -51,6 +51,7 @@ authenticated ACP agents. Available suites (results depend on the selected packa
 | `Feature.FreExecutionPolicy.Tests.ps1` | §0 FRE automatic CurrentUser execution-policy remediation (**Dev**, auto-skips) | 4 (1 conditional skip) |
 | `Feature.FreHooks.Tests.ps1` | §0 FRE progressive setup ordering, session hook installation, failure, and retry (**Dev**, auto-skips) | 3 |
 | `Feature.SidebarTabKeyboard.Tests.ps1` | Issue #1045: physical Tab/Up/Down navigate unfiltered and filtered Sidebar tabs without terminal focus; bare Enter activates, Ctrl+Enter does not, pointer selection still works, and Ctrl+Shift+S entry/exit preserves the originating shell while Tab visits a row | 3 |
+| `Feature.SidebarTooltipPlacement.Tests.ps1` | Complete authored matrix: expanded/collapsed en-US/ar-SA, mirrored physical rail/content, cold stable outer tooltip/full text, three safe points and paired exact neighboring identities/order; actual owned resize/first-observed versus settled popup, measured feasible screen fallback and immutable-original-build Horizontal geometry/content comparison. Hosted candidate native results gate owner geometry and actual realized-template rebinding; this does not claim automatic virtualization. Impossible fit never credits clearance, deep-hit guards refuse opaque roots. Diagnostic `ITE2E_TOOLTIP_BASELINE=1` captures only original-source Horizontal evidence and deliberately fails without release credit. No live acceptance/provider quota | 1 (explicit Dev/private PFN, source/App/WTA/build receipt, `ITE2E_TOOLTIP_NATIVE_RECEIPT` and `ITE2E_TOOLTIP_BASELINE_RECEIPT`; external owned controller still required) |
 | `Feature.SidebarSessionScroll.Tests.ps1` | Real shell hooks update the same visible Agents row through Idle/Active/Waiting for input/Idle without changing the search query or scrolling unchanged history order; status filters and genuine activity-time reordering still update. All three cases gate C374. Deterministic seeded rows, no model quota or test settings changes; teardown closes only recorded fixture pane GUIDs in the verified logical window after rechecking HWND/PID, never the shared process or unrelated windows/tabs. Original state is recovered only after the package is inactive, even on screenshot/settings failure; unrelated package activity or unconfirmed ownership/inactivity retains backups and fails explicitly. Changed, missing or unreadable settings and their recovery backup are retained and fail explicitly. Requires inactive Dev, Sidebar mode, completed FRE, and exact-build App/WTA hashes | 3 |
 | `Feature.PaneProgress.Tests.ps1` | PR #1043: one-shot OSC progress across real tab right-click moves/layout round trips, shared group-chevron/icon slot and aligned top-level titles, layout-specific Move submenu order/direction, and fixture-owned native hook identity/icon restoration with OSC3/OSC0; six-frame rendered ring evidence, no model quota | 4 checklist cases plus literal one-shot coverage (explicit Dev, exact-source `ITE2E_EXPECTED_APP_SHA256` / `ITE2E_EXPECTED_WTA_SHA256`, inactive package and interactive desktop required) |
 | `Feature.PinnedTabSelection.Tests.ps1` | PRs #1043/#1052: the primary two-pinned-plus-one-ordinary Horizontal/Sidebar round trip first verifies Alpha's active shell, exactly one selected Alpha Sidebar row, terminal focus, canonical order, shell identities and retained pin menus. A separate visual round trip verifies canonical accessibility labels and matched same-profile title-leading offsets; Beta unpin removes its extra Sidebar slot and keeps first-ordinary positioning. FontIcon peers are diagnostic only. A passing test credits C372's automated selection, identity, accessibility and geometry contracts. Full-header compositor crops and `acceptance.json` leave actual Sidebar glyph presence/Horizontal absence pending independent sign-off under the separate C373 MANUAL item **Pinned tab glyphs render only in Sidebar**, which has no automated coverage mapping | 1 (deterministic ACP fixture, no model quota; explicit Dev, exact-source `ITE2E_EXPECTED_APP_SHA256` / `ITE2E_EXPECTED_WTA_SHA256`, inactive package and interactive desktop required) |
@@ -260,6 +261,38 @@ coverage and must not be credited from this case.
 The suite table describes available cases, not a blanket pass result for every package or
 environment. Use `Invoke-ItE2EReport.ps1` and its full or incremental release report for the
 selected revision's actual passed, failed, skipped and remaining checklist items.
+Tooltip original-baseline capture may use a separate copy of its authentic build
+receipt with `baselineOriginalMsix = @{ path; sha256; registerReceiptPath;
+registerReceiptSHA256 }`. This baseline-only path pins the known original archive,
+source/private identity and registration receipt, hashes actual MSIX App/WTA entries
+against immutable installed bytes, and leaves the historical `ownSourceOutput`
+unchanged. Candidate validation still requires its current source-output hashes.
+Each tooltip locale freezes the original owned creation ledger's exact bytes in
+its own read-only, hash-checked evidence file before another launch can append.
+Native result evidence requires JSON boolean `hosted: true`; supported NUnit 2
+uses `Success` with explicit `executed="True"`, and NUnit 3 uses `Passed` with
+finite nonnegative recorded duration. Authentic UTF-16 TAEF `WTT-Logger` files
+use hashed `resultsFiles` and require unique matching `EndTest Result="Passed"`
+records, never setup `EndGroup` passes. Hashed actual runtime/cleanup packets
+bind runner PID, created package host, loaded App/test/host modules, unchanged
+source-diff snapshot and completed owned cleanup. Unsupported formats fail.
+Tooltip cold entry does not move a cursor already outside the verified intended
+activation band when no owned tooltip exists, even inside the owned content.
+It requires the current native process/window/creation lease, known native hit,
+finite physical cursor/owner bounds and full owner visibility. Actual exit movement retains strict pointer guards and bounded
+disappearance polling. Owned cold-point geometry/native diagnostics are saved
+before those guards, without foreign UIA inspection. Primary failures and all
+cursor/terminal/DPI cleanup failures are preserved independently.
+The tooltip suite resolves all commands before startup and invokes private
+coordinate hover only inside the existing ItE2E module. Its guarded callback
+receives explicit sample context while retaining the suite's original function
+and script scope; no unsafe input helper is exported.
+Before strict header hover, the module bridge reacquires only the owned
+foreground and records target native ownership plus the actual UIA point-peer
+type/class/runtime identity only when native hit/root/PID/foreground all match.
+`header-point.jsonl` is diagnosis, not an opaque-root permission. Baseline source,
+App and archive hashes come from the explicit verified baseline receipts rather
+than task-specific commit/package/hash literals.
 `Feature.AgentHotkeys` keeps physical Ctrl+Shift+/ input and observes the native
 `VerticalTabsHeader`/`HistoryList` projection. `Feature.SessionRefresh` opens the
 current Tabs/Agents header, not the retired History toolbar or search box, and

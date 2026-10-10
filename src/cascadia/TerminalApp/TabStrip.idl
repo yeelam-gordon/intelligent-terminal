@@ -101,6 +101,7 @@ namespace TerminalApp
         Windows.UI.Xaml.Controls.IconElement CreateIcon(Object source);
     };
 
+    [bindable]
     [default_interface] runtimeclass TabStripDisplayItem : Windows.UI.Xaml.Data.INotifyPropertyChanged
     {
         Microsoft.UI.Xaml.Controls.TabViewItem Tab { get; };
@@ -235,4 +236,9 @@ namespace TerminalApp
         Boolean RichTabGitAvailable;
         SidebarFiltersViewModel SidebarFilters { get; };
     };
+
+    runtimeclass InwardToolTipPlacementConverter : [default] Windows.UI.Xaml.Data.IValueConverter
+    {
+        InwardToolTipPlacementConverter();
+    }
 }
