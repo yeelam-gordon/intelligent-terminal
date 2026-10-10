@@ -228,7 +228,7 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
         }, $true)
         . ([scriptblock]::Create($wait.Extent.Text))
         function Get-CombinedFilterState { $script:filterState.Clone() }
-        function Invoke-UiClick { param($App, $Selector) }
+        function Invoke-UiElement { param($App, $Selector) }
         function Get-CombinedElement {
             param($Id)
             $script:peerRequests.Add($Id)
@@ -263,7 +263,7 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
     }
 
     BeforeEach {
-        $script:app = @{ Pid = 42 }
+        $script:app = @{ Pid = 42; Hwnd = 123 }
         $script:filterState = @{
             AgentsOnlyFilterMenuItem = $false
             RecentAgentSessionsFilterMenuItem = $false
@@ -278,9 +278,10 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
         $script:peerPid = 42
         $script:peerType = [Windows.Automation.ControlType]::MenuItem
         $script:unsupportedPattern = $false
-        Mock Invoke-UiClick {
+        Mock Invoke-UiElement {
             $Selector | Should -Be FilterTabsButton
             $App.Pid | Should -Be 42
+            $App.Hwnd | Should -Be 123
         }
         Mock Assert-CombinedHeaderCue { $Expected | Should -Be Tabs }
     }
@@ -300,7 +301,7 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
         $script:patternRequests.ToArray() | Should -Be $script:toggleCalls.ToArray()
         $script:filterState.AgentsOnlyFilterMenuItem | Should -BeFalse
         $script:filterState.RecentAgentSessionsFilterMenuItem | Should -BeFalse
-        Should -Invoke Invoke-UiClick -Exactly -Times 4
+        Should -Invoke Invoke-UiElement -Exactly -Times 4
         Should -Invoke Assert-CombinedHeaderCue -Exactly -Times 4
     }
 
@@ -324,7 +325,7 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
         $script:peerRequests.ToArray() | Should -Be @($Id, $Id, $Id)
         $script:toggleCalls.ToArray() | Should -Be @($Id)
         $script:filterState[$Id] | Should -BeTrue
-        Should -Invoke Invoke-UiClick -Exactly -Times 1
+        Should -Invoke Invoke-UiElement -Exactly -Times 1
         Should -Invoke Assert-CombinedHeaderCue -Exactly -Times 1
     }
 
@@ -349,6 +350,14 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
         Should -Invoke Assert-CombinedHeaderCue -Exactly -Times 0
     }
 
+    It 'fails an unsupported scoped opener before looking up or toggling a menu peer' {
+        Mock Invoke-UiElement { throw 'Unsupported Pattern' }
+        { Set-CombinedFilters -AgentsOnly $true -Recent $false } | Should -Throw '*Unsupported Pattern*'
+        $script:peerRequests.Count | Should -Be 0
+        $script:toggleCalls.Count | Should -Be 0
+        Should -Invoke Assert-CombinedHeaderCue -Exactly -Times 0
+    }
+
     It 'retains the 30-second bound when the peer never becomes ready' {
         Mock Wait-Until {
             $TimeoutSec | Should -Be 30
@@ -361,6 +370,81 @@ Describe 'Combined sidebar supported filter actions' -Tag 'Unit' {
         $script:toggleCalls.Count | Should -Be 0
         Should -Invoke Wait-Until -Exactly -Times 1
         Should -Invoke Assert-CombinedHeaderCue -Exactly -Times 0
+    }
+}
+
+Describe 'Combined filter state scoped opening' -Tag 'Unit' {
+    BeforeAll {
+        Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+        $definition = $script:ast.Find({ param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq 'Get-CombinedFilterState'
+        }, $true)
+        . ([scriptblock]::Create($definition.Extent.Text))
+        function Invoke-UiElement { param($App, $Selector) }
+        function Invoke-UiClick { param($App, $Selector) throw 'Physical opening is forbidden' }
+        function Send-WtWindowKey { param($App, $Vk, [switch]$RequireForeground) }
+        function Wait-Until { param($TimeoutSec, $Because, $Condition) & $Condition }
+        function Get-CombinedElement {
+            param($Id)
+            $script:statePeers.Add($Id)
+            $peer = [pscustomobject]@{
+                Current = @{ ProcessId = $script:statePid; IsOffscreen = $false
+                    ControlType = [Windows.Automation.ControlType]::MenuItem }
+                Id = $Id
+            }
+            $peer | Add-Member ScriptMethod GetCurrentPattern {
+                param($Pattern)
+                $Pattern | Should -Be ([Windows.Automation.TogglePattern]::Pattern)
+                @{ Current = @{ ToggleState = $script:states[$this.Id] } }
+            }
+            $peer
+        }
+    }
+    BeforeEach {
+        $script:app = @{ Pid = 42; Hwnd = 123 }
+        $script:statePid = 42
+        $script:statePeers = [Collections.Generic.List[string]]::new()
+        $script:states = @{
+            AgentsOnlyFilterMenuItem = [Windows.Automation.ToggleState]::On
+            RecentAgentSessionsFilterMenuItem = [Windows.Automation.ToggleState]::Off
+        }
+        Mock Invoke-UiElement {
+            $App.Hwnd | Should -Be 123
+            $App.Pid | Should -Be 42
+            $Selector | Should -Be FilterTabsButton
+        }
+        Mock Send-WtWindowKey {
+            $App.Pid | Should -Be 42
+            $Vk | Should -Be 0x1B
+            $RequireForeground | Should -BeTrue
+        }
+        Mock Wait-Until {
+            $TimeoutSec | Should -Be 30
+            $Because | Should -BeLike '*is visible in the owned filter flyout'
+            & $Condition
+        }
+    }
+    It 'opens with the scoped action and reads both original toggle states before retained dismissal' {
+        $state = Get-CombinedFilterState
+        $state.AgentsOnlyFilterMenuItem | Should -BeTrue
+        $state.RecentAgentSessionsFilterMenuItem | Should -BeFalse
+        $script:statePeers.ToArray() | Should -Be @('AgentsOnlyFilterMenuItem', 'RecentAgentSessionsFilterMenuItem')
+        Should -Invoke Invoke-UiElement -Exactly -Times 1
+        Should -Invoke Wait-Until -Exactly -Times 2
+        Should -Invoke Send-WtWindowKey -Exactly -Times 1
+    }
+    It 'retains process rejection and finally dismissal' {
+        $script:statePid = 43
+        { Get-CombinedFilterState } | Should -Throw
+        Should -Invoke Invoke-UiElement -Exactly -Times 1
+        Should -Invoke Send-WtWindowKey -Exactly -Times 1
+    }
+    It 'does not turn scoped invocation failure into a physical fallback' {
+        Mock Invoke-UiElement { throw 'Unsupported Pattern' }
+        { Get-CombinedFilterState } | Should -Throw '*Unsupported Pattern*'
+        $script:statePeers.Count | Should -Be 0
+        Should -Invoke Send-WtWindowKey -Exactly -Times 0
     }
 }
 

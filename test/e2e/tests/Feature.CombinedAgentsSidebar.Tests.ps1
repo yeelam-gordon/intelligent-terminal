@@ -566,7 +566,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 }
             }
         function Get-CombinedFilterState {
-            Invoke-UiClick -App $script:app -Selector FilterTabsButton | Out-Null
+            Invoke-UiElement -App $script:app -Selector FilterTabsButton | Out-Null
             try {
                 $state = @{}
                 foreach ($id in @('AgentsOnlyFilterMenuItem', 'RecentAgentSessionsFilterMenuItem')) {
@@ -592,7 +592,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             )) {
                 $state = Get-CombinedFilterState
                 if ($state[$entry.Id] -ne $entry.Value) {
-                    Invoke-UiClick -App $script:app -Selector FilterTabsButton | Out-Null
+                    Invoke-UiElement -App $script:app -Selector FilterTabsButton | Out-Null
                     $item = Wait-Until -TimeoutSec 30 -Because "$($entry.Id) is visible in the owned filter flyout" -Condition {
                         $peer = Get-CombinedElement $entry.Id
                         if ($peer -and -not $peer.Current.IsOffscreen) { $peer }
