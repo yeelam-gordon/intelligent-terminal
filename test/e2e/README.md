@@ -160,6 +160,24 @@ Import-Module Pester -MinimumVersion 5.0.0
 Invoke-Pester test\e2e\selftests\ResumeMetadataFixture.Unit.Tests.ps1 -Output Detailed
 ```
 
+The four PowerShell-only capture, reader and selector cases run independently
+of Visual Studio. Only the two native gate cases skip when `vswhere.exe`, a
+qualifying VC installation, or `vcvars64.bat` is absent, with a concrete reason.
+Discovery or compiler errors/timeouts fail those cases; they never become skips.
+The hermetic prerequisite matrix executes the same suite with Pester mocks:
+`pwsh -NoProfile -File test\e2e\selftests\Test-ResumeMetadataPrerequisites.ps1`.
+It succeeds only when all seven scenarios preserve four passing nonnative
+cases and exactly two native skips or expected failures, as appropriate.
+No app or global environment changes are involved.
+
+The common Sidebar setup uses a fresh owned backup and targeted settings/state
+overlays; it never calls `Clear-WtConfig` or resets user profiles, actions or
+keybindings. It refuses changed configuration, stale backup markers and active
+package processes before mutation, and restores original bytes only after
+verified inactivity. `CombinedSetupSafety.Unit.Tests.ps1` exercises the actual
+setup/recovery blocks with real merge/backup helpers and mocked app launch,
+including failure and recovery-refusal controls.
+
 SearchTextBox assertions use `Get-UiValue -ValuePattern` to read the real UIA
 value, including empty text. The default display-text helper retains winapp's
 Name fallback and is not an exact-empty query oracle.

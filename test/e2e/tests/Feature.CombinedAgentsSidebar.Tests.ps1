@@ -1088,7 +1088,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             language = 'en-US'; tabLayout = 'vertical'; tabLayoutVerticalWidth = 320
             startupActions = ''; firstWindowPreference = 'defaultProfile'; windowingBehavior = 'useNew'
             acpAgent = 'custom:combined-sidebar-fixture'; acpCustomCommand = $command; acpModel = ''
-            autoFixEnabled = $false; actions = @(); keybindings = @(); 'warning.confirmOnClose' = 'never'
+            autoFixEnabled = $false; 'warning.confirmOnClose' = 'never'
         }
         if (@(Get-WtProcessesForApp -App $script:target -IncludePackageExecutables).Count) {
             throw 'Dev started during preparation; refusing configuration mutation or adoption.'
@@ -1097,10 +1097,13 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             if ((Test-Path "$path.e2ebak") -or (Test-Path "$path.e2ebak.missing")) {
                 throw "Configuration markers changed during preparation; never replay them: $path"
             }
+            $hash = if (Test-Path -LiteralPath $path) { (Get-FileHash -LiteralPath $path).Hash } else { $null }
+            if ($hash -cne $script:originalHashes[$path]) {
+                throw "Configuration changed during preparation; refusing to overwrite newer user state: $path"
+            }
         }
         Backup-WtConfig -App $script:target
         $script:ownsConfig = $true
-        Clear-WtConfig -App $script:target
         foreach ($key in $startupState.Keys) {
             Set-WtState -App $script:target -Key $key -Value $startupState[$key] | Out-Null
         }

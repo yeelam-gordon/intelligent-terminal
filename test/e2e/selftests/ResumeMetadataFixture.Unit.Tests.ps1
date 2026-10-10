@@ -16,33 +16,6 @@ Describe 'Resume metadata fixtures' -Tag Unit {
 $input | Set-Content -LiteralPath $env:ITE2E_HOOK_RECEIPT
 exit 0
 '@ | Set-Content -LiteralPath $sink
-        $config = @{
-            ITE2E_SHIM_PWSH = (Get-Command pwsh.exe).Source
-            ITE2E_SHIM_FIXTURE = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-InteractiveDelegate.ps1')).Path
-            ITE2E_SHIM_LOG = $script:launchLog
-            ITE2E_SHIM_RUN = $script:sid
-            ITE2E_SHIM_WTCLI = $sink
-            ITE2E_SHIM_RESUME_SESSION = $script:sid
-            ITE2E_SHIM_SESSION_START_GATE = $script:gate
-            ITE2E_SHIM_SESSION_START_TIMEOUT = '2'
-        }
-        $header = Join-Path $script:root 'config.h'
-        @($config.Keys | ForEach-Object { "#define $_ LR`"ite2e($($config[$_]))ite2e`"" }) |
-            Set-Content -LiteralPath $header -Encoding ascii
-        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-        $vs = Invoke-Native -FilePath $vswhere -Arguments @('-latest', '-products', '*',
-            '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath') -TimeoutSec 10
-        $vs.ExitCode | Should -Be 0
-        $vcvars = Join-Path $vs.StdOut.Trim() 'VC\Auxiliary\Build\vcvars64.bat'
-        $source = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-CopilotDelegate.cpp')).Path
-        $build = "call `"$vcvars`" >nul && cl /nologo /EHsc /std:c++17 /FI`"$header`" `"$source`" /Fe:`"$script:shim`" /Fo:`"$script:root\copilot.obj`" /link /INCREMENTAL:NO"
-        $buildScript = "& `$env:ComSpec /d /c '$($build.Replace("'", "''"))'; exit `$LASTEXITCODE"
-        $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($buildScript))
-        $compile = Invoke-Native -FilePath (Get-Command pwsh.exe).Source -Arguments @('-NoProfile', '-EncodedCommand', $encoded) `
-            -WorkingDirectory $script:root -TimeoutSec 60
-        $compile.ExitCode | Should -Be 0 -Because ($compile.StdOut + $compile.StdErr)
-        $compile.TimedOut | Should -BeFalse
-
         function Start-ResumeFixtureProcess {
             param([string]$Executable, [string[]]$Arguments)
             $start = [Diagnostics.ProcessStartInfo]::new($Executable)
@@ -200,42 +173,89 @@ exit 0
         }
     }
 
-    It 'native shim holds the hook until gate release and forwards the configured timeout' {
-        $fixture = Start-ResumeFixtureProcess -Executable $script:shim -Arguments @('--resume', $script:sid)
-        try {
-            $waiting = "$script:gate.waiting-$script:sid.json"
-            Wait-Until -TimeoutSec 5 -IntervalSec 0.05 -Condition { Test-Path $waiting } | Out-Null
-            $receipt = Get-Content $waiting -Raw | ConvertFrom-Json
-            $receipt.session_id | Should -Be $script:sid
-            $receipt.pane_session_id | Should -Be $script:pane
-            Test-Path $script:hookLog | Should -BeFalse
-            Test-Path $script:launchLog | Should -BeFalse
-            $fixture.Process.HasExited | Should -BeFalse
-            Set-Content -LiteralPath $script:gate -Value 'release'
-            $fixture.Process.StandardInput.WriteLine('exit')
-            $fixture.Process.StandardInput.Flush()
-            $fixture.Process.WaitForExit(10000) | Should -BeTrue
-            $fixture.Process.ExitCode | Should -Be 0 -Because $fixture.Error.GetAwaiter().GetResult()
-            (Get-Content $script:hookLog -Raw | ConvertFrom-Json).session_id | Should -Be $script:sid
-            (Get-Content $script:launchLog -Raw | ConvertFrom-Json).command_line | Should -Match 'SessionStartTimeoutSec 2'
-            Test-Path "$script:gate.emitted-$script:sid.json" | Should -BeTrue
+    Context 'Native shim gates' {
+        BeforeAll {
+            $script:nativeSkipReason = $null
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+                $script:nativeSkipReason = "Native shim requires Visual Studio discovery: missing $vswhere"
+                return
+            }
+            $vs = Invoke-Native -FilePath $vswhere -Arguments @('-latest', '-products', '*',
+                '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath') -TimeoutSec 10
+            $vs.TimedOut | Should -BeFalse -Because 'Visual Studio discovery must complete within ten seconds'
+            $vs.ExitCode | Should -Be 0 -Because ($vs.StdOut + $vs.StdErr)
+            if ([string]::IsNullOrWhiteSpace($vs.StdOut)) {
+                $script:nativeSkipReason = 'Native shim requires a Visual Studio installation with VC.Tools.x86.x64; vswhere found none.'
+                return
+            }
+            $vcvars = Join-Path $vs.StdOut.Trim() 'VC\Auxiliary\Build\vcvars64.bat'
+            if (-not (Test-Path -LiteralPath $vcvars -PathType Leaf)) {
+                $script:nativeSkipReason = "Native shim requires the VC setup component: missing $vcvars"
+                return
+            }
+            $config = @{
+                ITE2E_SHIM_PWSH = (Get-Command pwsh.exe).Source
+                ITE2E_SHIM_FIXTURE = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-InteractiveDelegate.ps1')).Path
+                ITE2E_SHIM_LOG = $script:launchLog
+                ITE2E_SHIM_RUN = $script:sid
+                ITE2E_SHIM_WTCLI = (Join-Path $script:root 'hook-sink.ps1')
+                ITE2E_SHIM_RESUME_SESSION = $script:sid
+                ITE2E_SHIM_SESSION_START_GATE = $script:gate
+                ITE2E_SHIM_SESSION_START_TIMEOUT = '2'
+            }
+            $header = Join-Path $script:root 'config.h'
+            @($config.Keys | ForEach-Object { "#define $_ LR`"ite2e($($config[$_]))ite2e`"" }) |
+                Set-Content -LiteralPath $header -Encoding ascii
+            $source = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-CopilotDelegate.cpp')).Path
+            $build = "call `"$vcvars`" >nul && cl /nologo /EHsc /std:c++17 /FI`"$header`" `"$source`" /Fe:`"$script:shim`" /Fo:`"$script:root\copilot.obj`" /link /INCREMENTAL:NO"
+            $buildScript = "& `$env:ComSpec /d /c '$($build.Replace("'", "''"))'; exit `$LASTEXITCODE"
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($buildScript))
+            $compile = Invoke-Native -FilePath (Get-Command pwsh.exe).Source -Arguments @('-NoProfile', '-EncodedCommand', $encoded) `
+                -WorkingDirectory $script:root -TimeoutSec 60
+            $compile.TimedOut | Should -BeFalse -Because 'Native shim compilation must complete within sixty seconds'
+            $compile.ExitCode | Should -Be 0 -Because ($compile.StdOut + $compile.StdErr)
         }
-        finally { Stop-ResumeFixtureProcess $fixture }
-    }
 
-    It 'an unreleased native gate fails at its configured deadline without emitting a hook' {
-        foreach ($path in @($script:gate, $script:hookLog, $script:launchLog,
-                "$script:gate.waiting-$script:sid.json", "$script:gate.emitted-$script:sid.json")) {
-            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        It 'native shim holds the hook until gate release and forwards the configured timeout' {
+            if ($script:nativeSkipReason) { Set-ItResult -Skipped -Because $script:nativeSkipReason; return }
+            $fixture = Start-ResumeFixtureProcess -Executable $script:shim -Arguments @('--resume', $script:sid)
+            try {
+                $waiting = "$script:gate.waiting-$script:sid.json"
+                Wait-Until -TimeoutSec 5 -IntervalSec 0.05 -Condition { Test-Path $waiting } | Out-Null
+                $receipt = Get-Content $waiting -Raw | ConvertFrom-Json
+                $receipt.session_id | Should -Be $script:sid
+                $receipt.pane_session_id | Should -Be $script:pane
+                Test-Path $script:hookLog | Should -BeFalse
+                Test-Path $script:launchLog | Should -BeFalse
+                $fixture.Process.HasExited | Should -BeFalse
+                Set-Content -LiteralPath $script:gate -Value 'release'
+                $fixture.Process.StandardInput.WriteLine('exit')
+                $fixture.Process.StandardInput.Flush()
+                $fixture.Process.WaitForExit(10000) | Should -BeTrue
+                $fixture.Process.ExitCode | Should -Be 0 -Because $fixture.Error.GetAwaiter().GetResult()
+                (Get-Content $script:hookLog -Raw | ConvertFrom-Json).session_id | Should -Be $script:sid
+                (Get-Content $script:launchLog -Raw | ConvertFrom-Json).command_line | Should -Match 'SessionStartTimeoutSec 2'
+                Test-Path "$script:gate.emitted-$script:sid.json" | Should -BeTrue
+            }
+            finally { Stop-ResumeFixtureProcess $fixture }
         }
-        $fixture = Start-ResumeFixtureProcess -Executable $script:shim -Arguments @('--resume', $script:sid)
-        try {
-            $fixture.Process.WaitForExit(10000) | Should -BeTrue
-            $fixture.Process.ExitCode | Should -Not -Be 0
-            $fixture.Error.GetAwaiter().GetResult() | Should -Match 'Session-start gate was not released'
-            Test-Path $script:hookLog | Should -BeFalse
-            Test-Path $script:launchLog | Should -BeFalse
+
+        It 'an unreleased native gate fails at its configured deadline without emitting a hook' {
+            if ($script:nativeSkipReason) { Set-ItResult -Skipped -Because $script:nativeSkipReason; return }
+            foreach ($path in @($script:gate, $script:hookLog, $script:launchLog,
+                    "$script:gate.waiting-$script:sid.json", "$script:gate.emitted-$script:sid.json")) {
+                Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            }
+            $fixture = Start-ResumeFixtureProcess -Executable $script:shim -Arguments @('--resume', $script:sid)
+            try {
+                $fixture.Process.WaitForExit(10000) | Should -BeTrue
+                $fixture.Process.ExitCode | Should -Not -Be 0
+                $fixture.Error.GetAwaiter().GetResult() | Should -Match 'Session-start gate was not released'
+                Test-Path $script:hookLog | Should -BeFalse
+                Test-Path $script:launchLog | Should -BeFalse
+            }
+            finally { Stop-ResumeFixtureProcess $fixture }
         }
-        finally { Stop-ResumeFixtureProcess $fixture }
     }
 }
