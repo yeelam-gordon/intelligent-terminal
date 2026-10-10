@@ -2610,6 +2610,8 @@ namespace winrt::TerminalApp::implementation
 
             _mutatingTabCollections = false;
             endMutation.release();
+            // Selection events were suppressed during mutation; complete a real tab switch now.
+            // Reordering the selected tab or pinning must not repeat selection side effects.
             if (selectMoved && previouslySelected != tabViewItem)
             {
                 _OnSelectionChangedCore();
