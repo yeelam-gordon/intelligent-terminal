@@ -1021,7 +1021,8 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 $command = "Get-Content -Raw -LiteralPath '$($path.Replace("'", "''"))' | & '$($script:app.WtcliPath.Replace("'", "''"))' agent-hook --cli-source copilot --event $event"
                 Invoke-RunCommand -App $script:app -SessionId $Tab.session_id -Command $command -SettleSec 5 | Out-Null
             }
-            function Assert-CombinedSourcePayload {
+        }
+        function Assert-CombinedSourcePayload {
                 param([string]$SourcePane, [string]$TabId, [string]$ExpectedId, [string[]]$ForbiddenIds)
                 Set-WtPaneFocus -App $script:app -SessionId $SourcePane
                 Open-AgentPane -App $script:app -TimeoutSec 15 | Out-Null
@@ -1079,7 +1080,6 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                         Set-Content (Join-Path $script:evidence "$marker-$mode.json")
                 }
                 Set-WtPaneFocus -App $script:app -SessionId $SourcePane
-            }
         }
         $startupState = @{
             sidebarLayoutMigrationCompleted = $true; sidebarIntroductionShown = $true

@@ -146,6 +146,23 @@ exit 0
         finally { $writer.Dispose() }
     }
 
+    It 'native source payload assertions are available before any hook is emitted' {
+        $feature = Join-Path $PSScriptRoot '..\tests\Feature.CombinedAgentsSidebar.Tests.ps1'
+        $ast = [Management.Automation.Language.Parser]::ParseFile($feature, [ref]$null, [ref]$null)
+        $helpers = @($ast.FindAll({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq 'Assert-CombinedSourcePayload'
+        }, $true))
+        $helpers.Count | Should -Be 1
+        $parent = $helpers[0].Parent
+        while ($parent) {
+            $parent | Should -Not -BeOfType ([Management.Automation.Language.FunctionDefinitionAst]) `
+                -Because 'the no-hook path must not depend on invoking another helper first'
+            $parent = $parent.Parent
+        }
+    }
+
     It 'native resume cases expose a stable tag and retain their release titles' {
         $feature = Join-Path $PSScriptRoot '..\tests\Feature.CombinedAgentsSidebar.Tests.ps1'
         $ast = [Management.Automation.Language.Parser]::ParseFile($feature, [ref]$null, [ref]$null)
