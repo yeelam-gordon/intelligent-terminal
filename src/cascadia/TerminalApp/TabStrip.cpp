@@ -13,6 +13,7 @@
 #include "Utils.h"
 
 #include "TabStrip.g.cpp"
+#include "InwardToolTipPlacementConverter.g.cpp"
 #include "SidebarFiltersViewModel.g.cpp"
 #include "TabStripSelectionChangedEventArgs.g.cpp"
 #include "TabStripCloseRequestedEventArgs.g.cpp"
@@ -1224,8 +1225,42 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    IInspectable InwardToolTipPlacementConverter::Convert(IInspectable const& value,
+                                                          WUX::Interop::TypeName const&,
+                                                          IInspectable const&,
+                                                          hstring const&)
+    {
+        const auto flowDirection = unbox_value<WUX::FlowDirection>(value);
+        return box_value(flowDirection == WUX::FlowDirection::RightToLeft ? Primitives::PlacementMode::Left : Primitives::PlacementMode::Right);
+    }
+
+    IInspectable InwardToolTipPlacementConverter::ConvertBack(IInspectable const&,
+                                                              WUX::Interop::TypeName const&,
+                                                              IInspectable const&,
+                                                              hstring const&)
+    {
+        throw hresult_not_implemented();
+    }
+
+    void TabStrip::_UpdateTabHeaderToolTipPlacement(IInspectable const& sender)
+    {
+        if (const auto owner = sender.try_as<FrameworkElement>())
+        {
+            if (const auto toolTip = ToolTipService::GetToolTip(owner).try_as<ToolTip>())
+            {
+                toolTip.PlacementRect(winrt::Windows::Foundation::Rect{ 0, 0, static_cast<float>(owner.ActualWidth()), static_cast<float>(owner.ActualHeight()) });
+            }
+        }
+    }
+
+    void TabStrip::OnTabHeaderSizeChanged(IInspectable const& sender, SizeChangedEventArgs const&)
+    {
+        _UpdateTabHeaderToolTipPlacement(sender);
+    }
+
     void TabStrip::OnTabHeaderLoaded(IInspectable const& sender, RoutedEventArgs const&)
     {
+        _UpdateTabHeaderToolTipPlacement(sender);
         if (const auto root = sender.try_as<FrameworkElement>())
         {
             if (const auto display = root.DataContext().try_as<TerminalApp::TabStripDisplayItem>())

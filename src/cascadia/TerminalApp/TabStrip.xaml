@@ -54,6 +54,7 @@
                     </ResourceDictionary.ThemeDictionaries>
                 </ResourceDictionary>
             </ResourceDictionary.MergedDictionaries>
+            <local:InwardToolTipPlacementConverter x:Key="InwardToolTipPlacementConverter" />
             <!--  Remove the native horizontal tab border within this vertical-only scope.  -->
             <Thickness x:Key="TabViewItemBorderThickness">0</Thickness>
             <CornerRadius x:Key="SidebarTabCornerRadius">6</CornerRadius>
@@ -501,9 +502,18 @@
                               CornerRadius="{StaticResource SidebarTabCornerRadius}"
                               DoubleTapped="OnTabHeaderDoubleTapped"
                               Loaded="OnTabHeaderLoaded"
+                              SizeChanged="OnTabHeaderSizeChanged"
                               PointerPressed="OnTabHeaderPointerPressed"
                               Tapped="OnTabHeaderTapped"
-                              ToolTipService.ToolTip="{x:Bind ToolTipText, Mode=OneWay}">
+                              ToolTipService.PlacementTarget="{Binding ElementName=TabToolTipAnchor}">
+                            <ToolTipService.ToolTip>
+                                <ToolTip FlowDirection="LeftToRight"
+                                         Placement="{Binding FlowDirection, ElementName=TabHeaderGrid, Mode=OneWay, Converter={StaticResource InwardToolTipPlacementConverter}}">
+                                    <TextBlock Text="{x:Bind ToolTipText, Mode=OneWay}"
+                                               FlowDirection="{Binding FlowDirection, ElementName=TabHeaderGrid, Mode=OneWay}"
+                                               TextWrapping="Wrap" />
+                                </ToolTip>
+                            </ToolTipService.ToolTip>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
@@ -577,6 +587,11 @@
                                           FontSize="10"
                                           Glyph="&#xE711;" />
                             </Button>
+                            <Grid x:Name="TabToolTipAnchor"
+                                  Grid.ColumnSpan="3"
+                                  AutomationProperties.AccessibilityView="Raw"
+                                  FlowDirection="LeftToRight"
+                                  IsHitTestVisible="False" />
                         </Grid>
                         <ItemsControl x:Name="TabPaneItems"
                                       Margin="22,0,0,0"
