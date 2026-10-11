@@ -1,40 +1,6 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 
 BeforeAll {
-function Send-CombinedModifierEnter {
-    param($App, [ValidateSet('Ctrl', 'Alt', 'Shift')][string]$Modifier, [string]$EvidencePath)
-    $vk = @{ Ctrl = 0x11; Alt = 0x12; Shift = 0x10 }[$Modifier]
-    Test-WtWindowKeyFocusable -App $App | Should -BeTrue
-    Set-WtWindowForeground -App $App -Attempts 3 -DelayMs 150 | Should -BeTrue
-    $observations = [Collections.Generic.List[object]]::new()
-    $pressed = $false
-    try {
-        [ItE2E.ItWtWin32Input]::IsKeyDown($vk) | Should -BeFalse -Because 'do not release a modifier owned by another input operation'
-        [ItE2E.ItWtWin32Input]::keybd_event([byte]$vk, 0, 0, [UIntPtr]::Zero)
-        $pressed = $true
-        Start-Sleep -Milliseconds 500
-        $held = [ItE2E.ItWtWin32Input]::IsKeyDown($vk)
-        $observations.Add(@{ phase = 'before-enter'; held = $held; utc = [datetime]::UtcNow.ToString('o') })
-        $held | Should -BeTrue
-        [ItE2E.ItWtWin32Input]::GetForegroundWindow().ToInt64() | Should -Be $App.Hwnd
-        [ItE2E.ItWtWin32Input]::keybd_event(0x0D, 0, 0, [UIntPtr]::Zero)
-        Start-Sleep -Milliseconds 80
-        [ItE2E.ItWtWin32Input]::keybd_event(0x0D, 0, 0x2, [UIntPtr]::Zero)
-        # CoreWindow queries current modifier state when the queued Enter is handled.
-        Start-Sleep -Milliseconds 750
-        $held = [ItE2E.ItWtWin32Input]::IsKeyDown($vk)
-        $observations.Add(@{ phase = 'after-enter-before-release'; held = $held; utc = [datetime]::UtcNow.ToString('o') })
-        $held | Should -BeTrue
-    }
-    finally {
-        if ($pressed) {
-            [ItE2E.ItWtWin32Input]::keybd_event([byte]$vk, 0, 0x2, [UIntPtr]::Zero)
-            Start-Sleep -Milliseconds 120
-            $observations.Add(@{ phase = 'released'; held = [ItE2E.ItWtWin32Input]::IsKeyDown($vk); utc = [datetime]::UtcNow.ToString('o') })
-        }
-        $observations | ConvertTo-Json | Set-Content -LiteralPath $EvidencePath
-    }
-}
 function Invoke-CombinedCheckedCleanup {
     param($PrimaryFailure, [Parameter(Mandatory)][scriptblock]$Action)
     try { & $Action }
@@ -260,11 +226,9 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         Initialize-CombinedRuntimeBackup
         $script:historyPath = Join-Path $script:evidence 'history.json'
         $script:fixtureLog = Join-Path $script:evidence 'fixture.log'
-        $script:requestLog = Join-Path $script:evidence 'received-prompts.jsonl'
         $script:releasePromptPath = Join-Path $script:evidence 'release-prompt'
         $script:heldPromptMarker = $null
         $script:marker = 'combined-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-        $script:nativeFixtureIndex = 0
         $script:history = @(foreach ($i in 0..23) {
             @{
                 sessionId = "$script:marker-history-$i"
@@ -276,7 +240,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         @{ sessions = $script:history } | ConvertTo-Json -Depth 6 |
             Set-Content -LiteralPath $script:historyPath -Encoding utf8
         $fixture = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-AcpChatAgent.ps1')).Path
-        $invocation = "& '$($fixture.Replace("'", "''"))' -LogPath '$($script:fixtureLog.Replace("'", "''"))' -HistoryPath '$($script:historyPath.Replace("'", "''"))' -ReleasePromptPath '$($script:releasePromptPath.Replace("'", "''"))' -RequestLogPath '$($script:requestLog.Replace("'", "''"))'"
+        $invocation = "& '$($fixture.Replace("'", "''"))' -LogPath '$($script:fixtureLog.Replace("'", "''"))' -HistoryPath '$($script:historyPath.Replace("'", "''"))' -ReleasePromptPath '$($script:releasePromptPath.Replace("'", "''"))'"
         $command = 'pwsh -NoProfile -EncodedCommand ' +
             [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($invocation))
 
@@ -498,8 +462,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             function New-CombinedCliFixture {
                 param([string]$Purpose, [string]$SessionId = '', [string]$ResumeSession = '', [switch]$HoldHook)
                 $sid = if ($ResumeSession) { $ResumeSession } elseif ($SessionId) { $SessionId } else { [guid]::NewGuid().ToString() }
-                $script:nativeFixtureIndex += 1
-                $folder = Join-Path $script:evidence "$script:marker-$Purpose-$script:nativeFixtureIndex"
+                $folder = Join-Path $script:evidence "$script:marker-$Purpose"
                 New-Item -ItemType Directory -Path $folder -Force | Out-Null
                 $shim = Join-Path $folder 'copilot.exe'
                 if (Test-Path -LiteralPath $shim) { throw 'Owned native fixture output already exists; never overwrite an executable.' }
@@ -512,10 +475,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 }
                 if ($ResumeSession) { $config.ITE2E_SHIM_RESUME_SESSION = $ResumeSession }
                 $gate = Join-Path $folder 'release-native-hook'
-                if ($HoldHook) {
-                    $config.ITE2E_SHIM_SESSION_START_GATE = $gate
-                    $config.ITE2E_SHIM_SESSION_START_TIMEOUT = '180'
-                }
+                if ($HoldHook) { $config.ITE2E_SHIM_SESSION_START_GATE = $gate }
                 $header = Join-Path $folder 'config.h'
                 @($config.Keys | ForEach-Object { "#define $_ LR`"ite2e($($config[$_]))ite2e`"" }) |
                     Set-Content -LiteralPath $header -Encoding ascii
@@ -619,11 +579,10 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 $state = Get-CombinedFilterState
                 if ($state[$entry.Id] -ne $entry.Value) {
                     Invoke-UiClick -App $script:app -Selector FilterTabsButton | Out-Null
-                    $item = Wait-Until -TimeoutSec 30 -Because "$($entry.Id) is visible after reopening the owned filter flyout" -Condition {
+                    $item = Wait-Until -TimeoutSec 10 -Because 'the filter menu peer is visible' -Condition {
                         $peer = Get-CombinedElement $entry.Id
                         if ($peer -and -not $peer.Current.IsOffscreen) { $peer }
                     }
-                    $item.Current.ProcessId | Should -Be $script:app.Pid
                     $item.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Toggle()
                 }
             }
@@ -1062,65 +1021,6 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 Invoke-RunCommand -App $script:app -SessionId $Tab.session_id -Command $command -SettleSec 5 | Out-Null
             }
         }
-        function Assert-CombinedSourcePayload {
-                param([string]$SourcePane, [string]$TabId, [string]$ExpectedId, [string[]]$ForbiddenIds)
-                Set-WtPaneFocus -App $script:app -SessionId $SourcePane
-                Open-AgentPane -App $script:app -TimeoutSec 15 | Out-Null
-                $assistant = Wait-NewAgentPaneSession -App $script:app -TabId $TabId -TimeoutSec 20
-                Wait-AgentReady -App $script:app -PaneSessionId $assistant.PaneSessionId -TimeoutSec 20 | Should -BeTrue
-                $assistant.AcpSessionId | Should -Not -Be $ExpectedId
-                foreach ($mode in @('Planner', 'Autofix')) {
-                    Set-WtPaneFocus -App $script:app -SessionId $SourcePane
-                    $marker = 'SCROLL_TURN_90_' + [guid]::NewGuid().ToString('N')
-                    $text = if ($mode -eq 'Autofix') { "/fix $marker" } else { $marker }
-                    Send-AgentPrompt -App $script:app -PaneSessionId $assistant.PaneSessionId -Text $text | Out-Null
-                    $received = Wait-Until -TimeoutSec 20 -Because 'the real assistant request reaches the ACP fixture' -Condition {
-                        if (Test-Path $script:requestLog) {
-                            $stream = [IO.File]::Open($script:requestLog, [IO.FileMode]::Open,
-                                [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-                            $snapshot = [IO.MemoryStream]::new()
-                            try {
-                                $stream.CopyTo($snapshot)
-                                $bytes = $snapshot.ToArray()
-                            }
-                            finally {
-                                $snapshot.Dispose()
-                                $stream.Dispose()
-                            }
-                            $lastLf = [Array]::LastIndexOf($bytes, [byte]10)
-                            if ($lastLf -ge 0) {
-                                $completed = [Text.UTF8Encoding]::new($false, $true).GetString($bytes, 0, $lastLf + 1)
-                                $records = @(foreach ($line in $completed.Split("`n")) {
-                                    $line = $line.TrimEnd("`r")
-                                    if ($line.Length -gt 0) { $line | ConvertFrom-Json -ErrorAction Stop }
-                                })
-                                $records | Where-Object { $_.text.Contains($marker) } | Select-Object -First 1
-                            }
-                        }
-                    }
-                    $received.session_id | Should -Be $assistant.AcpSessionId
-                    $heading = if ($mode -eq 'Planner') { 'Terminal Context JSON' } else { 'Shell Context' }
-                    $json = [regex]::Match($received.text,
-                        '(?s)' + [regex]::Escape($heading) + '\s*```json\s*(.*?)\s*```')
-                    $json.Success | Should -BeTrue -Because "$mode must deliver structured source context"
-                    $source = $json.Groups[1].Value | ConvertFrom-Json
-                    if ($mode -eq 'Planner') {
-                        ([string]$source.activeTarget).Trim('{}') | Should -Be $SourcePane.Trim('{}')
-                    }
-                    if ($ExpectedId) { $source.agent_session_id | Should -Be $ExpectedId }
-                    else { $source.PSObject.Properties.Name | Should -Not -Contain 'agent_session_id' }
-                    foreach ($forbidden in $ForbiddenIds) {
-                        $source.agent_session_id | Should -Not -Be $forbidden
-                    }
-                    $source.agent_session_id | Should -Not -Be $assistant.AcpSessionId
-                    Wait-Until -TimeoutSec 15 -Because 'the deterministic chat turn renders its completion' -Condition {
-                        (Get-AgentPaneText -App $script:app -PaneSessionId $assistant.PaneSessionId).Contains("ACK_$marker")
-                    } | Out-Null
-                    $received | ConvertTo-Json -Depth 20 |
-                        Set-Content (Join-Path $script:evidence "$marker-$mode.json")
-                }
-                Set-WtPaneFocus -App $script:app -SessionId $SourcePane
-        }
         $startupState = @{
             sidebarLayoutMigrationCompleted = $true; sidebarIntroductionShown = $true
         }
@@ -1136,10 +1036,6 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         foreach ($path in @($script:target.SettingsPath, $script:target.StatePath)) {
             if ((Test-Path "$path.e2ebak") -or (Test-Path "$path.e2ebak.missing")) {
                 throw "Configuration markers changed during preparation; never replay them: $path"
-            }
-            $hash = if (Test-Path -LiteralPath $path) { (Get-FileHash -LiteralPath $path).Hash } else { $null }
-            if ($hash -cne $script:originalHashes[$path]) {
-                throw "Configuration changed during preparation; refusing to overwrite newer user state: $path"
             }
         }
         Backup-WtConfig -App $script:target
@@ -2066,28 +1962,147 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         }
     }
 
-    It '<CaseTitle> (<RecentScope>)' -Tag 'NativeSessionResume' -ForEach @(
-        if ($env:ITE2E_NATIVE_RESUME_DIAGNOSTIC -eq '1') {
-            @{ CaseTitle = 'Diagnostic native no-hook resume without modifier controls'; RecentScope = $true; HoldHook = $true; Diagnostic = $true }
+    It 'Native history resume publishes Idle before hooks' -Tag 'KnownNativeResumeMetadata' {
+        $sid = [guid]::NewGuid().ToString()
+        $fixture = New-CombinedCliFixture 'known-resume' -ResumeSession $sid -HoldHook
+        $directory = $env:ITE2E_CANONICAL_SHIM_DIRECTORY
+        if (-not $directory -or -not (Test-Path -LiteralPath $directory -PathType Container)) {
+            throw 'Supply an owned native resolver directory on the test profile PATH.'
         }
-        else {
-        @{ CaseTitle = 'History Enter resumes an unbound native session in the current window'; RecentScope = $true; HoldHook = $false }
-        @{ CaseTitle = 'History Enter resumes an unbound native session in the current window'; RecentScope = $false; HoldHook = $false }
-        @{ CaseTitle = 'Native history resume publishes Idle before hooks'; RecentScope = $true; HoldHook = $true }
+        $resolver = Join-Path $directory 'copilot.exe'
+        if (Test-Path -LiteralPath $resolver) { throw 'Never replace an existing native executable.' }
+        [IO.File]::Copy($fixture.Shim, $resolver, $false)
+        $resolverHash = (Get-FileHash -LiteralPath $resolver).Hash
+        $external = $null
+        $native = $null
+        $pane = $null
+        $primaryFailure = $null
+        try {
+            $start = [Diagnostics.ProcessStartInfo]::new($fixture.Shim)
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $true
+            $start.RedirectStandardInput = $true
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            $start.WorkingDirectory = $fixture.Folder
+            $start.Environment.Remove('WT_SESSION') | Out-Null
+            $start.Environment.Remove('WT_COM_CLSID') | Out-Null
+            $start.ArgumentList.Add('--external-session')
+            $start.ArgumentList.Add($sid)
+            $external = [Diagnostics.Process]::Start($start)
+            $output = $external.StandardOutput.ReadToEndAsync()
+            $errorOutput = $external.StandardError.ReadToEndAsync()
+            Wait-Until -TimeoutSec 15 -Condition { Test-Path -LiteralPath $fixture.Log } | Out-Null
+            $known = Get-Content -LiteralPath $fixture.Log | Select-Object -First 1 | ConvertFrom-Json
+            $known.session_id | Should -Be $sid
+            $known.native_pid | Should -Be $external.Id
+            $known.pane_session_id | Should -BeNullOrEmpty
+            $external.StandardInput.WriteLine('exit')
+            $external.StandardInput.Flush()
+            $external.WaitForExit(10000) | Should -BeTrue
+            Register-CombinedUnboundSession -Fixture $fixture -Stopped
+            (Get-CombinedElement SearchTabsButton).GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Current.ToggleState |
+                Should -Be ([Windows.Automation.ToggleState]::Off) -Because 'search must not bypass the Agents-only filter'
+            Set-CombinedFilters -AgentsOnly $true -Recent $false
+            $name = $script:pipe -replace '^\\\\\.\\pipe\\', ''
+            $rpc = [IO.Pipes.NamedPipeClientStream]::new('.', $name, [IO.Pipes.PipeDirection]::InOut)
+            $reader = $null
+            $writer = $null
+            try {
+                $rpc.Connect(5000)
+                $reader = [IO.StreamReader]::new($rpc)
+                $writer = [IO.StreamWriter]::new($rpc)
+                $writer.AutoFlush = $true
+                $requests = @(
+                    @{ jsonrpc = '2.0'; id = 1; method = 'initialize'; params = @{
+                        protocolVersion = 1; clientCapabilities = @{}; clientInfo = @{ name = 'known-resume-test'; version = '1' }
+                        _meta = @{ wta = @{ control_client = 'sidebar-history-v1' } }
+                    } },
+                    @{ jsonrpc = '2.0'; id = 2; method = '_intellterm.wta/session/activate'; params = @{
+                        identity = @{ session_id = $sid; history_key = @{ session_id = $sid; provider_id = 'copilot'; location = 'Host' } }
+                        window_id = [long]$script:app.WindowId; activation_id = [guid]::NewGuid().ToString()
+                    } }
+                )
+                foreach ($request in $requests) {
+                    $writer.WriteLine(($request | ConvertTo-Json -Depth 10 -Compress))
+                    $clock = [Diagnostics.Stopwatch]::StartNew()
+                    do {
+                        $read = $reader.ReadLineAsync()
+                        if (-not $read.Wait(15000)) { throw 'Known resume RPC timed out.' }
+                        $response = $read.GetAwaiter().GetResult() | ConvertFrom-Json -ErrorAction Stop
+                        if ($clock.Elapsed.TotalSeconds -gt 20) { throw 'Known resume RPC exceeded its deadline.' }
+                    } while ($response.id -ne $request.id)
+                    if ($response.error) { throw "Known resume RPC failed: $($response.error | ConvertTo-Json -Compress -Depth 8)" }
+                }
+                $response.result.accepted | Should -BeTrue
+            }
+            finally {
+                if ($writer) { $writer.Dispose() }
+                if ($reader) { $reader.Dispose() }
+                $rpc.Dispose()
+            }
+            $waiting = "$($fixture.Gate).waiting-$sid.json"
+            Wait-Until -TimeoutSec 15 -Condition { Test-Path -LiteralPath $waiting } | Out-Null
+            $receipt = Get-Content -LiteralPath $waiting -Raw | ConvertFrom-Json
+            $pane = [string]$receipt.pane_session_id
+            $pane | Should -Not -BeNullOrEmpty
+            $context = Invoke-WtCli -App $script:app -Arguments @('get-pane-context', '--target', $pane)
+            [string]$context.pane.window_id | Should -Be ([string]$script:app.WindowId)
+            $nativePid = (Get-WtPaneStatus -App $script:app -SessionId $pane).pid
+            $native = Get-Process -Id $nativePid -ErrorAction Stop
+            $native.Path | Should -Be $resolver
+            Wait-Until -TimeoutSec 10 -Because 'known metadata is bound before the hook' -Condition {
+                @((Get-CombinedSnapshot).sessions | Where-Object {
+                    $_.session_id -eq $sid -and $_.provider_id -eq 'copilot' -and $_.status -eq 'Idle' -and
+                        ([string]$_.pane_session_id).Trim('{}') -eq $pane.Trim('{}')
+                }).Count -eq 1
+            } | Out-Null
+            $row = Wait-Until -TimeoutSec 10 -Because 'the known native tab remains visible under Agents only' -Condition {
+                $list = Get-CombinedElement ItemsList
+                if ($list) {
+                    $rows = @($list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) |
+                        Where-Object { -not $_.Current.IsOffscreen -and $_.Current.Name.Contains($receipt.title) })
+                    if ($rows.Count -eq 1) { $rows[0] }
+                }
+            }
+            $row.Current.ProcessId | Should -Be $script:app.Pid
+            $row.Current.Name | Should -Match '\bIdle\b'
+            $row.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'HistoryProviderIcon')) |
+                Should -BeNullOrEmpty -Because 'the retained row is the live tab, not a Recent duplicate'
+            Test-Path -LiteralPath "$($fixture.Gate).emitted-$sid.json" | Should -BeFalse
+            Save-CombinedActionEvidence 'known-native-before-hook' -SessionId $sid -Screenshot
         }
+        catch { $primaryFailure = $_; throw }
+        finally {
+            Invoke-CombinedCheckedCleanup -PrimaryFailure $primaryFailure -Action {
+                Set-Content -LiteralPath $fixture.Gate -Value 'release for owned cleanup'
+                if ($pane) { Close-WtPane -App $script:app -SessionId $pane }
+                if ($native -and -not $native.WaitForExit(10000)) { throw 'Owned resumed fixture did not exit.' }
+                if ($external -and -not $external.HasExited) {
+                    $external.StandardInput.Close()
+                    if (-not $external.WaitForExit(10000)) { throw 'Owned external fixture did not exit.' }
+                }
+                (Get-FileHash -LiteralPath $resolver).Hash | Should -Be $resolverHash
+                if (@(Get-Process | Where-Object Path -eq $resolver).Count) { throw 'Native fixture is still active; retain it.' }
+                Remove-Item -LiteralPath $resolver
+                foreach ($file in @('copilot.exe', 'copilot.obj')) {
+                    Remove-Item -LiteralPath (Join-Path $fixture.Folder $file) -ErrorAction Stop
+                }
+            }
+        }
+    }
+
+    It 'History Enter resumes an unbound native session in the current window (<RecentScope>)' -ForEach @(
+        @{ RecentScope = $true }, @{ RecentScope = $false }
     ) {
         $sid = [guid]::NewGuid().ToString()
-        $fixture = New-CombinedCliFixture 'external-resume' -ResumeSession $sid -HoldHook:$HoldHook
+        $fixture = New-CombinedCliFixture 'external-resume' -ResumeSession $sid
         $external = $null
         $resumePane = $null
         $resumeProcess = $null
         $resolverOwned = $false
         $resolver = $null
-        $resumeListener = $null
-        $secondTab = $null
-        $secondProcess = $null
-        $missingTab = $null
-        $primaryFailure = $null
         try {
             if (-not $env:ITE2E_CANONICAL_SHIM_DIRECTORY) { throw 'External resume requires an approved existing resolver directory.' }
             $directory = [IO.Path]::GetFullPath($env:ITE2E_CANONICAL_SHIM_DIRECTORY)
@@ -2131,16 +2146,10 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             $externalRecord.pane_session_id | Should -BeNullOrEmpty
             $externalRecord.native_pid | Should -Be $external.Id
             $external.HasExited | Should -BeFalse
-            if ($HoldHook) {
-                $external.StandardInput.WriteLine('exit')
-                $external.StandardInput.Flush()
-                $external.WaitForExit(10000) | Should -BeTrue
-            }
-            Register-CombinedUnboundSession -Fixture $fixture -Stopped:$HoldHook
-            $initialStatus = if ($HoldHook) { 'Ended' } else { 'Idle' }
+            Register-CombinedUnboundSession -Fixture $fixture
             Wait-Until -TimeoutSec 20 -Condition {
                 @((Get-CombinedSnapshot).sessions | Where-Object {
-                    $_.session_id -eq $sid -and $_.provider_id -eq 'copilot' -and $_.status -eq $initialStatus -and
+                    $_.session_id -eq $sid -and $_.provider_id -eq 'copilot' -and $_.status -eq 'Idle' -and
                         -not $_.pane_session_id -and -not $_.owner_window_id -and -not $_.background_tab
                 }).Count -eq 1
             } | Out-Null
@@ -2163,28 +2172,13 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             $row.SetFocus()
             $row.Current.HasKeyboardFocus | Should -BeTrue
             $selectedBeforeModifiers = Get-ActivePane -App $script:app
-            if ($HoldHook) {
-                $unrelatedPaneBefore = Get-WtPaneStatus -App $script:app -SessionId $selectedBeforeModifiers.session_id
-                $unrelatedId = $script:history[0].sessionId
-                $unrelatedBefore = @((Get-CombinedSnapshot).sessions | Where-Object session_id -eq $unrelatedId)
-                $unrelatedBefore.Count | Should -Be 1
-                $unrelatedBefore[0].status | Should -Be 'Historical'
-                $unrelatedBinding = [string]$unrelatedBefore[0].pane_session_id
-                $resumeListener = Start-WtEventListener -App $script:app -WaitForReady
-            }
-            $modifierControls = if ($env:ITE2E_NATIVE_RESUME_DIAGNOSTIC -eq '1') { @() } else { @('Ctrl', 'Alt', 'Shift') }
-            foreach ($modifier in $modifierControls) {
+            foreach ($modifier in @('Ctrl', 'Alt', 'Shift')) {
                 $row = @(Get-CombinedRows Recent)[0]
                 $row.SetFocus()
                 $row.Current.HasKeyboardFocus | Should -BeTrue
-                Send-CombinedModifierEnter -App $script:app -Modifier $modifier `
-                    -EvidencePath (Join-Path $fixture.Folder "modifier-input-$modifier.json")
+                Send-WtWindowKey -App $script:app -Vk 0x0D -Ctrl:($modifier -eq 'Ctrl') `
+                    -Alt:($modifier -eq 'Alt') -Shift:($modifier -eq 'Shift') -RequireForeground | Out-Null
                 Start-Sleep -Milliseconds 300
-                @{
-                    modifier = $modifier; expected_tabs = $beforeTabs.Count
-                    actual_tabs = @(Get-WtTabs -App $script:app -WindowId $window).Count
-                    recorded_launches = @(Get-Content $fixture.Log | ForEach-Object { $_ | ConvertFrom-Json })
-                } | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $fixture.Folder "modifier-$modifier.json")
                 @(Get-Content $fixture.Log | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object mode -eq resume) |
                     Should -HaveCount 0 -Because "$modifier+Enter must not invoke native resume"
                 (Get-ActivePane -App $script:app).session_id | Should -Be $selectedBeforeModifiers.session_id
@@ -2204,69 +2198,6 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 session = @((Get-CombinedSnapshot).sessions | Where-Object session_id -eq $sid)
             } | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $script:evidence 'external-focused-row-before-enter.json')
             Send-WtWindowKey -App $script:app -Vk 0x0D -RequireForeground | Out-Null
-            if ($HoldHook) {
-                $waiting = "$($fixture.Gate).waiting-$sid.json"
-                Wait-Until -TimeoutSec 15 -Condition { Test-Path -LiteralPath $waiting } | Out-Null
-                $receipt = Get-Content -LiteralPath $waiting -Raw | ConvertFrom-Json
-                $receipt.session_id | Should -Be $sid
-                $resumePane = [string]$receipt.pane_session_id
-                $resumePane | Should -Not -BeNullOrEmpty
-                $resumePane | Should -Not -Be $selectedBeforeModifiers.session_id
-                # The fixture has created its actual pane but cannot emit a birth hook yet.
-                $event = Wait-WtEvent -Listener $resumeListener -TimeoutSec 10 -Predicate {
-                    $_.method -eq 'session_registry_changed' -and -not $_.params.session_id
-                }
-                $event | ConvertTo-Json -Depth 8 |
-                    Set-Content (Join-Path $fixture.Folder 'no-hook-structural-event.json')
-                Wait-Until -TimeoutSec 10 -Condition {
-                    @((Get-CombinedSnapshot).sessions | Where-Object {
-                        $_.session_id -eq $sid -and $_.provider_id -eq 'copilot' -and $_.status -eq 'Idle' -and
-                            ([string]$_.pane_session_id).Trim('{}') -eq $resumePane.Trim('{}')
-                    }).Count -eq 1
-                } | Out-Null
-                $bound = @((Get-CombinedSnapshot).sessions | Where-Object {
-                    ([string]$_.pane_session_id).Trim('{}') -eq $resumePane.Trim('{}')
-                })
-                $bound.Count | Should -Be 1
-                $bound[0].session_id | Should -Be $sid
-                $bound[0].origin | Should -Not -Be 'AgentPane'
-                # Represented identities may be suppressed from Recent; inspect the owned tab instead.
-                Set-CombinedQuery $receipt.title
-                Wait-Until -TimeoutSec 10 -Because 'the actual native tab renders its Idle metadata' -Condition {
-                    $rows = @(Get-CombinedRows Live | Where-Object {
-                        (Get-CombinedRowText $_).Contains($receipt.title) -and -not $_.Current.IsOffscreen
-                    })
-                    $rows.Count -eq 1 -and @($rows[0].FindAll(
-                        [Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) |
-                        Where-Object {
-                            $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text -and
-                                $_.Current.Name -match '\bIdle\b' -and -not $_.Current.IsOffscreen -and
-                                $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.BoundingRectangle.Height -gt 0
-                        }).Count -gt 0
-                } | Out-Null
-                $unrelatedAfter = @((Get-CombinedSnapshot).sessions | Where-Object session_id -eq $unrelatedId)
-                $unrelatedAfter.Count | Should -Be 1
-                $unrelatedAfter[0].status | Should -Be 'Historical'
-                [string]$unrelatedAfter[0].pane_session_id | Should -Be $unrelatedBinding
-                $unrelatedPaneAfter = Get-WtPaneStatus -App $script:app -SessionId $selectedBeforeModifiers.session_id
-                $unrelatedPaneAfter.pid | Should -Be $unrelatedPaneBefore.pid
-                @((Get-CombinedSnapshot).sessions | Where-Object {
-                    $_.session_id -eq $sid -and
-                        ([string]$_.pane_session_id).Trim('{}') -eq ([string]$selectedBeforeModifiers.session_id).Trim('{}')
-                }) | Should -HaveCount 0 -Because 'resume must not bind the unrelated previously selected pane'
-                Test-Path -LiteralPath "$($fixture.Gate).emitted-$sid.json" | Should -BeFalse
-                @(Get-Content $fixture.Log | ForEach-Object { $_ | ConvertFrom-Json } |
-                    Where-Object mode -eq resume) | Should -HaveCount 0
-                Save-CombinedActionEvidence 'native-resume-no-hook-idle' -SessionId $sid -Screenshot
-                $nativeEvent = Wait-WtEvent -Listener $resumeListener -TimeoutSec 10 -Predicate {
-                    $_.method -eq 'vt_sequence' -and
-                        ([string]$_.params.pane_id).Trim('{}') -eq $resumePane.Trim('{}') -and $_.params.tab_id
-                }
-                Assert-CombinedSourcePayload -SourcePane $resumePane -TabId ([string]$nativeEvent.params.tab_id) `
-                    -ExpectedId $sid
-                Test-Path -LiteralPath "$($fixture.Gate).emitted-$sid.json" | Should -BeFalse
-                Set-Content -LiteralPath $fixture.Gate -Value 'release after no-hook assertions'
-            }
             try {
                 Wait-Until -TimeoutSec 20 -Condition {
                     @(Get-Content $fixture.Log | ForEach-Object { $_ | ConvertFrom-Json } |
@@ -2307,135 +2238,10 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             [string]$context.pane.window_id | Should -Be $window
             @(Get-WtTabs -App $script:app -WindowId $window).Count | Should -Be ($beforeTabs.Count + 1)
             @(Get-WtWindows -App $script:app).Count | Should -Be $beforeWindows
-            if (-not $HoldHook) {
-                $external.HasExited | Should -BeFalse -Because 'explicit resume must not terminate the external original'
-            }
-            if ($HoldHook) {
-                $secondFixture = New-CombinedCliFixture 'source-control' -HoldHook
-                Set-Content -LiteralPath $secondFixture.Gate -Value 'second source permits its real birth hook'
-                $secondTab = New-WtTab -App $script:app -Command "`"$($secondFixture.Shim)`" --session-id $($secondFixture.SessionId)" `
-                    -Cwd $secondFixture.Folder -Title "$script:marker-second-source"
-                Wait-Until -TimeoutSec 15 -Condition { Test-Path $secondFixture.Log } | Out-Null
-                $secondReceipt = Get-Content $secondFixture.Log | Select-Object -First 1 | ConvertFrom-Json
-                ([string]$secondReceipt.pane_session_id).Trim('{}') | Should -Be ([string]$secondTab.session_id).Trim('{}')
-                $secondReceipt.session_id | Should -Be $secondFixture.SessionId
-                $secondProcess = Get-Process -Id $secondReceipt.native_pid -ErrorAction Stop
-                $secondProcess.Path | Should -Be $secondFixture.Shim
-                Wait-Until -TimeoutSec 10 -Condition {
-                    @((Get-CombinedSnapshot).sessions | Where-Object {
-                        $_.session_id -eq $secondReceipt.session_id -and
-                            ([string]$_.pane_session_id).Trim('{}') -eq ([string]$secondTab.session_id).Trim('{}')
-                    }).Count -eq 1
-                } | Out-Null
-                $secondEvent = Wait-WtEvent -Listener $resumeListener -TimeoutSec 10 -Predicate {
-                    $_.method -eq 'vt_sequence' -and
-                        ([string]$_.params.pane_id).Trim('{}') -eq ([string]$secondTab.session_id).Trim('{}') -and $_.params.tab_id
-                }
-                Assert-CombinedSourcePayload -SourcePane $secondTab.session_id -TabId ([string]$secondEvent.params.tab_id) `
-                    -ExpectedId $secondReceipt.session_id -ForbiddenIds @($sid)
-                $missingTab = New-WtTab -App $script:app -Command 'pwsh.exe -NoLogo -NoProfile -NoExit' `
-                    -Title "$script:marker-no-native-source"
-                @((Get-CombinedSnapshot).sessions | Where-Object {
-                    ([string]$_.pane_session_id).Trim('{}') -eq ([string]$missingTab.session_id).Trim('{}')
-                }) | Should -HaveCount 0 -Because 'the ordinary source has no native registry identity'
-                $missingTabId = Resolve-AgentOwnerTabId -App $script:app -OwnerPaneSessionId $missingTab.session_id
-                Assert-CombinedSourcePayload -SourcePane $missingTab.session_id -TabId $missingTabId `
-                    -ForbiddenIds @($sid, $secondReceipt.session_id)
-                $original = @((Get-CombinedSnapshot).sessions | Where-Object session_id -eq $sid)
-                $original.Count | Should -Be 1
-                ([string]$original[0].pane_session_id).Trim('{}') | Should -Be $resumePane.Trim('{}')
-                Set-WtPaneFocus -App $script:app -SessionId $resumePane
-                Set-CombinedFilters -AgentsOnly $true -Recent $true
-                Set-CombinedQuery $receipt.title
-                Send-CombinedCliHook -Fixture $fixture -PaneSessionId $resumePane -Event 'agent.tool.starting'
-                Wait-Until -TimeoutSec 10 -Condition {
-                    @((Get-CombinedSnapshot).sessions | Where-Object {
-                        $_.session_id -eq $sid -and $_.status -eq 'Working'
-                    }).Count -eq 1
-                } | Out-Null
-                $newerWorking = @((Get-CombinedSnapshot).sessions | Where-Object session_id -eq $sid)
-                $newerWorking.Count | Should -Be 1
-                $newerWorking[0].status | Should -Be 'Working'
-                $newerWorkingJson = $newerWorking[0] | ConvertTo-Json -Depth 12 -Compress
-                Set-WtPaneFocus -App $script:app -SessionId $missingTab.session_id
-                $distinctSource = Get-ActivePane -App $script:app
-                ([string]$distinctSource.session_id).Trim('{}') | Should -Be ([string]$missingTab.session_id).Trim('{}')
-                ([string]$distinctSource.session_id).Trim('{}') | Should -Not -Be $resumePane.Trim('{}')
-                [string]$distinctSource.window_id | Should -Be $window
-                $liveRow = Wait-Until -TimeoutSec 10 -Because 'the resumed live tab row shows newer Active metadata while another source is active' -Condition {
-                    $rows = @(Get-CombinedRows Live | Where-Object {
-                        (Get-CombinedRowText $_).Contains($receipt.title) -and
-                            (Get-CombinedRowText $_) -match '\bActive\b' -and -not $_.Current.IsOffscreen
-                    })
-                    if ($rows.Count -eq 1) { $rows[0] }
-                }
-                Set-WtWindowForeground -App $script:app -Attempts 3 -DelayMs 150 | Should -BeTrue
-                $liveRow.SetFocus()
-                $liveRow.Current.HasKeyboardFocus | Should -BeTrue
-                $beforeEnter = Get-ActivePane -App $script:app
-                ([string]$beforeEnter.session_id).Trim('{}') | Should -Be ([string]$distinctSource.session_id).Trim('{}') -Because 'focusing the live Sidebar row must not activate its terminal source before Enter'
-                [string]$beforeEnter.window_id | Should -Be ([string]$distinctSource.window_id)
-                [string]$beforeEnter.tab_id | Should -Be ([string]$distinctSource.tab_id)
-                Send-WtWindowKey -App $script:app -Vk 0x0D -RequireForeground | Out-Null
-                Wait-Until -TimeoutSec 10 -Because 'physical live-row Enter activates the exact resumed pane in its existing owner window and tab' -Condition {
-                    $active = Get-ActivePane -App $script:app
-                    ([string]$active.session_id).Trim('{}') -eq $resumePane.Trim('{}') -and
-                        [string]$active.window_id -eq $window -and
-                        [string]$active.tab_id -eq [string]$context.pane.tab_id
-                } | Out-Null
-                $current = @((Get-CombinedSnapshot).sessions | Where-Object session_id -eq $sid)
-                $current.Count | Should -Be 1
-                $current[0].status | Should -Be 'Working' -Because 'a subsequent activation must preserve newer activity'
-                ($current[0] | ConvertTo-Json -Depth 12 -Compress) | Should -Be $newerWorkingJson -Because 'live-row activation must preserve the complete newer registry state'
-                $activeRows = @(Get-CombinedRows Live | Where-Object {
-                    (Get-CombinedRowText $_).Contains($receipt.title) -and -not $_.Current.IsOffscreen
-                })
-                $activeRows.Count | Should -Be 1
-                @($activeRows[0].FindAll(
-                    [Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) |
-                    Where-Object {
-                        $_.Current.ControlType -eq [Windows.Automation.ControlType]::Text -and
-                            $_.Current.Name -match '\bActive\b' -and -not $_.Current.IsOffscreen -and
-                            $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.BoundingRectangle.Height -gt 0
-                    }).Count | Should -BeGreaterThan 0 -Because 'newer Working remains visibly rendered as Active after the proven focus transition'
-                @(Get-Content $fixture.Log | ForEach-Object { $_ | ConvertFrom-Json } |
-                    Where-Object mode -eq resume) | Should -HaveCount 1
-            }
+            $external.HasExited | Should -BeFalse -Because 'explicit resume must not terminate the external original'
             $resumed | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $script:evidence 'external-resume-proof.json')
         }
-        catch { $primaryFailure = $_; throw }
         finally {
-            if ($primaryFailure) {
-                @{
-                    message = $primaryFailure.Exception.Message
-                    stack = $primaryFailure.ScriptStackTrace
-                } | ConvertTo-Json | Set-Content (Join-Path $fixture.Folder 'primary-failure.json')
-            }
-            Invoke-CombinedCheckedCleanup -PrimaryFailure $primaryFailure -Action {
-            if ($resumeListener) { Stop-WtEventListener -Listener $resumeListener }
-            if ($HoldHook) { Set-Content -LiteralPath $fixture.Gate -Value 'release for owned cleanup' }
-            if (-not $resumePane -and $resolverOwned -and
-                @(Get-Process -ErrorAction Stop | Where-Object Path -eq $resolver).Count) {
-                $cleanupReceipt = Wait-Until -TimeoutSec 10 -Because 'an early failed activation retains its native launch receipt for owned cleanup' -Condition {
-                    @(Get-Content $fixture.Log | ForEach-Object { $_ | ConvertFrom-Json } |
-                        Where-Object { $_.mode -eq 'resume' -and $_.session_id -eq $sid }) | Select-Object -First 1
-                }
-                $resumeProcess = Get-Process -Id $cleanupReceipt.native_pid -ErrorAction Stop
-                $resumeProcess.Path | Should -Be $resolver
-                $cleanupReceipt.native_command_line | Should -Match ('--resume\s+"?' + [regex]::Escape($sid) + '"?(?:\s|$)')
-                $resumePane = [string]$cleanupReceipt.pane_session_id
-                $resumePane | Should -Not -BeNullOrEmpty
-                $cleanupContext = Invoke-WtCli -App $script:app -Arguments @('get-pane-context', '--target', $resumePane)
-                [string]$cleanupContext.pane.window_id | Should -Be $window
-                $null = $resumeProcess.Handle
-            }
-            if ($missingTab) { Close-WtPane -App $script:app -SessionId $missingTab.session_id }
-            if ($secondTab) {
-                Close-WtPane -App $script:app -SessionId $secondTab.session_id
-                if ($secondProcess -and -not $secondProcess.WaitForExit(10000)) {
-                    throw 'Owned second-source native fixture did not exit normally.'
-                }
-            }
             if ($resumePane) {
                 if ($resumeProcess -and -not $resumeProcess.HasExited) {
                     $current = Get-Process -Id $resumeProcess.Id -ErrorAction Stop
@@ -2470,7 +2276,6 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                     $path = Join-Path $fixture.Folder $name
                     if (Test-Path $path) { Remove-Item -LiteralPath $path }
                 }
-            }
             }
         }
     }

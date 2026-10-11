@@ -171,6 +171,9 @@ projection through the existing structural notification, without waiting for
 a hook. An exact matching binding established by an earlier hook is successful
 and keeps that hook's activity. Assistant source-pane context uses the existing
 registry lookup for the real native CLI session ID, not the helper's ACP ID.
+This known binding keeps the resumed tab visible under Agents only before its
+first hook. Idle is an initial baseline, not evidence that the CLI loaded or
+that subsequent activity is being observed.
 This initialization does not change subsequent hook-loss activity behavior,
 watcher ownership, or saved-layout restore routing.
 
