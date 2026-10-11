@@ -323,8 +323,10 @@ selection cache, timer, repair callback or view-model clock.
 Sidebar shortcut hints belong to the existing display descriptor, not the
 shared header presentation or canonical horizontal tab. Effective corresponding
 Ctrl+Alt+1..9 bindings target currently presented owning tabs, including search;
-custom or differently remapped bindings keep their canonical meaning. Hints
-use the same effective-binding target evaluator as execution, and advertise a
+custom or differently remapped bindings keep their canonical meaning.
+Recognized presented-owner navigation with no eligible owner is consumed as a
+no-op, preserving selection and content without forwarding the chord to the shell.
+Hints use the same effective-binding target evaluator as execution, and advertise a
 chord only for its actual owner. The descriptor retains only resolved tooltip
 and accelerator strings across ordinary presentation sync; projection, tooltip
 changes and settings reload refresh them. Horizontal presentation clears that

@@ -88,6 +88,8 @@ namespace TerminalAppUnitTests
         for (const auto* view : { &empty, &nobody })
         {
             VERIFY_IS_FALSE(view->PresentedAt(0).has_value());
+            VERIFY_IS_FALSE(view->PresentedAt(7).has_value());
+            VERIFY_IS_FALSE(view->PresentedAt(std::numeric_limits<uint32_t>::max()).has_value());
             VERIFY_IS_FALSE(view->LastPresented().has_value());
             VERIFY_IS_FALSE(view->IsPresented(&identity));
             VERIFY_IS_FALSE(view->MoveTarget(&identity, Direction::Previous).has_value());

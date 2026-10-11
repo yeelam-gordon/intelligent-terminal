@@ -551,8 +551,8 @@ namespace winrt::TerminalApp::implementation
                     _GetTabImpl(_tabs.GetAt(target->canonicalIndex)).get() == target->identity)
                 {
                     _SelectTab({ target->canonicalIndex });
-                    args.Handled(true);
                 }
+                args.Handled(true);
                 return;
             }
             _SelectTab({ realArgs.TabIndex() });

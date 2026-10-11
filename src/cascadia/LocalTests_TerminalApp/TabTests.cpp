@@ -14005,9 +14005,78 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last, L"A differently mapped number remains canonical.");
             page->_tabStrip.SearchQuery(L"no-owner-matches-this-query");
             page->_ApplyTabListProjection();
-            VERIFY_IS_FALSE(keys->TryKeyChord(two));
+            number(L"ctrl+alt+1", uint32_t{ 0 });
+            page->_OnSelectionChangedCore();
+            page->UpdateLayout();
+            const auto selected = page->_selectedTabItem();
+            const auto content = last->Content();
+            const auto header = last->TabViewItem().Header();
+            const auto stashed = last->HasStashedAgentPane();
+            uint32_t selectedContentIndex{};
+            VERIFY_IS_TRUE(page->_tabContent.Children().IndexOf(content, selectedContentIndex));
+            const auto verifyNoTarget = [&]() {
+                for (const auto& chord : { one, two, nine })
+                {
+                    VERIFY_IS_FALSE(page->_EvaluateTabSwitchTarget(chord).has_value());
+                    VERIFY_IS_TRUE(keys->TryKeyChord(chord), L"Recognized navigation with no presented owner is consumed.");
+                    VERIFY_ARE_EQUAL(3u, page->_tabs.Size());
+                    VERIFY_IS_TRUE(page->_tabs.GetAt(0) == *hidden);
+                    VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *first);
+                    VERIFY_IS_TRUE(page->_tabs.GetAt(2) == *last);
+                    VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last);
+                    VERIFY_IS_TRUE(page->_selectedTabItem() == selected);
+                    VERIFY_IS_TRUE(page->_tabContent.Children().GetAt(selectedContentIndex) == content);
+                    VERIFY_IS_TRUE(last->Content() == content);
+                    VERIFY_IS_TRUE(last->TabViewItem().Header() == header);
+                    VERIFY_IS_TRUE(last->GetRootPane() == root);
+                    VERIFY_IS_TRUE(last->GetActivePane() == active);
+                    VERIFY_ARE_EQUAL(stashed, last->HasStashedAgentPane());
+                    VERIFY_ARE_EQUAL(1.0, content.Opacity());
+                    VERIFY_IS_TRUE(content.IsHitTestVisible());
+                    const auto current = last->GetVisiblePaneSnapshot();
+                    VERIFY_ARE_EQUAL(snapshots.size(), current.size());
+                    for (size_t i = 0; i < current.size(); ++i)
+                    {
+                        VERIFY_ARE_EQUAL(snapshots[i].SessionId, current[i].SessionId);
+                        VERIFY_ARE_EQUAL(snapshots[i].ContentId, current[i].ContentId);
+                        VERIFY_ARE_EQUAL(snapshots[i].IsActive, current[i].IsActive);
+                    }
+                    VERIFY_ARE_EQUAL(bindings.size(), page->_paneAgentSessions.size());
+                    for (const auto& [session, binding] : bindings)
+                    {
+                        VERIFY_ARE_EQUAL(binding.sessionId, page->_paneAgentSessions.at(session).sessionId);
+                        VERIFY_ARE_EQUAL(binding.agent, page->_paneAgentSessions.at(session).agent);
+                    }
+                }
+            };
+            verifyNoTarget();
+            page->_tabStrip.SearchQuery(L"");
+            page->_tabStrip.SearchActive(false);
+            page->_ApplyTabListProjection();
+            VERIFY_IS_TRUE(page->_EvaluateTabSwitchTarget(one).has_value());
+            page->_rearranging = true;
+            verifyNoTarget();
+            page->_rearranging = false;
+            page->_mutatingTabCollections = true;
+            verifyNoTarget();
+            page->_mutatingTabCollections = false;
+            map.DeleteKeyBinding(one);
+            VERIFY_IS_FALSE(keys->TryKeyChord(one), L"An explicitly unbound chord retains normal key handling.");
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last);
+            map.RegisterKeyBinding(one, { ShortcutAction::ResizePane, nullptr });
+            VERIFY_IS_FALSE(keys->TryKeyChord(one), L"An unhandled non-navigation binding retains its handled result.");
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last);
+            number(L"ctrl+alt+1", uint32_t{ 0 });
+            page->_tabStrip.SearchQuery(L"no-owner-matches-this-query");
+            page->_ApplyTabListProjection();
             VERIFY_IS_TRUE(keys->TryKeyChord(custom));
             VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == first);
+            VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Horizontal));
+            page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
+            VERIFY_IS_TRUE(keys->TryKeyChord(one));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == hidden, L"Horizontal numbered bindings remain canonical.");
+            VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Vertical));
+            page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
             page->_tabStrip.SearchQuery(L"");
             page->_tabStrip.SearchActive(false);
             page->_ApplyTabListProjection();
