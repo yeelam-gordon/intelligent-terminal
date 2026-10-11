@@ -4,7 +4,8 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
     BeforeAll {
         Import-Module (Join-Path $PSScriptRoot '..\ItE2E\ItE2E.psd1') -Force
         . (Join-Path $PSScriptRoot 'helpers\TestTerminalCleanup.ps1')
-        Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+        Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase -ErrorAction Stop
+        if (-not ('Windows.Rect' -as [type])) { throw 'This PowerShell process lacks Windows desktop UIA types; run bootstrap and the desktop-type probe before launch.' }
         & (Get-Module ItE2E) { Initialize-WtWin32Input }
     }
 
@@ -28,7 +29,7 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
         $profiles = @(0..2 | ForEach-Object { @{
             guid = "{$([guid]::NewGuid())}"; tabTitle = $titles[$_]
             name = if ($_ -eq 1) { "Terminal profile`nFixture line two`nFixture line three`nFixture line four: Bravo" } else { $titles[$_] }
-            commandline = 'cmd.exe /d /k'; suppressApplicationTitle = $true; shellIntegrationEnabled = $false
+            commandline = 'cmd.exe /d /k "prompt $G"'; suppressApplicationTitle = $true; shellIntegrationEnabled = $false
         } })
         function Get-HeaderRows([string]$Layout) {
             $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$app.Hwnd)
@@ -64,21 +65,36 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
             $process = Get-Process -Id $app.Pid -ErrorAction Stop
             if (-not $app.Launched -or $app.OwnedProcess.HasExited -or $process.StartTime -ne $app.OwnedProcess.StartTime -or
                 $process.Path -ne $app.OwnedProcess.Path -or ($row.Peer.GetRuntimeId() -join ',') -ne $row.Runtime) { throw 'Stale creation/header lease.' }
-            $point = [ItE2E.ItWtWin32Input+POINT]::new(); $point.X = $row.Point.X; $point.Y = $row.Point.Y
-            $hit = [ItE2E.ItWtWin32Input]::WindowFromPoint($point)
-            if ([ItE2E.ItWtWin32Input]::GetAncestor($hit, 2) -ne [IntPtr][long]$app.Hwnd -or
-                [ItE2E.ItWtWin32Input]::GetWindowProcessId($hit) -ne $app.Pid -or
-                -not [ItE2E.ItWtWin32Input]::IsOwnedRootOrPopup([ItE2E.ItWtWin32Input]::GetForegroundWindow(), [IntPtr][long]$app.Hwnd, $app.Pid)) {
-                throw 'Header input is covered or foreground is foreign.'
+            if (-not [ItE2E.ItWtWin32Input]::IsOwnedRootOrPopup([ItE2E.ItWtWin32Input]::GetForegroundWindow(), [IntPtr][long]$app.Hwnd, $app.Pid)) { throw 'Header foreground is foreign.' }
+            $points = @($row.Point)
+            if ($Cursor) {
+                $position = [ItE2E.ItWtWin32Input]::GetCursorPosition()
+                $points += [Windows.Point]::new($position[0], $position[1])
             }
-            if (-not $row.Band.Contains($row.Point) -or @($row.Buttons | Where-Object { $_.Current.BoundingRectangle.Contains($row.Point) }).Count) { throw 'Header center intersects an action.' }
+            foreach ($location in $points) {
+                if (-not $row.Band.Contains($location) -or @($row.Buttons | Where-Object { $_.Current.BoundingRectangle.Contains($location) }).Count) { throw 'Header point is outside its activation band or intersects an action.' }
+                $point = [ItE2E.ItWtWin32Input+POINT]::new(); $point.X = $location.X; $point.Y = $location.Y
+                $hit = [ItE2E.ItWtWin32Input]::WindowFromPoint($point)
+                if ([ItE2E.ItWtWin32Input]::GetAncestor($hit, 2) -ne [IntPtr][long]$app.Hwnd -or
+                    [ItE2E.ItWtWin32Input]::GetWindowProcessId($hit) -ne $app.Pid) { throw 'Actual or expected header point is covered or foreign.' }
+            }
             foreach ($key in @(1, 2, 4, 5, 6, 16, 17, 18, 91, 92)) {
                 if ([ItE2E.ItWtWin32Input]::IsKeyDown($key)) { throw 'Held user input; no injection authorized.' }
             }
-            if ($Cursor) {
-                $position = [ItE2E.ItWtWin32Input]::GetCursorPosition()
-                if ($position[0] -ne $point.X -or $position[1] -ne $point.Y) { throw 'Physical cursor left the intended header center.' }
-            }
+        }
+        function Get-HeaderSelector($row, [string]$Layout) {
+            $search = Invoke-WinAppUi -App $app -UiArgs @('search', $row.Peer.Current.Name, '--json') -TimeoutSec 15
+            if ($search.TimedOut -or $search.ExitCode -ne 0) { throw "Header search failed: $($search.StdErr)" }
+            $json = $search.StdOut | ConvertFrom-Json -ErrorAction Stop
+            $kind = if ($Layout -eq 'vertical') { 'ListItem' } else { 'TabItem' }
+            $matches = @($json.matches | Where-Object { $_.name -ceq $row.Peer.Current.Name -and
+                $_.type -eq $kind -and $_.isEnabled -and -not $_.isOffscreen -and $_.width -gt 0 -and $_.height -gt 0 })
+            if ($matches.Count -ne 1) { throw 'No unique winapp semantic header.' }
+            $match = $matches[0]; $bounds = $row.Peer.Current.BoundingRectangle
+            if ($match.x -ne $bounds.Left -or $match.y -ne $bounds.Top -or $match.width -ne $bounds.Width -or $match.height -ne $bounds.Height) { throw 'Winapp header geometry differs from current UIA geometry.' }
+            $selector = @($match.slug, $match.Slug, $match.selector | Where-Object { $_ } | Select-Object -Unique)
+            if ($selector.Count -ne 1) { throw 'No unambiguous semantic header selector.' }
+            $selector[0]
         }
         function Get-OwnedTooltips {
             $condition = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$app.Pid)
@@ -116,9 +132,7 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
                 Set-WtPaneFocus -App $app -SessionId $identities[1].session_id | Out-Null
                 if (-not (Set-WtWindowForeground -App $app -Attempts 2)) { throw 'Cannot acquire owned foreground.' }
                 $rows = @(Get-HeaderRows $layout); $owner = $rows[1]
-                $tree = Get-UiTree -App $app -Selector $(if ($layout -eq 'vertical') { 'ItemsList' } else { 'TabView' }) -Depth 8
-                $slugs = @([regex]::Matches($tree, '(?m)^\s*(?<slug>\S+)\s+' + $(if ($layout -eq 'vertical') { 'ListItem' } else { 'TabItem' }) + '\s+"' + [regex]::Escape($titles[1]) + '"'))
-                if ($slugs.Count -ne 1) { throw 'No unique winapp semantic header selector.' }
+                $selector = Get-HeaderSelector $owner $layout
                 $box = $owner.Peer.Current.BoundingRectangle
                 if ([int]($box.Left + $box.Width / 2) -ne $owner.Point.X -or [int]($box.Top + $box.Height / 2) -ne $owner.Point.Y) { throw 'Semantic center differs from the safe activation-band center.' }
                 if (@(Get-OwnedTooltips).Count) { throw 'Tooltip already open before controlled hover.' }
@@ -127,15 +141,18 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
                 $start.UseShellExecute = $false; $start.CreateNoWindow = $true
                 $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
                 $start.Environment['WINAPP_CLI_TELEMETRY_OPTOUT'] = '1'
-                foreach ($argument in @('ui', 'hover', $slugs[0].Groups['slug'].Value, '-w', [string]$app.Hwnd, '--dwell-time', '5000', '--json')) { $start.ArgumentList.Add($argument) }
+                foreach ($argument in @('ui', 'hover', $selector, '-w', [string]$app.Hwnd, '--dwell-time', '5000', '--json')) { $start.ArgumentList.Add($argument) }
                 $hover = [Diagnostics.Process]::Start($start)
                 $stdout = $hover.StandardOutput.ReadToEndAsync(); $stderr = $hover.StandardError.ReadToEndAsync()
-                $tip = Wait-Until -TimeoutSec 4 -IntervalSec 0.1 -Because 'a real tooltip during genuine hover' -Condition {
+                $tip = $null; $poll = [Diagnostics.Stopwatch]::StartNew()
+                while (-not $tip -and $poll.Elapsed.TotalSeconds -lt 4) {
                     if ($hover.HasExited) { throw 'Hover ended before observation.' }
                     $found = @(Get-OwnedTooltips)
                     if ($found.Count -gt 1) { throw 'Ambiguous owned tooltip.' }
-                    if ($found.Count -eq 1) { Assert-HeaderInput $owner -Cursor; $found[0] }
+                    if ($found.Count -eq 1) { Assert-HeaderInput $owner -Cursor; $tip = $found[0] }
+                    else { Assert-HeaderInput $owner; Start-Sleep -Milliseconds 100 }
                 }
+                if (-not $tip) { throw 'No actual tooltip appeared within four seconds of genuine hover.' }
                 $fresh = @(Get-HeaderRows $layout)
                 ($fresh.Runtime -join '|') | Should -BeExactly ($rows.Runtime -join '|')
                 (($fresh | ForEach-Object { $_.Band.ToString() }) -join '|') | Should -BeExactly (($rows | ForEach-Object { $_.Band.ToString() }) -join '|')
@@ -150,10 +167,10 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
                         $area | Should -Be 0 -Because 'both adjacent activation bands must remain unobstructed'
                     }
                 }
+                $alpha = Get-HeaderSelector $fresh[0] $layout
+                if ($hover.HasExited) { throw 'Hover ended before physical neighbor selection.' }
                 Assert-HeaderInput $fresh[0]
-                $alpha = @([regex]::Matches($tree, '(?m)^\s*(?<slug>\S+)\s+' + $(if ($layout -eq 'vertical') { 'ListItem' } else { 'TabItem' }) + '\s+"' + [regex]::Escape($titles[0]) + '"'))
-                if ($alpha.Count -ne 1) { throw 'No unique physical Alpha header selector.' }
-                Invoke-Native -FilePath $start.FileName -Arguments @('ui', 'click', $alpha[0].Groups['slug'].Value, '-w', [string]$app.Hwnd, '--json') -TimeoutSec 15 |
+                Invoke-Native -FilePath $start.FileName -Arguments @('ui', 'click', $alpha, '-w', [string]$app.Hwnd, '--json') -TimeoutSec 15 |
                     ForEach-Object { if ($_.TimedOut -or $_.ExitCode -ne 0) { throw "Physical Alpha click failed: $($_.StdErr)" } }
                 Wait-Until -TimeoutSec 5 -Because 'physical Alpha selection preserves original identity' -Condition {
                     $active = Get-ActivePane -App $app
@@ -162,7 +179,9 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
                 if (-not (Wait-ItProcessDeadline -Process $hover -TimeoutSec 7) -or $hover.ExitCode -ne 0) { throw 'Genuine hover child failed or exceeded deadline.' }
                 if (-not $stdout.Wait(1000) -or -not $stderr.Wait(1000)) { throw 'Hover output drain timed out.' }
                 $hover.Dispose(); $hover = $null
-                Wait-Until -TimeoutSec 3 -Because 'the owned tooltip closes after hover' -Condition { @(Get-OwnedTooltips).Count -eq 0 } | Out-Null
+                $poll.Restart()
+                while (@(Get-OwnedTooltips).Count -and $poll.Elapsed.TotalSeconds -lt 3) { Start-Sleep -Milliseconds 100 }
+                if (@(Get-OwnedTooltips).Count) { throw 'Owned tooltip remained open after hover and neighbor selection.' }
                 $tabs = @(Get-WtTabs -App $app -WindowId $app.WindowId)
                 ($tabs.tab_id -join '|') | Should -BeExactly ($identities.tab_id -join '|')
                 foreach ($identity in $identities) {
