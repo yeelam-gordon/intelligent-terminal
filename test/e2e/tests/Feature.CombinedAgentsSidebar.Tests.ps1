@@ -2071,7 +2071,9 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'HistoryProviderIcon')) |
                 Should -BeNullOrEmpty -Because 'the retained row is the live tab, not a Recent duplicate'
             Test-Path -LiteralPath "$($fixture.Gate).emitted-$sid.json" | Should -BeFalse
-            Save-CombinedActionEvidence 'known-native-before-hook' -SessionId $sid -Screenshot
+            @((Get-CombinedSnapshot).sessions | Where-Object session_id -eq $sid) | ConvertTo-Json -Depth 10 |
+                Set-Content -LiteralPath (Join-Path $script:evidence 'known-native-before-hook.json')
+            Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence 'known-native-before-hook.png') | Out-Null
         }
         catch { $primaryFailure = $_; throw }
         finally {

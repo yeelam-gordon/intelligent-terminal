@@ -28,8 +28,7 @@ if ($Canonical) {
     }
     $session = $SessionId
     if ($SessionStartGate) {
-        $title = "ITE2E prehook $session"
-        [Console]::Write("$([char]27)]0;$title$([char]7)")
+        $title = [IO.Path]::GetFileName([IO.Directory]::GetCurrentDirectory())
         @{ pane_session_id = $env:WT_SESSION; session_id = $session; title = $title; phase = 'before-hook' } |
             ConvertTo-Json -Compress |
             Set-Content -LiteralPath "$SessionStartGate.waiting-$session.json"
