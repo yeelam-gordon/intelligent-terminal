@@ -1266,7 +1266,7 @@ namespace winrt::TerminalApp::implementation
         {
             return;
         }
-        const auto target = xamlRoot.Content().as<FrameworkElement>();
+        const auto target = xamlRoot.Content();
         if (const auto tooltip = ToolTipService::GetToolTip(header).try_as<ToolTip>())
         {
             tooltip.Placement(header.FlowDirection() == FlowDirection::RightToLeft ? Primitives::PlacementMode::Left : Primitives::PlacementMode::Right);
