@@ -320,6 +320,16 @@ focus fallback first retains the current visible terminal or Agent input, then
 uses the existing source-shell fallback; this adds no saved focus field,
 selection cache, timer, repair callback or view-model clock.
 
+Sidebar shortcut hints belong to the existing display descriptor, not the
+shared header presentation or canonical horizontal tab. Effective corresponding
+Ctrl+Alt+1..9 bindings target currently presented owning tabs, including search;
+custom or differently remapped bindings keep their canonical meaning. Hints
+use the same effective-binding target evaluator as execution, and advertise a
+chord only for its actual owner. The descriptor retains only resolved tooltip
+and accelerator strings across ordinary presentation sync; projection, tooltip
+changes and settings reload refresh them. Horizontal presentation clears that
+override and retains canonical tab hints and independently owned controls.
+
 Pin state remains shared model data. `TabHeaderControl.ShowPinnedIcon` is an
 appended, view-local property, defaulting to true: the canonical horizontal
 header sets it to false, while newly created sidebar headers retain the default.

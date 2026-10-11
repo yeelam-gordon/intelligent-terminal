@@ -75,6 +75,7 @@ namespace winrt::TerminalApp::implementation
 
         void SetTabText(winrt::hstring title);
         winrt::hstring GetTabText() const;
+        winrt::hstring ToolTipTextForKeyChord(const winrt::hstring& keyChord);
         void ResetTabText();
         void ActivateTabRenamer();
         void CancelTabRename();
@@ -139,6 +140,11 @@ namespace winrt::TerminalApp::implementation
             _UpdatePinMenuItem();
         }
         void SetTabPointerInteractionRestricted(bool restricted);
+        void SetVisibleMoveTargets(std::optional<std::pair<bool, bool>> targets)
+        {
+            _visibleMoveTargets = targets;
+            _EnableMenuItems();
+        }
 
         // Hide the agent pane without detaching it from the tree. The pane
         // stays alive (so TermControl + conpty + wta-helper survive), but
@@ -304,6 +310,7 @@ namespace winrt::TerminalApp::implementation
         winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _closeOtherTabsMenuItem{};
         bool _tabListPositionOperationsRestricted{ false };
         bool _tabMoveRestricted{ false };
+        std::optional<std::pair<bool, bool>> _visibleMoveTargets;
         bool _tabPointerInteractionRestricted{ false };
         winrt::Windows::UI::Xaml::Controls::MenuFlyout _contextMenuFlyout{ nullptr };
         winrt::Windows::UI::Xaml::Controls::MenuFlyoutItem _closeTabsAfterMenuItem{};

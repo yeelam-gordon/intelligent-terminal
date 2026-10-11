@@ -378,6 +378,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabExpandedGroupKeepsHeaderProgressForHiddenWinningPane);
         TEST_METHOD(VerticalTabRepeatedMovesPreserveCollections);
         TEST_METHOD(AgentScopeMoveTabDispatchPreservesOwner);
+        TEST_METHOD(PresentedTabNumbersUseRealBindings);
         TEST_METHOD(AgentScopeMoveTabSearchAndPinBoundaries);
         TEST_METHOD(MoveTabDispatchPreservesOrdinaryLayouts);
         TEST_METHOD(VerticalTabSelectionPreservesPresentation);
@@ -395,6 +396,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(AgentViewFiltersSplitPaneChildren);
         TEST_METHOD(VerticalTabSearchMatchesCommittedTitle);
         TEST_METHOD(VerticalTabTooltipsExposeStableShortcuts);
+        TEST_METHOD(SidebarHintsFollowEffectiveTargets);
         TEST_METHOD(VerticalTabSearchTracksActivePaneMetadata);
         TEST_METHOD(VerticalTabSearchUiState);
         TEST_METHOD(LiteralSearchHighlighting);
@@ -6220,21 +6222,22 @@ namespace TerminalAppLocalTests
             thirdDisplay.Presentation().AutomationName(originalName);
             VERIFY_ARE_EQUAL(originalName, Automation::AutomationProperties::GetName(thirdContainer));
             const std::wstring verticalTooltip{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) };
-            VERIFY_ARE_EQUAL(horizontalTooltip, verticalTooltip);
+            VERIFY_ARE_NOT_EQUAL(horizontalTooltip, verticalTooltip);
             VERIFY_ARE_EQUAL(winrt::hstring{ verticalTooltip }, thirdDisplay.ToolTipText());
             VERIFY_ARE_NOT_EQUAL(std::wstring::npos, verticalTooltip.find(L"Third tab"));
-            VERIFY_ARE_NOT_EQUAL(std::wstring::npos, verticalTooltip.find(L"ctrl+alt+3"));
+            VERIFY_ARE_NOT_EQUAL(std::wstring::npos, verticalTooltip.find(L"ctrl+alt+1"));
             VERIFY_ARE_EQUAL(winrt::hstring{ verticalTooltip }, Automation::AutomationProperties::GetHelpText(thirdContainer));
             VERIFY_IS_NULL(ToolTipService::GetToolTip(thirdContainer));
             VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+3" }, Automation::AutomationProperties::GetAcceleratorKey(third->TabViewItem()));
             VERIFY_ARE_EQUAL(
-                winrt::hstring{ L"ctrl+alt+3" },
+                winrt::hstring{ L"ctrl+alt+1" },
                 Automation::AutomationProperties::GetAcceleratorKey(thirdContainer));
 
             third->SetTabText(L"Renamed third tab");
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(tooltipText(third->TabViewItem()), std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) });
-            VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetHelpText(third->TabViewItem()), thirdDisplay.ToolTipText());
+            VERIFY_ARE_EQUAL(third->ToolTipTextForKeyChord(L"ctrl+alt+1"), thirdDisplay.ToolTipText());
+            VERIFY_ARE_EQUAL(thirdDisplay.ToolTipText(), winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+3" }, Automation::AutomationProperties::GetAcceleratorKey(third->TabViewItem()));
 
             ::Microsoft::Terminal::RichTab::Provider::Presentation presentation;
             presentation.text = L"main\n2 changes";
@@ -6242,17 +6245,18 @@ namespace TerminalAppLocalTests
             presentation.accessibilityText = presentation.tooltip;
             third->SetRichTabPresentation(presentation);
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(tooltipText(third->TabViewItem()), std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) });
-            VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetHelpText(third->TabViewItem()), thirdDisplay.ToolTipText());
+            VERIFY_ARE_EQUAL(third->ToolTipTextForKeyChord(L"ctrl+alt+1"), thirdDisplay.ToolTipText());
+            VERIFY_ARE_EQUAL(thirdDisplay.ToolTipText(), winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)));
             VERIFY_ARE_NOT_EQUAL(std::wstring::npos, std::wstring{ thirdDisplay.ToolTipText() }.find(presentation.tooltip));
 
-            third->UpdateTabViewIndex(1, 3, page->_PinnedTabCount());
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            strip->SyncTabPresentation(thirdDisplay);
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, Automation::AutomationProperties::GetAcceleratorKey(thirdContainer));
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, thirdDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+1" }, Automation::AutomationProperties::GetAcceleratorKey(thirdContainer));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+1" }, thirdDisplay.AcceleratorKey());
             VERIFY_ARE_NOT_EQUAL(
                 std::wstring::npos,
-                std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) }.find(L"ctrl+alt+2"));
+                std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) }.find(L"ctrl+alt+1"));
 
             page->_SelectTab(2);
             VERIFY_IS_TRUE(page->_selectedTabItem() == third->TabViewItem());
@@ -6260,7 +6264,7 @@ namespace TerminalAppLocalTests
             page->_tabStrip.IsRailCollapsed(true);
             page->UpdateLayout();
             VERIFY_ARE_EQUAL(Visibility::Collapsed, thirdHeader.FindName(L"TabHeaderPresenter").as<winrt::TerminalApp::TabHeaderControl>().Visibility());
-            VERIFY_ARE_EQUAL(tooltipText(third->TabViewItem()), std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) });
+            VERIFY_ARE_EQUAL(thirdDisplay.ToolTipText(), winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)));
             page->_tabStrip.IsRailCollapsed(false);
 
             page->_tabSearchActive = false;
@@ -6288,6 +6292,142 @@ namespace TerminalAppLocalTests
             const auto tenthDisplay = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)->DisplayItemForTab(tenth->TabViewItem());
             VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetHelpText(tenth->TabViewItem()), tenthDisplay.ToolTipText());
             VERIFY_ARE_NOT_EQUAL(std::wstring::npos, std::wstring{ tenthDisplay.ToolTipText() }.find(L"ctrl+alt+9"));
+        });
+    }
+
+    void TabTests::SidebarHintsFollowEffectiveTargets()
+    {
+        const auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        TestOnUIThread([&]() {
+            page->_historyRefreshInFlight = true;
+            NewTerminalArgs args;
+            for (uint32_t i = 0; i < 3; ++i)
+            {
+                VERIFY_SUCCEEDED(page->_OpenNewTab(args));
+            }
+            const auto hidden = page->_GetTabImpl(page->_tabs.GetAt(0));
+            const auto first = page->_GetTabImpl(page->_tabs.GetAt(1));
+            const auto last = page->_GetTabImpl(page->_tabs.GetAt(3));
+            for (uint32_t i = 0; i < 4; ++i)
+            {
+                const auto tab = page->_GetTabImpl(page->_tabs.GetAt(i));
+                tab->SuppressAgentPrewarm();
+                tab->SetTabText(i == 1 || i == 3 ? L"Visible owner" : L"Hidden owner");
+            }
+            page->_tabSearchActive = true;
+            page->_tabSearchQuery = L"Visible";
+            const auto map = page->_settings.ActionMap();
+            const auto bind = [&](const wchar_t* text, uint32_t index) {
+                const auto chord = KeyChordSerialization::FromString(text);
+                map.RegisterKeyBinding(chord, { ShortcutAction::SwitchToTab, SwitchToTabArgs{ index } });
+                return chord;
+            };
+            const auto keys = winrt::make_self<winrt::TerminalApp::implementation::AppKeyBindings>();
+            keys->SetActionMap(map);
+            keys->SetDispatch(*page->_actionDispatch);
+            const auto one = bind(L"ctrl+alt+1", 0);
+            const auto two = bind(L"ctrl+alt+2", 1);
+            bind(L"ctrl+alt+9", UINT32_MAX);
+            bind(L"ctrl+shift+1", 0);
+            bind(L"ctrl+shift+2", 1);
+            for (const auto& tab : page->_tabs)
+            {
+                page->_GetTabImpl(tab)->SetActionMap(map);
+            }
+            page->_ApplyTabListProjection();
+            page->UpdateLayout();
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            const auto hiddenDisplay = strip->DisplayItemForTab(hidden->TabViewItem());
+            const auto firstDisplay = strip->DisplayItemForTab(first->TabViewItem());
+            const auto lastDisplay = strip->DisplayItemForTab(last->TabViewItem());
+            const auto presentation = lastDisplay.Presentation();
+            const auto originalHeader = last->TabViewItem().Header();
+            const auto originalRoot = last->GetRootPane();
+            const auto verifyTarget = [&](const auto& tab, const auto& display) {
+                VERIFY_IS_FALSE(display.AcceleratorKey().empty());
+                const auto target = page->_EvaluateTabSwitchTarget(KeyChordSerialization::FromString(display.AcceleratorKey()));
+                VERIFY_IS_TRUE(target.has_value());
+                VERIFY_IS_TRUE(target->identity == tab.get());
+                VERIFY_ARE_EQUAL(tab->ToolTipTextForKeyChord(display.AcceleratorKey()), display.ToolTipText());
+                VERIFY_IS_TRUE(keys->TryKeyChord(KeyChordSerialization::FromString(display.AcceleratorKey())));
+                VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == tab);
+            };
+            verifyTarget(hidden, hiddenDisplay);
+            verifyTarget(first, firstDisplay);
+            verifyTarget(last, lastDisplay);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+shift+1" }, hiddenDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, lastDisplay.AcceleratorKey());
+            const auto canonicalKey = Automation::AutomationProperties::GetAcceleratorKey(last->TabViewItem());
+            const auto canonicalHelp = Automation::AutomationProperties::GetHelpText(last->TabViewItem());
+            strip->SyncTabPresentation(lastDisplay);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, lastDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(canonicalKey, Automation::AutomationProperties::GetAcceleratorKey(last->TabViewItem()));
+            VERIFY_ARE_EQUAL(canonicalHelp, Automation::AutomationProperties::GetHelpText(last->TabViewItem()));
+
+            bind(L"ctrl+alt+1", 3);
+            page->_RefreshUIForSettingsReload();
+            verifyTarget(first, firstDisplay);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+shift+2" }, firstDisplay.AcceleratorKey());
+            VERIFY_IS_TRUE(page->_EvaluateTabSwitchTarget(one)->identity == last.get());
+            map.DeleteKeyBinding(two);
+            page->_RefreshUIForSettingsReload();
+            verifyTarget(last, lastDisplay);
+            VERIFY_ARE_NOT_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, lastDisplay.AcceleratorKey());
+            bind(L"ctrl+alt+1", 0);
+            for (const auto text : { L"ctrl+alt+3", L"ctrl+alt+4", L"ctrl+alt+5", L"ctrl+alt+6", L"ctrl+alt+7", L"ctrl+alt+8" })
+            {
+                map.DeleteKeyBinding(KeyChordSerialization::FromString(text));
+            }
+            page->_RefreshUIForSettingsReload();
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+9" }, lastDisplay.AcceleratorKey());
+            last->SetTabText(L"Visible renamed owner");
+            ::Microsoft::Terminal::RichTab::Provider::Presentation metadata;
+            metadata.text = L"branch";
+            metadata.tooltip = L"New metadata without eligibility change";
+            metadata.accessibilityText = metadata.tooltip;
+            last->SetRichTabPresentation(metadata);
+            page->UpdateLayout();
+            verifyTarget(last, lastDisplay);
+            VERIFY_ARE_NOT_EQUAL(std::wstring::npos, std::wstring{ lastDisplay.ToolTipText() }.find(metadata.tooltip));
+            VERIFY_ARE_NOT_EQUAL(std::wstring::npos, std::wstring{ lastDisplay.ToolTipText() }.find(L"Visible renamed owner"));
+            map.DeleteKeyBinding(KeyChordSerialization::FromString(L"ctrl+alt+9"));
+            page->_RefreshUIForSettingsReload();
+            VERIFY_ARE_EQUAL(winrt::hstring{}, lastDisplay.AcceleratorKey());
+            strip->SyncTabPresentation(lastDisplay);
+            VERIFY_ARE_EQUAL(winrt::hstring{}, lastDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(last->ToolTipTextForKeyChord(L""), lastDisplay.ToolTipText());
+
+            VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Horizontal));
+            page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
+            winrt::get_self<winrt::TerminalApp::implementation::TabStripDisplayItem>(lastDisplay)->SyncTabPresentation(false, false);
+            VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetAcceleratorKey(last->TabViewItem()), lastDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetHelpText(last->TabViewItem()), lastDisplay.ToolTipText());
+            bind(L"ctrl+alt+2", 1);
+            VERIFY_IS_TRUE(page->_EvaluateTabSwitchTarget(two)->identity == first.get());
+            VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Vertical));
+            page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
+            page->_tabSearchActive = true;
+            page->_tabSearchQuery = L"Visible";
+            page->_ApplyTabListProjection();
+            const auto returnedDisplay = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)->DisplayItemForTab(last->TabViewItem());
+            verifyTarget(last, returnedDisplay);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, returnedDisplay.AcceleratorKey());
+            VERIFY_IS_TRUE(returnedDisplay.Presentation() == presentation);
+            VERIFY_IS_TRUE(last->TabViewItem().Header() == originalHeader);
+            VERIFY_IS_TRUE(last->GetRootPane() == originalRoot);
+            page->_TryMoveTab(3, 1);
+            const auto reorderedDisplay = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)->DisplayItemForTab(last->TabViewItem());
+            verifyTarget(last, reorderedDisplay);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+1" }, reorderedDisplay.AcceleratorKey());
+            page->_tabSearchActive = false;
+            page->_ApplyTabListProjection();
+            page->_SetTabPinned(last, true);
+            page->UpdateLayout();
+            const auto pinnedDisplay = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)->DisplayItemForTab(last->TabViewItem());
+            verifyTarget(last, pinnedDisplay);
+            VERIFY_IS_TRUE(pinnedDisplay.IsPinned());
+            VERIFY_IS_TRUE(pinnedDisplay.Presentation() == presentation);
+            VERIFY_IS_TRUE(last->GetRootPane() == originalRoot);
         });
     }
 
@@ -13778,9 +13918,9 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_TRUE(owner->_moveLeftMenuItem.IsEnabled());
                 VERIFY_IS_FALSE(owner->_moveRightMenuItem.IsEnabled());
                 VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Backward } }));
-                verifyOwner(1);
+                verifyOwner(0);
                 VERIFY_IS_TRUE(page->_tabs.GetAt(2) == *shell);
-                VERIFY_IS_TRUE(owner->_moveLeftMenuItem.IsEnabled());
+                VERIFY_IS_FALSE(owner->_moveLeftMenuItem.IsEnabled());
                 VERIFY_IS_TRUE(owner->_moveRightMenuItem.IsEnabled());
                 VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Backward } }));
                 verifyOwner(0);
@@ -13788,15 +13928,137 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_FALSE(owner->_moveLeftMenuItem.IsEnabled());
                 VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Backward } }));
                 verifyOwner(0);
-                for (uint32_t index = 1; index <= 2; ++index)
+                for (uint32_t attempt = 0; attempt < 2; ++attempt)
                 {
                     VERIFY_IS_TRUE(page->_actionDispatch->DoAction(*owner, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Forward } }));
-                    verifyOwner(index);
+                    verifyOwner(1);
                 }
                 VERIFY_ARE_EQUAL(expanded, display.IsExpanded());
                 VERIFY_IS_TRUE(page->_tabs.GetAt(0) == *first);
-                VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *shell);
+                VERIFY_IS_TRUE(page->_tabs.GetAt(2) == *shell);
             }
+        });
+    }
+
+    void TabTests::PresentedTabNumbersUseRealBindings()
+    {
+        using Page = winrt::TerminalApp::implementation::TerminalPage;
+        const auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        TestOnUIThread([&]() {
+            page->_historyRefreshInFlight = true;
+            const auto hidden = page->_GetFocusedTabImpl();
+            const auto first = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));
+            const auto last = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));
+            for (const auto& tab : { hidden, first, last })
+            {
+                tab->SuppressAgentPrewarm();
+            }
+            VERIFY_IS_TRUE(page->_SplitPane(last, SplitDirection::Right, 0.5f, page->_MakePane(nullptr, nullptr, nullptr), false));
+            VERIFY_IS_TRUE(page->_SplitPane(last, SplitDirection::Down, 0.5f, page->_MakePane(nullptr, nullptr, nullptr), false));
+            const auto root = last->GetRootPane();
+            const auto active = last->GetActivePane();
+            const auto snapshots = last->GetVisiblePaneSnapshot();
+            VERIFY_ARE_EQUAL(3u, snapshots.size());
+            page->_paneAgentSessions.insert_or_assign(first->GetActivePane()->GetSessionId(), Page::_PaneAgentSession{ L"number-first", L"copilot", L"" });
+            // Qualify the whole owner through a nonactive leaf, retaining an ordinary active sibling.
+            const auto agent = std::find_if(snapshots.begin(), snapshots.end(), [](const auto& pane) { return !pane.IsActive; });
+            VERIFY_IS_TRUE(agent != snapshots.end());
+            page->_paneAgentSessions.insert_or_assign(agent->SessionId, Page::_PaneAgentSession{ L"number-last", L"claude", L"" });
+            VERIFY_IS_FALSE(page->_paneAgentSessions.contains(active->GetSessionId()));
+            const auto bindings = page->_paneAgentSessions;
+            page->_tabStrip.SidebarFilters().ShowAgentsOnly(true);
+            page->_ApplyTabListProjection();
+            const auto map = page->_settings.ActionMap();
+            const auto number = [&](const wchar_t* text, uint32_t index) {
+                const auto chord = KeyChordSerialization::FromString(text);
+                map.RegisterKeyBinding(chord, { ShortcutAction::SwitchToTab, SwitchToTabArgs{ index } });
+                return chord;
+            };
+            const auto one = number(L"ctrl+alt+1", 0);
+            const auto two = number(L"ctrl+alt+2", 1);
+            const auto nine = number(L"ctrl+alt+9", UINT32_MAX);
+            const auto custom = number(L"ctrl+shift+2", 1);
+            const auto keys = winrt::make_self<winrt::TerminalApp::implementation::AppKeyBindings>();
+            keys->SetActionMap(map);
+            keys->SetDispatch(*page->_actionDispatch);
+            bool observedChord = false;
+            const auto token = page->_actionDispatch->SwitchToTab([&](const auto& sender, const auto&) {
+                observedChord = sender.template try_as<winrt::Microsoft::Terminal::Control::KeyChord>() != nullptr;
+            });
+            const auto removeObserver = wil::scope_exit([&]() { page->_actionDispatch->SwitchToTab(token); });
+            VERIFY_IS_TRUE(keys->TryKeyChord(one));
+            VERIFY_IS_TRUE(observedChord, L"The real binding entry must forward the physical chord.");
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == first);
+            VERIFY_IS_TRUE(keys->TryKeyChord(two));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last);
+            const auto eight = number(L"ctrl+alt+8", 7);
+            VERIFY_IS_TRUE(keys->TryKeyChord(eight));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last, L"Past-end visible ordinals retain the last-tab clamp.");
+            VERIFY_IS_TRUE(keys->TryKeyChord(nine));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last);
+            VERIFY_IS_TRUE(keys->TryKeyChord(custom));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == first);
+            VERIFY_IS_TRUE(page->_actionDispatch->DoAction({ ShortcutAction::SwitchToTab, SwitchToTabArgs{ uint32_t{ 0 } } }));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == hidden, L"Nonkeyboard indices remain canonical.");
+            number(L"ctrl+alt+1", 2);
+            VERIFY_IS_TRUE(keys->TryKeyChord(one));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last, L"A differently mapped number remains canonical.");
+            page->_tabStrip.SearchQuery(L"no-owner-matches-this-query");
+            page->_ApplyTabListProjection();
+            VERIFY_IS_FALSE(keys->TryKeyChord(two));
+            VERIFY_IS_TRUE(keys->TryKeyChord(custom));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == first);
+            page->_tabStrip.SearchQuery(L"");
+            page->_tabStrip.SearchActive(false);
+            page->_ApplyTabListProjection();
+            VERIFY_IS_TRUE(keys->TryKeyChord(nine));
+            page->UpdateLayout();
+            VERIFY_IS_TRUE(last->GetRootPane() == root);
+            VERIFY_IS_TRUE(last->GetActivePane() == active);
+            const auto after = last->GetVisiblePaneSnapshot();
+            VERIFY_ARE_EQUAL(snapshots.size(), after.size());
+            for (size_t i = 0; i < after.size(); ++i)
+            {
+                VERIFY_ARE_EQUAL(snapshots[i].SessionId, after[i].SessionId);
+                VERIFY_ARE_EQUAL(snapshots[i].ContentId, after[i].ContentId);
+                VERIFY_ARE_EQUAL(snapshots[i].IsActive, after[i].IsActive);
+            }
+            VERIFY_ARE_EQUAL(bindings.size(), page->_paneAgentSessions.size());
+            for (const auto& [session, binding] : bindings)
+            {
+                VERIFY_ARE_EQUAL(binding.sessionId, page->_paneAgentSessions.at(session).sessionId);
+                VERIFY_ARE_EQUAL(binding.agent, page->_paneAgentSessions.at(session).agent);
+            }
+            uint32_t contentIndex{};
+            VERIFY_IS_TRUE(page->_tabContent.Children().IndexOf(last->Content(), contentIndex));
+            VERIFY_ARE_EQUAL(1.0, last->Content().Opacity());
+            VERIFY_IS_TRUE(last->Content().IsHitTestVisible());
+            VERIFY_IS_FALSE(page->_actionDispatch->DoAction(*hidden, { ShortcutAction::MoveTab, MoveTabArgs{ L"", MoveTabDirection::Forward } }));
+            map.DeleteKeyBinding(two);
+            VERIFY_IS_FALSE(keys->TryKeyChord(two), L"An explicitly unbound numbered chord must not select a tab.");
+            const auto alias = Command::NewUserCommand();
+            alias.ActionAndArgs({ ShortcutAction::SwitchToTab, SwitchToTabArgs{ 1 } });
+            alias.GenerateID();
+            map.AddAction(alias, two);
+            VERIFY_IS_TRUE(keys->TryKeyChord(two));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last, L"An effective numbered alias uses the same owner projection.");
+            std::vector<winrt::com_ptr<winrt::TerminalApp::implementation::Tab>> visible{ first, last };
+            for (uint32_t i = 0; i < 10; ++i)
+            {
+                const auto tab = page->_GetTabImpl(page->_CreateNewTabFromPane(page->_MakePane(nullptr, nullptr, nullptr)));
+                tab->SuppressAgentPrewarm();
+                page->_paneAgentSessions.insert_or_assign(tab->GetActivePane()->GetSessionId(), Page::_PaneAgentSession{ L"number-extra", L"copilot", L"" });
+                visible.push_back(tab);
+            }
+            page->_ApplyTabListProjection();
+            for (uint32_t i = 0; i < 8; ++i)
+            {
+                const auto chord = number((L"ctrl+alt+" + std::to_wstring(i + 1)).c_str(), i);
+                VERIFY_IS_TRUE(keys->TryKeyChord(chord));
+                VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == visible[i]);
+            }
+            VERIFY_IS_TRUE(keys->TryKeyChord(nine));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == visible.back(), L"Nine selects the actual last visible owner, not the ninth.");
         });
     }
 

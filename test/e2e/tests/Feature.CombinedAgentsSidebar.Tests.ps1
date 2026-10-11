@@ -680,10 +680,39 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             }
             Assert-CombinedSearchState $true
         }
+        function Get-CombinedQuery {
+            param([string]$Value)
+            $observation = @{ Error = $null; Value = $null }
+            Wait-Until -TimeoutSec 5 -Because 'the owned visible search peer projects the exact query with search still active' -Condition {
+                try {
+                    $window = [Windows.Automation.AutomationElement]::FromHandle([IntPtr]([long]$script:app.Hwnd))
+                    if ($window.Current.ProcessId -ne $script:app.Pid) { throw 'Search window ownership changed.' }
+                    $bounds = $window.Current.BoundingRectangle
+                    $peers = @(Get-CombinedRawChildren $window | Where-Object {
+                        $_.Current.AutomationId -in @('SearchTextBox', 'SearchTabsButton') -and
+                            $_.Current.ProcessId -eq $script:app.Pid -and -not $_.Current.IsOffscreen -and
+                            $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.BoundingRectangle.Height -gt 0 -and
+                            $bounds.IntersectsWith($_.Current.BoundingRectangle)
+                    })
+                    $search = @($peers | Where-Object { $_.Current.AutomationId -ceq 'SearchTextBox' })
+                    $buttons = @($peers | Where-Object { $_.Current.AutomationId -ceq 'SearchTabsButton' })
+                    if ($search.Count -ne 1 -or $buttons.Count -ne 1) { return $false }
+                    $current = $search[0].GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value
+                    $toggle = $buttons[0].GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern).Current.ToggleState
+                    if ($current -cne $Value -or $toggle -ne [Windows.Automation.ToggleState]::On) { return $false }
+                    $observation.Value = $current
+                    return $true
+                }
+                catch { $observation.Error = $_; return $true }
+            } | Out-Null
+            if ($observation.Error) { throw $observation.Error }
+            $observation.Value
+        }
         function Set-CombinedQuery {
             param([string]$Value)
             Open-CombinedSearch
             Set-UiValue -App $script:app -Selector SearchTextBox -Value $Value | Out-Null
+            Get-CombinedQuery $Value | Out-Null
         }
         function Assert-CombinedBounds {
             $viewport = (Get-CombinedElement ItemsList).Current.BoundingRectangle
@@ -1046,7 +1075,9 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             language = 'en-US'; tabLayout = 'vertical'; tabLayoutVerticalWidth = 320
             startupActions = ''; firstWindowPreference = 'defaultProfile'; windowingBehavior = 'useNew'
             acpAgent = 'custom:combined-sidebar-fixture'; acpCustomCommand = $command; acpModel = ''
-            autoFixEnabled = $false; actions = @(); keybindings = @(); 'warning.confirmOnClose' = 'never'
+            autoFixEnabled = $false; actions = @(); keybindings = @(foreach ($number in 1..9) {
+                @{ keys = "ctrl+alt+$number"; command = @{ action = 'switchToTab'; index = $(if ($number -eq 9) { [uint32]4294967295 } else { $number - 1 }) } }
+            }); 'warning.confirmOnClose' = 'never'
         }
         if (@(Get-WtProcessesForApp -App $script:target -IncludePackageExecutables).Count) {
             throw 'Dev started during preparation; refusing configuration mutation or adoption.'
@@ -1069,6 +1100,14 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         Test-WtWindowKeyFocusable -App $script:app | Should -BeTrue -Because 'desktop ownership is required'
         Wait-AgentReady -App $script:app -TimeoutSec 60 | Should -BeTrue
         (Get-AgentPaneSession -App $script:app).AcpSessionId | Should -Match '^chat-fixture-'
+        $startupTabs = @(Get-WtTabs -App $script:app -WindowId $script:app.WindowId)
+        $startupTabs | Should -HaveCount 1
+        $startupPanes = @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId $startupTabs[0].tab_id)
+        # Wait-AgentReady opens this helper; empty native-provider metadata does not make its owner ordinary.
+        $script:openedFixtureOwners = @([pscustomobject]@{
+            session_id = $startupPanes[0].session_id; title = $startupTabs[0].title
+            FixtureSession = Get-AgentPaneSession -App $script:app
+        })
         Set-CombinedView $true
         (Get-CombinedElement VerticalTabsHeader).Current.Name | Should -Be 'Tabs'
         (Get-CombinedElement HistoryHeader).Current.Name | Should -Be 'Recent agent sessions'
@@ -1094,6 +1133,10 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             Wait-AgentReady -App $script:app -PaneSessionId $pane.PaneSessionId -TimeoutSec 40 | Should -BeTrue
             $pane.AcpSessionId | Should -Match '^chat-fixture-'
             $tab | Add-Member -NotePropertyName FixtureSession -NotePropertyValue $pane
+            $script:openedFixtureOwners += [pscustomobject]@{
+                session_id = $tab.session_id; title = "$script:marker-open-$('{0:D2}' -f $i)"
+                FixtureSession = $pane
+            }
             $tab
         })
         $script:pipe = (Get-Content -LiteralPath (Join-Path $script:app.LocalStateDir 'IntelligentTerminal\master-pipe.txt') -Raw).Trim()
@@ -1945,6 +1988,212 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             if ($observation.Error) { throw $observation.Error }
             $observation.Display
         }
+        function Assert-MoveNumberKeys {
+            param([string]$Phase)
+            $historyBefore = @((Get-CombinedSnapshot).sessions.session_id)
+            $numberCases = @(
+                @{ AgentsOnly = $false; Search = 'Closed'; Origin = 'Shell'; Number = 9 },
+                @{ AgentsOnly = $true; Search = 'Closed'; Origin = 'Shell'; Number = 9 },
+                @{ AgentsOnly = $true; Search = 'Empty'; Origin = 'Helper'; Number = 1 },
+                @{ AgentsOnly = $false; Search = 'Filtered'; Origin = 'Helper'; Number = 1 },
+                @{ AgentsOnly = $false; Search = 'Filtered'; Origin = 'Shell'; Number = 2 },
+                @{ AgentsOnly = $true; Search = 'Filtered'; Origin = 'ItemsList'; Number = 1 },
+                @{ AgentsOnly = $true; Search = 'Ordinary'; Origin = 'Shell'; Number = 1 }
+            )
+            foreach ($case in $numberCases) {
+                    $agentsOnly = $case.AgentsOnly
+                    $searchMode = $case.Search
+                    $origin = $case.Origin
+                    $number = $case.Number
+                    $query = switch ($searchMode) {
+                        'Filtered' { $title }
+                        'Ordinary' { "$title-ordinary" }
+                        default { '' }
+                    }
+                    Set-CombinedFilters -AgentsOnly $agentsOnly -Recent $false
+                    $search = $searchMode -ne 'Closed'
+                    if ($search) { Set-CombinedQuery $query }
+                    else {
+                        if ((Get-CombinedElement SearchTabsButton).GetCurrentPattern(
+                                [Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq
+                            [Windows.Automation.ToggleState]::On) {
+                            Invoke-UiClick -App $script:app -Selector SearchTabsButton | Out-Null
+                        }
+                        Assert-CombinedSearchState $false
+                    }
+                    # Query matching is global: nonempty search disables the Agents-only scope.
+                    $canonicalTabs = @(Get-WtTabs -App $script:app -WindowId $script:app.WindowId)
+                    $canonicalPanes = @{}
+                    $canonical = @(foreach ($tab in $canonicalTabs) {
+                        $tabPanes = @(Get-WtPanes -App $script:app -WindowId $script:app.WindowId -TabId $tab.tab_id)
+                        $canonicalPanes[$tabPanes[0].session_id] = $tabPanes
+                        $tabPanes[0].session_id
+                    })
+                    $qualifiedOwnerIds = @($script:openedFixtureOwners.session_id) + @($neighbor.session_id, $owner.session_id)
+                    $fixtureOwnerTitles = @{}
+                    foreach ($opened in $script:openedFixtureOwners) {
+                        $opened.FixtureSession.AcpSessionId | Should -Match '^chat-fixture-'
+                        $fixtureOwnerTitles[$opened.session_id] = $opened.title
+                    }
+                    $fixtureOwnerTitles[$neighbor.session_id] = "$title-neighbor"
+                    $fixtureOwnerTitles[$ordinary.session_id] = "$title-ordinary"
+                    $fixtureOwnerTitles[$owner.session_id] = $title
+                    @($canonical | Where-Object { -not $fixtureOwnerTitles.ContainsKey($_) }) | Should -HaveCount 0
+                    $targets = @($canonical | Where-Object {
+                        $fixtureOwnerTitles[$_].Contains($query) -and
+                            (-not ($agentsOnly -and [string]::IsNullOrEmpty($query)) -or $_ -in $qualifiedOwnerIds)
+                    })
+                    $targets.Count | Should -BeGreaterThan 0
+                    # Count owning row headers, never expanded pane children or recent-session rows.
+                    @(Get-CombinedRows Live).Count | Should -Be $targets.Count
+                    $expectedOwnerTitles = @($targets | ForEach-Object { $fixtureOwnerTitles[$_] })
+                    $actualOwnerTitles = @(foreach ($row in @(Get-CombinedRows Live)) {
+                        $parts = @(Get-CombinedRawChildren $row)
+                        $groups = @($parts | Where-Object { $_.Current.AutomationId -eq 'TabGroupToggleButton' })
+                        $groups.Count | Should -BeLessOrEqual 1
+                        $headers = @($parts | Where-Object {
+                            if ($_.Current.ControlType -ne [Windows.Automation.ControlType]::Text -or
+                                $_.Current.Name -notin $fixtureOwnerTitles.Values) { return $false }
+                            if (-not $groups.Count) { return $true }
+                            $center = $_.Current.BoundingRectangle.Top + $_.Current.BoundingRectangle.Height / 2
+                            $bounds = $groups[0].Current.BoundingRectangle
+                            $center -ge $bounds.Top -and $center -le $bounds.Bottom
+                        })
+                        $headers | Should -HaveCount 1
+                        $row.Current.ProcessId | Should -Be $script:app.Pid
+                        $headers[0].Current.ProcessId | Should -Be $script:app.Pid
+                        $headers[0].Current.Name
+                    })
+                    $actualOwnerTitles | Should -Be $expectedOwnerTitles
+                    $expected = if ($number -eq 9) { $targets[-1] } else { $targets[$number - 1] }
+                    $start = if ($expected -eq $owner.session_id) { $neighbor.session_id } else { $owner.session_id }
+                    if ($origin -ne 'Shell') { $start | Should -Be $owner.session_id }
+                            Set-WtPaneFocus -App $script:app -SessionId $start
+                            Set-WtWindowForeground -App $script:app | Should -BeTrue
+                            if ($origin -eq 'Helper') {
+                                $helperBefore = Get-AgentPaneSession -App $script:app -PaneSessionId $helper.PaneSessionId
+                                $helperBefore.HelperProcessId | Should -Be $helper.HelperProcessId
+                                $helperBefore.AcpSessionId | Should -Be $helper.AcpSessionId
+                                Invoke-WtCli -App $script:app -Arguments @('focus-pane', '-t', $helper.PaneSessionId) | Out-Null
+                                Wait-Until -TimeoutSec 5 -Because 'the actual helper terminal owns keyboard focus' -Condition {
+                                    $focus = [Windows.Automation.AutomationElement]::FocusedElement
+                                    $focus.Current.ClassName -eq 'TermControl' -and $focus.Current.Name -eq 'Agent Pane'
+                                } | Out-Null
+                            } elseif ($origin -eq 'ItemsList') {
+                                (Get-MoveGroup).SetFocus()
+                            }
+                            $focused = [Windows.Automation.AutomationElement]::FocusedElement
+                            $focused.Current.ProcessId | Should -Be $script:app.Pid
+                            $focused.Current.HasKeyboardFocus | Should -BeTrue
+                            $focused.Current.IsOffscreen | Should -BeFalse
+                            $focused.Current.BoundingRectangle.Width | Should -BeGreaterThan 0
+                            $focused.Current.BoundingRectangle.Height | Should -BeGreaterThan 0
+                            if ($origin -eq 'ItemsList') {
+                                [Windows.Automation.Automation]::Compare($focused, (Get-MoveGroup)) | Should -BeTrue
+                                (Get-CombinedElement ItemsList).Current.BoundingRectangle.Contains(
+                                    $focused.Current.BoundingRectangle) | Should -BeTrue
+                            } else {
+                                $focused.Current.ClassName | Should -Be 'TermControl'
+                                if ($origin -eq 'Shell') {
+                                    if ($start -eq $owner.session_id) {
+                                        @($focused.GetRuntimeId()) | Should -Be @((Get-MoveDisplay).runtime_id)
+                                    }
+                                } else {
+                                    $focused.Current.Name | Should -Be 'Agent Pane'
+                                    @($focused.GetRuntimeId()) | Should -Not -Be @((Get-MoveDisplay).runtime_id)
+                                    # TextPattern readiness is not a cross-API whole-buffer identity oracle.
+                                    $document = $focused.GetCurrentPattern([Windows.Automation.TextPattern]::Pattern).DocumentRange.GetText(-1)
+                                    $document | Should -Not -BeNullOrEmpty
+                                    $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+                                    $root.Current.ProcessId | Should -Be $script:app.Pid
+                                    $termCondition = [Windows.Automation.PropertyCondition]::new(
+                                        [Windows.Automation.AutomationElement]::ClassNameProperty, 'TermControl')
+                                    $helperPeers = @($root.FindAll([Windows.Automation.TreeScope]::Descendants, $termCondition) |
+                                        Where-Object { $_.Current.Name -eq 'Agent Pane' -and
+                                            $_.Current.ProcessId -eq $script:app.Pid -and -not $_.Current.IsOffscreen -and
+                                            $_.Current.BoundingRectangle.Width -gt 0 -and $_.Current.BoundingRectangle.Height -gt 0 })
+                                    $helperPeers | Should -HaveCount 1
+                                    [Windows.Automation.Automation]::Compare($focused, $helperPeers[0]) | Should -BeTrue
+                                    @($focused.GetRuntimeId()) | Should -Be @($helperPeers[0].GetRuntimeId())
+                                    $helperPeers[0].Current.HasKeyboardFocus | Should -BeTrue
+                                    $helperAfter = Get-AgentPaneSession -App $script:app -PaneSessionId $helper.PaneSessionId
+                                    $helperAfter.HelperProcessId | Should -Be $helperBefore.HelperProcessId
+                                    $helperAfter.AcpSessionId | Should -Be $helperBefore.AcpSessionId
+                                    $originalHelperProcess.HasExited | Should -BeFalse
+                                    $currentHelperProcess = Get-Process -Id $helper.HelperProcessId -ErrorAction Stop
+                                    $currentHelperProcess.StartTime | Should -Be $originalHelperProcess.StartTime
+                                    $currentHelperProcess.Path | Should -Be $originalHelperProcess.Path
+                                    $nativeHelper = Get-CimInstance Win32_Process -Filter "ProcessId=$($helper.HelperProcessId)" -OperationTimeoutSec 5 -ErrorAction Stop
+                                    $nativeHelper.ParentProcessId | Should -Be $script:app.Pid
+                                    $nativeHelper.ExecutablePath | Should -Be $script:app.WtaPath
+                                    $nativeHelper.CommandLine | Should -BeExactly $originalHelperNative.CommandLine
+                                    # Pane context exposes source terminals, not AgentPaneContent.
+                                    $sourceContext = Invoke-WtCli -App $script:app -Arguments @('get-pane-context', '--target', $owner.session_id)
+                                    [string]$sourceContext.pane.session_id | Should -Be ([string]$owner.session_id)
+                                    [string]$sourceContext.pane.tab_id | Should -Be ([string](Get-MoveOwner).tab_id)
+                                    [string]$sourceContext.pane.window_id | Should -Be ([string]$script:app.WindowId)
+                                    $nativeHelper.CommandLine | Should -Match ('--owner-tab-id\s+"?\{?' +
+                                        [regex]::Escape($originalHelperStableTabId) + '\}?"?(?:\s|$)')
+                                    # Active-pane resolves actual helper focus to its owning source shell.
+                                    $focusedSource = Get-ActivePane -App $script:app
+                                    [string]$focusedSource.session_id | Should -Be ([string]$owner.session_id)
+                                    [string]$focusedSource.tab_id | Should -Be ([string]$sourceContext.pane.tab_id)
+                                    [string]$focusedSource.window_id | Should -Be ([string]$sourceContext.pane.window_id)
+                                    $nativeHelper.CommandLine | Should -Match ('--owner-window-id\s+"?' +
+                                        [regex]::Escape([string]$script:app.WindowId) + '"?(?:\s|$)')
+                                }
+                            }
+                            $beforeActive = Get-ActivePane -App $script:app
+                            $startTab = @($canonicalTabs | Where-Object {
+                                $canonicalPanes[$canonical[$_.tab_id]].session_id -contains $start
+                            })
+                            $startTab | Should -HaveCount 1
+                            $beforeActive.tab_id | Should -Be $startTab[0].tab_id
+                            $canonicalPanes[$canonical[$beforeActive.tab_id]].session_id | Should -Not -Contain $expected
+                            Send-WtWindowKey -App $script:app -Vk (0x30 + $number) -Ctrl -Alt -RequireForeground | Out-Null
+                            Wait-Until -TimeoutSec 8 -Because "physical Ctrl+Alt+$number selects the presented owner" -Condition {
+                                $activeTab = (Get-ActivePane -App $script:app).tab_id
+                                $canonicalPanes[$canonical[$activeTab]].session_id -contains $expected
+                            } | Out-Null
+                            $afterFocus = [Windows.Automation.AutomationElement]::FocusedElement
+                            $afterFocus.Current.ProcessId | Should -Be $script:app.Pid
+                            $afterFocus.Current.HasKeyboardFocus | Should -BeTrue
+                            $afterFocus.Current.IsOffscreen | Should -BeFalse
+                            $afterFocus.Current.ClassName | Should -Be 'TermControl'
+                            $afterFocus.Current.BoundingRectangle.Width | Should -BeGreaterThan 0
+                            $afterFocus.Current.BoundingRectangle.Height | Should -BeGreaterThan 0
+                            if ($origin -eq 'Helper') {
+                                $helperAfterKey = Get-AgentPaneSession -App $script:app -PaneSessionId $helper.PaneSessionId
+                                $helperAfterKey.HelperProcessId | Should -Be $helperBefore.HelperProcessId
+                                $helperAfterKey.AcpSessionId | Should -Be $helperBefore.AcpSessionId
+                            }
+                            if ($expected -eq $owner.session_id) { Get-MoveDisplay | Should -Not -BeNullOrEmpty }
+                            @(Get-MoveOrder) | Should -Be $canonical
+                            Assert-CombinedSearchState $search
+                            if ($search) {
+                                Get-UiValue -App $script:app -Selector SearchTextBox -ValuePattern |
+                                    Should -Be $query
+                            }
+                            @{
+                                phase = $Phase; origin = $origin; number = $number; agents_only = $agentsOnly
+                                search = $searchMode; expected_shell = $expected; canonical_order = $canonical
+                                before_active = $beforeActive; after_active = Get-ActivePane -App $script:app
+                                focus_name = $focused.Current.Name; focus_id = $focused.Current.AutomationId
+                                focus_runtime_id = @($focused.GetRuntimeId())
+                            } | ConvertTo-Json -Depth 6 -Compress |
+                                Add-Content -LiteralPath (Join-Path $script:evidence 'tab-number-keys.jsonl')
+            }
+            if ((Get-CombinedElement SearchTabsButton).GetCurrentPattern(
+                    [Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq
+                [Windows.Automation.ToggleState]::On) {
+                Invoke-UiClick -App $script:app -Selector SearchTabsButton | Out-Null
+            }
+            Assert-CombinedSearchState $false
+            Set-CombinedFilters -AgentsOnly $true -Recent $false
+            Set-WtPaneFocus -App $script:app -SessionId $owner.session_id
+            @((Get-CombinedSnapshot).sessions.session_id) | Should -Be $historyBefore
+            Assert-MoveIdentity | Out-Null
+        }
         try {
             Set-CombinedView $false
             $helperIds = @(Get-AgentPaneSessions -App $script:app).PaneSessionId
@@ -1962,6 +2211,14 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 -Cwd $fixture.Folder -Title $title
             $created.Add($owner)
             $helper = Wait-NewAgentPaneSession -App $script:app -ExcludePaneSessionId $helperIds -TimeoutSec 40
+            $originalHelperProcess = Get-Process -Id $helper.HelperProcessId -ErrorAction Stop
+            $originalHelperProcess.Path | Should -Be $script:app.WtaPath
+            $originalHelperNative = Get-CimInstance Win32_Process -Filter "ProcessId=$($helper.HelperProcessId)" -OperationTimeoutSec 5 -ErrorAction Stop
+            $originalHelperNative.ParentProcessId | Should -Be $script:app.Pid
+            $originalHelperNative.CommandLine | Should -Match '--owner-tab-id\s+"?\{?[0-9a-fA-F-]{36}\}?"?(?:\s|$)'
+            $originalHelperStableTabId = [regex]::Match($originalHelperNative.CommandLine,
+                '--owner-tab-id\s+"?\{?([0-9a-fA-F-]{36})\}?"?(?:\s|$)').Groups[1].Value
+            [guid]$originalHelperStableTabId | Should -Not -Be ([guid]::Empty)
             Wait-AgentReady -App $script:app -PaneSessionId $helper.PaneSessionId -TimeoutSec 40 | Should -BeTrue
             $split = Split-WtPane -App $script:app -SessionId $owner.session_id -Direction right `
                 -Command 'pwsh.exe -NoLogo -NoProfile -NoExit'
@@ -1994,6 +2251,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             }) | Should -HaveCount 0
             $original = @(Get-MoveOrder)
             $original[-3..-1] | Should -Be @($neighbor.session_id, $ordinary.session_id, $owner.session_id)
+            Assert-MoveNumberKeys 'before movement'
             foreach ($expanded in @($true, $false)) {
                 $toggle = @(Get-CombinedRawChildren (Get-MoveGroup) |
                     Where-Object { $_.Current.AutomationId -eq 'TabGroupToggleButton' })[0]
@@ -2009,10 +2267,8 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 $beforeY = (Get-MoveGroup).Current.BoundingRectangle.Top
                 Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence "tab-move-$expanded-before.png") | Out-Null
                 foreach ($step in @(
-                    @{ Action = 'Move up'; Tail = @($neighbor.session_id, $owner.session_id, $ordinary.session_id) },
                     @{ Action = 'Move up'; Tail = @($owner.session_id, $neighbor.session_id, $ordinary.session_id) },
-                    @{ Action = 'Move down'; Tail = @($neighbor.session_id, $owner.session_id, $ordinary.session_id) },
-                    @{ Action = 'Move down'; Tail = @($neighbor.session_id, $ordinary.session_id, $owner.session_id) }
+                    @{ Action = 'Move down'; Tail = @($neighbor.session_id, $owner.session_id, $ordinary.session_id) }
                 )) {
                     Set-WtPaneFocus -App $script:app -SessionId $neighbor.session_id
                     Open-MoveMenu
@@ -2038,9 +2294,10 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                         Add-Content -LiteralPath (Join-Path $script:evidence 'tab-move.jsonl')
                 }
             }
+            Assert-MoveNumberKeys 'after movement'
             foreach ($query in @('', $title)) {
                 Set-CombinedQuery $query
-                Get-UiValue -App $script:app -Selector SearchTextBox -ValuePattern | Should -Be $query
+                Get-CombinedQuery $query | Should -BeExactly $query
                 $before = @(Get-MoveOrder)
                 $active = (Get-ActivePane -App $script:app).session_id
                 Open-MoveMenu
