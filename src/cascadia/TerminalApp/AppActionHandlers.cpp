@@ -527,11 +527,34 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    void TerminalPage::_HandleSwitchToTab(const IInspectable& /*sender*/,
+    void TerminalPage::_HandleSwitchToTab(const IInspectable& sender,
                                           const ActionEventArgs& args)
     {
         if (const auto& realArgs = args.ActionArgs().try_as<SwitchToTabArgs>())
         {
+            if (const auto chord = sender.try_as<KeyChord>(); chord && _isVerticalLayout &&
+                                                             _IsPresentedTabSwitchChord(chord, realArgs.TabIndex()))
+            {
+                const auto map = _settings.ActionMap();
+                const auto command = map ? map.GetActionByKeyChord(chord) : nullptr;
+                const auto effectiveArgs = command && command.ActionAndArgs().Action() == ShortcutAction::SwitchToTab ?
+                                               command.ActionAndArgs().Args().try_as<SwitchToTabArgs>() :
+                                               nullptr;
+                if (!effectiveArgs || effectiveArgs.TabIndex() != realArgs.TabIndex())
+                {
+                    _SelectTab({ realArgs.TabIndex() });
+                    args.Handled(true);
+                    return;
+                }
+                const auto target = _EvaluateTabSwitchTarget(chord);
+                if (target && target->canonicalIndex < _tabs.Size() &&
+                    _GetTabImpl(_tabs.GetAt(target->canonicalIndex)).get() == target->identity)
+                {
+                    _SelectTab({ target->canonicalIndex });
+                }
+                args.Handled(true);
+                return;
+            }
             _SelectTab({ realArgs.TabIndex() });
             args.Handled(true);
         }
@@ -943,7 +966,7 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto& realArgs = actionArgs.ActionArgs().try_as<MoveTabArgs>())
         {
-            if (_IsTabListPositionOperationBlocked() && realArgs.Window().empty())
+            if (_IsTabSearchEffective() && realArgs.Window().empty())
             {
                 actionArgs.Handled(false);
                 return;
