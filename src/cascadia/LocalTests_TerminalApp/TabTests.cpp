@@ -6237,7 +6237,7 @@ namespace TerminalAppLocalTests
                 const auto target = thirdHeader.XamlRoot().Content().as<FrameworkElement>();
                 VERIFY_IS_TRUE(ToolTipService::GetPlacementTarget(thirdHeader) == target);
                 VERIFY_ARE_EQUAL(FlowDirection::LeftToRight, target.FlowDirection());
-                VERIFY_ARE_EQUAL(Primitives::PlacementMode::Right, tooltip.Placement());
+                VERIFY_ARE_EQUAL(thirdHeader.FlowDirection() == FlowDirection::RightToLeft ? Primitives::PlacementMode::Left : Primitives::PlacementMode::Right, tooltip.Placement());
                 VERIFY_IS_NOT_NULL(tooltip.PlacementRect());
                 const auto rect = tooltip.PlacementRect().Value();
                 const auto expected = thirdHeader.TransformToVisual(target).TransformBounds(
@@ -6259,11 +6259,17 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(originalName, Automation::AutomationProperties::GetName(thirdContainer));
             const auto verticalTooltip = verticalTooltipText();
             const auto originalFlowDirection = thirdHeader.FlowDirection();
+            const auto stripImpl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
             thirdHeader.FlowDirection(FlowDirection::RightToLeft);
+            stripImpl->OnTabHeaderGotFocus(thirdHeader, RoutedEventArgs{});
+            verifyPlacementRect();
             VERIFY_ARE_EQUAL(verticalTooltip, verticalTooltipText());
             thirdHeader.FlowDirection(FlowDirection::LeftToRight);
+            stripImpl->OnTabHeaderGotFocus(thirdHeader, RoutedEventArgs{});
+            verifyPlacementRect();
             VERIFY_ARE_EQUAL(verticalTooltip, verticalTooltipText());
             thirdHeader.FlowDirection(originalFlowDirection);
+            stripImpl->OnTabHeaderGotFocus(thirdHeader, RoutedEventArgs{});
             VERIFY_ARE_EQUAL(horizontalTooltip, verticalTooltip);
             VERIFY_ARE_EQUAL(winrt::hstring{ verticalTooltip }, thirdDisplay.ToolTipText());
             VERIFY_ARE_NOT_EQUAL(std::wstring::npos, verticalTooltip.find(L"Third tab"));

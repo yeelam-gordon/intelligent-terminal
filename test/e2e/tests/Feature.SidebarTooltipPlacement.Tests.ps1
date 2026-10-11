@@ -9,7 +9,11 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
         & (Get-Module ItE2E) { Initialize-WtWin32Input }
     }
 
-    It 'Sidebar tooltips leave adjacent rows selectable' {
+    It 'Sidebar tooltips leave adjacent rows selectable (<Language>)' -TestCases @(
+        @{ Language = 'en-US' }
+        @{ Language = 'ar-SA' }
+    ) {
+        param($Language)
         $package = Get-ItTestPackage
         if ($package -in @('Dev', 'Store', 'Auto') -or $package -notmatch '.+_.+') { throw 'Select an explicit private package family name.' }
         $target = Resolve-ItApp -Package $package
@@ -28,7 +32,7 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
         $titles = @("Alpha-$token", "Bravo-$token", "Charlie-$token")
         $profiles = @(0..2 | ForEach-Object { @{
             guid = "{$([guid]::NewGuid())}"; tabTitle = $titles[$_]
-            name = if ($_ -eq 1) { "Terminal profile`nFixture line two`nFixture line three`nFixture line four: Bravo" } else { $titles[$_] }
+            name = if ($_ -eq 1) { "Terminal profile`nFixture line two`nFixture line three`nFixture line four: Bravo" + $(if ($Language -eq 'ar-SA') { "`nسطر عربي" }) } else { $titles[$_] }
             commandline = 'cmd.exe /d /k "prompt $G"'; suppressApplicationTitle = $true; shellIntegrationEnabled = $false
         } })
         function Get-HeaderRows([string]$Layout) {
@@ -38,6 +42,11 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
             $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
                 [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $id))
             if (-not $list -or $list.Current.IsOffscreen) { throw "Missing visible $id." }
+            if ($Layout -eq 'vertical') {
+                $rail = $list.Current.BoundingRectangle; $frame = $root.Current.BoundingRectangle
+                ($rail.Left + $rail.Width / 2 -gt $frame.Left + $frame.Width / 2) |
+                    Should -Be ($Language -eq 'ar-SA') -Because 'the actual Sidebar rail must occupy the locale-appropriate physical side'
+            }
             $kind = if ($Layout -eq 'vertical') { [Windows.Automation.ControlType]::ListItem } else { [Windows.Automation.ControlType]::TabItem }
             $peers = @($list.FindAll([Windows.Automation.TreeScope]::Descendants,
                 [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, $kind)))
@@ -112,7 +121,7 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
             $app = Start-Terminal -Package $package -TimeoutSec 30 -PassFre $true -State @{
                 sidebarLayoutMigrationCompleted = $true; sidebarIntroductionShown = $true
             } -Settings @{
-                language = 'en-US'; tabLayout = 'horizontal'; startupActions = ''; firstWindowPreference = 'defaultProfile'
+                language = $Language; tabLayout = 'horizontal'; startupActions = ''; firstWindowPreference = 'defaultProfile'
                 windowingBehavior = 'useNew'; 'warning.confirmOnClose' = 'never'; autoErrorDetectionEnabled = $false; autoFixEnabled = $false
                 defaultProfile = $profiles[0].guid; profiles = @{ list = $profiles }
             }
