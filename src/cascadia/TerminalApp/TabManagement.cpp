@@ -2156,7 +2156,7 @@ namespace winrt::TerminalApp::implementation
                                   winrt::get_self<implementation::TabStrip>(_tabStrip) :
                                   nullptr;
 
-        const auto apply = [&](const TerminalApp::Tab& tab, const TerminalApp::TabStripDisplayItem& projectedDisplay) {
+        const auto prepare = [&](const TerminalApp::Tab& tab, const TerminalApp::TabStripDisplayItem& projectedDisplay) {
             const auto item = tab.TabViewItem();
             const auto display = projectedDisplay ? projectedDisplay :
                                                     (tabStrip ? tabStrip->DisplayItemForTab(item) : nullptr);
@@ -2179,32 +2179,88 @@ namespace winrt::TerminalApp::implementation
             {
                 _RefreshTabStripPaneItems(tabImpl, display);
             }
-            const auto visible = _IsTabVisibleInProjection(tabImpl, display);
-            if (tabImpl)
+        };
+        if (!refreshAll)
+        {
+            prepare(changedTab, nullptr);
+        }
+        else
+        {
+            for (uint32_t index = 0; index < _tabs.Size(); ++index)
             {
-                tabImpl->SetTabListPositionOperationsRestricted(positionOperationsBlocked);
-                tabImpl->SetTabPointerInteractionRestricted(_IsCollapsedVerticalRail());
+                prepare(_tabs.GetAt(index), tabStrip ? tabStrip->DisplayItemAt(index) : nullptr);
             }
+        }
+        const auto owners = _BuildTabListSnapshot();
+        const ::TerminalApp::TabListViewModel list{ owners };
+        struct HintCandidate
+        {
+            KeyChord chord;
+            winrt::hstring text;
+            ::TerminalApp::TabListViewModel::Target target;
+            bool last;
+        };
+        std::vector<HintCandidate> hints;
+        if (tabStrip)
+        {
+            for (const auto& binding : _settings.ActionMap().KeyBindings())
+            {
+                if (const auto target = _EvaluateTabSwitchTarget(binding.Key(), &list))
+                {
+                    const auto args = binding.Value().ActionAndArgs().Args().as<SwitchToTabArgs>();
+                    const auto index = args.TabIndex();
+                    // Overflow is also a last-owner fallback, not a direct ordinal hint.
+                    const auto last = index == UINT32_MAX ||
+                                      (_IsPresentedTabSwitchChord(binding.Key(), index) ?
+                                           !list.PresentedAt(index).has_value() :
+                                           index >= _tabs.Size());
+                    hints.push_back({ binding.Key(), KeyChordSerialization::ToString(binding.Key()), *target, last });
+                }
+            }
+        }
+        uint32_t presentedIndex = 0;
+        list.ForEachOwner([&](const auto& owner, const bool visible) {
+            const auto tab = _GetTabImpl(_tabs.GetAt(owner.canonicalIndex));
+            const auto item = tab->TabViewItem();
+            const auto display = tabStrip ? tabStrip->DisplayItemAt(owner.canonicalIndex) : nullptr;
+            tab->SetVisibleMoveTargets(_IsAgentScopeEffective() ?
+                                          std::optional{ std::pair{
+                                              list.MoveTarget(owner.identity, ::TerminalApp::TabListViewModel::MoveDirection::Previous).has_value(),
+                                              list.MoveTarget(owner.identity, ::TerminalApp::TabListViewModel::MoveDirection::Next).has_value() } } :
+                                          std::nullopt);
+            tab->SetTabListPositionOperationsRestricted(positionOperationsBlocked, _IsTabSearchEffective());
+            tab->SetTabPointerInteractionRestricted(_IsCollapsedVerticalRail());
             if (display)
             {
+                const auto canonicalHint = Automation::AutomationProperties::GetAcceleratorKey(item);
+                const HintCandidate* chosen = nullptr;
+                int bestRank = 5;
+                for (const auto& hint : hints)
+                {
+                    if (hint.target.identity != owner.identity)
+                    {
+                        continue;
+                    }
+                    const auto rank = hint.last ? 3 :
+                                      hint.text == canonicalHint ? 0 :
+                                      visible && _IsPresentedTabSwitchChord(hint.chord, presentedIndex) ? 1 : 2;
+                    if (rank < bestRank || (rank == bestRank && chosen && hint.text < chosen->text))
+                    {
+                        chosen = &hint;
+                        bestRank = rank;
+                    }
+                }
+                const auto chord = chosen ? chosen->text : winrt::hstring{};
+                winrt::get_self<TabStripDisplayItem>(display)->SetSidebarHints(
+                    std::pair{ chord, tab->ToolTipTextForKeyChord(chord) }, tabStrip->IsVerticalPresentation());
                 tabStrip->SetTabItemVisibility(display, visible);
             }
             else
             {
                 _tabStrip.SetTabItemVisibility(item, visible);
             }
-        };
-        if (!refreshAll)
-        {
-            apply(changedTab, nullptr);
-        }
-        else
-        {
-            for (uint32_t index = 0; index < _tabs.Size(); ++index)
-            {
-                apply(_tabs.GetAt(index), tabStrip ? tabStrip->DisplayItemAt(index) : nullptr);
-            }
-        }
+            presentedIndex += visible ? 1u : 0u;
+        });
 
         if (tabStrip)
         {
@@ -2240,6 +2296,63 @@ namespace winrt::TerminalApp::implementation
         {
             _UpdateSidebarHistoryCurrentSession();
         }
+    }
+
+    std::vector<::TerminalApp::TabListViewModel::OwnerEntry> TerminalPage::_BuildTabListSnapshot() const
+    {
+        std::vector<::TerminalApp::TabListViewModel::OwnerEntry> owners;
+        owners.reserve(_tabs.Size());
+        const auto strip = _isVerticalLayout && _tabStrip ?
+                               winrt::get_self<implementation::TabStrip>(_tabStrip) :
+                               nullptr;
+        for (uint32_t index = 0; index < _tabs.Size(); ++index)
+        {
+            const auto tab = _GetTabImpl(_tabs.GetAt(index));
+            const auto display = strip ? strip->DisplayItemAt(index) : nullptr;
+            owners.push_back({ tab.get(), index, tab->IsPinned(), _IsTabVisibleInProjection(tab, display) });
+        }
+        return owners;
+    }
+
+    bool TerminalPage::_IsPresentedTabSwitchChord(const KeyChord& chord, uint32_t index)
+    {
+        const auto vkey = chord.Vkey();
+        return chord.Modifiers() == (Windows::System::VirtualKeyModifiers::Control | Windows::System::VirtualKeyModifiers::Menu) &&
+               vkey >= '1' && vkey <= '9' &&
+               index == (vkey == '9' ? UINT32_MAX : vkey - '1');
+    }
+
+    std::optional<::TerminalApp::TabListViewModel::Target> TerminalPage::_EvaluateTabSwitchTarget(const KeyChord& chord, const ::TerminalApp::TabListViewModel* preparedList) const
+    {
+        if (_rearranging || _mutatingTabCollections || !_settings.ActionMap())
+        {
+            return std::nullopt;
+        }
+        const auto command = _settings.ActionMap().GetActionByKeyChord(chord);
+        if (!command || command.ActionAndArgs().Action() != ShortcutAction::SwitchToTab)
+        {
+            return std::nullopt;
+        }
+        const auto args = command.ActionAndArgs().Args().try_as<SwitchToTabArgs>();
+        if (!args || _tabs.Size() == 0)
+        {
+            return std::nullopt;
+        }
+        const auto index = args.TabIndex();
+        if (_isVerticalLayout && _IsPresentedTabSwitchChord(chord, index))
+        {
+            const auto owners = preparedList ? std::vector<::TerminalApp::TabListViewModel::OwnerEntry>{} : _BuildTabListSnapshot();
+            const ::TerminalApp::TabListViewModel localList{ owners };
+            const auto& list = preparedList ? *preparedList : localList;
+            if (index == UINT32_MAX)
+            {
+                return list.LastPresented();
+            }
+            const auto target = list.PresentedAt(index);
+            return target ? target : list.LastPresented();
+        }
+        const auto canonicalIndex = std::min(index, _tabs.Size() - 1);
+        return ::TerminalApp::TabListViewModel::Target{ _GetTabImpl(_tabs.GetAt(canonicalIndex)).get(), canonicalIndex };
     }
 
     void TerminalPage::_UpdateTabFilterStatus()
@@ -2546,6 +2659,7 @@ namespace winrt::TerminalApp::implementation
         {
             winrt::get_self<implementation::TabStrip>(_tabStrip)->SetTabPinned(tab->TabViewItem(), pinned);
         }
+        _ApplyTabListProjection(nullptr, false);
     }
 
     // Method Description:
@@ -2620,6 +2734,12 @@ namespace winrt::TerminalApp::implementation
 
             _mutatingTabCollections = false;
             endMutation.release();
+            // Selection events were suppressed during mutation; complete a real tab switch now.
+            // Reordering the selected tab or pinning must not repeat selection side effects.
+            if (selectMoved && previouslySelected != tabViewItem)
+            {
+                _OnSelectionChangedCore();
+            }
             _UpdateTabView();
             _ApplyTabListProjection(tab);
 

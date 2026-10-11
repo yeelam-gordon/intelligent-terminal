@@ -11,6 +11,7 @@
 
 #include "TerminalPage.g.h"
 #include "Tab.h"
+#include "TabListViewModel.h"
 #include "AppKeyBindings.h"
 #include "AppCommandlineArgs.h"
 #include "RenameWindowRequestedArgs.g.h"
@@ -967,6 +968,9 @@ namespace winrt::TerminalApp::implementation
             bool refreshPaneItems = true,
             bool updateBookkeeping = true);
         void _UpdateTabFilterStatus();
+        std::vector<::TerminalApp::TabListViewModel::OwnerEntry> _BuildTabListSnapshot() const;
+        static bool _IsPresentedTabSwitchChord(const Microsoft::Terminal::Control::KeyChord& chord, uint32_t index);
+        std::optional<::TerminalApp::TabListViewModel::Target> _EvaluateTabSwitchTarget(const Microsoft::Terminal::Control::KeyChord& chord, const ::TerminalApp::TabListViewModel* list = nullptr) const;
         void _AttachOrUpdateRichTabControl(const Microsoft::Terminal::Control::TermControl& control);
         void _DetachRichTabControl(const Microsoft::Terminal::Control::TermControl& control);
         void _NotifyRichTabControl(
