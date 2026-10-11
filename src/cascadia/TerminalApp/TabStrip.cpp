@@ -1228,6 +1228,7 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto root = sender.try_as<FrameworkElement>())
         {
+            _UpdateTabHeaderToolTipPlacementRect(root);
             if (const auto display = root.DataContext().try_as<TerminalApp::TabStripDisplayItem>())
             {
                 _updateDisplayItemVisuals(root, display);
@@ -1237,6 +1238,22 @@ namespace winrt::TerminalApp::implementation
                     ToolTipService::SetToolTip(close, box_value(RS_(L"TabCloseToolTip")));
                 }
             }
+        }
+    }
+
+    void TabStrip::OnTabHeaderSizeChanged(IInspectable const& sender, SizeChangedEventArgs const&)
+    {
+        if (const auto root = sender.try_as<FrameworkElement>())
+        {
+            _UpdateTabHeaderToolTipPlacementRect(root);
+        }
+    }
+
+    void TabStrip::_UpdateTabHeaderToolTipPlacementRect(FrameworkElement const& header)
+    {
+        if (const auto tooltip = ToolTipService::GetToolTip(header).try_as<ToolTip>())
+        {
+            tooltip.PlacementRect(Rect{ 0, 0, static_cast<float>(header.ActualWidth()), static_cast<float>(header.ActualHeight()) });
         }
     }
 

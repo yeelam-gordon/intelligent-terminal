@@ -502,9 +502,12 @@
                               DoubleTapped="OnTabHeaderDoubleTapped"
                               Loaded="OnTabHeaderLoaded"
                               PointerPressed="OnTabHeaderPointerPressed"
-                              Tapped="OnTabHeaderTapped"
-                              ToolTipService.Placement="Right"
-                              ToolTipService.ToolTip="{x:Bind ToolTipText, Mode=OneWay}">
+                              SizeChanged="OnTabHeaderSizeChanged"
+                              Tapped="OnTabHeaderTapped">
+                            <ToolTipService.ToolTip>
+                                <ToolTip Content="{x:Bind ToolTipText, Mode=OneWay}"
+                                         Placement="Right" />
+                            </ToolTipService.ToolTip>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
