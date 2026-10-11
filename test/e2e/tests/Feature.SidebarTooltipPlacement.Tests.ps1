@@ -156,11 +156,12 @@ Describe 'Feature: Sidebar tooltip placement' -Tag @('Feature', 'SidebarTooltipP
                 $fresh = @(Get-HeaderRows $layout)
                 ($fresh.Runtime -join '|') | Should -BeExactly ($rows.Runtime -join '|')
                 (($fresh | ForEach-Object { $_.Band.ToString() }) -join '|') | Should -BeExactly (($rows | ForEach-Object { $_.Band.ToString() }) -join '|')
-                $tip.Current.Name | Should -BeExactly $owner.Peer.Current.HelpText
-                $tip.Current.Name | Should -Match ([regex]::Escape($profiles[1].name))
-                if ($layout -eq 'horizontal') { $expectedText = $tip.Current.Name }
+                $text = $tip.Current.Name.Replace("`r`n", "`n")
+                $text | Should -BeExactly $owner.Peer.Current.HelpText.Replace("`r`n", "`n")
+                $text | Should -Match ([regex]::Escape($profiles[1].name))
+                if ($layout -eq 'horizontal') { $expectedText = $text }
                 else {
-                    $tip.Current.Name | Should -BeExactly $expectedText
+                    $text | Should -BeExactly $expectedText
                     foreach ($neighbor in @(0, 2)) {
                         $intersection = [Windows.Rect]::Intersect($tip.Current.BoundingRectangle, $fresh[$neighbor].Band)
                         $area = if ($intersection.IsEmpty) { 0 } else { $intersection.Width * $intersection.Height }

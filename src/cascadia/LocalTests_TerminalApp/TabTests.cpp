@@ -6162,6 +6162,18 @@ namespace TerminalAppLocalTests
         auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
 
         TestOnUIThread([&]() {
+            for (uint32_t index = 0; index < 3; ++index)
+            {
+                const winrt::hstring id{ std::wstring{ L"Terminal.SwitchToTab" } + std::to_wstring(index) };
+                const auto key = KeyChordSerialization::FromString(winrt::hstring{ std::wstring{ L"ctrl+alt+" } + std::to_wstring(index + 1) });
+                Command command;
+                command.ActionAndArgs(ActionAndArgs{ ShortcutAction::SwitchToTab, SwitchToTabArgs{ index } });
+                command.GenerateID();
+                page->_settings.ActionMap().AddAction(command, key);
+                page->_settings.UpdateCommandID(command, id);
+                VERIFY_ARE_EQUAL(KeyChordSerialization::ToString(key), KeyChordSerialization::ToString(page->_settings.ActionMap().GetKeyBindingForAction(id)));
+            }
+            page->SetSettings(page->_settings, false);
             NewTerminalArgs args;
             VERIFY_SUCCEEDED(page->_OpenNewTab(args));
             VERIFY_SUCCEEDED(page->_OpenNewTab(args));
@@ -6208,17 +6220,27 @@ namespace TerminalAppLocalTests
             const auto thirdContainer = page->_tabStrip.ContainerFromIndex(2).as<ListViewItem>();
             const auto thirdHeader = thirdContainer.ContentTemplateRoot().as<StackPanel>().Children().GetAt(0).as<Grid>();
             const auto verticalTooltipText = [&]() {
-                return std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader).as<ToolTip>().Content()) };
+                const auto tooltip = ToolTipService::GetToolTip(thirdHeader).as<ToolTip>();
+                const auto content = tooltip.Content().as<TextBlock>();
+                VERIFY_ARE_EQUAL(FlowDirection::LeftToRight, tooltip.FlowDirection());
+                VERIFY_ARE_EQUAL(thirdHeader.FlowDirection(), content.FlowDirection());
+                VERIFY_ARE_EQUAL(content.Text(), Automation::AutomationProperties::GetName(tooltip));
+                return std::wstring{ content.Text() };
             };
             const auto verifyPlacementRect = [&]() {
                 const auto tooltip = ToolTipService::GetToolTip(thirdHeader).as<ToolTip>();
+                const auto target = thirdHeader.XamlRoot().Content().as<FrameworkElement>();
+                VERIFY_IS_TRUE(ToolTipService::GetPlacementTarget(thirdHeader) == target);
+                VERIFY_ARE_EQUAL(FlowDirection::LeftToRight, target.FlowDirection());
                 VERIFY_ARE_EQUAL(Primitives::PlacementMode::Right, tooltip.Placement());
                 VERIFY_IS_NOT_NULL(tooltip.PlacementRect());
                 const auto rect = tooltip.PlacementRect().Value();
-                VERIFY_ARE_EQUAL(0.0f, rect.X);
-                VERIFY_ARE_EQUAL(0.0f, rect.Y);
-                VERIFY_ARE_EQUAL(static_cast<float>(thirdHeader.ActualWidth()), rect.Width);
-                VERIFY_ARE_EQUAL(static_cast<float>(thirdHeader.ActualHeight()), rect.Height);
+                const auto expected = thirdHeader.TransformToVisual(target).TransformBounds(
+                    winrt::Windows::Foundation::Rect{ 0, 0, static_cast<float>(thirdHeader.ActualWidth()), static_cast<float>(thirdHeader.ActualHeight()) });
+                VERIFY_ARE_EQUAL(expected.X, rect.X);
+                VERIFY_ARE_EQUAL(expected.Y, rect.Y);
+                VERIFY_ARE_EQUAL(expected.Width, rect.Width);
+                VERIFY_ARE_EQUAL(expected.Height, rect.Height);
             };
             verifyPlacementRect();
             const auto thirdDisplay = thirdContainer.Content().as<winrt::TerminalApp::TabStripDisplayItem>();
@@ -6231,6 +6253,12 @@ namespace TerminalAppLocalTests
             thirdDisplay.Presentation().AutomationName(originalName);
             VERIFY_ARE_EQUAL(originalName, Automation::AutomationProperties::GetName(thirdContainer));
             const auto verticalTooltip = verticalTooltipText();
+            const auto originalFlowDirection = thirdHeader.FlowDirection();
+            thirdHeader.FlowDirection(FlowDirection::RightToLeft);
+            VERIFY_ARE_EQUAL(verticalTooltip, verticalTooltipText());
+            thirdHeader.FlowDirection(FlowDirection::LeftToRight);
+            VERIFY_ARE_EQUAL(verticalTooltip, verticalTooltipText());
+            thirdHeader.FlowDirection(originalFlowDirection);
             VERIFY_ARE_EQUAL(horizontalTooltip, verticalTooltip);
             VERIFY_ARE_EQUAL(winrt::hstring{ verticalTooltip }, thirdDisplay.ToolTipText());
             VERIFY_ARE_NOT_EQUAL(std::wstring::npos, verticalTooltip.find(L"Third tab"));

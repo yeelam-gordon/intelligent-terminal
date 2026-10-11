@@ -1228,7 +1228,7 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto root = sender.try_as<FrameworkElement>())
         {
-            _UpdateTabHeaderToolTipPlacementRect(root);
+            _UpdateTabHeaderToolTipPlacement(root);
             if (const auto display = root.DataContext().try_as<TerminalApp::TabStripDisplayItem>())
             {
                 _updateDisplayItemVisuals(root, display);
@@ -1245,15 +1245,33 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto root = sender.try_as<FrameworkElement>())
         {
-            _UpdateTabHeaderToolTipPlacementRect(root);
+            _UpdateTabHeaderToolTipPlacement(root);
         }
     }
 
-    void TabStrip::_UpdateTabHeaderToolTipPlacementRect(FrameworkElement const& header)
+    void TabStrip::OnTabHeaderPointerEntered(IInspectable const& sender, Input::PointerRoutedEventArgs const&)
     {
+        _UpdateTabHeaderToolTipPlacement(sender.as<FrameworkElement>());
+    }
+
+    void TabStrip::OnTabHeaderGotFocus(IInspectable const& sender, RoutedEventArgs const&)
+    {
+        _UpdateTabHeaderToolTipPlacement(sender.as<FrameworkElement>());
+    }
+
+    void TabStrip::_UpdateTabHeaderToolTipPlacement(FrameworkElement const& header)
+    {
+        const auto xamlRoot = header.XamlRoot();
+        if (!xamlRoot)
+        {
+            return;
+        }
+        const auto target = xamlRoot.Content().as<FrameworkElement>();
         if (const auto tooltip = ToolTipService::GetToolTip(header).try_as<ToolTip>())
         {
-            tooltip.PlacementRect(Rect{ 0, 0, static_cast<float>(header.ActualWidth()), static_cast<float>(header.ActualHeight()) });
+            ToolTipService::SetPlacementTarget(header, target);
+            tooltip.PlacementRect(header.TransformToVisual(target).TransformBounds(
+                Rect{ 0, 0, static_cast<float>(header.ActualWidth()), static_cast<float>(header.ActualHeight()) }));
         }
     }
 
