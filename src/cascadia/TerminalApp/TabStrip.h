@@ -9,7 +9,6 @@
 #include "winrt/Windows.UI.ViewManagement.h"
 
 #include "TabStrip.g.h"
-#include "InwardToolTipPlacementConverter.g.h"
 #include "SidebarFiltersViewModel.g.h"
 #include "TabStripSelectionChangedEventArgs.g.h"
 #include "TabStripCloseRequestedEventArgs.g.h"
@@ -467,8 +466,6 @@ namespace winrt::TerminalApp::implementation
                                         winrt::Windows::UI::Xaml::Controls::ContainerContentChangingEventArgs const& e);
         void OnTabHeaderLoaded(winrt::Windows::Foundation::IInspectable const& sender,
                                winrt::Windows::UI::Xaml::RoutedEventArgs const& e);
-        void OnTabHeaderSizeChanged(winrt::Windows::Foundation::IInspectable const& sender,
-                                    winrt::Windows::UI::Xaml::SizeChangedEventArgs const& e);
         void OnRowHeaderLoaded(winrt::Windows::Foundation::IInspectable const& sender,
                                winrt::Windows::UI::Xaml::RoutedEventArgs const& e);
         void OnHeaderRenameEnded(winrt::Windows::Foundation::IInspectable const& sender,
@@ -533,7 +530,6 @@ namespace winrt::TerminalApp::implementation
 
     private:
         TerminalApp::TabStripOrientation _orientation{ TerminalApp::TabStripOrientation::Vertical };
-        static void _UpdateTabHeaderToolTipPlacement(winrt::Windows::Foundation::IInspectable const& sender);
         bool _tabsVisible{ true };
         bool _isRailCollapsed{ false };
         bool _isVerticalPresentation{ true };
@@ -681,22 +677,6 @@ namespace winrt::TerminalApp::implementation
     };
 }
 
-namespace winrt::TerminalApp::implementation
-{
-    struct InwardToolTipPlacementConverter : InwardToolTipPlacementConverterT<InwardToolTipPlacementConverter>
-    {
-        InwardToolTipPlacementConverter() = default;
-        winrt::Windows::Foundation::IInspectable Convert(winrt::Windows::Foundation::IInspectable const& value,
-                                                         winrt::Windows::UI::Xaml::Interop::TypeName const& targetType,
-                                                         winrt::Windows::Foundation::IInspectable const& parameter,
-                                                         winrt::hstring const& language);
-        winrt::Windows::Foundation::IInspectable ConvertBack(winrt::Windows::Foundation::IInspectable const& value,
-                                                             winrt::Windows::UI::Xaml::Interop::TypeName const& targetType,
-                                                             winrt::Windows::Foundation::IInspectable const& parameter,
-                                                             winrt::hstring const& language);
-    };
-}
-
 namespace winrt::TerminalApp::factory_implementation
 {
     BASIC_FACTORY(SidebarFiltersViewModel);
@@ -704,5 +684,4 @@ namespace winrt::TerminalApp::factory_implementation
     BASIC_FACTORY(TabStripHistoryHeader);
     BASIC_FACTORY(TabStripHistoryHeaderAutomationPeer);
     BASIC_FACTORY(TabStrip);
-    BASIC_FACTORY(InwardToolTipPlacementConverter);
 }
