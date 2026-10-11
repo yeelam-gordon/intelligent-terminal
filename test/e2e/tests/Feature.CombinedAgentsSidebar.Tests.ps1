@@ -475,7 +475,10 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 }
                 if ($ResumeSession) { $config.ITE2E_SHIM_RESUME_SESSION = $ResumeSession }
                 $gate = Join-Path $folder 'release-native-hook'
-                if ($HoldHook) { $config.ITE2E_SHIM_SESSION_START_GATE = $gate }
+                if ($HoldHook) {
+                    $config.ITE2E_SHIM_SESSION_START_GATE = $gate
+                    $config.ITE2E_SHIM_SUPPRESS_TITLE_BEFORE_HOOK = '1'
+                }
                 $header = Join-Path $folder 'config.h'
                 @($config.Keys | ForEach-Object { "#define $_ LR`"ite2e($($config[$_]))ite2e`"" }) |
                     Set-Content -LiteralPath $header -Encoding ascii
@@ -1978,6 +1981,13 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         $pane = $null
         $primaryFailure = $null
         try {
+            $resolvedPath = Join-Path $fixture.Folder 'resolved-native-executable.json'
+            $command = "(Get-Command copilot.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source | ConvertTo-Json | Set-Content -LiteralPath '$($resolvedPath.Replace("'", "''"))'"
+            Invoke-RunCommand -App $script:app -SessionId $script:tabs[0].session_id -Command $command -SettleSec 5 | Out-Null
+            Wait-Until -TimeoutSec 10 -Because 'the owning Terminal shell resolves the copied native fixture before activation' -Condition {
+                Test-Path -LiteralPath $resolvedPath
+            } | Out-Null
+            (Get-Content -LiteralPath $resolvedPath -Raw | ConvertFrom-Json) | Should -Be $resolver
             $start = [Diagnostics.ProcessStartInfo]::new($fixture.Shim)
             $start.UseShellExecute = $false
             $start.CreateNoWindow = $true
