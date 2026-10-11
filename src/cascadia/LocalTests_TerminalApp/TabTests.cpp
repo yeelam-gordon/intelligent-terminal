@@ -6173,6 +6173,11 @@ namespace TerminalAppLocalTests
                 page->_settings.UpdateCommandID(command, id);
                 VERIFY_ARE_EQUAL(KeyChordSerialization::ToString(key), KeyChordSerialization::ToString(page->_settings.ActionMap().GetKeyBindingForAction(id)));
             }
+            Command lastTabCommand;
+            lastTabCommand.ActionAndArgs(ActionAndArgs{ ShortcutAction::SwitchToTab, SwitchToTabArgs{ std::numeric_limits<uint32_t>::max() } });
+            lastTabCommand.GenerateID();
+            page->_settings.ActionMap().AddAction(lastTabCommand, KeyChordSerialization::FromString(L"ctrl+alt+9"));
+            page->_settings.UpdateCommandID(lastTabCommand, L"Terminal.SwitchToLastTab");
             page->SetSettings(page->_settings, false);
             NewTerminalArgs args;
             VERIFY_SUCCEEDED(page->_OpenNewTab(args));
