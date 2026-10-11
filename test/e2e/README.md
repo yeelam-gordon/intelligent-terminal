@@ -19,6 +19,30 @@ The live smoke proved separate hosts, package-local CLIs, and sidebar search
 invoke/filter/clear. It did not validate concurrent full suites or mark release
 checklist items complete.
 
+### Focused owning-tab movement container
+
+`Feature.CombinedAgentsSidebar.Tests.ps1` accepts the optional Pester container
+data switch `OwningTabMoveOnly`. It discovers only C425 (one case), retains its
+complete setup, history import, cleanup and movement/content/session oracles,
+and omits only the unrelated eight helper seeds and 30-second startup survival
+observation. Default discovery remains 33 cases; the existing
+`ITE2E_HISTORY_INDICATORS_ONLY` behavior is unchanged. A broad filter cannot run
+seed-dependent cases in the focused container.
+
+After pinning the explicitly selected package and exact build/ownership
+environment as required by the suite, run:
+
+```powershell
+$cfg = New-PesterConfiguration
+$cfg.Run.Container = New-PesterContainer -Path test\e2e\tests\Feature.CombinedAgentsSidebar.Tests.ps1 `
+    -Data @{ OwningTabMoveOnly = $true }
+$cfg.Filter.FullName = 'Feature: combined Agents sidebar.Agents view moves whole owning tabs without changing sessions'
+Invoke-Pester -Configuration $cfg
+```
+
+This focused run does not validate the other 32 cases or grant their checklist
+coverage. Use `Run.SkipRun = $true` for non-live discovery only.
+
 ## Release-checklist coverage
 
 ### Startup and failure ownership

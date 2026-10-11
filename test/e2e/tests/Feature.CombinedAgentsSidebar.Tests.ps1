@@ -1,5 +1,7 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 
+param([switch]$OwningTabMoveOnly)
+
 BeforeAll {
 function Wait-CombinedCliLaunchRecord {
     param([Parameter(Mandatory)][string]$Path, [int]$TimeoutSec = 20)
@@ -1074,7 +1076,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         (Get-CombinedElement VerticalTabsHeader).Current.Name | Should -Be 'Tabs'
         Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence 'startup-header.png') | Out-Null
         $survival = [Diagnostics.Stopwatch]::StartNew()
-        $survivalSeconds = if ($env:ITE2E_HISTORY_INDICATORS_ONLY -eq '1') { 0 } else { 30 }
+        $survivalSeconds = if ($OwningTabMoveOnly -or $env:ITE2E_HISTORY_INDICATORS_ONLY -eq '1') { 0 } else { 30 }
         while ($survival.Elapsed.TotalSeconds -lt $survivalSeconds) {
             Get-Process -Id $script:app.Pid -ErrorAction Stop | Out-Null
             Start-Sleep -Milliseconds 500
@@ -1084,7 +1086,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             pid = $script:app.Pid; hwnd = $script:app.Hwnd; observed_seconds = $survival.Elapsed.TotalSeconds
             header = 'Tabs'; agents_round_trip = $true
         } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:evidence 'startup-survival.json')
-        $seedIndices = if ($env:ITE2E_HISTORY_INDICATORS_ONLY -eq '1') { @() } else { 0..7 }
+        $seedIndices = if ($OwningTabMoveOnly -or $env:ITE2E_HISTORY_INDICATORS_ONLY -eq '1') { @() } else { 0..7 }
         $script:tabs = @(foreach ($i in $seedIndices) {
             $existingPaneIds = @(Get-AgentPaneSessions -App $script:app).PaneSessionId
             $tab = New-WtTab -App $script:app -Title "$script:marker-open-$('{0:D2}' -f $i)" -Command 'pwsh.exe -NoLogo -NoProfile -NoExit'
@@ -1229,6 +1231,8 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         }
     }
 
+    # Do not discover seed-dependent cases when the owning-tab container omits their setup.
+    if (-not $OwningTabMoveOnly) {
     Context 'Independent scope filters and global search' {
         BeforeAll {
             $script:scopeClock = [Diagnostics.Stopwatch]::StartNew()
@@ -1776,6 +1780,8 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         }
     }
 
+    }
+
     It 'Agents view moves whole owning tabs without changing sessions' {
         $fixture = New-CombinedCliFixture 'tab-move'
         $created = [Collections.Generic.List[object]]::new()
@@ -2097,6 +2103,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
         }
     }
 
+    if (-not $OwningTabMoveOnly) {
     It 'History background indicator restores the whole original tab (<Status>)' -ForEach @(
         @{ Status = 'Idle' }, @{ Status = 'Working' }
     ) {
@@ -3169,5 +3176,6 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
             Set-WtPaneFocus -App $script:app -SessionId $tab.session_id
             }
         }
+    }
     }
 }
