@@ -6164,9 +6164,49 @@ namespace TerminalAppLocalTests
 
     void TabTests::VerticalTabTooltipsExposeStableShortcuts()
     {
-        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const CascadiaSettings settings{ LR"({
+            "defaultProfile": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+            "showTabsInTitlebar": false,
+            "tabLayout": "vertical",
+            "profiles": [{
+                "name": "profile0",
+                "guid": "{6239a42c-1111-49a3-80bd-e8fdd045185c}",
+                "closeOnExit": "never"
+            }]
+        })",
+                                         LR"({
+            "actions": [
+                { "command": { "action": "switchToTab", "index": 0 }, "id": "Terminal.SwitchToTab0" },
+                { "command": { "action": "switchToTab", "index": 1 }, "id": "Terminal.SwitchToTab1" },
+                { "command": { "action": "switchToTab", "index": 2 }, "id": "Terminal.SwitchToTab2" },
+                { "command": { "action": "switchToTab", "index": 3 }, "id": "Terminal.SwitchToTab3" },
+                { "command": { "action": "switchToTab", "index": 4 }, "id": "Terminal.SwitchToTab4" },
+                { "command": { "action": "switchToTab", "index": 5 }, "id": "Terminal.SwitchToTab5" },
+                { "command": { "action": "switchToTab", "index": 6 }, "id": "Terminal.SwitchToTab6" },
+                { "command": { "action": "switchToTab", "index": 7 }, "id": "Terminal.SwitchToTab7" },
+                { "command": { "action": "switchToTab", "index": 4294967295 }, "id": "Terminal.SwitchToLastTab" }
+            ],
+            "keybindings": [
+                { "keys": "ctrl+alt+1", "id": "Terminal.SwitchToTab0" },
+                { "keys": "ctrl+alt+2", "id": "Terminal.SwitchToTab1" },
+                { "keys": "ctrl+alt+3", "id": "Terminal.SwitchToTab2" },
+                { "keys": "ctrl+alt+4", "id": "Terminal.SwitchToTab3" },
+                { "keys": "ctrl+alt+5", "id": "Terminal.SwitchToTab4" },
+                { "keys": "ctrl+alt+6", "id": "Terminal.SwitchToTab5" },
+                { "keys": "ctrl+alt+7", "id": "Terminal.SwitchToTab6" },
+                { "keys": "ctrl+alt+8", "id": "Terminal.SwitchToTab7" },
+                { "keys": "ctrl+alt+9", "id": "Terminal.SwitchToLastTab" }
+            ]
+        })" };
+        winrt::com_ptr<winrt::TerminalApp::implementation::TerminalPage> page;
+        _initializeTerminalPage(page, settings);
 
         TestOnUIThread([&]() {
+            const auto actionMap = settings.ActionMap();
+            VERIFY_IS_NOT_NULL(actionMap.GetKeyBindingForAction(L"Terminal.SwitchToTab0"));
+            VERIFY_IS_NOT_NULL(actionMap.GetKeyBindingForAction(L"Terminal.SwitchToTab2"));
+            VERIFY_IS_NOT_NULL(actionMap.GetKeyBindingForAction(L"Terminal.SwitchToLastTab"));
+            VERIFY_IS_TRUE(actionMap.KeyBindings().Size() >= 9u);
             NewTerminalArgs args;
             VERIFY_SUCCEEDED(page->_OpenNewTab(args));
             VERIFY_SUCCEEDED(page->_OpenNewTab(args));
@@ -6268,6 +6308,7 @@ namespace TerminalAppLocalTests
             page->_tabStrip.IsRailCollapsed(false);
 
             page->_tabSearchActive = false;
+            page->_tabSearchQuery = L"";
             page->_ApplyTabListProjection();
             for (auto i = 0; i < 6; ++i)
             {
@@ -11525,21 +11566,26 @@ namespace TerminalAppLocalTests
 
     void TabTests::VerticalTabStripCompatibilitySetPaneItemsPreservesHeaderProgress()
     {
-        winrt::TerminalApp::TabStrip strip;
-        Grid host;
-        winrt::MUX::Controls::TabViewItem tab;
+        winrt::TerminalApp::TabStrip strip{ nullptr };
+        Grid host{ nullptr };
+        winrt::MUX::Controls::TabViewItem tab{ nullptr };
+        winrt::TerminalApp::TerminalTabStatus tabStatus{ nullptr };
+        winrt::TerminalApp::TabHeaderControl header{ nullptr };
 
         TestOnUIThread([&]() {
+            strip = winrt::TerminalApp::TabStrip{};
+            host = Grid{};
+            tab = winrt::MUX::Controls::TabViewItem{};
             host.Width(240);
             host.Height(200);
             strip.Width(240);
             strip.Height(200);
 
-            winrt::TerminalApp::TerminalTabStatus tabStatus;
+            tabStatus = winrt::TerminalApp::TerminalTabStatus{};
             tabStatus.IsProgressRingActive(true);
             tabStatus.ProgressValue(60);
 
-            winrt::TerminalApp::TabHeaderControl header;
+            header = winrt::TerminalApp::TabHeaderControl{};
             header.Title(L"Split tab");
             header.TabStatus(tabStatus);
             tab.Header(header);
@@ -11559,7 +11605,14 @@ namespace TerminalAppLocalTests
             Window::Current().Content(host);
             Window::Current().Activate();
             host.UpdateLayout();
+        });
 
+        _waitForContentTransferReviewUI([&]() {
+            host.UpdateLayout();
+            return strip.IsLoaded() && strip.ContainerFromIndex(0) != nullptr;
+        });
+
+        TestOnUIThread([&]() {
             const auto stripImpl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(strip);
             const auto container = strip.ContainerFromIndex(0).as<ListViewItem>();
             const auto display = stripImpl->ItemsList().ItemFromContainer(container).as<winrt::TerminalApp::TabStripDisplayItem>();
