@@ -392,9 +392,9 @@ Describe 'Combined owning-tab container selection' -Tag 'Unit' {
     }
 
     It 'discovers <Count> cases for <Mode> without running live setup' -ForEach @(
-        @{ Mode = 'default'; Focused = $false; History = ''; Count = 33 },
+        @{ Mode = 'default'; Focused = $false; History = ''; Count = 34 },
         @{ Mode = 'owning-tab only'; Focused = $true; History = ''; Count = 1 },
-        @{ Mode = 'history compatibility'; Focused = $false; History = '1'; Count = 33 },
+        @{ Mode = 'history compatibility'; Focused = $false; History = '1'; Count = 34 },
         @{ Mode = 'focused history compatibility'; Focused = $true; History = '1'; Count = 1 }
     ) {
         $env:ITE2E_HISTORY_INDICATORS_ONLY = $History
