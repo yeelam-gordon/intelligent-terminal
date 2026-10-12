@@ -117,6 +117,10 @@ authenticated ACP agents. Available suites (results depend on the selected packa
 | `Feature.AgentPaneMove.Tests.ps1` | PR #429: `/move` stays per-tab, preserves global position, and restores agent input focus | 1 |
 
 **Coverage and results are tracked by stable checklist IDs and generated release reports.**
+Native-resume metadata coverage verifies only the known provider/session ID
+and actual created-pane binding before the birth hook, including retention
+under **Agents only**. Idle is the existing initial baseline, not proof of CLI
+readiness or ongoing activity; later activity still depends on hooks.
 The updated combined-sidebar scope/search cases reuse that suite's owned Dev
 startup, deterministic history fixture, native resume fixtures and teardown.
 The related action, session-refresh, delegated-identity, provider-appearance,
