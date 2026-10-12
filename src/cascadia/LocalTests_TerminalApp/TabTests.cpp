@@ -6487,17 +6487,17 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_NOT_EQUAL(horizontalTooltip, verticalTooltip);
             VERIFY_ARE_EQUAL(winrt::hstring{ verticalTooltip }, thirdDisplay.ToolTipText());
             VERIFY_ARE_NOT_EQUAL(std::wstring::npos, verticalTooltip.find(L"Third tab"));
-            VERIFY_ARE_NOT_EQUAL(std::wstring::npos, verticalTooltip.find(L"ctrl+alt+1"));
+            VERIFY_ARE_NOT_EQUAL(std::wstring::npos, verticalTooltip.find(L"ctrl+alt+3"));
             VERIFY_ARE_EQUAL(winrt::hstring{ verticalTooltip }, Automation::AutomationProperties::GetHelpText(thirdContainer));
             VERIFY_IS_NULL(ToolTipService::GetToolTip(thirdContainer));
             VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+3" }, Automation::AutomationProperties::GetAcceleratorKey(third->TabViewItem()));
             VERIFY_ARE_EQUAL(
-                winrt::hstring{ L"ctrl+alt+1" },
+                winrt::hstring{ L"ctrl+alt+3" },
                 Automation::AutomationProperties::GetAcceleratorKey(thirdContainer));
 
             third->SetTabText(L"Renamed third tab");
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(third->ToolTipTextForKeyChord(L"ctrl+alt+1"), thirdDisplay.ToolTipText());
+            VERIFY_ARE_EQUAL(third->ToolTipTextForKeyChord(L"ctrl+alt+3"), thirdDisplay.ToolTipText());
             VERIFY_ARE_EQUAL(thirdDisplay.ToolTipText(), winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)));
             VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+3" }, Automation::AutomationProperties::GetAcceleratorKey(third->TabViewItem()));
 
@@ -6507,18 +6507,18 @@ namespace TerminalAppLocalTests
             presentation.accessibilityText = presentation.tooltip;
             third->SetRichTabPresentation(presentation);
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(third->ToolTipTextForKeyChord(L"ctrl+alt+1"), thirdDisplay.ToolTipText());
+            VERIFY_ARE_EQUAL(third->ToolTipTextForKeyChord(L"ctrl+alt+3"), thirdDisplay.ToolTipText());
             VERIFY_ARE_EQUAL(thirdDisplay.ToolTipText(), winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)));
             VERIFY_ARE_NOT_EQUAL(std::wstring::npos, std::wstring{ thirdDisplay.ToolTipText() }.find(presentation.tooltip));
 
             const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
             strip->SyncTabPresentation(thirdDisplay);
             page->UpdateLayout();
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+1" }, Automation::AutomationProperties::GetAcceleratorKey(thirdContainer));
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+1" }, thirdDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+3" }, Automation::AutomationProperties::GetAcceleratorKey(thirdContainer));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+3" }, thirdDisplay.AcceleratorKey());
             VERIFY_ARE_NOT_EQUAL(
                 std::wstring::npos,
-                std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) }.find(L"ctrl+alt+1"));
+                std::wstring{ winrt::unbox_value<winrt::hstring>(ToolTipService::GetToolTip(thirdHeader)) }.find(L"ctrl+alt+3"));
 
             page->_SelectTab(2);
             VERIFY_IS_TRUE(page->_selectedTabItem() == third->TabViewItem());
@@ -6618,19 +6618,20 @@ namespace TerminalAppLocalTests
             verifyTarget(hidden, hiddenDisplay);
             verifyTarget(first, firstDisplay);
             verifyTarget(last, lastDisplay);
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+shift+1" }, hiddenDisplay.AcceleratorKey());
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, lastDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetAcceleratorKey(hidden->TabViewItem()), hiddenDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+4" }, lastDisplay.AcceleratorKey());
             const auto canonicalKey = Automation::AutomationProperties::GetAcceleratorKey(last->TabViewItem());
             const auto canonicalHelp = Automation::AutomationProperties::GetHelpText(last->TabViewItem());
             strip->SyncTabPresentation(lastDisplay);
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, lastDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+4" }, lastDisplay.AcceleratorKey());
             VERIFY_ARE_EQUAL(canonicalKey, Automation::AutomationProperties::GetAcceleratorKey(last->TabViewItem()));
             VERIFY_ARE_EQUAL(canonicalHelp, Automation::AutomationProperties::GetHelpText(last->TabViewItem()));
 
             bind(L"ctrl+alt+1", 3);
             page->_RefreshUIForSettingsReload();
             verifyTarget(first, firstDisplay);
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+shift+2" }, firstDisplay.AcceleratorKey());
+            VERIFY_IS_TRUE(page->_EvaluateTabSwitchTarget(two)->identity == first.get());
+            VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetAcceleratorKey(first->TabViewItem()), firstDisplay.AcceleratorKey());
             VERIFY_IS_TRUE(page->_EvaluateTabSwitchTarget(one)->identity == last.get());
             map.DeleteKeyBinding(two);
             page->_RefreshUIForSettingsReload();
@@ -6673,15 +6674,15 @@ namespace TerminalAppLocalTests
             page->_tabSearchQuery = L"Visible";
             page->_ApplyTabListProjection();
             const auto returnedDisplay = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)->DisplayItemForTab(last->TabViewItem());
-            verifyTarget(last, returnedDisplay);
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, returnedDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(winrt::hstring{}, returnedDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(last->ToolTipTextForKeyChord(L""), returnedDisplay.ToolTipText());
             VERIFY_IS_TRUE(returnedDisplay.Presentation() == presentation);
             VERIFY_IS_TRUE(last->TabViewItem().Header() == originalHeader);
             VERIFY_IS_TRUE(last->GetRootPane() == originalRoot);
             page->_TryMoveTab(3, 1);
             const auto reorderedDisplay = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)->DisplayItemForTab(last->TabViewItem());
             verifyTarget(last, reorderedDisplay);
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+1" }, reorderedDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, reorderedDisplay.AcceleratorKey());
             page->_tabSearchActive = false;
             page->_ApplyTabListProjection();
             page->_SetTabPinned(last, true);
@@ -14547,6 +14548,37 @@ namespace TerminalAppLocalTests
             page->_tabStrip.SearchQuery(L"no-owner-matches-this-query");
             page->_ApplyTabListProjection();
             number(L"ctrl+alt+1", uint32_t{ 0 });
+            VERIFY_IS_TRUE(keys->TryKeyChord(one));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == first, L"Zero Search results retain the first base-filter target.");
+            VERIFY_IS_TRUE(keys->TryKeyChord(two));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last);
+            VERIFY_IS_TRUE(keys->TryKeyChord(nine));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last);
+            page->_tabStrip.SidebarFilters().ShowAgentsOnly(false);
+            page->_ApplyTabListProjection();
+            VERIFY_IS_TRUE(page->_EvaluateTabSwitchTarget(nine)->canonicalIndex == 2u);
+            VERIFY_IS_TRUE(keys->TryKeyChord(one));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == hidden, L"All-filter numbering also ignores zero Search results.");
+            VERIFY_IS_TRUE(keys->TryKeyChord(two));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == first);
+            VERIFY_IS_TRUE(keys->TryKeyChord(nine));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last);
+            page->_tabStrip.SidebarFilters().ShowAgentsOnly(true);
+            hidden->SetTabText(L"Ordinary global result");
+            page->_tabStrip.SearchQuery(L"Ordinary global result");
+            page->_ApplyTabListProjection();
+            VERIFY_IS_TRUE(page->_IsTabVisibleInProjection(hidden), L"Agents Search still displays an ordinary global result.");
+            VERIFY_IS_TRUE(keys->TryKeyChord(one));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == first);
+            VERIFY_IS_TRUE(keys->TryKeyChord(two));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last);
+            VERIFY_IS_TRUE(keys->TryKeyChord(nine));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == last);
+            VERIFY_IS_TRUE(page->_actionDispatch->DoAction({ ShortcutAction::SwitchToTab, SwitchToTabArgs{ uint32_t{ 0 } } }));
+            VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == hidden);
+            VERIFY_IS_TRUE(keys->TryKeyChord(nine));
+            page->_paneAgentSessions.clear();
+            page->_ApplyTabListProjection();
             page->_OnSelectionChangedCore();
             page->UpdateLayout();
             const auto selected = page->_selectedTabItem();
@@ -14556,10 +14588,11 @@ namespace TerminalAppLocalTests
             uint32_t selectedContentIndex{};
             VERIFY_IS_TRUE(page->_tabContent.Children().IndexOf(content, selectedContentIndex));
             const auto verifyNoTarget = [&]() {
+                const auto expectedBindings = page->_paneAgentSessions;
                 for (const auto& chord : { one, two, nine })
                 {
                     VERIFY_IS_FALSE(page->_EvaluateTabSwitchTarget(chord).has_value());
-                    VERIFY_IS_TRUE(keys->TryKeyChord(chord), L"Recognized navigation with no presented owner is consumed.");
+                    VERIFY_IS_TRUE(keys->TryKeyChord(chord), L"Recognized navigation with no navigation owner is consumed.");
                     VERIFY_ARE_EQUAL(3u, page->_tabs.Size());
                     VERIFY_IS_TRUE(page->_tabs.GetAt(0) == *hidden);
                     VERIFY_IS_TRUE(page->_tabs.GetAt(1) == *first);
@@ -14582,8 +14615,8 @@ namespace TerminalAppLocalTests
                         VERIFY_ARE_EQUAL(snapshots[i].ContentId, current[i].ContentId);
                         VERIFY_ARE_EQUAL(snapshots[i].IsActive, current[i].IsActive);
                     }
-                    VERIFY_ARE_EQUAL(bindings.size(), page->_paneAgentSessions.size());
-                    for (const auto& [session, binding] : bindings)
+                    VERIFY_ARE_EQUAL(expectedBindings.size(), page->_paneAgentSessions.size());
+                    for (const auto& [session, binding] : expectedBindings)
                     {
                         VERIFY_ARE_EQUAL(binding.sessionId, page->_paneAgentSessions.at(session).sessionId);
                         VERIFY_ARE_EQUAL(binding.agent, page->_paneAgentSessions.at(session).agent);
@@ -14591,6 +14624,7 @@ namespace TerminalAppLocalTests
                 }
             };
             verifyNoTarget();
+            page->_paneAgentSessions = bindings;
             page->_tabStrip.SearchQuery(L"");
             page->_tabStrip.SearchActive(false);
             page->_ApplyTabListProjection();

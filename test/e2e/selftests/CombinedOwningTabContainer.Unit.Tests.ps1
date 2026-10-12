@@ -142,19 +142,23 @@ Describe 'Combined owning-tab container selection' -Tag 'Unit' {
     It 'uses a bounded positive physical matrix with all focus origins and global ordinary search' {
         $assignment = Get-CombinedModeAssignment numberCases
         . ([scriptblock]::Create($assignment))
-        $numberCases | Should -HaveCount 7
+        $numberCases | Should -HaveCount 9
         @($numberCases.Origin | Sort-Object -Unique) | Should -Be @('Helper', 'ItemsList', 'Shell')
-        @($numberCases.Search | Sort-Object -Unique) | Should -Be @('Closed', 'Empty', 'Filtered', 'Ordinary')
+        @($numberCases.Search | Sort-Object -Unique) | Should -Be @('Closed', 'Empty', 'Filtered', 'NoMatch', 'Ordinary')
         @($numberCases.Number | Sort-Object -Unique) | Should -Be @(1, 2, 9)
         @($numberCases | Where-Object { $_.AgentsOnly -and $_.Search -eq 'Ordinary' }) | Should -HaveCount 1
+        @($numberCases | Where-Object { $_.AgentsOnly -and $_.Search -eq 'NoMatch' }).Number | Should -Be @(1, 9)
         $body = $script:suiteAst.Find({ param($node)
             $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
                 $node.Name -eq 'Assert-MoveNumberKeys'
         }, $true).Body.Extent.Text
         $body | Should -Match 'Should -Not -Contain \$expected'
-        $body | Should -Match 'if \(\$number -eq 9\) \{ \$targets\[-1\] \}'
+        $body | Should -Match 'if \(\$number -eq 9\) \{ \$navigationTargets\[-1\] \}'
         $body | Should -Match '\$agentsOnly -and \[string\]::IsNullOrEmpty\(\$query\)'
-        $body | Should -Match '@\(Get-CombinedRows Live\)\.Count \| Should -Be \$targets.Count'
+        $body | Should -Match '@\(Get-CombinedRows Live\)\.Count \| Should -Be \$displayOwners.Count'
+        (Get-CombinedModeAssignment navigationTargets) | Should -Not -Match '\$query|Contains'
+        $body | Should -Match 'navigation_basis ='
+        $body | Should -Match 'display_basis ='
         $body | Should -Not -Match 'foreach \(\$(origin|number|searchMode|agentsOnly) in'
         $body | Should -Not -Match 'Set-WtPaneFocus[^\r\n]*\$helper.PaneSessionId'
         $body | Should -Match '''focus-pane'', ''-t'', \$helper.PaneSessionId'
@@ -168,8 +172,8 @@ Describe 'Combined owning-tab container selection' -Tag 'Unit' {
                 $node.GetCommandName() -eq 'Assert-MoveNumberKeys'
         }, $true))
         $calls | Should -HaveCount 2
-        ($numberCases.Count * $calls.Count) | Should -Be 14
-        ($numberCases.Count * $calls.Count) | Should -BeLessOrEqual 25
+        ($numberCases.Count * $calls.Count) | Should -Be 18
+        ($numberCases.Count * $calls.Count) | Should -BeLessOrEqual 20
     }
 
     It 'extracts helper-origin focus and identity gates without comparing different text APIs' {
@@ -274,20 +278,21 @@ Describe 'Combined owning-tab container selection' -Tag 'Unit' {
         $sample.observations.helperProcess.ParentProcessId | Should -Be $sample.focus.pid
     }
 
-    It 'models empty scope and nonempty global search independently of rendered rows' -ForEach @(
-        @{ Agents = $true; Query = ''; Expected = @('initial', 'neighbor', 'owner') },
-        @{ Agents = $false; Query = ''; Expected = @('initial', 'neighbor', 'ordinary', 'owner') },
-        @{ Agents = $true; Query = 'fixture'; Expected = @('neighbor', 'ordinary', 'owner') },
-        @{ Agents = $true; Query = 'ordinary'; Expected = @('ordinary') }
+    It 'models stable navigation separately from global search display' -ForEach @(
+        @{ Agents = $true; Query = ''; ExpectedDisplay = @('initial', 'neighbor', 'owner'); ExpectedNavigation = @('initial', 'neighbor', 'owner') },
+        @{ Agents = $false; Query = ''; ExpectedDisplay = @('initial', 'neighbor', 'ordinary', 'owner'); ExpectedNavigation = @('initial', 'neighbor', 'ordinary', 'owner') },
+        @{ Agents = $true; Query = 'fixture'; ExpectedDisplay = @('neighbor', 'ordinary', 'owner'); ExpectedNavigation = @('initial', 'neighbor', 'owner') },
+        @{ Agents = $true; Query = 'ordinary'; ExpectedDisplay = @('ordinary'); ExpectedNavigation = @('initial', 'neighbor', 'owner') },
+        @{ Agents = $true; Query = 'no-match'; ExpectedDisplay = @(); ExpectedNavigation = @('initial', 'neighbor', 'owner') }
     ) {
         $canonical = @('initial', 'neighbor', 'ordinary', 'owner')
-        $targets = @($canonical | Where-Object {
-            $name = if ($_ -eq 'initial') { 'startup' } else { "fixture-$_" }
-            $name.Contains($Query) -and (-not ($Agents -and [string]::IsNullOrEmpty($Query)) -or $_ -ne 'ordinary')
-        })
-        $targets | Should -Be $Expected
-        $source = Get-Content (Join-Path $PSScriptRoot '..\..\..\src\cascadia\TerminalApp\TerminalPage.h') -Raw
-        $source | Should -Match '(?s)bool _IsAgentScopeEffective\(\).*?_tabSearchQuery.empty\(\).*?TabStripFilterMode::AllTabs'
+        $fixtureOwnerTitles = @{ initial = 'startup'; neighbor = 'fixture-neighbor'; ordinary = 'fixture-ordinary'; owner = 'fixture-owner' }
+        $qualifiedOwnerIds = @('initial', 'neighbor', 'owner')
+        $agentsOnly = $Agents; $query = $Query
+        . ([scriptblock]::Create((Get-CombinedModeAssignment navigationTargets)))
+        . ([scriptblock]::Create((Get-CombinedModeAssignment displayOwners)))
+        $navigationTargets | Should -Be $ExpectedNavigation
+        $displayOwners | Should -Be $ExpectedDisplay
         $protocol = Get-Content (Join-Path $PSScriptRoot '..\..\..\src\cascadia\TerminalApp\TerminalPage.Protocol.cpp') -Raw
         $protocol | Should -Match '(?s)_getProtocolSourcePane.*?pane->IsAgentPane\(\).*?candidate->IsSourceOfAgentPane\(\)'
         $protocol | Should -Match 'const auto effectivePane = _getProtocolSourcePane\(tabImpl\)'
@@ -300,22 +305,22 @@ Describe 'Combined owning-tab container selection' -Tag 'Unit' {
             @('initial', 'neighbor', 'owner', 'ordinary')
         )) {
             foreach ($case in $numberCases) {
-                $targets = @(switch ($case.Search) {
-                    'Ordinary' { @('ordinary') }
-                    'Filtered' { @($canonical | Where-Object { $_ -ne 'initial' }) }
-                    default {
-                        if ($case.AgentsOnly) { @($canonical | Where-Object { $_ -in @('initial', 'neighbor', 'owner') }) }
-                        else { $canonical }
-                    }
-                })
-                $expected = if ($case.Number -eq 9) { $targets[-1] } else { $targets[$case.Number - 1] }
+                $agentsOnly = $case.AgentsOnly
+                $qualifiedOwnerIds = @('initial', 'neighbor', 'owner')
+                . ([scriptblock]::Create((Get-CombinedModeAssignment navigationTargets)))
+                $expected = if ($case.Number -eq 9) { $navigationTargets[-1] } else { $navigationTargets[$case.Number - 1] }
                 $start = if ($expected -eq 'owner') { 'neighbor' } else { 'owner' }
                 $start | Should -Not -Be $expected
                 if ($case.Origin -ne 'Shell') { $start | Should -Be 'owner' }
                 if ($case.AgentsOnly -and $case.Search -eq 'Closed' -and $case.Number -eq 9) {
                     $expected | Should -Be 'owner'
                 }
-                if ($case.Search -eq 'Ordinary') { $expected | Should -Be 'ordinary' }
+                if ($case.Search -eq 'Ordinary') {
+                    $expected | Should -Be 'neighbor'
+                }
+                if ($case.Search -eq 'NoMatch') {
+                    $expected | Should -Be $(if ($case.Number -eq 9) { 'owner' } else { 'initial' })
+                }
             }
         }
     }
@@ -345,7 +350,7 @@ Describe 'Combined owning-tab container selection' -Tag 'Unit' {
             $fixtureOwnerTitles['owner'] = 'fixture'
             . ([scriptblock]::Create((Get-CombinedModeAssignment qualifiedOwnerIds)))
             $qualifiedOwnerIds | Should -Be (@($script:openedFixtureOwners.session_id) + @('neighbor', 'owner'))
-            $assignment = Get-CombinedModeAssignment targets
+            $assignment = Get-CombinedModeAssignment displayOwners
             foreach ($scenario in @(
                 @{ Agents = $true; Query = ''; Expected = @($script:openedFixtureOwners.session_id) + @('neighbor', 'owner') },
                 @{ Agents = $false; Query = ''; Expected = $canonical },
@@ -355,7 +360,9 @@ Describe 'Combined owning-tab container selection' -Tag 'Unit' {
                 $agentsOnly = $scenario.Agents
                 $query = $scenario.Query
                 . ([scriptblock]::Create($assignment))
-                $targets | Should -Be $scenario.Expected
+                $displayOwners | Should -Be $scenario.Expected
+                . ([scriptblock]::Create((Get-CombinedModeAssignment navigationTargets)))
+                $navigationTargets | Should -Be $(if ($agentsOnly) { @($script:openedFixtureOwners.session_id) + @('neighbor', 'owner') } else { $canonical })
                 $canonical[0] | Should -Be 'initial'
                 $canonical | Should -Be (@($script:openedFixtureOwners.session_id) + @('neighbor', 'ordinary', 'owner'))
             }

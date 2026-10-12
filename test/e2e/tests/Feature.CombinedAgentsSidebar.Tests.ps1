@@ -1998,7 +1998,9 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                 @{ AgentsOnly = $false; Search = 'Filtered'; Origin = 'Helper'; Number = 1 },
                 @{ AgentsOnly = $false; Search = 'Filtered'; Origin = 'Shell'; Number = 2 },
                 @{ AgentsOnly = $true; Search = 'Filtered'; Origin = 'ItemsList'; Number = 1 },
-                @{ AgentsOnly = $true; Search = 'Ordinary'; Origin = 'Shell'; Number = 1 }
+                @{ AgentsOnly = $true; Search = 'Ordinary'; Origin = 'Shell'; Number = 2 },
+                @{ AgentsOnly = $true; Search = 'NoMatch'; Origin = 'Shell'; Number = 1 },
+                @{ AgentsOnly = $true; Search = 'NoMatch'; Origin = 'Shell'; Number = 9 }
             )
             foreach ($case in $numberCases) {
                     $agentsOnly = $case.AgentsOnly
@@ -2008,6 +2010,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                     $query = switch ($searchMode) {
                         'Filtered' { $title }
                         'Ordinary' { "$title-ordinary" }
+                        'NoMatch' { "$title-no-matching-owner" }
                         default { '' }
                     }
                     Set-CombinedFilters -AgentsOnly $agentsOnly -Recent $false
@@ -2021,7 +2024,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                         }
                         Assert-CombinedSearchState $false
                     }
-                    # Query matching is global: nonempty search disables the Agents-only scope.
+                    # Navigation uses the selected filter; nonempty search is a separate global display.
                     $canonicalTabs = @(Get-WtTabs -App $script:app -WindowId $script:app.WindowId)
                     $canonicalPanes = @{}
                     $canonical = @(foreach ($tab in $canonicalTabs) {
@@ -2039,14 +2042,17 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                     $fixtureOwnerTitles[$ordinary.session_id] = "$title-ordinary"
                     $fixtureOwnerTitles[$owner.session_id] = $title
                     @($canonical | Where-Object { -not $fixtureOwnerTitles.ContainsKey($_) }) | Should -HaveCount 0
-                    $targets = @($canonical | Where-Object {
+                    $navigationTargets = @($canonical | Where-Object {
+                        -not $agentsOnly -or $_ -in $qualifiedOwnerIds
+                    })
+                    $displayOwners = @($canonical | Where-Object {
                         $fixtureOwnerTitles[$_].Contains($query) -and
                             (-not ($agentsOnly -and [string]::IsNullOrEmpty($query)) -or $_ -in $qualifiedOwnerIds)
                     })
-                    $targets.Count | Should -BeGreaterThan 0
+                    $navigationTargets.Count | Should -BeGreaterThan 0
                     # Count owning row headers, never expanded pane children or recent-session rows.
-                    @(Get-CombinedRows Live).Count | Should -Be $targets.Count
-                    $expectedOwnerTitles = @($targets | ForEach-Object { $fixtureOwnerTitles[$_] })
+                    @(Get-CombinedRows Live).Count | Should -Be $displayOwners.Count
+                    $expectedOwnerTitles = @($displayOwners | ForEach-Object { $fixtureOwnerTitles[$_] })
                     $actualOwnerTitles = @(foreach ($row in @(Get-CombinedRows Live)) {
                         $parts = @(Get-CombinedRawChildren $row)
                         $groups = @($parts | Where-Object { $_.Current.AutomationId -eq 'TabGroupToggleButton' })
@@ -2065,7 +2071,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                         $headers[0].Current.Name
                     })
                     $actualOwnerTitles | Should -Be $expectedOwnerTitles
-                    $expected = if ($number -eq 9) { $targets[-1] } else { $targets[$number - 1] }
+                    $expected = if ($number -eq 9) { $navigationTargets[-1] } else { $navigationTargets[$number - 1] }
                     $start = if ($expected -eq $owner.session_id) { $neighbor.session_id } else { $owner.session_id }
                     if ($origin -ne 'Shell') { $start | Should -Be $owner.session_id }
                             Set-WtPaneFocus -App $script:app -SessionId $start
@@ -2151,7 +2157,7 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                             $beforeActive.tab_id | Should -Be $startTab[0].tab_id
                             $canonicalPanes[$canonical[$beforeActive.tab_id]].session_id | Should -Not -Contain $expected
                             Send-WtWindowKey -App $script:app -Vk (0x30 + $number) -Ctrl -Alt -RequireForeground | Out-Null
-                            Wait-Until -TimeoutSec 8 -Because "physical Ctrl+Alt+$number selects the presented owner" -Condition {
+                            Wait-Until -TimeoutSec 8 -Because "physical Ctrl+Alt+$number selects the stable filter-navigation owner" -Condition {
                                 $activeTab = (Get-ActivePane -App $script:app).tab_id
                                 $canonicalPanes[$canonical[$activeTab]].session_id -contains $expected
                             } | Out-Null
@@ -2177,6 +2183,10 @@ Describe 'Feature: combined Agents sidebar' -Tag @('Feature', 'CombinedAgentsSid
                             @{
                                 phase = $Phase; origin = $origin; number = $number; agents_only = $agentsOnly
                                 search = $searchMode; expected_shell = $expected; canonical_order = $canonical
+                                navigation_basis = 'selected AgentsOnly filter, independent of query'
+                                display_basis = 'global nonempty query; selected filter when empty'
+                                navigation_targets = $navigationTargets; display_owners = $displayOwners
+                                displayed_owner_titles = $actualOwnerTitles
                                 before_active = $beforeActive; after_active = Get-ActivePane -App $script:app
                                 focus_name = $focused.Current.Name; focus_id = $focused.Current.AutomationId
                                 focus_runtime_id = @($focused.GetRuntimeId())

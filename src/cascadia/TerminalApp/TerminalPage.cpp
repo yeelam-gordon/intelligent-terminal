@@ -13136,44 +13136,33 @@ namespace winrt::TerminalApp::implementation
         }
 
         const auto direction = args.Direction();
-        if (direction != MoveTabDirection::None && !_IsTabSearchEffective())
+        if (direction != MoveTabDirection::None)
         {
-            if (_IsAgentScopeEffective())
+            if (_rearranging || _mutatingTabCollections)
             {
-                if (_rearranging || _mutatingTabCollections)
-                {
-                    return false;
-                }
-                const auto owners = _BuildTabListSnapshot();
-                const ::TerminalApp::TabListViewModel list{ owners };
-                if (!list.IsPresented(tab.get()))
-                {
-                    return false;
-                }
-                const auto target = list.MoveTarget(tab.get(), direction == MoveTabDirection::Forward ?
-                                                                  ::TerminalApp::TabListViewModel::MoveDirection::Next :
-                                                                  ::TerminalApp::TabListViewModel::MoveDirection::Previous);
-                if (target)
-                {
-                    const auto current = _GetTabIndex(*tab);
-                    if (!current || target->canonicalIndex >= _tabs.Size() ||
-                        _GetTabImpl(_tabs.GetAt(target->canonicalIndex)).get() != target->identity)
-                    {
-                        return false;
-                    }
-                    _TryMoveTab(*current, gsl::narrow_cast<int32_t>(target->canonicalIndex));
-                }
-                return true;
+                return false;
             }
-            // Use the requested tab, if provided. Otherwise, use the currently
-            // focused tab.
-            const auto tabIndex = til::coalesce(_GetTabIndex(*tab),
-                                                _GetFocusedTabIndex());
-            if (tabIndex)
+            const auto criteria = _ReadTabListCriteria();
+            const auto owners = _BuildTabListSnapshot();
+            const ::TerminalApp::TabListViewModel list{ owners, criteria };
+            if (!list.Policy().searchEffective)
             {
-                const auto currentTabIndex = tabIndex.value();
-                const auto delta = direction == MoveTabDirection::Forward ? 1 : -1;
-                _TryMoveTab(currentTabIndex, gsl::narrow_cast<int32_t>(currentTabIndex) + delta);
+                const auto state = list.StateFor(tab.get());
+                if (!state || !state->navigationOrdinal)
+                {
+                    return false;
+                }
+            }
+            const auto target = list.MoveTarget(tab.get(), direction == MoveTabDirection::Forward ? ::TerminalApp::TabListViewModel::MoveDirection::Next : ::TerminalApp::TabListViewModel::MoveDirection::Previous);
+            if (target)
+            {
+                const auto current = _GetTabIndex(*tab);
+                if (!current || target->canonicalIndex >= _tabs.Size() ||
+                    _GetTabImpl(_tabs.GetAt(target->canonicalIndex)).get() != target->identity)
+                {
+                    return false;
+                }
+                _TryMoveTab(*current, gsl::narrow_cast<int32_t>(target->canonicalIndex));
             }
         }
 

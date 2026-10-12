@@ -2150,8 +2150,10 @@ namespace winrt::TerminalApp::implementation
 
         const auto refreshAll = _pendingTabProjectionRefresh || !changedTab;
         _pendingTabProjectionRefresh = false;
-        const bool positionOperationsBlocked = _IsTabListPositionOperationBlocked();
-        const auto highlightQuery = _IsTabSearchEffective() ? _tabSearchQuery : winrt::hstring{};
+        const auto criteria = _ReadTabListCriteria();
+        const auto policy = ::TerminalApp::TabListViewModel{ std::span<const ::TerminalApp::TabListViewModel::OwnerEntry>{}, criteria }.Policy();
+        const bool positionOperationsBlocked = policy.positionOperationsBlocked;
+        const auto highlightQuery = policy.searchEffective ? winrt::hstring{ criteria.query } : winrt::hstring{};
         const auto tabStrip = _isVerticalLayout ?
                                   winrt::get_self<implementation::TabStrip>(_tabStrip) :
                                   nullptr;
@@ -2192,65 +2194,46 @@ namespace winrt::TerminalApp::implementation
             }
         }
         const auto owners = _BuildTabListSnapshot();
-        const ::TerminalApp::TabListViewModel list{ owners };
-        struct HintCandidate
-        {
-            KeyChord chord;
-            winrt::hstring text;
-            ::TerminalApp::TabListViewModel::Target target;
-            bool last;
-        };
-        std::vector<HintCandidate> hints;
+        const ::TerminalApp::TabListViewModel list{ owners, criteria };
+        std::vector<::TerminalApp::TabListViewModel::BindingCandidate> hints;
         if (tabStrip)
         {
             for (const auto& binding : _settings.ActionMap().KeyBindings())
             {
-                if (const auto target = _EvaluateTabSwitchTarget(binding.Key(), &list))
+                const auto command = _settings.ActionMap().GetActionByKeyChord(binding.Key());
+                if (command && command.ActionAndArgs().Action() == ShortcutAction::SwitchToTab)
                 {
-                    const auto args = binding.Value().ActionAndArgs().Args().as<SwitchToTabArgs>();
-                    const auto index = args.TabIndex();
-                    // Overflow is also a last-owner fallback, not a direct ordinal hint.
-                    const auto last = index == UINT32_MAX ||
-                                      (_IsPresentedTabSwitchChord(binding.Key(), index) ?
-                                           !list.PresentedAt(index).has_value() :
-                                           index >= _tabs.Size());
-                    hints.push_back({ binding.Key(), KeyChordSerialization::ToString(binding.Key()), *target, last });
+                    if (const auto args = command.ActionAndArgs().Args().try_as<SwitchToTabArgs>())
+                    {
+                        const auto text = KeyChordSerialization::ToString(binding.Key());
+                        hints.push_back({ std::wstring{ text.c_str(), text.size() }, args.TabIndex(), _IsPresentedTabSwitchChord(binding.Key(), args.TabIndex()) });
+                    }
                 }
             }
         }
-        uint32_t presentedIndex = 0;
-        list.ForEachOwner([&](const auto& owner, const bool visible) {
+        for (const auto& owner : owners)
+        {
+            if (_rearranging || _mutatingTabCollections || owner.canonicalIndex >= _tabs.Size() ||
+                _GetTabImpl(_tabs.GetAt(owner.canonicalIndex)).get() != owner.identity)
+            {
+                _pendingTabProjectionRefresh = true;
+                return;
+            }
+            const auto state = list.StateFor(owner.identity).value();
+            const auto visible = state.displayed;
             const auto tab = _GetTabImpl(_tabs.GetAt(owner.canonicalIndex));
             const auto item = tab->TabViewItem();
             const auto display = tabStrip ? tabStrip->DisplayItemAt(owner.canonicalIndex) : nullptr;
-            tab->SetVisibleMoveTargets(_IsAgentScopeEffective() ?
-                                          std::optional{ std::pair{
-                                              list.MoveTarget(owner.identity, ::TerminalApp::TabListViewModel::MoveDirection::Previous).has_value(),
-                                              list.MoveTarget(owner.identity, ::TerminalApp::TabListViewModel::MoveDirection::Next).has_value() } } :
-                                          std::nullopt);
-            tab->SetTabListPositionOperationsRestricted(positionOperationsBlocked, _IsTabSearchEffective());
+            tab->SetVisibleMoveTargets(policy.navigationAgentScopeEffective ?
+                                           std::optional{ std::pair{ state.canMovePrevious, state.canMoveNext } } :
+                                           std::nullopt);
+            tab->SetTabListPositionOperationsRestricted(positionOperationsBlocked, policy.searchEffective);
             tab->SetTabPointerInteractionRestricted(_IsCollapsedVerticalRail());
             if (display)
             {
                 const auto canonicalHint = Automation::AutomationProperties::GetAcceleratorKey(item);
-                const HintCandidate* chosen = nullptr;
-                int bestRank = 5;
-                for (const auto& hint : hints)
-                {
-                    if (hint.target.identity != owner.identity)
-                    {
-                        continue;
-                    }
-                    const auto rank = hint.last ? 3 :
-                                      hint.text == canonicalHint ? 0 :
-                                      visible && _IsPresentedTabSwitchChord(hint.chord, presentedIndex) ? 1 : 2;
-                    if (rank < bestRank || (rank == bestRank && chosen && hint.text < chosen->text))
-                    {
-                        chosen = &hint;
-                        bestRank = rank;
-                    }
-                }
-                const auto chord = chosen ? chosen->text : winrt::hstring{};
+                const auto chosen = list.ChooseHint(owner.identity, std::wstring_view{ canonicalHint.c_str(), canonicalHint.size() }, hints);
+                const auto chord = chosen ? winrt::hstring{ hints[*chosen].text } : winrt::hstring{};
                 winrt::get_self<TabStripDisplayItem>(display)->SetSidebarHints(
                     std::pair{ chord, tab->ToolTipTextForKeyChord(chord) }, tabStrip->IsVerticalPresentation());
                 tabStrip->SetTabItemVisibility(display, visible);
@@ -2259,8 +2242,14 @@ namespace winrt::TerminalApp::implementation
             {
                 _tabStrip.SetTabItemVisibility(item, visible);
             }
-            presentedIndex += visible ? 1u : 0u;
-        });
+            if (_rearranging || _mutatingTabCollections || _tabs.Size() != owners.size() ||
+                owner.canonicalIndex >= _tabs.Size() ||
+                _GetTabImpl(_tabs.GetAt(owner.canonicalIndex)).get() != owner.identity)
+            {
+                _pendingTabProjectionRefresh = true;
+                return;
+            }
+        }
 
         if (tabStrip)
         {
@@ -2285,7 +2274,7 @@ namespace winrt::TerminalApp::implementation
 
         if (updateBookkeeping)
         {
-            _UpdateTabFilterStatus();
+            _UpdateTabFilterStatus(&list);
         }
         const auto canDragDrop = CanDragDrop() &&
                                  !positionOperationsBlocked &&
@@ -2309,7 +2298,7 @@ namespace winrt::TerminalApp::implementation
         {
             const auto tab = _GetTabImpl(_tabs.GetAt(index));
             const auto display = strip ? strip->DisplayItemAt(index) : nullptr;
-            owners.push_back({ tab.get(), index, tab->IsPinned(), _IsTabVisibleInProjection(tab, display) });
+            owners.push_back(_ReadTabListOwner(*tab, index, display));
         }
         return owners;
     }
@@ -2339,43 +2328,40 @@ namespace winrt::TerminalApp::implementation
             return std::nullopt;
         }
         const auto index = args.TabIndex();
-        if (_isVerticalLayout && _IsPresentedTabSwitchChord(chord, index))
+        const auto useFilterNavigation = _IsPresentedTabSwitchChord(chord, index);
+        if (preparedList)
         {
-            const auto owners = preparedList ? std::vector<::TerminalApp::TabListViewModel::OwnerEntry>{} : _BuildTabListSnapshot();
-            const ::TerminalApp::TabListViewModel localList{ owners };
-            const auto& list = preparedList ? *preparedList : localList;
-            if (index == UINT32_MAX)
-            {
-                return list.LastPresented();
-            }
-            const auto target = list.PresentedAt(index);
-            return target ? target : list.LastPresented();
+            const auto result = preparedList->SwitchTarget(index, useFilterNavigation);
+            return result ? std::optional{ result->target } : std::nullopt;
         }
-        const auto canonicalIndex = std::min(index, _tabs.Size() - 1);
-        return ::TerminalApp::TabListViewModel::Target{ _GetTabImpl(_tabs.GetAt(canonicalIndex)).get(), canonicalIndex };
+        const auto criteria = _ReadTabListCriteria();
+        const auto owners = _BuildTabListSnapshot();
+        const auto result = ::TerminalApp::TabListViewModel{ owners, criteria }.SwitchTarget(index, useFilterNavigation);
+        return result ? std::optional{ result->target } : std::nullopt;
     }
 
-    void TerminalPage::_UpdateTabFilterStatus()
+    void TerminalPage::_UpdateTabFilterStatus(const ::TerminalApp::TabListViewModel* preparedList)
     {
         if (!_tabStrip || !_isVerticalLayout)
         {
             return;
         }
 
-        uint32_t visibleCount = _tabs.Size();
+        const auto criteria = preparedList ? ::TerminalApp::TabListViewModel::Criteria{} : _ReadTabListCriteria();
+        const auto owners = preparedList ? std::vector<::TerminalApp::TabListViewModel::OwnerEntry>{} : _BuildTabListSnapshot();
+        const ::TerminalApp::TabListViewModel localList{ owners, criteria };
+        const auto& list = preparedList ? *preparedList : localList;
+        uint32_t visibleCount = 0;
         bool selectedMatches = true;
-        if (_IsAgentScopeEffective())
+        const auto selected = _selectedTabItem();
+        for (const auto& tab : _tabs)
         {
-            visibleCount = 0;
-            const auto selected = _selectedTabItem();
-            for (const auto& tab : _tabs)
+            const auto state = list.StateFor(_GetTabImpl(tab).get());
+            const auto matches = state && state->navigationOrdinal.has_value();
+            visibleCount += matches ? 1u : 0u;
+            if (tab.TabViewItem() == selected)
             {
-                const auto matches = _MatchesTabScope(_GetTabImpl(tab));
-                visibleCount += matches ? 1u : 0u;
-                if (tab.TabViewItem() == selected)
-                {
-                    selectedMatches = matches;
-                }
+                selectedMatches = matches;
             }
         }
         _tabStrip.SetFilterStatus(visibleCount, selectedMatches);
@@ -2383,93 +2369,69 @@ namespace winrt::TerminalApp::implementation
 
     bool TerminalPage::_MatchesTabScope(const winrt::com_ptr<Tab>& tab) const
     {
-        return tab && (tab->IsAgentTab() || _TabHasCliAgent(tab));
+        return _TabListStateFor(tab.get()).agentScopeMatched;
     }
 
-    bool TerminalPage::_MatchesTabSearch(const Tab& tab, const TerminalApp::TabStripDisplayItem& projectedDisplay) const
+    ::TerminalApp::TabListViewModel::Criteria TerminalPage::_ReadTabListCriteria() const
     {
-        if (!_IsTabSearchEffective())
-        {
-            return true;
-        }
+        return { _isVerticalLayout, _isVerticalRailVisible, _isVerticalRailCollapsed, _tabFilterMode != TerminalApp::TabStripFilterMode::AllTabs, _tabSearchActive, std::wstring{ _tabSearchQuery.c_str(), _tabSearchQuery.size() } };
+    }
 
-        const std::wstring_view query{ _tabSearchQuery.c_str(), _tabSearchQuery.size() };
-        if (query.empty())
-        {
-            return true;
-        }
-
-        const auto matches = [&](const std::wstring_view value) {
-            if (query.size() > value.size())
-            {
-                return false;
-            }
-
-            for (size_t offset = 0; offset + query.size() <= value.size(); ++offset)
-            {
-                if (til::compare_ordinal_insensitive(value.substr(offset, query.size()), query) == 0)
-                {
-                    return true;
-                }
-            }
-            return false;
-        };
-
+    ::TerminalApp::TabListViewModel::OwnerEntry TerminalPage::_ReadTabListOwner(const Tab& tab, uint32_t index, const TerminalApp::TabStripDisplayItem& projectedDisplay) const
+    {
+        ::TerminalApp::TabListViewModel::OwnerEntry owner{};
+        owner.identity = &tab;
+        owner.canonicalIndex = index;
+        owner.isPinned = tab.IsPinned();
+        owner.isAgent = tab.IsAgentTab() || _TabHasCliAgent(tab);
         const auto title = tab.Title();
-        if (matches(std::wstring_view{ title.c_str(), title.size() }))
-        {
-            return true;
-        }
-
+        owner.title.assign(title.c_str(), title.size());
         const auto tabStrip = _isVerticalLayout && _tabStrip ?
                                   winrt::get_self<implementation::TabStrip>(_tabStrip) :
                                   nullptr;
         const auto display = projectedDisplay ? projectedDisplay :
                                                 (tabStrip ? tabStrip->DisplayItemForTab(tab.TabViewItem()) : nullptr);
         const auto header = tab.TabViewItem().Header().try_as<TerminalApp::TabHeaderControl>();
-        const auto metadataVisible = display ? display.IsMetadataVisible() : header && header.IsMetadataVisible();
-        if (metadataVisible)
+        owner.headerMetadataVisible = display ? display.IsMetadataVisible() : header && header.IsMetadataVisible();
+        if (owner.headerMetadataVisible)
         {
             const auto metadata = display ? display.Presentation().MetadataText() : header.MetadataText();
-            if (matches(std::wstring_view{ metadata.c_str(), metadata.size() }))
-            {
-                return true;
-            }
+            owner.headerMetadataText.assign(metadata.c_str(), metadata.size());
         }
-
-        if (!display || display.ChildrenVisibility() != Visibility::Visible)
+        owner.childrenVisible = display && display.ChildrenVisibility() == Visibility::Visible;
+        if (owner.childrenVisible)
         {
-            return false;
-        }
-
-        for (const auto& pane : display.PaneItems())
-        {
-            const auto title = pane.Title();
-            if (matches(std::wstring_view{ title.c_str(), title.size() }))
+            for (const auto& pane : display.PaneItems())
             {
-                return true;
-            }
-
-            if (pane.MetadataVisibility() == Visibility::Visible)
-            {
+                const auto paneTitle = pane.Title();
                 const auto metadata = pane.MetadataText();
-                if (matches(std::wstring_view{ metadata.c_str(), metadata.size() }))
-                {
-                    return true;
-                }
+                owner.children.push_back({ std::wstring{ paneTitle.c_str(), paneTitle.size() },
+                                           std::wstring{ metadata.c_str(), metadata.size() },
+                                           pane.MetadataVisibility() == Visibility::Visible });
             }
         }
-        return false;
+        return owner;
+    }
+
+    ::TerminalApp::TabListViewModel::OwnerState TerminalPage::_TabListStateFor(const Tab* tab, const TerminalApp::TabStripDisplayItem& display) const
+    {
+        const auto criteria = _ReadTabListCriteria();
+        if (!tab)
+        {
+            return ::TerminalApp::TabListViewModel{ std::span<const ::TerminalApp::TabListViewModel::OwnerEntry>{}, criteria }.StateFor(nullptr).value();
+        }
+        const auto owner = _ReadTabListOwner(*tab, 0, display);
+        return ::TerminalApp::TabListViewModel{ std::span{ &owner, size_t{ 1 } }, criteria }.StateFor(tab).value();
+    }
+
+    bool TerminalPage::_MatchesTabSearch(const Tab& tab, const TerminalApp::TabStripDisplayItem& display) const
+    {
+        return _TabListStateFor(&tab, display).searchMatched;
     }
 
     bool TerminalPage::_IsTabVisibleInProjection(const winrt::com_ptr<Tab>& tab, const TerminalApp::TabStripDisplayItem& display) const
     {
-        if (!tab)
-        {
-            return !_IsTabSearchEffective() && !_IsAgentScopeEffective();
-        }
-        return (!_IsAgentScopeEffective() || _MatchesTabScope(tab)) &&
-               _MatchesTabSearch(*tab, display);
+        return _TabListStateFor(tab.get(), display).displayed;
     }
 
     bool TerminalPage::_IsKnownAgentCliTitle(const std::wstring_view title) noexcept
@@ -2486,20 +2448,20 @@ namespace winrt::TerminalApp::implementation
 
     bool TerminalPage::_TabHasCliAgent(const winrt::com_ptr<Tab>& tab) const
     {
-        if (!tab)
-        {
-            return false;
-        }
+        return tab && _TabHasCliAgent(*tab);
+    }
 
+    bool TerminalPage::_TabHasCliAgent(const Tab& tab) const
+    {
         // Agent CLIs set a stable, known terminal title before their first
         // session event. Ignore user-renamed tabs so an arbitrary custom title
         // cannot opt a normal shell into the Agent filter.
-        if (tab->GetTabText().empty() && _IsKnownAgentCliTitle(tab->Title()))
+        if (tab.GetTabText().empty() && _IsKnownAgentCliTitle(tab.Title()))
         {
             return true;
         }
 
-        const auto rootPane = tab->GetRootPane();
+        const auto rootPane = tab.GetRootPane();
         return rootPane && rootPane->WalkTree([&](const auto& pane) {
             const auto sessionId = pane->GetSessionId();
             return sessionId != winrt::guid{} &&
