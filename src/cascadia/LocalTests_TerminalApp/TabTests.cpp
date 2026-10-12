@@ -6684,6 +6684,13 @@ namespace TerminalAppLocalTests
             {
                 page->_GetTabImpl(tab)->SetActionMap(map);
             }
+            // Canonical hints use named action IDs; effective sidebar hints also recognize aliases.
+            const auto hiddenCanonicalKey = Automation::AutomationProperties::GetAcceleratorKey(hidden->TabViewItem());
+            const auto hiddenCanonicalHelp = Automation::AutomationProperties::GetHelpText(hidden->TabViewItem());
+            const auto firstCanonicalKey = Automation::AutomationProperties::GetAcceleratorKey(first->TabViewItem());
+            const auto firstCanonicalHelp = Automation::AutomationProperties::GetHelpText(first->TabViewItem());
+            const auto canonicalKey = Automation::AutomationProperties::GetAcceleratorKey(last->TabViewItem());
+            const auto canonicalHelp = Automation::AutomationProperties::GetHelpText(last->TabViewItem());
             page->_ApplyTabListProjection();
             page->UpdateLayout();
             const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
@@ -6705,12 +6712,18 @@ namespace TerminalAppLocalTests
             verifyTarget(hidden, hiddenDisplay);
             verifyTarget(first, firstDisplay);
             verifyTarget(last, lastDisplay);
-            VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetAcceleratorKey(hidden->TabViewItem()), hiddenDisplay.AcceleratorKey());
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+4" }, lastDisplay.AcceleratorKey());
-            const auto canonicalKey = Automation::AutomationProperties::GetAcceleratorKey(last->TabViewItem());
-            const auto canonicalHelp = Automation::AutomationProperties::GetHelpText(last->TabViewItem());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+1" }, hiddenDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, firstDisplay.AcceleratorKey());
+            VERIFY_IS_NULL(map.GetActionByKeyChord(KeyChordSerialization::FromString(L"ctrl+alt+4")));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+9" }, lastDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(hiddenCanonicalKey, Automation::AutomationProperties::GetAcceleratorKey(hidden->TabViewItem()));
+            VERIFY_ARE_EQUAL(hiddenCanonicalHelp, Automation::AutomationProperties::GetHelpText(hidden->TabViewItem()));
+            VERIFY_ARE_EQUAL(firstCanonicalKey, Automation::AutomationProperties::GetAcceleratorKey(first->TabViewItem()));
+            VERIFY_ARE_EQUAL(firstCanonicalHelp, Automation::AutomationProperties::GetHelpText(first->TabViewItem()));
+            VERIFY_ARE_EQUAL(canonicalKey, Automation::AutomationProperties::GetAcceleratorKey(last->TabViewItem()));
+            VERIFY_ARE_EQUAL(canonicalHelp, Automation::AutomationProperties::GetHelpText(last->TabViewItem()));
             strip->SyncTabPresentation(lastDisplay);
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+4" }, lastDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+9" }, lastDisplay.AcceleratorKey());
             VERIFY_ARE_EQUAL(canonicalKey, Automation::AutomationProperties::GetAcceleratorKey(last->TabViewItem()));
             VERIFY_ARE_EQUAL(canonicalHelp, Automation::AutomationProperties::GetHelpText(last->TabViewItem()));
 
@@ -6718,7 +6731,9 @@ namespace TerminalAppLocalTests
             page->_RefreshUIForSettingsReload();
             verifyTarget(first, firstDisplay);
             VERIFY_IS_TRUE(page->_EvaluateTabSwitchTarget(two)->identity == first.get());
-            VERIFY_ARE_EQUAL(Automation::AutomationProperties::GetAcceleratorKey(first->TabViewItem()), firstDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ctrl+alt+2" }, firstDisplay.AcceleratorKey());
+            VERIFY_ARE_EQUAL(firstCanonicalKey, Automation::AutomationProperties::GetAcceleratorKey(first->TabViewItem()));
+            VERIFY_ARE_EQUAL(firstCanonicalHelp, Automation::AutomationProperties::GetHelpText(first->TabViewItem()));
             VERIFY_IS_TRUE(page->_EvaluateTabSwitchTarget(one)->identity == last.get());
             map.DeleteKeyBinding(two);
             page->_RefreshUIForSettingsReload();
