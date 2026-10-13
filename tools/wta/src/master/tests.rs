@@ -14205,17 +14205,19 @@ fn controlled_history_agent(
         .on_receive_request(
             move |_req: acp::schema::v1::ListSessionsRequest,
                   responder: acp::Responder<acp::schema::v1::ListSessionsResponse>,
-                  _cx| {
+                  cx: acp::ConnectionTo<acp::Client>| {
                 let requests = requests.clone();
                 async move {
                     let (reply, response) = tokio::sync::oneshot::channel();
                     requests.send(reply).unwrap();
-                    match response.await.unwrap() {
-                        Ok(rows) => {
-                            responder.respond(acp::schema::v1::ListSessionsResponse::new(rows))
+                    cx.spawn(async move {
+                        match response.await.unwrap() {
+                            Ok(rows) => {
+                                responder.respond(acp::schema::v1::ListSessionsResponse::new(rows))
+                            }
+                            Err(error) => responder.respond_with_error(error),
                         }
-                        Err(error) => responder.respond_with_error(error),
-                    }
+                    })
                 }
             },
             acp::on_receive_request!(),
@@ -14391,6 +14393,217 @@ async fn history_snapshot_reads_never_query_even_with_a_bound_agent() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn history_refresh_timeout_retains_one_request_until_late_recovery() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            // Negative control: the old drop-and-retry boundary can overlap
+            // work on a peer that ignores cooperative cancellation.
+            let (old_agent, mut old_requests) =
+                controlled_history_agent("copilot", crate::agent_source::AgentSource::Host);
+            let old_wait = tokio::time::timeout(
+                HISTORY_LIST_TIMEOUT,
+                old_agent
+                    .conn
+                    .list_sessions(acp::schema::v1::ListSessionsRequest::new()),
+            );
+            tokio::pin!(old_wait);
+            let old_reply = tokio::select! {
+                reply = old_requests.recv() => reply.unwrap(),
+                _ = &mut old_wait => panic!("no request sent"),
+            };
+            tokio::time::advance(HISTORY_LIST_TIMEOUT).await;
+            assert!(old_wait.await.is_err());
+            let replacement = old_agent
+                .conn
+                .list_sessions(acp::schema::v1::ListSessionsRequest::new());
+            let replies = async {
+                let replacement_reply = old_requests.recv().await.unwrap();
+                assert!(
+                    !old_reply.is_closed(),
+                    "timed-out peer work is still outstanding"
+                );
+                old_reply.send(Ok(vec![])).unwrap();
+                replacement_reply.send(Ok(vec![])).unwrap();
+            };
+            assert!(tokio::join!(replacement, replies).0.is_ok());
+
+            let (agent, mut requests) =
+                controlled_history_agent("copilot", crate::agent_source::AgentSource::Host);
+            let refresh = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
+            tokio::pin!(refresh);
+            let late_reply = tokio::select! {
+                request = requests.recv() => request.unwrap(),
+                _ = &mut refresh => panic!("refresh completed before reply"),
+            };
+            let waiter = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
+            tokio::pin!(waiter);
+            assert!(futures::poll!(&mut waiter).is_pending());
+            tokio::time::advance(std::time::Duration::from_secs(5)).await;
+            assert!(refresh.await.is_none());
+            assert!(waiter.await.is_none(), "queued caller shares the timeout");
+            assert!(
+                refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate)
+                    .await
+                    .is_none()
+            );
+            assert!(
+                requests.try_recv().is_err(),
+                "manual refresh cannot bypass an unresolved request's delay"
+            );
+
+            tokio::time::advance(std::time::Duration::from_secs(5)).await;
+            let retry = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic);
+            tokio::pin!(retry);
+            assert!(futures::poll!(&mut retry).is_pending());
+            for _ in 0..10 {
+                tokio::task::yield_now().await;
+            }
+            assert!(
+                requests.try_recv().is_err(),
+                "retry must not enqueue another RPC while the old one is unresolved"
+            );
+            tokio::time::advance(std::time::Duration::from_secs(5)).await;
+            assert!(retry.await.is_none());
+            tokio::time::advance(std::time::Duration::from_secs(5)).await;
+            late_reply
+                .send(Ok(vec![history_row("recovered", "Late response")]))
+                .unwrap();
+            tokio::time::advance(std::time::Duration::from_secs(5)).await;
+            assert_eq!(
+                refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic).await,
+                Some(1)
+            );
+            assert_eq!(agent.history_refresh.gate.lock().await.failures, 0);
+            assert!(
+                requests.try_recv().is_err(),
+                "recovery consumes the old RPC"
+            );
+            assert_eq!(
+                state.registry.snapshot().await[0].title.as_deref(),
+                Some("Late response")
+            );
+        })
+        .await;
+}
+
+#[test]
+fn history_refresh_delay_doubles_halves_and_caps() {
+    let mut refresh = HistoryRefreshState::default();
+    for seconds in [5, 10, 20, 40, 80, 160, 320, 600, 600] {
+        assert_eq!(
+            refresh.record_failure(HISTORY_REFRESH_MAX_DELAY),
+            std::time::Duration::from_secs(seconds)
+        );
+    }
+    for millis in [
+        300_000, 150_000, 75_000, 37_500, 18_750, 9_375, 5_000, 5_000,
+    ] {
+        assert_eq!(
+            refresh.record_success(),
+            std::time::Duration::from_millis(millis)
+        );
+    }
+    assert!(refresh.retry_delay.is_none());
+    assert_eq!(
+        refresh.record_failure(HISTORY_REFRESH_MAX_DELAY),
+        HISTORY_REFRESH_INTERVAL
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn history_refresh_timeout_peer_eof_and_replacement_reset_request_ownership() {
+    use tokio::io::AsyncBufReadExt;
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            let (client_pipe, peer_pipe) = tokio::io::duplex(8192);
+            let (read, write) = tokio::io::split(client_pipe);
+            let (client, io) = conn::spawn_client(
+                acp::Client.builder().name("history-eof-client"),
+                conn::byte_streams(write.compat_write(), read.compat()),
+            );
+            tokio::task::spawn_local(async move {
+                let _ = io.await;
+            });
+            let mut agent = listing_agent(crate::agent_sessions::CliSource::Copilot, &[]);
+            let inner = Arc::get_mut(&mut agent).unwrap();
+            inner.conn.shutdown();
+            inner.conn = client;
+            add_test_agent_to_pool(&state, &agent).await;
+
+            let mut peer = tokio::io::BufReader::new(peer_pipe);
+            let mut request = String::new();
+            let refresh = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
+            tokio::pin!(refresh);
+            tokio::select! {
+                bytes = peer.read_line(&mut request) => assert!(bytes.unwrap() > 0),
+                _ = &mut refresh => panic!("refresh completed before timeout"),
+            }
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&request).unwrap()["method"],
+                "session/list"
+            );
+            tokio::time::advance(HISTORY_LIST_TIMEOUT).await;
+            assert!(refresh.await.is_none());
+            tokio::time::advance(HISTORY_REFRESH_INTERVAL).await;
+            let retry = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic);
+            tokio::pin!(retry);
+            assert!(futures::poll!(&mut retry).is_pending());
+            request.clear();
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(1),
+                    peer.read_line(&mut request)
+                )
+                .await
+                .is_err(),
+                "no replacement request is sent before peer EOF"
+            );
+
+            drop(peer);
+            assert!(retry.await.is_none());
+            assert!(agent.conn.transport_ended());
+            assert_eq!(
+                *agent.history_refresh.failure.lock().await,
+                Some(HistoryRefreshFailure::Other)
+            );
+            assert!(agent
+                .history_refresh
+                .gate
+                .lock()
+                .await
+                .pending_list
+                .is_none());
+            let cell = state.agents.lock().await[&agent.cmd_key].clone();
+            reap_agent(&state, &agent.cmd_key, &cell, agent.instance_id).await;
+            assert!(agent
+                .history_refresh
+                .retired
+                .load(std::sync::atomic::Ordering::Acquire));
+            let mut replacement =
+                listing_agent(crate::agent_sessions::CliSource::Copilot, &["fresh"]);
+            Arc::get_mut(&mut replacement).unwrap().cmd_key = agent.cmd_key.clone();
+            assert_ne!(replacement.instance_id, agent.instance_id);
+            assert!(replacement
+                .history_refresh
+                .gate
+                .lock()
+                .await
+                .retry_delay
+                .is_none());
+            add_test_agent_to_pool(&state, &replacement).await;
+            assert_eq!(seed_host_and_broadcast(&state, &replacement).await, Some(1));
+            assert!(seed_host_and_broadcast(&state, &agent).await.is_none());
+            assert_eq!(
+                state.registry.snapshot().await[0].session_id,
+                SessionId::new("fresh")
+            );
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn history_refresh_runs_without_views_and_does_not_block_on_a_slow_connection() {
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -14548,7 +14761,7 @@ async fn history_refresh_failure_backs_off_without_clearing_rows_and_manual_refr
                     PathBuf::from("C:\\repo"),
                 ))
                 .await;
-            for delay in [5, 10, 20, 40, 60, 60] {
+            for delay in [5, 10, 20, 40, 80, 160, 320, 600, 600] {
                 let refresh =
                     refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
                 let reply = async {
@@ -14600,8 +14813,32 @@ async fn history_refresh_failure_backs_off_without_clearing_rows_and_manual_refr
             assert_eq!(count, Some(0));
             assert_eq!(agent.history_refresh.gate.lock().await.failures, 0);
             assert_eq!(
+                agent.history_refresh.gate.lock().await.retry_delay,
+                Some(std::time::Duration::from_secs(300)),
+                "recovery halves the delay rather than dropping immediately to five seconds"
+            );
+            assert_eq!(
                 state.history_status.borrow().status,
                 crate::session_registry::HistoryLoadStatus::Ready
+            );
+            tokio::time::advance(std::time::Duration::from_secs(299)).await;
+            assert_eq!(
+                refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic).await,
+                Some(0)
+            );
+            assert!(
+                requests.try_recv().is_err(),
+                "healthy recovery still honors its reduced delay"
+            );
+            tokio::time::advance(std::time::Duration::from_secs(1)).await;
+            let refresh = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic);
+            let reply = async {
+                requests.recv().await.unwrap().send(Ok(vec![])).unwrap();
+            };
+            assert_eq!(tokio::join!(refresh, reply).0, Some(0));
+            assert_eq!(
+                agent.history_refresh.gate.lock().await.retry_delay,
+                Some(std::time::Duration::from_secs(150))
             );
         })
         .await;
@@ -14881,7 +15118,6 @@ async fn history_refresh_timeout_kind_distinguishes_mixed_failures_and_recovery(
             };
             tokio::time::advance(std::time::Duration::from_secs(5)).await;
             assert!(!refresh.await);
-            late_reply.send(Ok(Vec::new())).unwrap();
             assert_eq!(
                 *timeout_agent.history_refresh.failure.lock().await,
                 Some(HistoryRefreshFailure::Timeout)
@@ -14911,6 +15147,14 @@ async fn history_refresh_timeout_kind_distinguishes_mixed_failures_and_recovery(
                 timeout_requests.try_recv().is_err(),
                 "timeouts retain failure backoff"
             );
+            tokio::time::advance(std::time::Duration::from_secs(5)).await;
+            late_reply.send(Ok(Vec::new())).unwrap();
+            assert_eq!(
+                refresh_agent_history(&state, &timeout_agent, HistoryRefreshTrigger::Periodic)
+                    .await,
+                Some(0),
+                "consume the late response before requesting another list"
+            );
             let refresh =
                 refresh_agent_history(&state, &timeout_agent, HistoryRefreshTrigger::Immediate);
             let reply = async {
@@ -14929,7 +15173,12 @@ async fn history_refresh_timeout_kind_distinguishes_mixed_failures_and_recovery(
                     .lock()
                     .await
                     .get(&timeout_agent.cmd_key),
-                Some(&HistoryRefreshFailure::Other),
+                None,
+                "successful late recovery cleared the discovery error"
+            );
+            assert_eq!(
+                *timeout_agent.history_refresh.failure.lock().await,
+                Some(HistoryRefreshFailure::Other)
             );
             let refresh =
                 refresh_agent_history(&state, &timeout_agent, HistoryRefreshTrigger::Immediate);
@@ -15009,17 +15258,16 @@ async fn history_refresh_timeout_kind_distinguishes_mixed_failures_and_recovery(
                 Some(HistoryErrorKind::Timeout)
             );
 
-            let refresh =
-                refresh_agent_history(&state, &timeout_agent, HistoryRefreshTrigger::Immediate);
-            let reply = async {
-                timeout_requests
-                    .recv()
-                    .await
-                    .unwrap()
-                    .send(Ok(Vec::new()))
-                    .unwrap();
-            };
-            assert_eq!(tokio::join!(refresh, reply).0, Some(0));
+            assert_eq!(
+                timeout_agent.history_refresh.gate.lock().await.retry_delay,
+                Some(std::time::Duration::from_secs(10))
+            );
+            tokio::time::advance(std::time::Duration::from_secs(10)).await;
+            assert_eq!(
+                refresh_agent_history(&state, &timeout_agent, HistoryRefreshTrigger::Periodic)
+                    .await,
+                Some(0)
+            );
             assert_eq!(
                 *state.history_status.borrow(),
                 HistorySyncStatus {

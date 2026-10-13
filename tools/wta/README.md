@@ -199,7 +199,15 @@ This only reads the current registry snapshot; it never starts an agent or waits
 for an ACP history query. Master synchronizes initialized, listing-capable pooled
 connections every five seconds, including already-connected WSL and custom agents.
 Each connection has one refresh in flight; history and title updates share its
-single response. Failed queries retain prior rows and back off up to 60 seconds.
+single response. Failed waits/queries retain prior rows and increase the background
+retry delay through 5, 10, 20, 40, 80, 160, 320, then at most 600 seconds.
+Each successful refresh halves that delay, down to the normal five-second cadence.
+The individual wait budget stays five seconds; timing out retains the outstanding
+request, and subsequent waits consume its eventual response rather than sending
+another `session/list`. A slow provider can therefore recover without overlapping
+queries. Manual refresh cannot bypass the delay while a request remains unresolved;
+it can still request a fresh list immediately after a completed response.
+No shared agent process is restarted or terminated by this backoff.
 The opt-in JSON object contains `sessions` and `history_status` (`loading`, `ready`,
 or `error`), with optional `history_error_kind` to distinguish timeout-only failures;
 ordinary `--json` output remains one session per line.

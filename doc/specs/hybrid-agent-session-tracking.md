@@ -499,7 +499,12 @@ preserves live status and pane bindings. WSL/custom sessions already known to th
 are still displayed, but this pass does not start WSL distros or unknown custom commands.
 Master refreshes initialized, listing-capable pooled connections every five seconds,
 including already-connected WSL and custom agents. Snapshot reads never perform ACP
-queries; push notifications remain immediate. The 60-second open-view fallback runs
+queries; push notifications remain immediate. Failed history waits/queries double
+retry spacing from five seconds to a 600-second cap; successful refreshes halve it
+back to five seconds. The five-second wait budget does not cancel or replace an
+unresolved request: a later wait consumes that request's response, including on
+slow hosts. This is per agent instance and does not restart shared chat/resume
+connections. The 60-second open-view fallback runs
 in Sidebar for vertical layout and in the helper for nonvertical layout. The host
 propagates the actual window layout through helper-ready and hot runtime config,
 so layout switches do not require an ACP reconnect.

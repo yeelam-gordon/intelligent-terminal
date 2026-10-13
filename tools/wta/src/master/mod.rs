@@ -53,6 +53,8 @@ const SESSION_LOAD_TIMEOUT_SECS: u64 = 55;
 const SESSION_ROLLBACK_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const MASTER_PIPE_DISCOVERY_FILE: &str = "master-pipe.txt";
 const HISTORY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+const HISTORY_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const HISTORY_REFRESH_MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(600);
 
 use agent_client_protocol as acp;
 use anyhow::{anyhow, Context, Result};
@@ -1900,13 +1902,32 @@ impl From<crate::session_registry::HistoryLoadStatus> for HistorySyncStatus {
 struct HistoryRefreshState {
     next_refresh_at: Option<tokio::time::Instant>,
     failures: u32,
+    retry_delay: Option<std::time::Duration>,
     last_count: Option<usize>,
+    pending_list: Option<
+        futures::future::BoxFuture<'static, acp::Result<acp::schema::v1::ListSessionsResponse>>,
+    >,
 }
 
 impl HistoryRefreshState {
-    fn record_failure(&mut self) -> std::time::Duration {
-        self.failures = self.failures.saturating_add(1).min(5);
-        std::time::Duration::from_secs((5u64 << (self.failures - 1)).min(60))
+    fn record_failure(&mut self, max_delay: std::time::Duration) -> std::time::Duration {
+        self.failures = self.failures.saturating_add(1);
+        let delay = self
+            .retry_delay
+            .map_or(HISTORY_REFRESH_INTERVAL, |delay| delay.saturating_mul(2))
+            .min(max_delay);
+        self.retry_delay = Some(delay);
+        delay
+    }
+
+    fn record_success(&mut self) -> std::time::Duration {
+        self.failures = 0;
+        let delay = self
+            .retry_delay
+            .map_or(HISTORY_REFRESH_INTERVAL, |delay| delay / 2)
+            .max(HISTORY_REFRESH_INTERVAL);
+        self.retry_delay = (delay > HISTORY_REFRESH_INTERVAL).then_some(delay);
+        delay
     }
 
     fn retry_due(&self) -> bool {
@@ -6875,6 +6896,7 @@ async fn publish_session_status_delta(state: &MasterStateInner, session_id: &str
 /// Called only under the per-connection refresh gate. Failure is not an empty list.
 async fn host_session_list_raw(
     agent: &AgentCli,
+    refresh: &mut HistoryRefreshState,
 ) -> Result<Vec<acp::schema::v1::SessionInfo>, HistoryRefreshFailure> {
     if agent
         .cached_init_resp
@@ -6886,14 +6908,22 @@ async fn host_session_list_raw(
         return Err(HistoryRefreshFailure::Other);
     }
 
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        agent
-            .conn
-            .list_sessions(acp::schema::v1::ListSessionsRequest::new()),
-    )
-    .await
-    {
+    // A wait timeout does not prove that the peer stopped work. Keep the same
+    // future (including queued transport work) until a response or transport
+    // failure settles it, rather than cancelling and issuing overlapping RPCs.
+    let pending = refresh.pending_list.get_or_insert_with(|| {
+        let connection = agent.conn.clone();
+        Box::pin(async move {
+            connection
+                .list_sessions(acp::schema::v1::ListSessionsRequest::new())
+                .await
+        })
+    });
+    let result = tokio::time::timeout(HISTORY_LIST_TIMEOUT, pending).await;
+    if result.is_ok() {
+        refresh.pending_list = None;
+    }
+    match result {
         Ok(Ok(resp)) => Ok(resp.sessions),
         Ok(Err(e)) => {
             tracing::warn!(
@@ -6907,7 +6937,7 @@ async fn host_session_list_raw(
             tracing::warn!(
                 target: "master_history",
                 cli = ?agent.cli_source,
-                "host session/list timed out"
+                "host session/list wait timed out; retaining the outstanding request"
             );
             Err(HistoryRefreshFailure::Timeout)
         }
@@ -7038,8 +7068,9 @@ fn titles_from_listing(
 async fn sync_host_history(
     state: &MasterStateInner,
     agent: &AgentCli,
+    refresh: &mut HistoryRefreshState,
 ) -> Result<(bool, usize), HistoryRefreshFailure> {
-    let sessions = host_session_list_raw(agent).await?;
+    let sessions = host_session_list_raw(agent, refresh).await?;
     if agent
         .history_refresh
         .retired
@@ -7293,8 +7324,8 @@ async fn refresh_agent_history(
     // The interval already paces periodic work. Applying the success delay
     // again would skip ticks whenever the previous dispatch started slightly late.
     let honor_delay = match trigger {
-        HistoryRefreshTrigger::Immediate => false,
-        HistoryRefreshTrigger::Periodic => refresh.failures != 0,
+        HistoryRefreshTrigger::Immediate => refresh.pending_list.is_some(),
+        HistoryRefreshTrigger::Periodic => refresh.retry_delay.is_some(),
         HistoryRefreshTrigger::Event => true,
     };
     // Waiters share the completed refresh rather than queueing another ACP call.
@@ -7307,18 +7338,26 @@ async fn refresh_agent_history(
         return refresh.last_count;
     }
     let started_at = tokio::time::Instant::now();
-    let result = sync_host_history(state, agent).await;
+    let recovering = refresh.retry_delay.is_some();
+    let result = sync_host_history(state, agent, &mut refresh).await;
     let delay = if result.is_ok() {
-        refresh.failures = 0;
-        HISTORY_REFRESH_INTERVAL
+        refresh.record_success()
     } else {
-        refresh.record_failure()
+        refresh.record_failure(HISTORY_REFRESH_MAX_DELAY)
     };
-    refresh.next_refresh_at = Some(if result.is_ok() {
+    refresh.next_refresh_at = Some(if result.is_ok() && !recovering {
         started_at + delay
     } else {
         tokio::time::Instant::now() + delay
     });
+    tracing::debug!(
+        target: "master_history",
+        agent_id = %agent.resolved_agent_id,
+        failures = refresh.failures,
+        retry_delay_ms = delay.as_millis() as u64,
+        pending = refresh.pending_list.is_some(),
+        "history refresh schedule updated"
+    );
     refresh.last_count = result.ok().map(|(_, count)| count);
     {
         let mut discovery_errors = state.history_discovery_errors.lock().await;
@@ -7509,7 +7548,7 @@ where
             Err(error) => {
                 let mut retries = state.history_discovery_retries.lock().await;
                 let retry = retries.entry(key.clone()).or_default();
-                let delay = retry.record_failure();
+                let delay = retry.record_failure(std::time::Duration::from_secs(60));
                 retry.next_refresh_at = Some(tokio::time::Instant::now() + delay);
                 drop(retries);
                 state.history_discovery_errors.lock().await.insert(key, HistoryRefreshFailure::Other);
