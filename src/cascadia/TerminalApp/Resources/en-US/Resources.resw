@@ -350,6 +350,10 @@
     <value>Waiting for input</value>
     <comment>Agent History session status: the agent needs a response or approval from the user.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>Attention requested</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
   <data name="VerticalTabsHistoryStatusError" xml:space="preserve">
     <value>Error</value>
     <comment>Agent History session status: the session encountered an error.</comment>

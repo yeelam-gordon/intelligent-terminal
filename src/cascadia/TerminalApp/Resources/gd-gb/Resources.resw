@@ -696,4 +696,8 @@
     <value>Tha na tabaichean agus seiseanan àidseantan agad sa bhàr-taoibh a-nis. Cleachd Roghainnean taisbeanaidh a’ bhàr-taoibh gus mion-fhiosrachadh nan tabaichean a thaghadh. Dèan briogadh deas air taba gus tilleadh gu tabaichean còmhnard.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>Aire air iarraidh</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

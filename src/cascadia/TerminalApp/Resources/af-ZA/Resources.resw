@@ -695,4 +695,8 @@
     <value>Jou oortjies en agentsessies is nou in die sybalk. Gebruik Sybalkvertoonopsies om oortjiebesonderhede te kies. Regsklik op ’n oortjie om na horisontale oortjies terug te keer.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>Aandag versoek</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

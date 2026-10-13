@@ -1710,4 +1710,8 @@ Per tutte le opzioni disponibili, esegui 'wt new-tab --help'.</value>
     <value>Le schede e le sessioni degli agenti sono ora nella barra laterale. Usa Opzioni di visualizzazione della barra laterale per scegliere i dettagli delle schede. Fai clic con il pulsante destro su una scheda per tornare alle schede orizzontali.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>Attenzione richiesta</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

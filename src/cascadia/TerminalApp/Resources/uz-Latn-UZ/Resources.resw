@@ -788,4 +788,8 @@
     <value>Varaqlaringiz va agent seanslaringiz endi yon panelda. Varaq tafsilotlarini tanlash uchun Yon panelni ko‘rsatish parametrlari tugmasidan foydalaning. Gorizontal varaqlarga qaytish uchun varaqni o‘ng tugma bilan bosing.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>Eʼtibor soʻraldi</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

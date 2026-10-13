@@ -809,4 +809,8 @@
     <value>Os seus separadores e sessões de agentes estão agora na barra lateral. Utilize Opções de apresentação da barra lateral para escolher os detalhes dos separadores. Clique com o botão direito num separador para voltar aos separadores horizontais.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>Atenção solicitada</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

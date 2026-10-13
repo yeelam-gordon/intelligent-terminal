@@ -1,5 +1,47 @@
 # Hooks-Fallback Agent Session Watcher (Hybrid Tracking)
 
+## Sessions OFF: pane-local native status
+
+The native sidebar uses `EffectiveAgentSessionManagementEnabled()` (the user
+setting combined with hooks policy), not listener availability, to select its
+status source. With Sessions ON, the existing hook/registry path is unchanged.
+With Sessions OFF, only a native agent provider recorded at pane creation or an
+explicit resume identifies a CLI pane. ACP helper panes keep their direct status;
+ordinary shells do not gain agent status from titles, bells or progress.
+Installed hooks may still emit in-band events while Sessions is OFF. Native
+hook binding ingestion and retained hook replay are therefore gated in both
+the page and shared content manager; they cannot overwrite explicit resume
+bindings or launch-owned providers. ACP helper content is explicitly marked
+and remains eligible for its direct session events.
+
+The existing parsed OSC 9;4 progress reports provide Idle (0), Working (1/3),
+Error (2), and Paused (4). A pane-local warning bell requests attention; it does
+**not** prove the agent is waiting for input. The next progress event clears
+attention. With Sessions OFF, only disappearance of the pane ID ends native
+ownership. OSC 133;D and a retained pane's Closed/Failed connection do not prove
+the agent has ended, and do not expire status, provider identity, or explicit
+resume bindings. This pane-presence status is deliberately not a process-liveness
+claim. Changing Sessions clears observations and invalidates already-queued
+BEL/progress callbacks using a mutex-protected observation epoch. State belongs
+to the managed content, so splitting/reparenting or transferring content does not
+attribute one pane's signal to another.
+
+New native launches remain provider-known but session-unknown without hooks.
+Historical ACP list rows contain `updated_at`, exposed as `started_at`, not a
+genuine creation timestamp or launch ownership token. Neither FIFO matching,
+timestamp tolerance, nor a singleton same-provider result can distinguish an
+external session or an updated old session. Discovery therefore never guesses
+a new pane's session ID, including concurrent and ambiguous lists. Explicit
+recent-session resume retains its known binding under the actual connection
+SessionId even without a saved pane ID. Explicit binding ownership transfers with
+the pane between windows and remains until that pane is removed, including after
+command marks or retained Closed/Failed connection states. The existing Sessions
+ON hook/completion policy is unchanged. A reused saved pane GUID cannot
+inherit the closed pane's explicit ownership marker.
+
+The watcher design below describes registry tracking, not an authority to
+infer native pane identity when Sessions is OFF.
+
 ## Abstract
 
 Intelligent Terminal (IT) surfaces a live list of agent-CLI sessions

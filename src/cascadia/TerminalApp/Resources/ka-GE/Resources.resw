@@ -696,4 +696,8 @@
     <value>თქვენი ჩანართები და აგენტების სესიები ახლა გვერდით ზოლშია. ჩანართების დეტალების ასარჩევად გამოიყენეთ გვერდითი ზოლის ჩვენების პარამეტრები. ჰორიზონტალურ ჩანართებზე დასაბრუნებლად მარჯვენა ღილაკით დააწკაპუნეთ ჩანართზე.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>მოთხოვნილია ყურადღება</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

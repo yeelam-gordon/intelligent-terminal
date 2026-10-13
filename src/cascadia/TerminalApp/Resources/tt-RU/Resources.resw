@@ -788,4 +788,8 @@
     <value>Кыстыргычларыгыз һәм агент сессияләрегез хәзер ян панельдә. Кыстыргыч мәгълүматларын сайлау өчен Ян панель күрсәтү параметрлары төймәсен кулланыгыз. Горизонталь кыстыргычларга кайту өчен кыстыргычка тычканның уң төймәсе белән басыгыз.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>Игътибар соралды</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

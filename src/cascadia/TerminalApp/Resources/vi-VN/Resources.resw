@@ -720,4 +720,8 @@
     <value>Các tab và phiên tác tử của bạn hiện nằm trong thanh bên. Dùng Tùy chọn hiển thị thanh bên để chọn chi tiết tab. Nhấp chuột phải vào một tab để quay lại các tab nằm ngang.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>Đã yêu cầu chú ý</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>
