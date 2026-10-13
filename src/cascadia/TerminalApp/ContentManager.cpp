@@ -92,6 +92,10 @@ namespace winrt::TerminalApp::implementation
         if (const auto it = _content.find(contentId); it != _content.end())
         {
             it->second.nativeAgentStatus = NativeAgentStatus{ providerId };
+            if (!_nativeAgentSessionEventsEnabled)
+            {
+                it->second.nativeAgentProviderId = providerId;
+            }
         }
     }
 

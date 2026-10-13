@@ -397,6 +397,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(NativeAgentSessionsOffStatusIsPaneLocal);
         TEST_METHOD(NativeAgentSessionsOffObservesParsedSignals);
         TEST_METHOD(NativeAgentSessionsOffResumeUsesConnectionIdentity);
+        TEST_METHOD(NativeAgentSessionsOffResumeUpdatesProviderIdentity);
         TEST_METHOD(NativeAgentSessionsOffSplitKeepsConnectionIdentity);
         TEST_METHOD(NativeAgentSessionsOffTransferRetainsExplicitOwnership);
         TEST_METHOD(NativeAgentSessionsOffRetainsStatusUntilPaneRemoval);
@@ -16223,6 +16224,9 @@ namespace TerminalAppLocalTests
         using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
         const auto baseline = winrt::make_self<TestConnection>(winrt::guid{ L"{33911111-2222-3333-4444-555555555555}" }, State::Connected);
         auto page = _commonSetup(*baseline);
+        const auto uiThreadCleanup = wil::scope_exit([&]() {
+            RunOnUIThread([&]() { page = nullptr; });
+        });
         TestOnUIThread([&]() {
             const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
             const auto sourceConnection = winrt::make_self<TestConnection>(winrt::guid{ L"{22911111-2222-3333-4444-555555555555}" }, State::Connected);
@@ -16388,12 +16392,17 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(std::string{ "Idle" }, page->_RichTabAgentInfoForControl(controls[0])->status);
             // State follows ContentId, not a replaced split Pane or TermControl.
             const auto transferredContentId = controls[1].ContentId();
+            page->_TryPublishInteractiveResumeBinding(
+                controls[1], _formatPaneId(ids[1]), {}, L"claude", L"11111111-2222-3333-4444-555555555555");
             manager->ObserveNativeAgentStatus(transferredContentId, 2, true);
             const auto detachedRoot = tabs[1]->DetachRoot();
             VERIFY_IS_NOT_NULL(detachedRoot);
             page->_manager.Detach(controls[1]);
             const auto reattached = page->_AttachControlToContent(transferredContentId);
             VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, page->_RichTabAgentInfoForControl(reattached)->status);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, manager->NativeAgentProviderId(reattached.ContentId()));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, manager->NativeAgentProviderIdForPane(ids[1]));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ms-appx:///AgentIcons/claude.svg" }, page->_AgentIconForControl(reattached, {}));
             winrt::guid helperId;
             VERIFY_SUCCEEDED(CoCreateGuid(reinterpret_cast<GUID*>(&helperId)));
             const auto helperConnection = winrt::make_self<TestConnection>(helperId, State::Connected);
@@ -16561,6 +16570,78 @@ namespace TerminalAppLocalTests
         });
     }
 
+    void TabTests::NativeAgentSessionsOffResumeUpdatesProviderIdentity()
+    {
+        using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
+        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto uiThreadCleanup = wil::scope_exit([&]() {
+            RunOnUIThread([&]() { page = nullptr; });
+        });
+        TestOnUIThread([&]() {
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
+            page->_SyncNativeAgentStatusMode();
+            const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
+            const winrt::guid paneId{ L"{91511111-2222-3333-4444-555555555555}" };
+            const auto connection = winrt::make_self<TestConnection>(paneId, State::Connected);
+            const auto pane = page->_MakePane(NewTerminalArgs{}, nullptr, *connection);
+            const auto control = pane->GetTerminalControl();
+            const auto contentId = control.ContentId();
+            VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(pane));
+            const auto savedProvider = [&]() {
+                return pane->GetContent().GetNewTerminalArgs(BuildStartupKind::Persist).as<NewTerminalArgs>().NativeAgentProviderId();
+            };
+            VERIFY_IS_FALSE(pane->IsAgentPane());
+            VERIFY_IS_FALSE(manager->NativeAgentStatusForContent(contentId).has_value());
+            VERIFY_IS_TRUE(manager->NativeAgentProviderId(contentId).empty());
+            VERIFY_IS_TRUE(manager->NativeAgentProviderIdForPane(paneId).empty());
+            VERIFY_IS_TRUE(savedProvider().empty());
+            VERIFY_IS_FALSE(page->_RichTabAgentInfoForControl(control).has_value());
+            VERIFY_IS_FALSE(page->_BuildRichTabFirstPartyFields(control).contains("agentStatus"));
+
+            for (const auto& [provider, icon] : {
+                     std::pair{ L"copilot", L"ms-appx:///AgentIcons/copilot.svg" },
+                     std::pair{ L"claude", L"ms-appx:///AgentIcons/claude.svg" } })
+            {
+                page->_TryPublishInteractiveResumeBinding(
+                    control, _formatPaneId(connection->SessionId()), {}, provider, L"11111111-2222-3333-4444-555555555555");
+                const auto status = manager->NativeAgentStatusForContent(contentId);
+                VERIFY_IS_TRUE(status.has_value());
+                VERIFY_ARE_EQUAL(winrt::hstring{ provider }, status.value().providerId);
+                VERIFY_ARE_EQUAL(winrt::hstring{ provider }, manager->NativeAgentProviderId(contentId));
+                VERIFY_ARE_EQUAL(winrt::hstring{ provider }, manager->NativeAgentProviderIdForPane(paneId));
+                VERIFY_ARE_EQUAL(winrt::hstring{ provider }, savedProvider());
+                VERIFY_ARE_EQUAL(winrt::hstring{ provider }, page->_paneAgentSessions.at(paneId).agent);
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"11111111-2222-3333-4444-555555555555" },
+                    page->_paneAgentSessions.at(paneId).sessionId);
+                for (const auto attention : { false, true })
+                {
+                    manager->ObserveNativeAgentStatus(contentId, 4, attention);
+                    const auto info = page->_RichTabAgentInfoForControl(control);
+                    VERIFY_IS_TRUE(info.has_value());
+                    VERIFY_ARE_EQUAL(std::string{ attention ? "AttentionRequested" : "Paused" }, info.value().status);
+                    VERIFY_ARE_EQUAL(winrt::hstring{ icon }, page->_AgentIconForControl(control, pane->GetContent().Icon()));
+                }
+            }
+
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(true);
+            page->_SyncNativeAgentStatusMode();
+            page->_TryPublishInteractiveResumeBinding(
+                control, _formatPaneId(connection->SessionId()), {}, L"copilot", L"22222222-2222-3333-4444-555555555555");
+            const auto status = manager->NativeAgentStatusForContent(contentId);
+            VERIFY_IS_TRUE(status.has_value());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, status.value().providerId);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, manager->NativeAgentProviderId(contentId));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, manager->NativeAgentProviderIdForPane(paneId));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, savedProvider());
+            VERIFY_IS_FALSE(page->_RichTabAgentInfoForControl(control).has_value());
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
+            page->_SyncNativeAgentStatusMode();
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, manager->NativeAgentProviderId(contentId));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, manager->NativeAgentProviderIdForPane(paneId));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, savedProvider());
+        });
+    }
+
     void TabTests::NativeAgentSessionsOffSplitKeepsConnectionIdentity()
     {
         using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
@@ -16690,7 +16771,7 @@ namespace TerminalAppLocalTests
                 args.Commandline(L"copilot --resume 11111111-2222-3333-4444-555555555555");
                 page->_settings.GetProfileForArgs(args).CloseOnExit(CloseOnExitMode::Never);
                 pane = page->_MakePane(args, nullptr, *connection);
-                VERIFY_ARE_EQUAL(CloseOnExitMode::Never, pane->GetFocusedProfile().CloseOnExit());
+                VERIFY_ARE_EQUAL(CloseOnExitMode::Never, pane->GetContent().as<TerminalPaneContent>().GetProfile().CloseOnExit());
                 control = pane->GetTerminalControl();
                 contentId = control.ContentId();
                 control.Initialized([initialized](auto&&, auto&&) { initialized->Set(); });
