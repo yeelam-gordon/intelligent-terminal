@@ -16289,24 +16289,35 @@ namespace TerminalAppLocalTests
     {
         using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
         auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        std::vector<winrt::Microsoft::Terminal::Control::TermControl> controls;
+        std::vector<winrt::guid> ids;
+        std::vector<winrt::com_ptr<winrt::TerminalApp::implementation::Tab>> tabs;
         TestOnUIThread([&]() {
             page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
             page->_SyncNativeAgentStatusMode();
-            const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
-            std::vector<winrt::Microsoft::Terminal::Control::TermControl> controls;
-            std::vector<winrt::guid> ids;
-            for (const auto provider : { L"copilot", L"copilot", L"" })
-            {
+        });
+        for (const auto provider : { L"copilot", L"copilot", L"" })
+        {
+            const auto initialized = std::make_shared<::details::Event>();
+            VERIFY_IS_TRUE(initialized->IsValid());
+            TestOnUIThread([&]() {
                 winrt::guid id;
                 VERIFY_SUCCEEDED(CoCreateGuid(reinterpret_cast<GUID*>(&id)));
                 const auto connection = winrt::make_self<TestConnection>(id, State::Connected);
                 NewTerminalArgs args;
                 args.NativeAgentProviderId(provider);
                 const auto pane = page->_MakePane(args, nullptr, *connection);
+                pane->GetTerminalControl().Initialized([initialized](auto&&, auto&&) { initialized->Set(); });
                 VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(pane));
                 controls.push_back(pane->GetTerminalControl());
                 ids.push_back(id);
-            }
+                tabs.push_back(page->_GetFocusedTabImpl());
+                page->UpdateLayout();
+            });
+            VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(initialized->m_handle, 10000));
+        }
+        TestOnUIThread([&]() {
+            const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
             // Even a hook cache explicitly naming this pane cannot supply OFF activity.
             page->_richTabAgentStatusByPaneId.insert_or_assign(ids[0],
                 winrt::TerminalApp::implementation::TerminalPage::_RichTabAgentInfo{
@@ -16369,9 +16380,12 @@ namespace TerminalAppLocalTests
             manager->ResetNativeAgentStatusObservations();
             VERIFY_ARE_EQUAL(std::string{ "Idle" }, page->_RichTabAgentInfoForControl(controls[0])->status);
             // State follows ContentId, not a replaced split Pane or TermControl.
-            manager->ObserveNativeAgentStatus(controls[1].ContentId(), 2, true);
+            const auto transferredContentId = controls[1].ContentId();
+            manager->ObserveNativeAgentStatus(transferredContentId, 2, true);
+            const auto detachedRoot = tabs[1]->DetachRoot();
+            VERIFY_IS_NOT_NULL(detachedRoot);
             page->_manager.Detach(controls[1]);
-            const auto reattached = page->_AttachControlToContent(controls[1].ContentId());
+            const auto reattached = page->_AttachControlToContent(transferredContentId);
             VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, page->_RichTabAgentInfoForControl(reattached)->status);
             winrt::guid helperId;
             VERIFY_SUCCEEDED(CoCreateGuid(reinterpret_cast<GUID*>(&helperId)));
@@ -16446,6 +16460,8 @@ namespace TerminalAppLocalTests
         {
             bool drained = false;
             winrt::event_token bellToken{};
+            const auto initialized = std::make_shared<::details::Event>();
+            VERIFY_IS_TRUE(initialized->IsValid());
             TestOnUIThread([&]() {
                 page->_settings.GlobalSettings().AgentSessionManagementEnabled(startEnabled);
                 page->_SyncNativeAgentStatusMode();
@@ -16456,7 +16472,12 @@ namespace TerminalAppLocalTests
                 args.NativeAgentProviderId(L"copilot");
                 const auto pane = page->_MakePane(args, nullptr, *connection);
                 control = pane->GetTerminalControl();
+                control.Initialized([initialized](auto&&, auto&&) { initialized->Set(); });
                 VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(pane));
+                page->UpdateLayout();
+            });
+            VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(initialized->m_handle, 10000));
+            TestOnUIThread([&]() {
                 // Registered after the page observer: that observer enqueues
                 // its work before this handler resets the mode synchronously.
                 bellToken = control.WarningBell([&, startEnabled](auto&&, auto&&) {
@@ -16641,6 +16662,8 @@ namespace TerminalAppLocalTests
             const auto connection = winrt::make_self<TestConnection>(paneId, State::Connected);
             std::shared_ptr<Pane> pane;
             winrt::Microsoft::Terminal::Control::TermControl control{ nullptr };
+            const auto initialized = std::make_shared<::details::Event>();
+            VERIFY_IS_TRUE(initialized->IsValid());
             TestOnUIThread([&]() {
                 page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
                 page->_SyncNativeAgentStatusMode();
@@ -16652,7 +16675,12 @@ namespace TerminalAppLocalTests
                 args.Commandline(L"copilot --resume 11111111-2222-3333-4444-555555555555");
                 pane = page->_MakePane(args, nullptr, *connection);
                 control = pane->GetTerminalControl();
+                control.Initialized([initialized](auto&&, auto&&) { initialized->Set(); });
                 VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(pane));
+                page->UpdateLayout();
+            });
+            VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(initialized->m_handle, 10000));
+            TestOnUIThread([&]() {
                 const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
                 manager->ObserveNativeAgentStatus(control.ContentId(), 3, true);
                 VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, page->_RichTabAgentInfoForControl(control)->status);

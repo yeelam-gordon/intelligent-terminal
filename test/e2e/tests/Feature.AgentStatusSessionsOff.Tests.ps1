@@ -51,15 +51,15 @@ Describe 'Feature: native agent status with Sessions off' -Tag @('Feature', 'Age
             @("@echo off", ">>`"$receipt`" echo $provider fixture invoked", 'exit /b 1') |
                 Set-Content (Join-Path $script:wrapperDir "$provider.cmd") -Encoding ascii
         }
-        $home = Join-Path $script:evidence 'automation-home'
+        $automationHome = Join-Path $script:evidence 'automation-home'
         $script:isolatedEnvironment = @{
-            USERPROFILE = $home; HOME = $home
-            XDG_CONFIG_HOME = (Join-Path $home '.config')
-            COPILOT_HOME = (Join-Path $home '.copilot')
-            CLAUDE_CONFIG_DIR = (Join-Path $home '.claude')
-            CODEX_HOME = (Join-Path $home '.codex')
-            GEMINI_CLI_HOME = (Join-Path $home '.gemini')
-            OPENCODE_CONFIG_DIR = (Join-Path $home '.config\opencode')
+            USERPROFILE = $automationHome; HOME = $automationHome
+            XDG_CONFIG_HOME = (Join-Path $automationHome '.config')
+            COPILOT_HOME = (Join-Path $automationHome '.copilot')
+            CLAUDE_CONFIG_DIR = (Join-Path $automationHome '.claude')
+            CODEX_HOME = (Join-Path $automationHome '.codex')
+            GEMINI_CLI_HOME = (Join-Path $automationHome '.gemini')
+            OPENCODE_CONFIG_DIR = (Join-Path $automationHome '.config\opencode')
             PATH = "$script:wrapperDir;$($script:target.InstallLocation);$env:PATH"
             WT_WTCLI_PATH = $script:target.WtcliPath; WTCLI_PATH = $script:target.WtcliPath
         }
@@ -71,6 +71,10 @@ Describe 'Feature: native agent status with Sessions off' -Tag @('Feature', 'Age
             'CODEX_HOME', 'GEMINI_CLI_HOME', 'OPENCODE_CONFIG_DIR')) {
             New-Item -ItemType Directory -Path $script:isolatedEnvironment[$key] -Force | Out-Null
         }
+        # Unredirected known-folder queries expand USERPROFILE, whereas packaged
+        # settings stay in the registered user's LocalState.
+        New-Item -ItemType Directory -Path (Join-Path $automationHome 'AppData\Local'),
+            (Join-Path $automationHome 'AppData\Roaming') -Force | Out-Null
         $script:fixture = Join-Path $script:evidence 'Emit-NativeStatus.ps1'
         @'
 param([string]$Signal, [string]$Receipt, [string]$Title, [int]$LifetimeSec = 300)
@@ -96,8 +100,10 @@ while ($clock.Elapsed.TotalSeconds -lt $LifetimeSec) {
     ConvertTo-Json | Set-Content -LiteralPath "$Receipt.failure.json"
 exit 124
 '@ | Set-Content -LiteralPath $script:fixture
-        $acp = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-AcpInteractionAgent.ps1')).Path
-        $code = "& '$($acp.Replace("'", "''"))' -LogPath '$($script:evidence.Replace("'", "''"))\acp.log'"
+        $acp = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-AcpChatAgent.ps1')).Path
+        $history = Join-Path $script:evidence 'acp-history.json'
+        @{ sessions = @() } | ConvertTo-Json | Set-Content -LiteralPath $history
+        $code = "& '$($acp.Replace("'", "''"))' -LogPath '$($script:evidence.Replace("'", "''"))\acp.log' -HistoryPath '$($history.Replace("'", "''"))'"
         $profile = '{' + [guid]::NewGuid().ToString() + '}'
         $script:ownsConfig = $true
         $script:app = Start-Terminal -Package $env:ITE2E_PACKAGE -PassFre $true -State @{
@@ -111,17 +117,27 @@ exit 124
             'warning.confirmOnClose' = 'never'; defaultProfile = $profile
             profiles = @{ list = @(@{
                 guid = $profile; name = 'Sessions-off control'; commandline = "`"$pwsh`" -NoLogo -NoProfile -NoExit"
+                tabTitle = 'Sessions-off control'; suppressApplicationTitle = $true
                 shellIntegrationEnabled = $false
                 reloadEnvironmentVariables = $false
+                environment = $script:isolatedEnvironment
             }) }
         }
         $script:app.Launched | Should -BeTrue
         $script:window = [string]$script:app.WindowId
-        # No profile environment overrides: this child must inherit the actual
-        # owned host. WtaProcess appends WinGet/npm PATH entries, preserving our
-        # leading wrappers; WTA hooks resolves each CLI through which::which.
+        $settingsReadByHost = Invoke-WtCli -App $script:app -Arguments @('get-settings')
+        $settingsReadByHost.defaultProfile | Should -Be $profile
+        $settingsReadByHost.agentSessionManagementEnabled | Should -BeFalse
+        $initialTabs = @(Get-WtTabs -App $script:app -WindowId $script:window)
+        $initialTabs | Should -HaveCount 1
+        $initialTabs[0].title | Should -Be 'Sessions-off control' -Because 'the actual host must load the fixture profile, not fallback defaults'
+        $settingsReadByHost | ConvertTo-Json -Depth 12 |
+            Set-Content (Join-Path $script:evidence 'settings-read-by-host.json')
+        # Profile overrides prove pane-side isolation separately. They cannot
+        # prove the host environment used for C++ hook reconciliation.
         $probeFile = Join-Path $script:evidence 'host-hook-isolation.json'
         $probeCode = @"
+try {
 `$names = @('copilot', 'claude', 'codex', 'gemini', 'opencode')
 `$envNames = @('USERPROFILE', 'HOME', 'XDG_CONFIG_HOME', 'COPILOT_HOME', 'CLAUDE_CONFIG_DIR',
     'CODEX_HOME', 'GEMINI_CLI_HOME', 'OPENCODE_CONFIG_DIR', 'PATH')
@@ -136,18 +152,38 @@ foreach (`$name in `$names) {
 if (`$LASTEXITCODE -ne 0) { throw 'Read-only hook status probe failed' }
 @{ environment = `$environment; paths = `$paths; hook_status = (`$statusText -join "`n" | ConvertFrom-Json) } |
     ConvertTo-Json -Depth 12 | Set-Content -LiteralPath '$($probeFile.Replace("'", "''"))'
+}
+catch {
+    @{ error = `$_.ToString(); stack = `$_.ScriptStackTrace; environment = `$environment; paths = `$paths } | ConvertTo-Json -Depth 8 |
+        Set-Content -LiteralPath '$($probeFile.Replace("'", "''")).failure.json'
+    throw
+}
 "@
+        $probeCode | Set-Content (Join-Path $script:evidence 'host-hook-isolation-probe.ps1')
+        $probeTokens = $null
+        $probeErrors = $null
+        [void][Management.Automation.Language.Parser]::ParseInput($probeCode, [ref]$probeTokens, [ref]$probeErrors)
+        if ($probeErrors.Count) { throw ($probeErrors.Message -join '; ') }
         $probeEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probeCode))
-        New-WtTab -App $script:app -Command "`"$pwsh`" -NoProfile -EncodedCommand $probeEncoded" | Out-Null
-        Wait-Until -TimeoutSec 30 -Because 'owned host inheritance and read-only hook resolver proof' -Condition {
-            Test-Path -LiteralPath $probeFile
-        } | Out-Null
+        $probePane = New-WtTab -App $script:app -Command "`"$pwsh`" -NoProfile -NoExit -EncodedCommand $probeEncoded"
+        try {
+            Wait-Until -TimeoutSec 30 -Because 'owned host inheritance and read-only hook resolver proof' -Condition {
+                (Test-Path -LiteralPath $probeFile) -or (Test-Path -LiteralPath "$probeFile.failure.json")
+            } | Out-Null
+            if (Test-Path -LiteralPath "$probeFile.failure.json") {
+                throw (Get-Content -LiteralPath "$probeFile.failure.json" -Raw)
+            }
+        }
+        finally {
+            Get-WtCapture -App $script:app -SessionId $probePane.session_id -MaxLines 100 |
+                Set-Content (Join-Path $script:evidence 'host-hook-isolation-probe.txt')
+        }
         $probe = Get-Content -LiteralPath $probeFile -Raw | ConvertFrom-Json
         foreach ($key in @('USERPROFILE', 'HOME', 'XDG_CONFIG_HOME', 'COPILOT_HOME', 'CLAUDE_CONFIG_DIR',
             'CODEX_HOME', 'GEMINI_CLI_HOME', 'OPENCODE_CONFIG_DIR')) {
             $probe.environment.$key | Should -Be $script:isolatedEnvironment[$key]
         }
-        $probe.environment.PATH.StartsWith("$script:wrapperDir;", [StringComparison]::OrdinalIgnoreCase) | Should -BeTrue
+        ($probe.environment.PATH -split ';') | Should -Contain $script:wrapperDir
         foreach ($provider in $script:providers) {
             $expected = Join-Path $script:wrapperDir "$provider.cmd"
             $probe.paths.$provider | Should -Be $expected
@@ -157,7 +193,27 @@ if (`$LASTEXITCODE -ne 0) { throw 'Read-only hook status probe failed' }
             $cli[0].plugin_installed | Should -BeFalse
             (Test-Path (Join-Path $script:evidence "$provider-wrapper.log")) | Should -BeTrue
         }
-        $script:hookIsolationVerified = $true
+        $creator = $script:app.OwnedLauncherProcess
+        $directHost = $creator -and -not $creator.HasExited -and
+            $creator.Id -eq $script:app.Pid -and
+            $creator.Path -eq (Join-Path $script:target.InstallLocation 'WindowsTerminal.exe') -and
+            $creator.StartTime -eq $script:app.OwnedProcess.StartTime
+        # The verified wtai creator launches its adjacent host with a null
+        # environment block (src/cascadia/wt/shim.cpp), preserving inheritance.
+        $shimHost = $creator -and
+            $script:app.PSObject.Properties.Name -contains 'CreatedTerminalParentPid' -and
+            $script:app.CreatedTerminalParentPid -eq $creator.Id -and
+            $script:app.OwnedProcess.Path -eq (Join-Path $script:target.InstallLocation 'WindowsTerminal.exe')
+        @{
+            pane_isolation_verified = $true
+            direct_inherited_host_verified = [bool]$directHost
+            shim_inherited_host_verified = [bool]$shimHost
+            created_pid = if ($creator) { $creator.Id } else { $null }
+            actual_host_pid = $script:app.Pid
+            required_image = (Join-Path $script:target.InstallLocation 'WindowsTerminal.exe')
+            reason = 'Direct creation or the identity-verified wtai creator chain preserves the isolated runner environment.'
+        } | ConvertTo-Json | Set-Content (Join-Path $script:evidence 'host-activation-isolation.json')
+        $script:hookIsolationVerified = [bool]($directHost -or $shimHost)
         function Assert-StatusDeadline {
             if ($script:suiteClock.Elapsed.TotalSeconds -ge 240) {
                 throw 'Sessions-off suite exceeded its four-minute outer deadline.'
@@ -342,8 +398,11 @@ if (`$LASTEXITCODE -ne 0) { throw 'Read-only hook status probe failed' }
     }
     It 'Sessions on without hooks suppresses native OSC and BEL fallback' {
         if (-not $script:hookIsolationVerified) {
-            Set-ItResult -Skipped -Because 'ALL-provider wrapper resolution and owned host home inheritance are unproven.'
-            return
+            throw 'Actual-host automation environment inheritance is unverified; ON reconciliation is unsafe.'
+        }
+        foreach ($fixture in @($script:native, $script:otherNative)) {
+            Send-StatusSignal $fixture -State 0
+            Assert-Status $fixture Idle
         }
         $beforeReceipts = @{}
         foreach ($provider in @('copilot', 'claude', 'codex', 'gemini')) {
@@ -353,7 +412,9 @@ if (`$LASTEXITCODE -ne 0) { throw 'Read-only hook status probe failed' }
         Set-WtSetting -App $script:app -Key agentSessionManagementEnabled -Value $true | Out-Null
         Wait-Until -TimeoutSec 15 -Because 'the product clears OFF metadata on the effective mode change' -Condition {
             $text = Get-StatusText $script:native
-            $text -and $text -notmatch '(?m)(^|[ ,·])Idle($|[ ,·])'
+            $otherText = Get-StatusText $script:otherNative
+            $statusPattern = '(?m)(^|[ ,·])(Active|Idle|Error|Paused|Attention requested|Waiting for input)($|[ ,·])'
+            $text -and $otherText -and $text -notmatch $statusPattern -and $otherText -notmatch $statusPattern
         } | Out-Null
         Wait-Until -TimeoutSec 30 -Because 'ALL-provider reconciliation invokes only failing fixture CLIs' -Condition {
             $complete = $true
