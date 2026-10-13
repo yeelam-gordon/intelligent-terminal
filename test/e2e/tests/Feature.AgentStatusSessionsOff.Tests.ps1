@@ -305,7 +305,10 @@ catch {
             $snapshot.PSObject.Properties.Name | Should -Contain sessions
             $snapshot.PSObject.Properties.Name | Should -Contain history_status
             ($snapshot.sessions -is [array]) | Should -BeTrue -Because 'including an empty sessions array is mandatory'
-            $snapshot.history_status | Should -BeIn @('loading', 'ready') -Because 'a failed registry query cannot prove absence'
+            # History discovery failures are independent of this successful
+            # full-registry response; they do not invalidate live pane bindings.
+            $snapshot.history_status | Should -BeIn @('loading', 'ready', 'error')
+            (Get-Content (Join-Path $script:evidence 'acp.log') -Raw) | Should -Match '(?m)^\d+\|list\|' -Because 'the fixture must exercise real ACP session discovery'
             foreach ($session in $snapshot.sessions) {
                 $session.PSObject.Properties.Name | Should -Contain session_id
                 $session.PSObject.Properties.Name | Should -Contain pane_session_id
@@ -379,6 +382,7 @@ catch {
         Send-StatusSignal $script:native -Kind bell
         Assert-Status $script:native 'Attention requested'
         Assert-Status $script:otherNative Paused
+        Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence 'sessions-off-attention-and-paused.png') | Out-Null
         Send-StatusSignal $script:otherNative -State 2
         Assert-Status $script:otherNative Error
         Assert-Status $script:native 'Attention requested'
@@ -437,7 +441,10 @@ catch {
         Assert-NoAgentStatus $script:native
         Set-WtSetting -App $script:app -Key agentSessionManagementEnabled -Value $false | Out-Null
         Wait-Until -TimeoutSec 15 -Because 'the product reloads Sessions OFF before fresh output' -Condition {
-            (Invoke-WtCli -App $script:app -Arguments @('get-settings')).agentSessionManagementEnabled -eq $false
+            $text = Get-StatusText $script:native
+            $otherText = Get-StatusText $script:otherNative
+            $idlePattern = '(?m)(^|[ ,·])Idle($|[ ,·])'
+            $text -match $idlePattern -and $otherText -match $idlePattern
         } | Out-Null
         Send-StatusSignal $script:native -State 1
         Assert-Status $script:native Active

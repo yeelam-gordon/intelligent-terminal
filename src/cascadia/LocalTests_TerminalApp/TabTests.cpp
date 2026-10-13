@@ -16292,6 +16292,13 @@ namespace TerminalAppLocalTests
         std::vector<winrt::Microsoft::Terminal::Control::TermControl> controls;
         std::vector<winrt::guid> ids;
         std::vector<winrt::com_ptr<winrt::TerminalApp::implementation::Tab>> tabs;
+        const auto uiThreadCleanup = wil::scope_exit([&]() {
+            RunOnUIThread([&]() {
+                controls.clear();
+                tabs.clear();
+                page = nullptr;
+            });
+        });
         TestOnUIThread([&]() {
             page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
             page->_SyncNativeAgentStatusMode();
@@ -16655,6 +16662,11 @@ namespace TerminalAppLocalTests
     {
         using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
         auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto pageUIThreadCleanup = wil::scope_exit([&]() {
+            RunOnUIThread([&]() {
+                page = nullptr;
+            });
+        });
         for (const auto finalState : { State::Failed, State::Closed })
         {
             winrt::guid paneId;
@@ -16662,19 +16674,25 @@ namespace TerminalAppLocalTests
             const auto connection = winrt::make_self<TestConnection>(paneId, State::Connected);
             std::shared_ptr<Pane> pane;
             winrt::Microsoft::Terminal::Control::TermControl control{ nullptr };
+            uint64_t contentId{ 0 };
             const auto initialized = std::make_shared<::details::Event>();
             VERIFY_IS_TRUE(initialized->IsValid());
+            const auto paneUIThreadCleanup = wil::scope_exit([&]() {
+                RunOnUIThread([&]() {
+                    control = nullptr;
+                    pane.reset();
+                });
+            });
             TestOnUIThread([&]() {
                 page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
                 page->_SyncNativeAgentStatusMode();
-                for (const auto profile : page->_settings.AllProfiles())
-                {
-                    profile.CloseOnExit(CloseOnExitMode::Never);
-                }
                 NewTerminalArgs args;
                 args.Commandline(L"copilot --resume 11111111-2222-3333-4444-555555555555");
+                page->_settings.GetProfileForArgs(args).CloseOnExit(CloseOnExitMode::Never);
                 pane = page->_MakePane(args, nullptr, *connection);
+                VERIFY_ARE_EQUAL(CloseOnExitMode::Never, pane->GetFocusedProfile().CloseOnExit());
                 control = pane->GetTerminalControl();
+                contentId = control.ContentId();
                 control.Initialized([initialized](auto&&, auto&&) { initialized->Set(); });
                 VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(pane));
                 page->UpdateLayout();
@@ -16695,7 +16713,10 @@ namespace TerminalAppLocalTests
                 return page->_panesWithEmittedTerminalEndState.contains(_formatPaneId(paneId));
             });
             TestOnUIThread([&]() {
-                VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, page->_RichTabAgentInfoForControl(control)->status);
+                VERIFY_IS_FALSE(page->_FindTabIdForSessionId(_formatPaneId(paneId)).empty());
+                const auto retainedStatus = page->_RichTabAgentInfoForControl(control);
+                VERIFY_IS_TRUE(retainedStatus.has_value());
+                VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, retainedStatus.value().status);
                 VERIFY_IS_TRUE(page->_paneAgentSessions.contains(paneId));
                 VERIFY_IS_TRUE(page->_explicitNativeAgentSessions.contains(paneId));
                 VERIFY_IS_TRUE(page->_interactiveResumeSessions.contains(paneId));
@@ -16717,7 +16738,7 @@ namespace TerminalAppLocalTests
             });
             _waitForContentTransferReviewUI([&]() {
                 const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
-                return !manager->NativeAgentStatusForContent(control.ContentId());
+                return !manager->NativeAgentStatusForContent(contentId);
             });
         }
     }
