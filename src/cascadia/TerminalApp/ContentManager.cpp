@@ -41,7 +41,7 @@ namespace winrt::TerminalApp::implementation
 
         {
             std::lock_guard lock{ _mutex };
-            _content.emplace(content.Id(), TerminalContent{ content, providerId });
+            _content.emplace(content.Id(), TerminalContent{ content, providerId, NativeAgentStatus{ providerId } });
         }
 
         return content;
@@ -73,6 +73,106 @@ namespace winrt::TerminalApp::implementation
             }
         }
         return {};
+    }
+
+    std::optional<ContentManager::NativeAgentStatus> ContentManager::NativeAgentStatusForContent(const uint64_t contentId) const
+    {
+        std::lock_guard lock{ _mutex };
+        const auto it = _content.find(contentId);
+        if (it == _content.end() || it->second.nativeAgentStatus.providerId.empty())
+        {
+            return std::nullopt;
+        }
+        return it->second.nativeAgentStatus;
+    }
+
+    void ContentManager::BeginNativeAgentStatus(const uint64_t contentId, const winrt::hstring& providerId)
+    {
+        std::lock_guard lock{ _mutex };
+        if (const auto it = _content.find(contentId); it != _content.end())
+        {
+            it->second.nativeAgentStatus = NativeAgentStatus{ providerId };
+            if (!_nativeAgentSessionEventsEnabled)
+            {
+                it->second.nativeAgentProviderId = providerId;
+            }
+        }
+    }
+
+    void ContentManager::ObserveNativeAgentStatus(const uint64_t contentId, const uint64_t progressState, const bool attention)
+    {
+        std::lock_guard lock{ _mutex };
+        if (const auto it = _content.find(contentId); it != _content.end())
+        {
+            auto& status = it->second.nativeAgentStatus;
+            status.progressState = progressState;
+            status.attention = attention;
+        }
+    }
+
+    void ContentManager::ResetNativeAgentStatusObservations()
+    {
+        std::lock_guard lock{ _mutex };
+        ++_nativeAgentStatusObservationEpoch;
+        for (auto& [id, content] : _content)
+        {
+            content.nativeAgentStatus.progressState = 0;
+            content.nativeAgentStatus.attention = false;
+        }
+    }
+
+    uint64_t ContentManager::NativeAgentStatusObservationEpoch() const
+    {
+        std::lock_guard lock{ _mutex };
+        return _nativeAgentStatusObservationEpoch;
+    }
+
+    void ContentManager::SetNativeAgentSessionEventsEnabled(const bool enabled)
+    {
+        _CheckThread();
+        std::lock_guard lock{ _mutex };
+        _nativeAgentSessionEventsEnabled = enabled;
+        if (!enabled)
+        {
+            std::erase_if(_agentBindings, [&](const auto& entry) {
+                const auto content = _content.find(entry.first);
+                return content == _content.end() || !content->second.agentHelper;
+            });
+            for (auto& [id, content] : _content)
+            {
+                if (!content.nativeAgentStatus.providerId.empty())
+                {
+                    content.nativeAgentProviderId = content.nativeAgentStatus.providerId;
+                }
+            }
+        }
+    }
+
+    void ContentManager::MarkAgentHelper(const uint64_t contentId)
+    {
+        std::lock_guard lock{ _mutex };
+        if (const auto content = _content.find(contentId); content != _content.end())
+        {
+            content->second.agentHelper = true;
+        }
+    }
+
+    bool ContentManager::AcceptsAgentSessionEvents(const winrt::guid& paneId) const
+    {
+        std::lock_guard lock{ _mutex };
+        if (_nativeAgentSessionEventsEnabled)
+        {
+            return true;
+        }
+        for (const auto& [id, content] : _content)
+        {
+            const auto connection = content.core.Core().Connection();
+            if (connection && connection.SessionId() == paneId)
+            {
+                return content.agentHelper;
+            }
+        }
+        return false;
     }
 
     void ContentManager::UpdateKeepRunningTab(const winrt::TerminalApp::Tab& tab)
@@ -192,6 +292,10 @@ namespace winrt::TerminalApp::implementation
         const winrt::guid sessionId = paneId.starts_with('{') ?
                                           ::Microsoft::Console::Utils::GuidFromString(text.c_str()) :
                                           ::Microsoft::Console::Utils::GuidFromPlainString(text.c_str());
+        if (!AcceptsAgentSessionEvents(sessionId))
+        {
+            return;
+        }
         const auto agentSessionId = winrt::to_hstring(params.get("agent_session_id", "").asString());
         const auto agent = winrt::to_hstring(params.get("agent", params.get("cli_source", "")).asString());
         if (!ended && (agentSessionId.empty() || std::wstring_view{ agentSessionId }.starts_with(L"sidekick-") || agent.empty()))

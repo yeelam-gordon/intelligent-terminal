@@ -696,4 +696,8 @@
     <value>Οι καρτέλες και οι συνεδρίες των πρακτόρων σας βρίσκονται πλέον στην πλαϊνή γραμμή. Χρησιμοποιήστε το κουμπί Επιλογές εμφάνισης πλαϊνής γραμμής για να επιλέξετε τις λεπτομέρειες των καρτελών. Κάντε δεξί κλικ σε μια καρτέλα για να επιστρέψετε στις οριζόντιες καρτέλες.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>Ζητήθηκε προσοχή</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

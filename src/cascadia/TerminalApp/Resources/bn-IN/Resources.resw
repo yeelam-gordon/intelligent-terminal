@@ -811,4 +811,8 @@
     <value>আপনার ট্যাব এবং এজেন্ট সেশন এখন সাইডবারে আছে। ট্যাবের বিবরণ বেছে নিতে সাইডবারের প্রদর্শন বিকল্প ব্যবহার করুন। অনুভূমিক ট্যাবে ফিরে যেতে একটি ট্যাবে ডান-ক্লিক করুন।</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>মনোযোগ চাওয়া হয়েছে</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

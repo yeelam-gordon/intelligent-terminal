@@ -1000,6 +1000,10 @@ namespace winrt::TerminalApp::implementation
         };
         static _RichTabAgentStatusSnapshot _BuildAgentStatusSnapshot(const std::vector<_RichTabAgentInfo>& rows, const std::unordered_map<winrt::guid, _RichTabAgentInfo>& lastReceivedByPane);
         std::optional<_RichTabAgentInfo> _RichTabAgentInfoForControl(const Microsoft::Terminal::Control::TermControl& control);
+        void _SyncNativeAgentStatusMode();
+        void _ObserveNativeAgentStatus(const Microsoft::Terminal::Control::TermControl& control, bool attention);
+        std::optional<bool> _lastEffectiveAgentSessionManagementEnabled;
+        std::unordered_set<winrt::guid> _explicitNativeAgentSessions;
         winrt::hstring _AgentIconForControl(const Microsoft::Terminal::Control::TermControl& control, const winrt::hstring& profileIcon);
         std::unordered_map<std::string, std::string> _BuildRichTabFirstPartyFields(const Microsoft::Terminal::Control::TermControl& control);
         void _UpdateRichTabFirstPartyFields(const Microsoft::Terminal::Control::TermControl& control);

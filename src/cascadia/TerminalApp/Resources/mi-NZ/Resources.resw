@@ -696,4 +696,8 @@
     <value>Kei te paetaha ināianei ō ripa me ō wātū māngai AI. Whakamahia Ngā kōwhiringa whakaatu paetaha hei kōwhiri i ngā taipitopito ripa. Pāwhiri-matau i tētahi ripa hei hoki ki ngā ripa whakapae.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>Kua tonoa te aro</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

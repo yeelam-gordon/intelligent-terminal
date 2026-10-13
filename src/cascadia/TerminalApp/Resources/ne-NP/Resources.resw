@@ -813,4 +813,8 @@
     <value>तपाईंका ट्याब र एजेन्ट सत्रहरू अब साइडबारमा छन्। ट्याबका विवरणहरू छान्न साइडबार प्रदर्शन विकल्पहरू प्रयोग गर्नुहोस्। तेर्सा ट्याबहरूमा फर्कन ट्याबमा दायाँ-क्लिक गर्नुहोस्।</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
   </data>
+  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
+    <value>ध्यान दिन अनुरोध गरिएको छ</value>
+    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
+  </data>
 </root>

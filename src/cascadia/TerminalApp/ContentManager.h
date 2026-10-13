@@ -45,6 +45,20 @@ namespace winrt::TerminalApp::implementation
                                                                               const winrt::hstring& providerId);
         winrt::hstring NativeAgentProviderId(uint64_t contentId) const;
         winrt::hstring NativeAgentProviderIdForPane(const winrt::guid& paneId) const;
+        struct NativeAgentStatus
+        {
+            winrt::hstring providerId;
+            uint64_t progressState{ 0 };
+            bool attention{ false };
+        };
+        std::optional<NativeAgentStatus> NativeAgentStatusForContent(uint64_t contentId) const;
+        void BeginNativeAgentStatus(uint64_t contentId, const winrt::hstring& providerId);
+        void ObserveNativeAgentStatus(uint64_t contentId, uint64_t progressState, bool attention);
+        void ResetNativeAgentStatusObservations();
+        uint64_t NativeAgentStatusObservationEpoch() const;
+        void SetNativeAgentSessionEventsEnabled(bool enabled);
+        void MarkAgentHelper(uint64_t contentId);
+        bool AcceptsAgentSessionEvents(const winrt::guid& paneId) const;
 
         void Detach(const Microsoft::Terminal::Control::TermControl& control);
 
@@ -79,8 +93,12 @@ namespace winrt::TerminalApp::implementation
         {
             Microsoft::Terminal::Control::ControlInteractivity core;
             winrt::hstring nativeAgentProviderId;
+            NativeAgentStatus nativeAgentStatus;
+            bool agentHelper{ false };
         };
         std::unordered_map<uint64_t, TerminalContent> _content;
+        bool _nativeAgentSessionEventsEnabled{ true };
+        uint64_t _nativeAgentStatusObservationEpoch{ 0 };
 
         struct AgentBinding
         {
