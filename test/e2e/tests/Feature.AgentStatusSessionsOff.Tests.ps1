@@ -1,12 +1,13 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 # Real provider-labelled COM creation -> child stdout -> ConPTY parser -> Sidebar metadata.
-# No hooks, ACP prompts, status injection or inferred conversation IDs. Resume binding,
-# effective-policy overrides and pane-removal cleanup require native unit proof.
+# No hooks, ACP prompts, status injection or inferred conversation IDs.
+# Known resume uses an exact fixture conversation ID; policy and removal need separate proof.
 # Without Sessions/hooks, command completion or retained connection state cannot
 # prove that the native agent ended; its pane ID must disappear.
 Describe 'Feature: native agent status with Sessions off' -Tag @('Feature', 'AgentStatusSessionsOff') {
     BeforeAll {
         Import-Module (Join-Path $PSScriptRoot '..\ItE2E\ItE2E.psd1') -Force
+        . (Join-Path $PSScriptRoot 'helpers\SidebarExpansionEvents.ps1')
         Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
         $script:app = $null
         $script:ownsConfig = $false
@@ -256,9 +257,41 @@ catch {
             # progress-ring peers also say Error/Paused for ordinary shells.
             $rows[0].Current.Name
         }
+        function Save-StatusDiagnostic {
+            param($Fixture, [string]$Phase)
+            try {
+                $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+                $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                    [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'ItemsList'))
+                $rows = if ($list) {
+                    @($list.FindAll([Windows.Automation.TreeScope]::Children,
+                        [Windows.Automation.Condition]::TrueCondition) | ForEach-Object {
+                        @{ name = $_.Current.Name; automation_id = $_.Current.AutomationId
+                            offscreen = $_.Current.IsOffscreen; control_type = $_.Current.ControlType.ProgrammaticName }
+                    })
+                } else { @() }
+                @{
+                    utc = [DateTimeOffset]::UtcNow; phase = $Phase; expected_title = $Fixture.Title
+                    host_pid = $root.Current.ProcessId; list_found = [bool]$list
+                    list_offscreen = if ($list) { $list.Current.IsOffscreen } else { $null }
+                    title_matched_rows = @($rows | Where-Object { $_.name.Contains($Fixture.Title) })
+                    all_rows = $rows; fixture_pane = $Fixture.Pane
+                    actual_panes = @(Get-WtPanes -App $script:app -WindowId $script:window -TabId $Fixture.Pane.tab_id)
+                    settings_disk = Invoke-WtCli -App $script:app -Arguments @('get-settings')
+                    registry = try { Get-StatusRegistrySnapshot } catch { @{ diagnostic_error = $_.ToString() } }
+                } | ConvertTo-Json -Depth 16 |
+                    Set-Content (Join-Path $script:evidence "$($Fixture.Title)-$Phase-diagnostic.json")
+            }
+            catch {
+                $_ | Out-String | Set-Content (Join-Path $script:evidence "$($Fixture.Title)-$Phase-diagnostic-error.txt")
+            }
+        }
         function Send-StatusSignal {
             param($Fixture, [string]$Kind = 'progress', [int]$State = 0)
             if ($Kind -ne 'close') { Assert-StatusDeadline }
+            if ($Kind -eq 'progress' -and $State -in @(0, 4)) {
+                Save-StatusDiagnostic $Fixture "before-OSC$State"
+            }
             $token = [guid]::NewGuid().ToString('N')
             $request = @{ kind = $Kind; state = $State; token = $token } | ConvertTo-Json -Compress
             $staging = "$($Fixture.Signal).next"
@@ -273,9 +306,17 @@ catch {
         }
         function Assert-Status {
             param($Fixture, [string]$Expected)
-            $text = Wait-Until -TimeoutSec 10 -Because "native metadata reaches $Expected" -Condition {
-                $value = Get-StatusText $Fixture
-                if ($value -match "(?m)(^|[ ,·])$([regex]::Escape($Expected))($|[ ,·])") { $value }
+            try {
+                $registryStatus = @{ Active = 'Working'; Idle = 'Idle'; Error = 'Error'; 'Waiting for input' = 'Attention' }[$Expected]
+                Assert-RegistryObservation $Fixture $registryStatus
+                $text = Wait-Until -TimeoutSec 10 -Because "native metadata reaches $Expected" -Condition {
+                    $value = Get-StatusText $Fixture
+                    if ($value -match "(?m)(^|[ ,·])$([regex]::Escape($Expected))($|[ ,·])") { $value }
+                }
+            }
+            catch {
+                Save-StatusDiagnostic $Fixture "timeout-$Expected"
+                throw
             }
             $text | Should -Not -Match 'Attention requested'
             $text | Set-Content (Join-Path $script:evidence "$($Fixture.Title)-$Expected.txt")
@@ -289,6 +330,10 @@ catch {
                 $text | Should -Not -Match '(?m)(^|[ ,·])(Active|Idle|Error|Paused|Attention requested|Waiting for input)($|[ ,·])'
                 Start-Sleep -Milliseconds 100
             } while ([DateTime]::UtcNow -lt $deadline)
+            $snapshot = Get-StatusRegistrySnapshot
+            @($snapshot.native_pane_observations | Where-Object {
+                ([string]$_.pane_id).Trim('{}') -eq ([string]$Fixture.Pane.session_id).Trim('{}')
+            }) | Should -HaveCount 0 -Because 'shell output and Sessions-ON native output must not create OFF observations'
         }
         function Assert-BellRequestsInput {
             param($Fixture)
@@ -302,8 +347,7 @@ catch {
                 Start-Sleep -Milliseconds 100
             } while ([DateTime]::UtcNow -lt $deadline)
         }
-        function Assert-NoFabricatedBinding {
-            param($Fixture)
+        function Get-StatusRegistrySnapshot {
             Assert-StatusDeadline
             $pipe = (Get-Content (Join-Path $script:app.LocalStateDir 'IntelligentTerminal\master-pipe.txt') -Raw).Trim()
             $pipe | Should -Not -BeNullOrEmpty
@@ -320,14 +364,59 @@ catch {
             # History discovery failures are independent of this successful
             # full-registry response; they do not invalidate live pane bindings.
             $snapshot.history_status | Should -BeIn @('loading', 'ready', 'error')
-            (Get-Content (Join-Path $script:evidence 'acp.log') -Raw) | Should -Match '(?m)^\d+\|list\|' -Because 'the fixture must exercise real ACP session discovery'
+            if ($snapshot.PSObject.Properties.Name -contains 'native_pane_observations') {
+                ($snapshot.native_pane_observations -is [array]) | Should -BeTrue
+                foreach ($observation in $snapshot.native_pane_observations) {
+                    foreach ($key in @('pane_id', 'provider_id', 'window_id', 'tab_id', 'mode_epoch', 'status', 'last_activity_at_ms')) {
+                        $observation.PSObject.Properties.Name | Should -Contain $key
+                    }
+                    [guid]::Parse($observation.pane_id) | Should -Not -Be ([guid]::Empty)
+                    $observation.provider_id | Should -Not -BeNullOrEmpty
+                    $observation.tab_id | Should -BeOfType [string]
+                    $observation.tab_id | Should -Not -BeNullOrEmpty
+                    $observation.mode_epoch | Should -BeGreaterOrEqual 0
+                    $observation.last_activity_at_ms | Should -BeGreaterThan 0
+                }
+            }
             foreach ($session in $snapshot.sessions) {
                 $session.PSObject.Properties.Name | Should -Contain session_id
                 $session.PSObject.Properties.Name | Should -Contain pane_session_id
                 $session.session_id | Should -Not -BeNullOrEmpty
             }
-            $result.StdOut | Set-Content (Join-Path $script:evidence "$($Fixture.Title)-binding.json")
-            @($snapshot.sessions | Where-Object pane_session_id -EQ $Fixture.Pane.session_id) | Should -HaveCount 0
+            $snapshot
+        }
+        function Assert-RegistryObservation {
+            param($Fixture, [string]$Status)
+            $captured = @{ Snapshot = $null }
+            try {
+                $observation = Wait-Until -TimeoutSec 10 -Because "master owns this exact native pane's $Status observation" -Condition {
+                    $captured.Snapshot = Get-StatusRegistrySnapshot
+                    $rows = @($captured.Snapshot.native_pane_observations | Where-Object {
+                        ([string]$_.pane_id).Trim('{}') -eq ([string]$Fixture.Pane.session_id).Trim('{}')
+                    })
+                    if ($rows.Count -eq 1 -and $rows[0].status -eq $Status) { $rows[0] }
+                }
+                $observation.provider_id | Should -Be copilot
+                [string]$observation.window_id | Should -Be $script:window
+                $observation.agent_session_id | Should -BeNullOrEmpty -Because 'a new native pane has no known conversation ID'
+                $observation.location | Should -BeNullOrEmpty
+                @($captured.Snapshot.sessions | Where-Object {
+                    ([string]$_.pane_session_id).Trim('{}') -eq ([string]$Fixture.Pane.session_id).Trim('{}')
+                }) | Should -HaveCount 0 -Because 'pane observations are not invented ACP sessions'
+            }
+            finally {
+                $captured.Snapshot | ConvertTo-Json -Depth 16 |
+                    Set-Content (Join-Path $script:evidence "$($Fixture.Title)-registry-$Status.json")
+            }
+        }
+        function Assert-NoFabricatedBinding {
+            param($Fixture)
+            $snapshot = Get-StatusRegistrySnapshot
+            (Get-Content (Join-Path $script:evidence 'acp.log') -Raw) | Should -Match '(?m)^\d+\|list\|' -Because 'the fixture must exercise real ACP session discovery'
+            $snapshot | ConvertTo-Json -Depth 16 | Set-Content (Join-Path $script:evidence "$($Fixture.Title)-binding.json")
+            @($snapshot.sessions | Where-Object {
+                ([string]$_.pane_session_id).Trim('{}') -eq ([string]$Fixture.Pane.session_id).Trim('{}')
+            }) | Should -HaveCount 0
         }
         $script:native = New-StatusFixture native
         $script:otherNative = New-StatusFixture native
@@ -421,6 +510,15 @@ catch {
             Send-StatusSignal $fixture -State 0
             Assert-Status $fixture Idle
         }
+        $beforeModeChange = Get-StatusRegistrySnapshot
+        $initialEpochs = @{}
+        foreach ($fixture in @($script:native, $script:otherNative)) {
+            $observation = @($beforeModeChange.native_pane_observations | Where-Object {
+                ([string]$_.pane_id).Trim('{}') -eq ([string]$fixture.Pane.session_id).Trim('{}')
+            })
+            $observation | Should -HaveCount 1
+            $initialEpochs[$fixture.Pane.session_id] = $observation[0].mode_epoch
+        }
         $beforeReceipts = @{}
         foreach ($provider in @('copilot', 'claude', 'codex', 'gemini')) {
             $beforeReceipts[$provider] = @(Get-Content (Join-Path $script:evidence "$provider-wrapper.log")).Count
@@ -433,6 +531,13 @@ catch {
             $statusPattern = '(?m)(^|[ ,·])(Active|Idle|Error|Paused|Attention requested|Waiting for input)($|[ ,·])'
             $text -and $otherText -and $text -notmatch $statusPattern -and $otherText -notmatch $statusPattern
         } | Out-Null
+        $onSnapshot = Get-StatusRegistrySnapshot
+        foreach ($fixture in @($script:native, $script:otherNative)) {
+            @($onSnapshot.native_pane_observations | Where-Object {
+                ([string]$_.pane_id).Trim('{}') -eq ([string]$fixture.Pane.session_id).Trim('{}')
+            }) | Should -HaveCount 0 -Because 'loaded ON mode must clear master-owned OFF observations'
+        }
+        $onSnapshot | ConvertTo-Json -Depth 16 | Set-Content (Join-Path $script:evidence 'registry-sessions-on.json')
         Wait-Until -TimeoutSec 30 -Because 'ALL-provider reconciliation invokes only failing fixture CLIs' -Condition {
             $complete = $true
             foreach ($provider in $beforeReceipts.Keys) {
@@ -459,10 +564,183 @@ catch {
             $idlePattern = '(?m)(^|[ ,·])Idle($|[ ,·])'
             $text -match $idlePattern -and $otherText -match $idlePattern
         } | Out-Null
+        foreach ($fixture in @($script:native, $script:otherNative)) {
+            Assert-RegistryObservation $fixture Idle
+        }
+        $afterModeChange = Get-StatusRegistrySnapshot
+        foreach ($fixture in @($script:native, $script:otherNative)) {
+            $observation = @($afterModeChange.native_pane_observations | Where-Object {
+                ([string]$_.pane_id).Trim('{}') -eq ([string]$fixture.Pane.session_id).Trim('{}')
+            })
+            $observation | Should -HaveCount 1
+            $observation[0].mode_epoch | Should -BeGreaterThan $initialEpochs[$fixture.Pane.session_id]
+        }
         Send-StatusSignal $script:native -State 1
         Assert-Status $script:native Active
         Send-StatusSignal $script:native -State 0
         Assert-Status $script:native Idle
         Assert-NoFabricatedBinding $script:native
+    }
+    It 'Known native resume shares canonical status across tabs Recent and session list' {
+        $sid = [guid]::NewGuid().ToString()
+        $otherSid = [guid]::NewGuid().ToString()
+        $title = 'Known-resume-' + $sid.Substring(0, 8)
+        $historyPath = Join-Path $script:evidence 'known-history.json'
+        $logPath = Join-Path $script:evidence 'known-acp.log'
+        $launchPath = Join-Path $script:evidence 'known-native-launch.json'
+        $signal = Join-Path $script:evidence 'known-native.signal.json'
+        $receipt = Join-Path $script:evidence 'known-native.receipt.txt'
+        $otherCwd = Join-Path $script:evidence 'other-conversation'
+        New-Item -ItemType Directory $otherCwd | Out-Null
+        @{ sessions = @(
+            @{ sessionId = $sid; title = $title; cwd = $script:evidence; updatedAt = '2020-01-02T00:00:00Z' },
+            @{ sessionId = $otherSid; title = $title; cwd = $otherCwd; updatedAt = '2020-01-01T00:00:00Z' }
+        ) } | ConvertTo-Json -Depth 6 | Set-Content $historyPath
+        $dispatcher = Join-Path $script:evidence 'Dispatch-CopilotFixture.ps1'
+        $acp = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-AcpChatAgent.ps1')).Path
+        $dispatchCode = @'
+$ErrorActionPreference = 'Stop'
+$cli = @($args)
+if (($cli -join ' ') -ceq '--acp --stdio') {
+    & '__ACP__' -LogPath '__LOG__' -HistoryPath '__HISTORY__'
+    exit 0
+}
+if ($cli.Count -eq 2 -and $cli[0] -ceq '--resume' -and $cli[1] -ceq '__SID__' -and $env:WT_SESSION) {
+    @{ args = $cli; session_id = $cli[1]; pane_session_id = $env:WT_SESSION; pid = $PID; provider = 'copilot'; location = 'Host' } |
+        ConvertTo-Json -Compress | Set-Content '__LAUNCH__'
+    & '__EMITTER__' -Signal '__SIGNAL__' -Receipt '__RECEIPT__' -Title '__TITLE__'
+    exit $LASTEXITCODE
+}
+[Console]::Error.WriteLine('Fixture rejects unsupported Copilot arguments')
+exit 1
+'@
+        foreach ($replacement in @{
+            '__ACP__' = $acp; '__LOG__' = $logPath; '__HISTORY__' = $historyPath; '__SID__' = $sid
+            '__LAUNCH__' = $launchPath; '__EMITTER__' = $script:fixture; '__SIGNAL__' = $signal
+            '__RECEIPT__' = $receipt; '__TITLE__' = $title
+        }.GetEnumerator()) {
+            $dispatchCode = $dispatchCode.Replace($replacement.Key, $replacement.Value.Replace("'", "''"))
+        }
+        $dispatchCode | Set-Content $dispatcher
+        $pwsh = (Get-Command pwsh.exe -ErrorAction Stop).Source
+        @('@echo off', "`"$pwsh`" -NoProfile -File `"$dispatcher`" %*", 'exit /b %errorlevel%') |
+            Set-Content (Join-Path $script:wrapperDir 'copilot.cmd') -Encoding ascii
+        Set-WtSetting -App $script:app -Key acpModel -Value '' | Out-Null
+        Set-WtSetting -App $script:app -Key acpAgent -Value copilot | Out-Null
+        Open-AgentPane -App $script:app | Out-Null
+        Wait-AgentReady -App $script:app -TimeoutSec 30 | Should -BeTrue
+        $knownRows = Wait-Until -TimeoutSec 20 -Because 'real Copilot/Host ACP history contains both exact fixture IDs' -Condition {
+            $snapshot = Get-StatusRegistrySnapshot
+            $rows = @($snapshot.sessions | Where-Object { $_.session_id -in @($sid, $otherSid) })
+            if ($rows.Count -eq 2 -and @($rows | Where-Object { $_.provider_id -ne 'copilot' -or $_.location -ne 'Host' }).Count -eq 0) { $rows }
+        }
+        $otherBefore = @($knownRows | Where-Object session_id -eq $otherSid)[0]
+        (Get-Content $logPath -Raw) | Should -Match '(?m)^\d+\|list\|'
+        $pipe = (Get-Content (Join-Path $script:app.LocalStateDir 'IntelligentTerminal\master-pipe.txt') -Raw).Trim()
+        $rpc = [IO.Pipes.NamedPipeClientStream]::new('.', ($pipe -replace '^\\\\\.\\pipe\\', ''), [IO.Pipes.PipeDirection]::InOut)
+        $reader = $null
+        $writer = $null
+        try {
+            $rpc.Connect(5000)
+            $reader = [IO.StreamReader]::new($rpc)
+            $writer = [IO.StreamWriter]::new($rpc)
+            $writer.AutoFlush = $true
+            foreach ($request in @(
+                @{ jsonrpc = '2.0'; id = 1; method = 'initialize'; params = @{
+                    protocolVersion = 1; clientCapabilities = @{}; clientInfo = @{ name = 'known-status-test'; version = '1' }
+                    _meta = @{ wta = @{ control_client = 'sidebar-history-v1' } }
+                } },
+                @{ jsonrpc = '2.0'; id = 2; method = '_intellterm.wta/session/activate'; params = @{
+                    identity = @{ session_id = $sid; history_key = @{ session_id = $sid; provider_id = 'copilot'; location = 'Host' } }
+                    window_id = [long]$script:window; activation_id = [guid]::NewGuid().ToString()
+                } }
+            )) {
+                $writer.WriteLine(($request | ConvertTo-Json -Depth 10 -Compress))
+                $clock = [Diagnostics.Stopwatch]::StartNew()
+                do {
+                    $read = $reader.ReadLineAsync()
+                    if (-not $read.Wait(10000)) { throw 'Known resume RPC timed out.' }
+                    $response = $read.GetAwaiter().GetResult() | ConvertFrom-Json -ErrorAction Stop
+                    if ($clock.Elapsed.TotalSeconds -gt 15) { throw 'Known resume response deadline exceeded.' }
+                } while ($response.id -ne $request.id)
+                if ($response.error) { throw ($response.error | ConvertTo-Json -Depth 8 -Compress) }
+            }
+            $response.result.accepted | Should -BeTrue
+        }
+        finally {
+            if ($writer) { $writer.Dispose() }
+            if ($reader) { $reader.Dispose() }
+            $rpc.Dispose()
+        }
+        Wait-Until -TimeoutSec 15 -Because 'the native CLI receives the exact resume ID in a real Terminal connection' -Condition {
+            Test-Path $launchPath
+        } | Out-Null
+        $launch = Get-Content $launchPath -Raw | ConvertFrom-Json
+        $launch.session_id | Should -BeExactly $sid
+        ($launch.args -join ' ') | Should -BeExactly "--resume $sid"
+        $launch.pane_session_id | Should -Not -BeNullOrEmpty
+        $context = Invoke-WtCli -App $script:app -Arguments @('get-pane-context', '--target', $launch.pane_session_id)
+        [string]$context.pane.window_id | Should -Be $script:window
+        $native = [pscustomobject]@{
+            Pane = $context.pane; Title = $title; Signal = $signal; Receipt = $receipt; Kind = 'native'
+        }
+        $script:fixtures += $native
+        foreach ($step in @(@{ State = 1; Status = 'Working'; Text = 'Active' }, @{ State = 0; Status = 'Idle'; Text = 'Idle' },
+            @{ State = -1; Status = 'Attention'; Text = 'Waiting for input' })) {
+            if ($step.State -eq -1) { Send-StatusSignal $native -Kind bell } else { Send-StatusSignal $native -State $step.State }
+            $current = Wait-Until -TimeoutSec 10 -Because 'one canonical Copilot/Host binding and native observation share status' -Condition {
+                $snapshot = Get-StatusRegistrySnapshot
+                $rows = @($snapshot.sessions | Where-Object session_id -eq $sid)
+                $observations = @($snapshot.native_pane_observations | Where-Object {
+                    ([string]$_.pane_id).Trim('{}') -eq ([string]$launch.pane_session_id).Trim('{}')
+                })
+                if ($rows.Count -eq 1 -and $rows[0].status -eq $step.Status -and
+                    ([string]$rows[0].pane_session_id).Trim('{}') -eq ([string]$launch.pane_session_id).Trim('{}') -and
+                    $observations.Count -eq 1 -and $observations[0].agent_session_id -eq $sid -and
+                    $observations[0].status -eq $step.Status) { $snapshot }
+            }
+            $bound = @($current.sessions | Where-Object session_id -eq $sid)[0]
+            $bound.provider_id | Should -Be copilot
+            $bound.location | Should -Be Host
+            $other = @($current.sessions | Where-Object session_id -eq $otherSid)
+            $other | Should -HaveCount 1
+            $other[0].pane_session_id | Should -BeNullOrEmpty
+            $other[0].status | Should -Be $otherBefore.status
+            $current | ConvertTo-Json -Depth 16 | Set-Content (Join-Path $script:evidence "known-$($step.Status)-registry.json")
+            Wait-Until -TimeoutSec 10 -Because 'the bound tab renders the same canonical status' -Condition {
+                $text = Get-StatusText $native
+                if ($text -match [regex]::Escape($step.Text)) { $text }
+            } | Set-Content (Join-Path $script:evidence "known-$($step.Status)-tab.txt")
+        }
+        Set-TestSidebarScope -App $script:app -AgentsOnly $true -Recent $true
+        $recent = Wait-Until -TimeoutSec 10 -Because 'only the unrelated same-title history remains in Recent' -Condition {
+            $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+            $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'ItemsList'))
+            $rows = @($list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) |
+                Where-Object { -not $_.Current.IsOffscreen -and $_.Current.Name.Contains($title) })
+            $historyRows = @($rows | Where-Object {
+                $_.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                    [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'HistoryProviderIcon'))
+            })
+            if ($rows.Count -eq 2 -and $historyRows.Count -eq 1) {
+                $parts = @($historyRows[0].FindAll([Windows.Automation.TreeScope]::Descendants,
+                    [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name })
+                if (($parts -join ' ') -match [regex]::Escape('other-conversation')) {
+                    @($rows | ForEach-Object { $_.Current.Name }); $parts
+                }
+            }
+        }
+        $recent | Set-Content (Join-Path $script:evidence 'known-recent-dedup.txt')
+        Open-SessionList -App $script:app -TimeoutSec 15 | Out-Null
+        $helper = Get-AgentPaneSession -App $script:app
+        Wait-Until -TimeoutSec 10 -Because 'classic sessions renders both real identities with one attention badge' -Condition {
+            $text = Get-AgentPaneText -App $script:app -PaneSessionId $helper.PaneSessionId -MaxLines 100
+            $rows = @($text -split "`n" | Where-Object { $_.Contains($title) })
+            if ($rows.Count -eq 2 -and @($rows | Where-Object { $_ -match 'Waiting for input' }).Count -eq 1) { $text }
+        } | Set-Content (Join-Path $script:evidence 'known-classic-sessions.txt')
+        $final = Get-StatusRegistrySnapshot
+        @($final.sessions | Where-Object { $_.session_id -eq $sid -and $_.status -eq 'Attention' -and $_.provider_id -eq 'copilot' -and $_.location -eq 'Host' }) |
+            Should -HaveCount 1
     }
 }

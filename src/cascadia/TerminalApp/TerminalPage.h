@@ -988,6 +988,10 @@ namespace winrt::TerminalApp::implementation
             std::string providerId;
             std::optional<uint64_t> lastActivityAtMs;
             std::optional<winrt::guid> paneSessionId;
+            std::optional<uint64_t> modeEpoch;
+            uint64_t windowId{ 0 };
+            std::string tabId;
+            Json::Value location;
         };
         static bool _IsBuiltinAgentProviderId(std::string_view id);
         static bool _ShouldUseIncomingAgentProvider(std::string_view existingProviderId, std::string_view incomingProviderId);
@@ -999,9 +1003,13 @@ namespace winrt::TerminalApp::implementation
             std::unordered_map<winrt::guid, _RichTabAgentInfo> byPane;
         };
         static _RichTabAgentStatusSnapshot _BuildAgentStatusSnapshot(const std::vector<_RichTabAgentInfo>& rows, const std::unordered_map<winrt::guid, _RichTabAgentInfo>& lastReceivedByPane);
+        static std::vector<_RichTabAgentInfo> _ParseAgentStatusResponse(const Json::Value& response);
         std::optional<_RichTabAgentInfo> _RichTabAgentInfoForControl(const Microsoft::Terminal::Control::TermControl& control);
         void _SyncNativeAgentStatusMode();
-        void _ObserveNativeAgentStatus(const Microsoft::Terminal::Control::TermControl& control, bool attention);
+        void _PublishNativeAgentSignal(const Microsoft::Terminal::Control::TermControl& control, bool attention, uint64_t progressState);
+        void _PublishNativeAgentObservation(const Microsoft::Terminal::Control::TermControl& control, std::string_view kind, bool reset = false, std::optional<uint64_t> progressState = std::nullopt);
+        static std::string _NativeAgentObservationSource(const Microsoft::Terminal::Control::TermControl& control, const winrt::hstring& backend);
+        static Json::Value _NativeAgentObservationLocation(std::string_view source);
         std::optional<bool> _lastEffectiveAgentSessionManagementEnabled;
         std::unordered_set<winrt::guid> _explicitNativeAgentSessions;
         winrt::hstring _AgentIconForControl(const Microsoft::Terminal::Control::TermControl& control, const winrt::hstring& profileIcon);

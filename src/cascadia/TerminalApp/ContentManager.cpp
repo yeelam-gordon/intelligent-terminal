@@ -41,7 +41,7 @@ namespace winrt::TerminalApp::implementation
 
         {
             std::lock_guard lock{ _mutex };
-            _content.emplace(content.Id(), TerminalContent{ content, providerId, NativeAgentStatus{ providerId } });
+            _content.emplace(content.Id(), TerminalContent{ content, providerId });
         }
 
         return content;
@@ -75,23 +75,23 @@ namespace winrt::TerminalApp::implementation
         return {};
     }
 
-    std::optional<ContentManager::NativeAgentStatus> ContentManager::NativeAgentStatusForContent(const uint64_t contentId) const
+    std::optional<ContentManager::NativeAgentObservationIdentity> ContentManager::NativeAgentObservationForContent(const uint64_t contentId) const
     {
         std::lock_guard lock{ _mutex };
         const auto it = _content.find(contentId);
-        if (it == _content.end() || it->second.nativeAgentStatus.providerId.empty())
+        if (it == _content.end() || it->second.agentHelper || it->second.observation.modeEpoch == 0)
         {
             return std::nullopt;
         }
-        return it->second.nativeAgentStatus;
+        return it->second.observation;
     }
 
-    void ContentManager::BeginNativeAgentStatus(const uint64_t contentId, const winrt::hstring& providerId)
+    void ContentManager::SetExplicitNativeAgentProvider(const uint64_t contentId, const winrt::hstring& providerId)
     {
         std::lock_guard lock{ _mutex };
         if (const auto it = _content.find(contentId); it != _content.end())
         {
-            it->second.nativeAgentStatus = NativeAgentStatus{ providerId };
+            it->second.explicitNativeAgentProviderId = providerId;
             if (!_nativeAgentSessionEventsEnabled)
             {
                 it->second.nativeAgentProviderId = providerId;
@@ -99,38 +99,52 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    void ContentManager::ObserveNativeAgentStatus(const uint64_t contentId, const uint64_t progressState, const bool attention)
+    ContentManager::NativeAgentObservationIdentity ContentManager::AdmitNativeAgentObservation(
+        const uint64_t contentId, const uint64_t windowId, const std::string& tabId, const std::string& agentSessionId, const std::string& location, const bool reset)
+    {
+        std::lock_guard lock{ _mutex };
+        if (const auto it = _content.find(contentId); it != _content.end() && !it->second.agentHelper)
+        {
+            const auto provider = it->second.explicitNativeAgentProviderId.empty() || agentSessionId.empty() ?
+                                      it->second.nativeAgentProviderId : it->second.explicitNativeAgentProviderId;
+            if (provider.empty())
+            {
+                return {};
+            }
+            auto& identity = it->second.observation;
+            if (reset || identity.modeEpoch == 0 || identity.providerId != provider ||
+                identity.windowId != windowId || identity.tabId != tabId ||
+                identity.agentSessionId != agentSessionId || identity.location != location)
+            {
+                identity = { provider, ++_nativeAgentObservationGeneration, windowId, tabId, agentSessionId, location,
+                    !it->second.observationAdmitted };
+                it->second.observationAdmitted = true;
+            }
+            return identity;
+        }
+        return {};
+    }
+
+    void ContentManager::RemoveNativeAgentObservation(const uint64_t contentId)
     {
         std::lock_guard lock{ _mutex };
         if (const auto it = _content.find(contentId); it != _content.end())
         {
-            auto& status = it->second.nativeAgentStatus;
-            status.progressState = progressState;
-            status.attention = attention;
+            it->second.observation = {};
         }
-    }
-
-    void ContentManager::ResetNativeAgentStatusObservations()
-    {
-        std::lock_guard lock{ _mutex };
-        ++_nativeAgentStatusObservationEpoch;
-        for (auto& [id, content] : _content)
-        {
-            content.nativeAgentStatus.progressState = 0;
-            content.nativeAgentStatus.attention = false;
-        }
-    }
-
-    uint64_t ContentManager::NativeAgentStatusObservationEpoch() const
-    {
-        std::lock_guard lock{ _mutex };
-        return _nativeAgentStatusObservationEpoch;
     }
 
     void ContentManager::SetNativeAgentSessionEventsEnabled(const bool enabled)
     {
         _CheckThread();
         std::lock_guard lock{ _mutex };
+        if (_nativeAgentSessionEventsEnabled != enabled)
+        {
+            for (auto& [id, content] : _content)
+            {
+                content.observation = {};
+            }
+        }
         _nativeAgentSessionEventsEnabled = enabled;
         if (!enabled)
         {
@@ -140,9 +154,9 @@ namespace winrt::TerminalApp::implementation
             });
             for (auto& [id, content] : _content)
             {
-                if (!content.nativeAgentStatus.providerId.empty())
+                if (!content.explicitNativeAgentProviderId.empty())
                 {
-                    content.nativeAgentProviderId = content.nativeAgentStatus.providerId;
+                    content.nativeAgentProviderId = content.explicitNativeAgentProviderId;
                 }
             }
         }

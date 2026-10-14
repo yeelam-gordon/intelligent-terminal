@@ -1,10 +1,11 @@
 # Hooks-Fallback Agent Session Watcher (Hybrid Tracking)
 
-## Sessions OFF: pane-local native status
+## Sessions OFF: native observations in the shared registry
 
-The native sidebar uses `EffectiveAgentSessionManagementEnabled()` (the user
-setting combined with hooks policy), not listener availability, to select its
-status source. With Sessions ON, the existing hook/registry path is unchanged.
+Terminal uses `EffectiveAgentSessionManagementEnabled()` (the user setting
+combined with hooks policy), not listener availability, to enable native
+OSC/BEL observation publishing. WTA remains the authoritative status source.
+With Sessions ON, the existing hook/registry path is unchanged.
 With Sessions OFF, only a native agent provider recorded at pane creation or an
 explicit resume identifies a CLI pane. ACP helper panes keep their direct status;
 ordinary shells do not gain agent status from titles, bells or progress.
@@ -13,6 +14,20 @@ hook binding ingestion and retained hook replay are therefore gated in both
 the page and shared content manager; they cannot overwrite explicit resume
 bindings or launch-owned providers. ACP helper content is explicitly marked
 and remains eligible for its direct session events.
+
+Terminal publishes raw observations through the existing COM event channel;
+no new COM interface or polling loop is introduced. WTA applies them in its
+existing registry. Tab metadata reads the registry snapshot, and known
+conversation rows use the same canonical activity in Recent sessions and the
+classic agent-pane session picker. C++ retains only transport identity and
+epoch fences, not a separate native activity store.
+
+An unbound native pane has a registry observation keyed by its actual pane
+GUID, not an invented ACP session ID or a resumable history row. A known
+explicit resume can bind a real row using its exact provider, conversation ID
+and execution source. Existing authoritative born-bound assignment may arrive
+before or after observation admission. History discovery alone cannot promote
+an unknown pane into a conversation.
 
 The existing parsed OSC 9;4 progress reports map to the existing agent statuses:
 Idle (0/4), Working (1/3, displayed as Active), and Error (2). Paused progress
@@ -27,10 +42,11 @@ prove that the process has ended. With Sessions OFF, only disappearance of the p
 ownership. OSC 133;D and a retained pane's Closed/Failed connection do not prove
 the agent has ended, and do not expire status, provider identity, or explicit
 resume bindings. This pane-presence status is deliberately not a process-liveness
-claim. Changing Sessions clears observations and invalidates already-queued
-BEL/progress callbacks using a mutex-protected observation epoch. State belongs
-to the managed content, so splitting/reparenting or transferring content does not
-attribute one pane's signal to another.
+claim. Changing Sessions clears OFF observation ownership and invalidates queued
+BEL/progress callbacks through admission epochs. WTA retains activity across a
+same-owner OFF transfer or reconnect while updating routing context; older
+epochs cannot update the new owner. Splitting, reparenting or transferring
+content must not attribute one pane's signal to another.
 
 New native launches remain provider-known but session-unknown without hooks.
 Historical ACP list rows contain `updated_at`, exposed as `started_at`, not a
@@ -48,9 +64,9 @@ inherit the closed pane's explicit ownership marker.
 The watcher design below describes registry tracking, not an authority to
 infer native pane identity when Sessions is OFF.
 
-Validation of this simplified mapping is pending a fresh native test run and
-live C429/C430 run. Earlier acceptance of the removed Paused/Attention requested
-mapping does not validate this behavior.
+Validation of the shared-registry path is pending fresh native and live
+C429/C430/C431 runs. Mapping-only native results and earlier acceptance of the
+removed Paused/Attention requested presentation do not validate this data flow.
 
 ## Abstract
 

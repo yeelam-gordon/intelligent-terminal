@@ -7837,6 +7837,7 @@ where
         sessions,
         Some(history_status.status),
         history_status.error_kind,
+        state.registry.native_pane_observations().await,
     );
     Ok(acp::schema::v1::ExtResponse::new(raw.into()))
 }
@@ -10571,6 +10572,20 @@ async fn handle_master_wt_event(state: &Arc<MasterStateInner>, event_json: serde
         .get("params")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
+
+    if method == "native_agent_observation" {
+        match serde_json::from_value::<crate::session_registry::NativeAgentObservation>(params) {
+            Ok(event) => {
+                if state.registry.apply_native_observation(event).await {
+                    broadcast_session_status_change(state, None).await;
+                }
+            }
+            Err(error) => tracing::warn!(
+                target: "master_wt_event", %error, "invalid native agent observation"
+            ),
+        }
+        return;
+    }
 
     if method == "agent_availability_changed" {
         if params

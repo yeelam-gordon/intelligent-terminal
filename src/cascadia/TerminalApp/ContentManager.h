@@ -45,17 +45,20 @@ namespace winrt::TerminalApp::implementation
                                                                               const winrt::hstring& providerId);
         winrt::hstring NativeAgentProviderId(uint64_t contentId) const;
         winrt::hstring NativeAgentProviderIdForPane(const winrt::guid& paneId) const;
-        struct NativeAgentStatus
+        struct NativeAgentObservationIdentity
         {
             winrt::hstring providerId;
-            uint64_t progressState{ 0 };
-            bool attention{ false };
+            uint64_t modeEpoch{ 0 };
+            uint64_t windowId{ 0 };
+            std::string tabId;
+            std::string agentSessionId;
+            std::string location;
+            bool initialAdmission{ false };
         };
-        std::optional<NativeAgentStatus> NativeAgentStatusForContent(uint64_t contentId) const;
-        void BeginNativeAgentStatus(uint64_t contentId, const winrt::hstring& providerId);
-        void ObserveNativeAgentStatus(uint64_t contentId, uint64_t progressState, bool attention);
-        void ResetNativeAgentStatusObservations();
-        uint64_t NativeAgentStatusObservationEpoch() const;
+        void SetExplicitNativeAgentProvider(uint64_t contentId, const winrt::hstring& providerId);
+        std::optional<NativeAgentObservationIdentity> NativeAgentObservationForContent(uint64_t contentId) const;
+        NativeAgentObservationIdentity AdmitNativeAgentObservation(uint64_t contentId, uint64_t windowId, const std::string& tabId, const std::string& agentSessionId, const std::string& location, bool reset);
+        void RemoveNativeAgentObservation(uint64_t contentId);
         void SetNativeAgentSessionEventsEnabled(bool enabled);
         void MarkAgentHelper(uint64_t contentId);
         bool AcceptsAgentSessionEvents(const winrt::guid& paneId) const;
@@ -93,12 +96,14 @@ namespace winrt::TerminalApp::implementation
         {
             Microsoft::Terminal::Control::ControlInteractivity core;
             winrt::hstring nativeAgentProviderId;
-            NativeAgentStatus nativeAgentStatus;
+            winrt::hstring explicitNativeAgentProviderId;
+            NativeAgentObservationIdentity observation;
+            bool observationAdmitted{ false };
             bool agentHelper{ false };
         };
         std::unordered_map<uint64_t, TerminalContent> _content;
         bool _nativeAgentSessionEventsEnabled{ true };
-        uint64_t _nativeAgentStatusObservationEpoch{ 0 };
+        uint64_t _nativeAgentObservationGeneration{ 0 };
 
         struct AgentBinding
         {
