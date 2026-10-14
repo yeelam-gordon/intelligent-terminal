@@ -644,7 +644,7 @@
   </data>
   <data name="PaneProgressStatusPaused" xml:space="preserve">
     <value>Samachisqa</value>
-    <comment>Status for temporarily paused OSC 9;4 progress. Used with an appended localized percentage in accessibility status, and standalone without a percentage as the sidebar status for a paused local agent. Does not mean waiting for user input or approval.</comment>
+    <comment>Accessibility status for temporarily paused OSC 9;4 progress. A localized percentage is appended; this does not mean waiting for user input or approval.</comment>
   </data>
   <data name="VerticalTabsAgentsSearch.Text" xml:space="preserve">
     <value>Pestañakunata hinaspa kunanllaraq agentekunaq sesionkunata maskay</value>
@@ -695,9 +695,5 @@
   <data name="SidebarIntroductionDescription" xml:space="preserve">
     <value>Pestañaykikuna hinaspa agentekunaq sesionkuna kunan waqta siqipi kachkan. Waqta siqi rikuchiy akllanakuna nisqata llamk'achiy pestañakunaq kaqninkunata akllanapaq. Pestañapi paña clicta ruway sirisqa pestañakunaman kutinapaq.</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
-  </data>
-  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
-    <value>Qhaway mañakusqa</value>
-    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
   </data>
 </root>

@@ -1678,7 +1678,7 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   </data>
   <data name="PaneProgressStatusPaused" xml:space="preserve">
     <value>一時停止</value>
-    <comment>Status for temporarily paused OSC 9;4 progress. Used with an appended localized percentage in accessibility status, and standalone without a percentage as the sidebar status for a paused local agent. Does not mean waiting for user input or approval.</comment>
+    <comment>Accessibility status for temporarily paused OSC 9;4 progress. A localized percentage is appended; this does not mean waiting for user input or approval.</comment>
   </data>
   <data name="VerticalTabsAgentsSearch.Text" xml:space="preserve">
     <value>タブと最近のエージェント セッションを検索</value>
@@ -1711,9 +1711,5 @@ In this context, "agent" refers to an AI agent (e.g. Copilot, Claude, Gemini), n
   <data name="SidebarIntroductionDescription" xml:space="preserve">
     <value>タブとエージェント セッションがサイドバーに表示されるようになりました。サイドバーの表示オプションでタブの詳細を選択できます。タブを右クリックすると、横並びのタブに戻せます。</value>
     <comment>Body of the once-only sidebar introduction teaching tip. Sidebar display options refers to the sidebar toolbar button with that tooltip. Explain where to customize visible tab details and how to return to the horizontal tab layout using a tab's context menu. Agents means AI agents, not people.</comment>
-  </data>
-  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
-    <value>注意を求めています</value>
-    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
   </data>
 </root>

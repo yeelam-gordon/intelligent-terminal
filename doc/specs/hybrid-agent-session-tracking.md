@@ -14,10 +14,16 @@ the page and shared content manager; they cannot overwrite explicit resume
 bindings or launch-owned providers. ACP helper content is explicitly marked
 and remains eligible for its direct session events.
 
-The existing parsed OSC 9;4 progress reports provide Idle (0), Working (1/3),
-Error (2), and Paused (4). A pane-local warning bell requests attention; it does
-**not** prove the agent is waiting for input. The next progress event clears
-attention. With Sessions OFF, only disappearance of the pane ID ends native
+The existing parsed OSC 9;4 progress reports map to the existing agent statuses:
+Idle (0/4), Working (1/3, displayed as Active), and Error (2). Paused progress
+does not claim active work or add a sidebar status; its existing progress-ring
+presentation is unchanged. BEL maps to the existing Attention status, displayed
+as Waiting for input, and retains the existing tab bell handling. Here Waiting
+for input includes both needing a response and finishing work ready for the
+next human request; BEL does not prove a mandatory response or approval.
+The next progress event clears this attention observation and maps to
+Working, Error, or Idle. OSC 9;4;0 alone clears progress to Idle and does not
+prove that the process has ended. With Sessions OFF, only disappearance of the pane ID ends native
 ownership. OSC 133;D and a retained pane's Closed/Failed connection do not prove
 the agent has ended, and do not expire status, provider identity, or explicit
 resume bindings. This pane-presence status is deliberately not a process-liveness
@@ -41,6 +47,10 @@ inherit the closed pane's explicit ownership marker.
 
 The watcher design below describes registry tracking, not an authority to
 infer native pane identity when Sessions is OFF.
+
+Validation of this simplified mapping is pending a fresh native test run and
+live C429/C430 run. Earlier acceptance of the removed Paused/Attention requested
+mapping does not validate this behavior.
 
 ## Abstract
 

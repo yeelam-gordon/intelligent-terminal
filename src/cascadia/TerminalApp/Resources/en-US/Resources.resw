@@ -350,10 +350,6 @@
     <value>Waiting for input</value>
     <comment>Agent History session status: the agent needs a response or approval from the user.</comment>
   </data>
-  <data name="VerticalTabsPaneStatusAttentionRequested" xml:space="preserve">
-    <value>Attention requested</value>
-    <comment>Status for a Terminal-launched native agent pane that emitted BEL while session management is disabled. This signal requests attention; it does not prove the agent is waiting for input or approval.</comment>
-  </data>
   <data name="VerticalTabsHistoryStatusError" xml:space="preserve">
     <value>Error</value>
     <comment>Agent History session status: the session encountered an error.</comment>
@@ -1736,7 +1732,7 @@ For all available options, run 'wt new-tab --help'.</value>
   </data>
   <data name="PaneProgressStatusPaused" xml:space="preserve">
     <value>Paused</value>
-    <comment>Status for temporarily paused OSC 9;4 progress. Used with an appended localized percentage in accessibility status, and standalone without a percentage as the sidebar status for a paused local agent. Does not mean waiting for user input or approval.</comment>
+    <comment>Accessibility status for temporarily paused OSC 9;4 progress. A localized percentage is appended; this does not mean waiting for user input or approval.</comment>
   </data>
   <data name="VerticalTabsAgentsSearch.Text" xml:space="preserve">
     <value>Search tabs and recent agent sessions</value>

@@ -16352,18 +16352,16 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(manager->AgentSessionEvent(controls[0].ContentId()).empty());
             for (const auto& [progress, expected] : {
                      std::pair{ 0u, "Idle" }, std::pair{ 1u, "Working" }, std::pair{ 3u, "Working" },
-                     std::pair{ 2u, "Error" }, std::pair{ 4u, "Paused" } })
+                     std::pair{ 2u, "Error" }, std::pair{ 4u, "Idle" } })
             {
                 manager->ObserveNativeAgentStatus(controls[0].ContentId(), progress, false);
                 VERIFY_ARE_EQUAL(std::string{ expected }, page->_RichTabAgentInfoForControl(controls[0])->status);
                 VERIFY_ARE_EQUAL(std::string{ "Idle" }, page->_RichTabAgentInfoForControl(controls[1])->status);
             }
             manager->ObserveNativeAgentStatus(controls[0].ContentId(), 4, true);
-            VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, page->_RichTabAgentInfoForControl(controls[0])->status);
-            const auto resources = winrt::Windows::ApplicationModel::Resources::Core::ResourceManager::Current()
-                                       .MainResourceMap().GetSubtree(L"TerminalApp/Resources");
+            VERIFY_ARE_EQUAL(std::string{ "Attention" }, page->_RichTabAgentInfoForControl(controls[0])->status);
             VERIFY_ARE_EQUAL(
-                winrt::to_string(resources.GetValue(L"VerticalTabsPaneStatusAttentionRequested").ValueAsString()),
+                winrt::to_string(winrt::TerminalApp::implementation::TerminalPage::_SidebarHistoryStatusText("Attention")),
                 page->_BuildRichTabFirstPartyFields(controls[0]).at("agentStatus"));
 
             // No historical row, including ambiguous/concurrent same-provider rows,
@@ -16387,7 +16385,7 @@ namespace TerminalAppLocalTests
             manager->ObserveNativeAgentStatus(controls[0].ContentId(), 3, false);
             VERIFY_ARE_EQUAL(std::string{ "Working" }, page->_RichTabAgentInfoForControl(controls[0])->status);
             manager->ObserveNativeAgentStatus(controls[0].ContentId(), 1, true);
-            VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, page->_RichTabAgentInfoForControl(controls[0])->status);
+            VERIFY_ARE_EQUAL(std::string{ "Attention" }, page->_RichTabAgentInfoForControl(controls[0])->status);
             manager->ResetNativeAgentStatusObservations();
             VERIFY_ARE_EQUAL(std::string{ "Idle" }, page->_RichTabAgentInfoForControl(controls[0])->status);
             // State follows ContentId, not a replaced split Pane or TermControl.
@@ -16399,7 +16397,7 @@ namespace TerminalAppLocalTests
             VERIFY_IS_NOT_NULL(detachedRoot);
             page->_manager.Detach(controls[1]);
             const auto reattached = page->_AttachControlToContent(transferredContentId);
-            VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, page->_RichTabAgentInfoForControl(reattached)->status);
+            VERIFY_ARE_EQUAL(std::string{ "Attention" }, page->_RichTabAgentInfoForControl(reattached)->status);
             VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, manager->NativeAgentProviderId(reattached.ContentId()));
             VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, manager->NativeAgentProviderIdForPane(ids[1]));
             VERIFY_ARE_EQUAL(winrt::hstring{ L"ms-appx:///AgentIcons/claude.svg" }, page->_AgentIconForControl(reattached, {}));
@@ -16427,14 +16425,24 @@ namespace TerminalAppLocalTests
         const auto connection = winrt::make_self<TestConnection>(
             winrt::guid{ L"{91311111-2222-3333-4444-555555555555}" }, State::Connected);
         winrt::Microsoft::Terminal::Control::TermControl control{ nullptr };
+        winrt::com_ptr<winrt::TerminalApp::implementation::Tab> tab;
+        const auto cleanup = wil::scope_exit([&]() {
+            RunOnUIThread([&]() {
+                control = nullptr;
+                tab = nullptr;
+                page = nullptr;
+            });
+        });
         TestOnUIThread([&]() {
             page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
             page->_SyncNativeAgentStatusMode();
             NewTerminalArgs args;
             args.NativeAgentProviderId(L"copilot");
+            page->_settings.GetProfileForArgs(args).BellStyle(BellStyle::Taskbar);
             const auto pane = page->_MakePane(args, nullptr, *connection);
             control = pane->GetTerminalControl();
             VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(pane));
+            tab = page->_GetFocusedTabImpl();
         });
         const auto emit = [&](const std::u16string_view sequence) {
             TestOnUIThread([&]() {
@@ -16447,17 +16455,49 @@ namespace TerminalAppLocalTests
                 return info && info->status == expected;
             });
         };
+        const auto verifyBellRequestsInput = [&]() {
+            TestOnUIThread([&]() {
+                tab->Focus(FocusState::Unfocused);
+                tab->ShowBellIndicator(false);
+            });
+            emit(u"\a");
+            _waitForContentTransferReviewUI([&]() { return tab->_tabStatus.BellIndicator(); });
+            waitStatus("Attention");
+            TestOnUIThread([&]() {
+                VERIFY_ARE_EQUAL(
+                    winrt::to_string(winrt::TerminalApp::implementation::TerminalPage::_SidebarHistoryStatusText("Attention")),
+                    page->_BuildRichTabFirstPartyFields(control).at("agentStatus"));
+            });
+        };
         for (const auto& [sequence, expected] : {
                  std::pair{ u"\x1b]9;4;1;20\x1b\\", "Working" },
                  std::pair{ u"\x1b]9;4;3\x1b\\", "Working" },
                  std::pair{ u"\x1b]9;4;2;20\x1b\\", "Error" },
-                 std::pair{ u"\x1b]9;4;4;20\x1b\\", "Paused" } })
+                 std::pair{ u"\x1b]9;4;4;20\x1b\\", "Idle" } })
         {
             emit(sequence);
             waitStatus(expected);
         }
-        emit(u"\a");
-        waitStatus("AttentionRequested");
+        TestOnUIThread([&]() {
+            VERIFY_ARE_EQUAL(uint64_t{ 4 }, control.TaskbarState());
+            VERIFY_ARE_EQUAL(
+                winrt::to_string(winrt::TerminalApp::implementation::TerminalPage::_SidebarHistoryStatusText("Idle")),
+                page->_BuildRichTabFirstPartyFields(control).at("agentStatus"));
+        });
+        // Waiting for input includes being ready for the next request; BEL
+        // alone does not establish a mandatory response or approval.
+        emit(u"\x1b]9;4;1;50\x1b\\");
+        waitStatus("Working");
+        verifyBellRequestsInput();
+        emit(u"\x1b]9;4;2;20\x1b\\");
+        waitStatus("Error");
+        verifyBellRequestsInput();
+        emit(u"\x1b]9;4;4;20\x1b\\");
+        waitStatus("Idle");
+        verifyBellRequestsInput();
+        emit(u"\x1b]9;4;0\x1b\\");
+        waitStatus("Idle");
+        verifyBellRequestsInput();
         emit(u"\x1b]9;4;0\x1b\\");
         waitStatus("Idle");
         emit(u"\x1b]133;D;0\x1b\\");
@@ -16618,7 +16658,7 @@ namespace TerminalAppLocalTests
                     manager->ObserveNativeAgentStatus(contentId, 4, attention);
                     const auto info = page->_RichTabAgentInfoForControl(control);
                     VERIFY_IS_TRUE(info.has_value());
-                    VERIFY_ARE_EQUAL(std::string{ attention ? "AttentionRequested" : "Paused" }, info.value().status);
+                    VERIFY_ARE_EQUAL(std::string{ attention ? "Attention" : "Idle" }, info.value().status);
                     VERIFY_ARE_EQUAL(winrt::hstring{ icon }, page->_AgentIconForControl(control, pane->GetContent().Icon()));
                 }
             }
@@ -16672,7 +16712,7 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(firstLeaf != originalPane);
             VERIFY_IS_TRUE(firstLeaf->GetTerminalControl() == firstControl);
             VERIFY_IS_TRUE(page->_explicitNativeAgentSessions.contains(firstId));
-            VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, page->_RichTabAgentInfoForControl(firstControl)->status);
+            VERIFY_ARE_EQUAL(std::string{ "Attention" }, page->_RichTabAgentInfoForControl(firstControl)->status);
             VERIFY_ARE_EQUAL(std::string{ "Idle" }, page->_RichTabAgentInfoForControl(secondControl)->status);
             VERIFY_IS_FALSE(page->_paneAgentSessions.contains(secondId));
             page->_HandleClosePaneRequested(firstLeaf);
@@ -16722,7 +16762,7 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(fixture->destination->_interactiveResumeSessions.contains(paneId));
             VERIFY_ARE_EQUAL(winrt::hstring{ L"11111111-2222-3333-4444-555555555555" },
                 fixture->destination->_paneAgentSessions.at(paneId).sessionId);
-            VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" },
+            VERIFY_ARE_EQUAL(std::string{ "Attention" },
                 fixture->destination->_RichTabAgentInfoForControl(movedControl)->status);
             // A real toggle must retain the moved explicit owner, not treat it
             // as hook metadata eligible for removal.
@@ -16782,7 +16822,7 @@ namespace TerminalAppLocalTests
             TestOnUIThread([&]() {
                 const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
                 manager->ObserveNativeAgentStatus(control.ContentId(), 3, true);
-                VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, page->_RichTabAgentInfoForControl(control)->status);
+                VERIFY_ARE_EQUAL(std::string{ "Attention" }, page->_RichTabAgentInfoForControl(control)->status);
                 page->_TryPublishInteractiveResumeBinding(
                     control, _formatPaneId(paneId), {}, L"copilot", L"11111111-2222-3333-4444-555555555555");
                 manager->ObserveNativeAgentStatus(control.ContentId(), 3, true);
@@ -16797,7 +16837,7 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_FALSE(page->_FindTabIdForSessionId(_formatPaneId(paneId)).empty());
                 const auto retainedStatus = page->_RichTabAgentInfoForControl(control);
                 VERIFY_IS_TRUE(retainedStatus.has_value());
-                VERIFY_ARE_EQUAL(std::string{ "AttentionRequested" }, retainedStatus.value().status);
+                VERIFY_ARE_EQUAL(std::string{ "Attention" }, retainedStatus.value().status);
                 VERIFY_IS_TRUE(page->_paneAgentSessions.contains(paneId));
                 VERIFY_IS_TRUE(page->_explicitNativeAgentSessions.contains(paneId));
                 VERIFY_IS_TRUE(page->_interactiveResumeSessions.contains(paneId));

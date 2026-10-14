@@ -11590,10 +11590,9 @@ namespace winrt::TerminalApp::implementation
             const auto local = winrt::get_self<ContentManager>(_manager)->NativeAgentStatusForContent(control.ContentId());
             if (local)
             {
-                const auto status = local->attention ? "AttentionRequested" :
+                const auto status = local->attention ? "Attention" :
                                     local->progressState == 1 || local->progressState == 3 ? "Working" :
-                                    local->progressState == 2 ? "Error" :
-                                    local->progressState == 4 ? "Paused" : "Idle";
+                                    local->progressState == 2 ? "Error" : "Idle";
                 return _RichTabAgentInfo{ {}, status, winrt::to_string(local->providerId), std::nullopt, paneSessionId };
             }
             // ACP helper panes retain their direct status; an ordinary shell
@@ -11647,9 +11646,7 @@ namespace winrt::TerminalApp::implementation
         std::unordered_map<std::string, std::string> firstPartyFields;
         if (const auto agentInfo = _RichTabAgentInfoForControl(control))
         {
-            const auto text = agentInfo->status == "AttentionRequested" ? RS_(L"VerticalTabsPaneStatusAttentionRequested") :
-                              agentInfo->status == "Paused" ? RS_(L"PaneProgressStatusPaused") :
-                                                            _SidebarHistoryStatusText(agentInfo->status);
+            const auto text = _SidebarHistoryStatusText(agentInfo->status);
             firstPartyFields.emplace("agentStatus", winrt::to_string(text));
         }
         firstPartyFields.emplace("branchLabel", winrt::to_string(RS_(L"VerticalTabsMetadataBranch/Text")));

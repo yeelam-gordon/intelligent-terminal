@@ -277,7 +277,7 @@ catch {
                 $value = Get-StatusText $Fixture
                 if ($value -match "(?m)(^|[ ,·])$([regex]::Escape($Expected))($|[ ,·])") { $value }
             }
-            $text | Should -Not -Match 'Waiting for input'
+            $text | Should -Not -Match 'Attention requested'
             $text | Set-Content (Join-Path $script:evidence "$($Fixture.Title)-$Expected.txt")
         }
         function Assert-NoAgentStatus {
@@ -287,6 +287,18 @@ catch {
                 $text = Get-StatusText $Fixture
                 $text | Should -Not -BeNullOrEmpty -Because 'suppression requires a realized owned row'
                 $text | Should -Not -Match '(?m)(^|[ ,·])(Active|Idle|Error|Paused|Attention requested|Waiting for input)($|[ ,·])'
+                Start-Sleep -Milliseconds 100
+            } while ([DateTime]::UtcNow -lt $deadline)
+        }
+        function Assert-BellRequestsInput {
+            param($Fixture)
+            Send-StatusSignal $Fixture -Kind bell
+            Assert-Status $Fixture 'Waiting for input'
+            $deadline = [DateTime]::UtcNow.AddSeconds(2)
+            do {
+                $text = Get-StatusText $Fixture
+                $text | Should -Match '(?m)(^|[ ,·])Waiting for input($|[ ,·])'
+                $text | Should -Not -Match 'Paused|Attention requested'
                 Start-Sleep -Milliseconds 100
             } while ([DateTime]::UtcNow -lt $deadline)
         }
@@ -370,22 +382,22 @@ catch {
     }
     It 'Sessions off native OSC and BEL report truthful status without shell false positives' {
         Send-StatusSignal $script:otherNative -State 4
-        Assert-Status $script:otherNative Paused
+        Assert-Status $script:otherNative Idle
         foreach ($step in @(@{ State = 1; Text = 'Active' }, @{ State = 3; Text = 'Active' },
-            @{ State = 2; Text = 'Error' }, @{ State = 4; Text = 'Paused' }, @{ State = 0; Text = 'Idle' })) {
+            @{ State = 2; Text = 'Error' }, @{ State = 4; Text = 'Idle' }, @{ State = 0; Text = 'Idle' })) {
             Send-StatusSignal $script:native -State $step.State
             Assert-Status $script:native $step.Text
-            Assert-Status $script:otherNative Paused
+            Assert-Status $script:otherNative Idle
             Send-StatusSignal $script:shell -State $step.State
             Assert-NoAgentStatus $script:shell
         }
-        Send-StatusSignal $script:native -Kind bell
-        Assert-Status $script:native 'Attention requested'
-        Assert-Status $script:otherNative Paused
-        Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence 'sessions-off-attention-and-paused.png') | Out-Null
+        Assert-BellRequestsInput $script:native
+        Assert-Status $script:otherNative Idle
+        Save-UiScreenshot -App $script:app -Path (Join-Path $script:evidence 'sessions-off-waiting-for-input-and-idle.png') | Out-Null
         Send-StatusSignal $script:otherNative -State 2
         Assert-Status $script:otherNative Error
-        Assert-Status $script:native 'Attention requested'
+        Assert-Status $script:native 'Waiting for input'
+        Assert-BellRequestsInput $script:otherNative
         Send-StatusSignal $script:shell -Kind bell
         Assert-NoAgentStatus $script:shell
         $panes = @(Get-WtPanes -App $script:app -WindowId $script:window -TabId $script:shell.Pane.tab_id)
@@ -395,6 +407,7 @@ catch {
         Assert-NoFabricatedBinding $script:shell
         Send-StatusSignal $script:native -State 1
         Assert-Status $script:native Active
+        Assert-BellRequestsInput $script:native
         Send-StatusSignal $script:native -State 0
         Assert-Status $script:native Idle
         Send-StatusSignal $script:otherNative -State 0
