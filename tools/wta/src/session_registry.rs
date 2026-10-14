@@ -1494,6 +1494,17 @@ pub fn agent_session_to_session_info(s: &AgentSession) -> SessionInfo {
 #[allow(dead_code)] // Task B wires hook RPCs into these reducer methods.
 #[async_trait::async_trait]
 pub trait SessionRegistry: Send + Sync {
+    /// Some means an active native OFF owner claims this id, including rejected
+    /// provider/backend or non-activity events. None leaves legacy gates intact.
+    async fn apply_native_watcher_activity(
+        &self,
+        _cli: &CliSource,
+        _key: &str,
+        _event: SessionEvent,
+    ) -> Option<bool> {
+        None
+    }
+
     async fn apply_native_observation(&self, _event: NativeAgentObservation) -> bool {
         false
     }
@@ -1740,6 +1751,55 @@ pub(crate) fn title_is_displayable(cli: Option<&CliSource>, title: &str) -> bool
 
 #[async_trait::async_trait]
 impl SessionRegistry for InMemoryRegistry {
+    async fn apply_native_watcher_activity(
+        &self,
+        cli: &CliSource,
+        key: &str,
+        event: SessionEvent,
+    ) -> Option<bool> {
+        let mut state = self.inner.lock().await;
+        let owners: Vec<_> = state
+            .native_panes
+            .values()
+            .filter(|native| {
+                native.active
+                    && native
+                        .bound_identity
+                        .as_ref()
+                        .is_some_and(|identity| identity.session_id.to_string() == key)
+            })
+            .collect();
+        if owners.is_empty() {
+            return None;
+        }
+        let mut matches = owners.into_iter().filter_map(|native| {
+            let identity = native.bound_identity.as_ref()?;
+            let row = state.sessions.get(identity)?;
+            (cli.canonical_provider_id().as_deref()
+                == Some(native.observation.provider_id.as_str())
+                && row.location == SessionLocation::Host
+                && row.session_universe.is_none()
+                && native_bound_identity(&state, &native.observation).as_ref() == Some(identity))
+            .then(|| identity.clone())
+        });
+        let Some(identity) = matches.next() else {
+            return Some(false);
+        };
+        if matches.next().is_some() {
+            return Some(false);
+        }
+        let event_key = match &event {
+            SessionEvent::ToolStarting { key, .. }
+            | SessionEvent::ToolCompleted { key }
+            | SessionEvent::Notification { key, .. } => key,
+            _ => return Some(false),
+        };
+        if event_key != key {
+            return Some(false);
+        }
+        Some(apply_event_locked(&mut state, event, Some(&identity)))
+    }
+
     async fn apply_native_observation(&self, event: NativeAgentObservation) -> bool {
         let pane_id = uuid::Uuid::parse_str(&event.pane_id).ok();
         let window_id = event.window_id;
@@ -1863,7 +1923,7 @@ impl SessionRegistry for InMemoryRegistry {
 
     async fn apply_event(&self, ev: SessionEvent) -> bool {
         let mut guard = self.inner.lock().await;
-        apply_event_locked(&mut guard, ev)
+        apply_event_locked(&mut guard, ev, None)
     }
 
     async fn set_origin(&self, sid: &acp::schema::v1::SessionId, origin: SessionOrigin) -> bool {
@@ -2476,7 +2536,11 @@ fn end_entry(state: &mut RegistryState, identity: &SessionIdentity, now: u64) ->
 }
 
 #[allow(dead_code)] // Task B calls this via SessionRegistry::apply_event.
-fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
+fn apply_event_locked(
+    state: &mut RegistryState,
+    ev: SessionEvent,
+    qualified_activity: Option<&SessionIdentity>,
+) -> bool {
     let protected_pane = match &ev {
         SessionEvent::SessionStarted {
             pane_session_id, ..
@@ -2686,7 +2750,10 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
         }
         SessionEvent::ToolStarting { key, tool_name } => {
             let sid = acp::schema::v1::SessionId::new(key);
-            let Some(identity) = unique_identity_for_raw(state, &sid) else {
+            let Some(identity) = qualified_activity
+                .cloned()
+                .or_else(|| unique_identity_for_raw(state, &sid))
+            else {
                 return false;
             };
             let Some(entry) = state.sessions.get_mut(&identity) else {
@@ -2715,7 +2782,10 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
         }
         SessionEvent::ToolCompleted { key } => {
             let sid = acp::schema::v1::SessionId::new(key);
-            let Some(identity) = unique_identity_for_raw(state, &sid) else {
+            let Some(identity) = qualified_activity
+                .cloned()
+                .or_else(|| unique_identity_for_raw(state, &sid))
+            else {
                 return false;
             };
             let Some(entry) = state.sessions.get_mut(&identity) else {
@@ -2744,7 +2814,10 @@ fn apply_event_locked(state: &mut RegistryState, ev: SessionEvent) -> bool {
         }
         SessionEvent::Notification { key, message } => {
             let sid = acp::schema::v1::SessionId::new(key);
-            let Some(identity) = unique_identity_for_raw(state, &sid) else {
+            let Some(identity) = qualified_activity
+                .cloned()
+                .or_else(|| unique_identity_for_raw(state, &sid))
+            else {
                 return false;
             };
             let Some(entry) = state.sessions.get_mut(&identity) else {

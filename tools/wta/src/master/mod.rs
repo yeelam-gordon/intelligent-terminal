@@ -8711,6 +8711,19 @@ async fn handle_session_born_bound(
 ///      VS Code / another terminal) → drop — we can't bind it to an IT pane.
 async fn apply_watcher_event(state: &MasterStateInner, emitted: crate::session_watcher::Emitted) {
     let sid = acp::schema::v1::SessionId::new(emitted.key.clone());
+    // Native OFF ownership is qualified registry state, not a raw-id admission
+    // into the legacy born-bound map. It also supersedes stale hook ownership.
+    if let Some(applied) = state
+        .registry
+        .apply_native_watcher_activity(&emitted.cli, &emitted.key, emitted.event.clone())
+        .await
+    {
+        if applied {
+            broadcast_session_status_change(state, None).await;
+            try_refresh_title_via_acp(state, &sid).await;
+        }
+        return;
+    }
 
     // Hybrid dedup — the watcher is a *fallback*. Coordinate with authoritative
     // producers:
