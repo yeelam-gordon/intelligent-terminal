@@ -175,6 +175,7 @@ exit 124
                 environment = $script:isolatedEnvironment
             }) }
         }
+        $script:app | Add-Member -NotePropertyName RequireOwnedForeground -NotePropertyValue $true
         $script:app.Launched | Should -BeTrue
         $script:window = [string]$script:app.WindowId
         $settingsReadByHost = Invoke-WtCli -App $script:app -Arguments @('get-settings')
