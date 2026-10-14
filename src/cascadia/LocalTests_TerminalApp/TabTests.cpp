@@ -432,6 +432,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(LatestBuiltinAgentReportWinsForPane);
         TEST_METHOD(AgentSnapshotTiesPreserveLastReceivedPaneReport);
         TEST_METHOD(SessionSnapshotsUseOwnedMasterPipe);
+        TEST_METHOD(SharedWtaNativeReceiverGenerationSurvivesWaitRetirement);
         TEST_METHOD(AgentSnapshotSelectionIsIndependentOfRowOrder);
         TEST_METHOD(BottomBarSessionsButtonFollowsLayout);
         TEST_METHOD(BottomBarSessionsButtonDispatchesExistingAction);
@@ -7923,6 +7924,42 @@ namespace TerminalAppLocalTests
         VERIFY_ARE_EQUAL(
             std::wstring{ L"sessions list --origin shell --json --include-status" },
             Page::_BuildSessionsListArguments({}, true));
+    }
+
+    void TabTests::SharedWtaNativeReceiverGenerationSurvivesWaitRetirement()
+    {
+        using Owner = winrt::TerminalApp::implementation::SharedWta;
+        namespace Details = winrt::TerminalApp::implementation::details;
+        Owner owner;
+        const auto first = owner._waitGeneration.Reserve();
+        VERIFY_IS_TRUE(first != 0);
+        VERIFY_ARE_EQUAL(static_cast<uintptr_t>(0), owner._waitGeneration.Current());
+        VERIFY_ARE_EQUAL(first, owner._waitGeneration.Register(101, first));
+        owner._masterGeneration = first;
+        owner._waitGeneration.Retire();
+        VERIFY_ARE_EQUAL(static_cast<uint64_t>(first), owner.MasterGeneration());
+        VERIFY_IS_FALSE(owner._waitGeneration.Claim(first).has_value());
+
+        const auto failedAttempt = owner._waitGeneration.Reserve();
+        const auto replacement = owner._waitGeneration.Reserve();
+        VERIFY_IS_TRUE(replacement > failedAttempt && failedAttempt > first);
+        VERIFY_ARE_EQUAL(static_cast<uintptr_t>(0), owner._waitGeneration.Register(101, failedAttempt));
+        VERIFY_ARE_EQUAL(replacement, owner._waitGeneration.Register(101, replacement));
+        VERIFY_IS_FALSE(owner._waitGeneration.Claim(first).has_value());
+        VERIFY_ARE_EQUAL(replacement, owner._waitGeneration.Current());
+
+        const std::vector<std::pair<std::wstring, std::wstring>> overrides{
+            { L"wta_master_generation", L"9999" },
+            { L"WTA_RECEIVER_FIXTURE", L"preserved" }
+        };
+        const auto environment = Details::BuildMasterEnvironmentBlock(overrides, replacement);
+        VERIFY_IS_TRUE(environment.has_value());
+        VERIFY_IS_TRUE(environment->find(L"WTA_MASTER_GENERATION=" + std::to_wstring(replacement) + L'\0') != std::wstring::npos);
+        VERIFY_IS_TRUE(environment->find(L"WTA_RECEIVER_FIXTURE=preserved") != std::wstring::npos);
+        VERIFY_IS_TRUE(environment->find(L"wta_master_generation=9999") == std::wstring::npos);
+        VERIFY_IS_FALSE(Details::BuildMasterEnvironmentBlock(overrides, 0).has_value());
+        owner._CleanupLocked();
+        VERIFY_ARE_EQUAL(static_cast<uint64_t>(0), owner.MasterGeneration());
     }
 
     void TabTests::AgentSnapshotSelectionIsIndependentOfRowOrder()
