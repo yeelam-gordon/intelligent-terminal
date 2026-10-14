@@ -1824,15 +1824,18 @@ impl SessionRegistry for InMemoryRegistry {
             .values()
             .map(|pane| {
                 let mut observation = pane.observation.clone();
-                observation.agent_session_id = pane
+                let row = pane
                     .bound_identity
                     .as_ref()
-                    .map(|identity| identity.session_id.to_string());
-                if let Some(row) = pane
-                    .bound_identity
-                    .as_ref()
+                    .filter(|identity| {
+                        state.active_by_pane.get(&observation.pane_id) == Some(*identity)
+                    })
                     .and_then(|identity| state.sessions.get(identity))
-                {
+                    .filter(|row| active_source_pane_session(row));
+                observation.agent_session_id = row.map(|row| row.session_id.to_string());
+                if let Some(row) = row {
+                    observation.location =
+                        row.location.is_actionable().then(|| row.location.clone());
                     if let Some(status) = &row.status {
                         observation.status = status.clone();
                         observation.last_activity_at_ms = row
@@ -4027,6 +4030,94 @@ mod tests {
         );
         assert!(registry.native_pane_observations().await.is_empty());
         assert!(registry.inner.lock().await.native_panes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn native_observation_late_binding_projects_canonical_location() {
+        for location in [
+            SessionLocation::Host,
+            SessionLocation::Wsl {
+                distro: "Ubuntu".into(),
+            },
+        ] {
+            let registry = InMemoryRegistry::new();
+            registry
+                .apply_native_observation(native_event(
+                    serde_json::json!({"kind":"reset", "tracking_enabled":false}),
+                    1,
+                ))
+                .await;
+            let unknown = registry.native_pane_observations().await.remove(0);
+            assert!(unknown.agent_session_id.is_none());
+            assert!(unknown.location.is_none());
+            let row = qualified_info("source-resume", "copilot", location.clone(), "history");
+            let identity = SessionIdentity::from_info(&row);
+            registry.upsert(row).await;
+            let other = if location == SessionLocation::Host {
+                SessionLocation::Wsl {
+                    distro: "Ubuntu".into(),
+                }
+            } else {
+                SessionLocation::Host
+            };
+            registry
+                .upsert(qualified_info(
+                    "source-resume",
+                    "copilot",
+                    other,
+                    "other history",
+                ))
+                .await;
+            registry.mark_resume_dispatched_identity(&identity).await;
+            registry
+                .assign_resume_pane_identity(&identity, NATIVE_PANE.into())
+                .await;
+            let bound = registry.native_pane_observations().await.remove(0);
+            assert_eq!(bound.agent_session_id.as_deref(), Some("source-resume"));
+            assert_eq!(bound.location, Some(location));
+            assert_eq!(bound.status, AgentStatus::Idle);
+            registry
+                .assign_resume_pane_identity(&identity, uuid::Uuid::from_u128(2).to_string())
+                .await;
+            let rebound = registry.native_pane_observations().await.remove(0);
+            assert!(rebound.agent_session_id.is_none());
+            assert!(rebound.location.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn native_observation_wrong_source_cannot_project_an_unmatched_history_row() {
+        let registry = InMemoryRegistry::new();
+        let mut event = native_event(
+            serde_json::json!({"kind":"reset", "tracking_enabled":false}),
+            1,
+        );
+        event.agent_session_id = Some("source-mismatch".into());
+        event.location = Some(SessionLocation::Host);
+        registry.apply_native_observation(event).await;
+        let row = qualified_info(
+            "source-mismatch",
+            "copilot",
+            SessionLocation::Wsl {
+                distro: "Ubuntu".into(),
+            },
+            "history",
+        );
+        let identity = SessionIdentity::from_info(&row);
+        registry.upsert(row).await;
+        registry.mark_resume_dispatched_identity(&identity).await;
+        registry
+            .assign_resume_pane_identity(&identity, NATIVE_PANE.into())
+            .await;
+        let unmatched = registry.native_pane_observations().await.remove(0);
+        assert!(unmatched.agent_session_id.is_none());
+        assert_eq!(unmatched.location, Some(SessionLocation::Host));
+        assert_eq!(
+            registry.lookup_identity(&identity).await.unwrap().location,
+            SessionLocation::Wsl {
+                distro: "Ubuntu".into()
+            }
+        );
     }
 
     fn info(id: &str, pane: Option<&str>) -> SessionInfo {
