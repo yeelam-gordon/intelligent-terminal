@@ -291,6 +291,16 @@ catch {
             $script:fixtures += $fixture
             $fixture
         }
+        function Get-StatusRowParts {
+            param($Element)
+            $walker = [Windows.Automation.TreeWalker]::RawViewWalker
+            $child = $walker.GetFirstChild($Element)
+            while ($child) {
+                $child
+                Get-StatusRowParts $child
+                $child = $walker.GetNextSibling($child)
+            }
+        }
         function Get-StatusText {
             param($Fixture)
             Assert-StatusDeadline
@@ -299,9 +309,12 @@ catch {
             $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
                 [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'ItemsList'))
             if (-not $list -or $list.Current.IsOffscreen) { throw 'Owned Sidebar ItemsList is not visible.' }
+            $expectedTitle = if ($Fixture.PSObject.Properties['StatusTitle']) { $Fixture.StatusTitle } else { $Fixture.Title }
             $rows = @($list.FindAll([Windows.Automation.TreeScope]::Children,
                 [Windows.Automation.Condition]::TrueCondition) | Where-Object {
-                -not $_.Current.IsOffscreen -and $_.Current.Name.Contains($Fixture.Title)
+                $parts = @(Get-StatusRowParts $_)
+                -not $_.Current.IsOffscreen -and $_.Current.Name.Contains($expectedTitle) -and
+                    @($parts | Where-Object { $_.Current.AutomationId -in @('HistoryProviderIcon', 'HistoryHeaderButton') }).Count -eq 0
             })
             if ($rows.Count -ne 1) { return $null }
             # The top-level tab peer contains first-party metadata. Descendant
@@ -784,7 +797,8 @@ class CopilotFixture {
         $context = Invoke-WtCli -App $script:app -Arguments @('get-pane-context', '--target', $launch.pane_session_id)
         [string]$context.pane.window_id | Should -Be $script:window
         $native = [pscustomobject]@{
-            Pane = $context.pane; Title = $title; Signal = $signal; Receipt = $receipt; Kind = 'native'
+            Pane = $context.pane; Title = $title; StatusTitle = $selectedTitle
+            Signal = $signal; Receipt = $receipt; Kind = 'native'
         }
         $script:fixtures += $native
         foreach ($step in @(@{ State = 1; Status = 'Working'; Text = 'Active' }, @{ State = 0; Status = 'Idle'; Text = 'Idle' },
@@ -804,6 +818,7 @@ class CopilotFixture {
             $bound = @($current.sessions | Where-Object session_id -eq $sid)[0]
             $bound.provider_id | Should -Be copilot
             $bound.location | Should -Be Host
+            $bound.title | Should -BeExactly $selectedTitle
             $nativeObservation = @($current.native_pane_observations | Where-Object agent_session_id -eq $sid)
             $nativeObservation | Should -HaveCount 1
             $nativeObservation[0].provider_id | Should -Be copilot
@@ -824,13 +839,22 @@ class CopilotFixture {
             $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
             $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
                 [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'ItemsList'))
-            $rows = @($list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) |
-                Where-Object { -not $_.Current.IsOffscreen -and $_.Current.Name.Contains($title) })
-            $historyRows = @($rows | Where-Object {
-                $_.FindFirst([Windows.Automation.TreeScope]::Descendants,
-                    [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'HistoryProviderIcon'))
+            $visibleRows = @($list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) |
+                Where-Object { -not $_.Current.IsOffscreen })
+            $historyRows = @($visibleRows | Where-Object {
+                @((Get-StatusRowParts $_) | Where-Object { $_.Current.AutomationId -eq 'HistoryProviderIcon' }).Count -gt 0 -and
+                    $_.Current.Name.Contains($title)
             })
-            if ($rows.Count -eq 2 -and $historyRows.Count -eq 1) {
+            $selectedHistoryRows = @($visibleRows | Where-Object {
+                @((Get-StatusRowParts $_) | Where-Object { $_.Current.AutomationId -eq 'HistoryProviderIcon' }).Count -gt 0 -and
+                    $_.Current.Name.Contains($selectedTitle)
+            })
+            $liveRows = @($visibleRows | Where-Object {
+                @((Get-StatusRowParts $_) | Where-Object { $_.Current.AutomationId -in @('HistoryProviderIcon', 'HistoryHeaderButton') }).Count -eq 0 -and
+                    $_.Current.Name.Contains($selectedTitle)
+            })
+            $rows = @($liveRows) + @($historyRows)
+            if ($rows.Count -eq 2 -and $liveRows.Count -eq 1 -and $historyRows.Count -eq 1 -and $selectedHistoryRows.Count -eq 0) {
                 $parts = @($historyRows[0].FindAll([Windows.Automation.TreeScope]::Descendants,
                     [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name })
                 if (($parts -join ' ') -match [regex]::Escape($otherCwd)) {
