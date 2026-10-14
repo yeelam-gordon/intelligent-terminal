@@ -54,10 +54,14 @@ namespace winrt::TerminalApp::implementation
             std::string agentSessionId;
             std::string location;
             bool initialAdmission{ false };
+            uint64_t receiverGeneration{ 0 };
+            std::string qualifiedSessionId;
+            std::string qualifiedLocation;
         };
         void SetExplicitNativeAgentProvider(uint64_t contentId, const winrt::hstring& providerId);
         std::optional<NativeAgentObservationIdentity> NativeAgentObservationForContent(uint64_t contentId) const;
-        NativeAgentObservationIdentity AdmitNativeAgentObservation(uint64_t contentId, uint64_t windowId, const std::string& tabId, const std::string& agentSessionId, const std::string& location, bool reset);
+        NativeAgentObservationIdentity AdmitNativeAgentObservation(uint64_t contentId, uint64_t windowId, const std::string& tabId, const std::string& agentSessionId, const std::string& location, bool reset, uint64_t receiverGeneration = 0);
+        void RetainQualifiedNativeAgentIdentity(uint64_t contentId, uint64_t modeEpoch, const std::string& sessionId, const std::string& location);
         void RemoveNativeAgentObservation(uint64_t contentId);
         void SetNativeAgentSessionEventsEnabled(bool enabled);
         void MarkAgentHelper(uint64_t contentId);

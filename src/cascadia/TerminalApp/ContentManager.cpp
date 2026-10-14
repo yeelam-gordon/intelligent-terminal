@@ -100,7 +100,7 @@ namespace winrt::TerminalApp::implementation
     }
 
     ContentManager::NativeAgentObservationIdentity ContentManager::AdmitNativeAgentObservation(
-        const uint64_t contentId, const uint64_t windowId, const std::string& tabId, const std::string& agentSessionId, const std::string& location, const bool reset)
+        const uint64_t contentId, const uint64_t windowId, const std::string& tabId, const std::string& agentSessionId, const std::string& location, const bool reset, const uint64_t receiverGeneration)
     {
         std::lock_guard lock{ _mutex };
         if (const auto it = _content.find(contentId); it != _content.end() && !it->second.agentHelper)
@@ -114,15 +114,34 @@ namespace winrt::TerminalApp::implementation
             auto& identity = it->second.observation;
             if (reset || identity.modeEpoch == 0 || identity.providerId != provider ||
                 identity.windowId != windowId || identity.tabId != tabId ||
-                identity.agentSessionId != agentSessionId || identity.location != location)
+                identity.agentSessionId != agentSessionId || identity.location != location ||
+                identity.receiverGeneration != receiverGeneration)
             {
+                const auto retainQualified = identity.providerId == provider &&
+                    (agentSessionId.empty() ? identity.agentSessionId.empty() : identity.qualifiedSessionId == agentSessionId) &&
+                    (location.empty() || identity.qualifiedLocation == location);
+                auto qualifiedSessionId = retainQualified ? identity.qualifiedSessionId : std::string{};
+                auto qualifiedLocation = retainQualified ? identity.qualifiedLocation : std::string{};
                 identity = { provider, ++_nativeAgentObservationGeneration, windowId, tabId, agentSessionId, location,
-                    !it->second.observationAdmitted };
+                    !it->second.observationAdmitted, receiverGeneration, std::move(qualifiedSessionId), std::move(qualifiedLocation) };
                 it->second.observationAdmitted = true;
             }
             return identity;
         }
         return {};
+    }
+
+    void ContentManager::RetainQualifiedNativeAgentIdentity(
+        const uint64_t contentId, const uint64_t modeEpoch, const std::string& sessionId, const std::string& location)
+    {
+        std::lock_guard lock{ _mutex };
+        if (const auto it = _content.find(contentId);
+            it != _content.end() && !it->second.agentHelper && modeEpoch != 0 &&
+            it->second.observation.modeEpoch == modeEpoch)
+        {
+            it->second.observation.qualifiedSessionId = sessionId;
+            it->second.observation.qualifiedLocation = location;
+        }
     }
 
     void ContentManager::RemoveNativeAgentObservation(const uint64_t contentId)
