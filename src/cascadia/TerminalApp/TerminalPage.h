@@ -1085,6 +1085,7 @@ namespace winrt::TerminalApp::implementation
         };
         static _SidebarHistorySnapshot _ParseSidebarHistorySnapshot(const std::string& output, uint64_t currentWindowId = 0);
         safe_void_coroutine _LoadSidebarHistory(uint64_t generation);
+        static std::wstring _BuildSessionsListArguments(std::wstring_view masterPipe, bool shellOrigin);
         void _CompleteSidebarHistoryRefresh(uint64_t generation, _SidebarHistorySnapshot snapshot);
         struct _SidebarHistoryActivationRequest
         {

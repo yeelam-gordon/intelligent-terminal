@@ -21,6 +21,8 @@ existing registry. Tab metadata reads the registry snapshot, and known
 conversation rows use the same canonical activity in Recent sessions and the
 classic agent-pane session picker. C++ retains only transport identity and
 epoch fences, not a separate native activity store.
+Rich-status and Sidebar snapshot readers pin the process-owned SharedWta master
+pipe when available; an empty pipe, including during startup, retains implicit discovery.
 
 An unbound native pane has a registry observation keyed by its actual pane
 GUID, not an invented ACP session ID or a resumable history row. A known

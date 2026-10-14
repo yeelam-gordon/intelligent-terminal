@@ -7134,6 +7134,20 @@ namespace winrt::TerminalApp::implementation
         return snapshot;
     }
 
+    std::wstring TerminalPage::_BuildSessionsListArguments(const std::wstring_view masterPipe, const bool shellOrigin)
+    {
+        std::wstring arguments{ shellOrigin ?
+                                    L"sessions list --origin shell --json --include-status" :
+                                    L"sessions list --json --include-status" };
+        if (!masterPipe.empty())
+        {
+            arguments.append(L" --master \"");
+            arguments.append(masterPipe);
+            arguments.push_back(L'"');
+        }
+        return arguments;
+    }
+
     safe_void_coroutine TerminalPage::_LoadSidebarHistory(const uint64_t generation)
     {
         const auto weakThis = get_weak();
@@ -7141,14 +7155,14 @@ namespace winrt::TerminalApp::implementation
         const auto currentWindowId = _WindowProperties.WindowId();
         const auto cancellation = std::make_shared<std::atomic<bool>>(false);
         _historyRefreshCancellation = cancellation;
+        const auto arguments = _BuildSessionsListArguments(SharedWta::Instance().MasterPipeName(), true);
 
         co_await winrt::resume_background();
 
         namespace Wta = ::Microsoft::Terminal::WtaProcess;
         const auto result = Wta::RunWtaCapture(
             Wta::ResolveWtaExePath(),
-            // Keep the Agent Management MVP's shell-origin visibility contract.
-            L"sessions list --origin shell --json --include-status",
+            arguments,
             15'000,
             nullptr,
             false,
@@ -11994,13 +12008,14 @@ namespace winrt::TerminalApp::implementation
         const auto weakThis = get_weak();
         const auto dispatcher = Dispatcher();
         const auto lastReceivedByPane = _richTabAgentStatusByPaneId;
+        const auto arguments = _BuildSessionsListArguments(SharedWta::Instance().MasterPipeName(), false);
 
         co_await winrt::resume_background();
 
         namespace Wta = ::Microsoft::Terminal::WtaProcess;
         const auto result = Wta::RunWtaCapture(
             Wta::ResolveWtaExePath(),
-            L"sessions list --json --include-status",
+            arguments,
             15'000,
             nullptr,
             false);

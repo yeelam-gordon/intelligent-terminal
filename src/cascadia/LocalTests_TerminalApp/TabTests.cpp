@@ -431,6 +431,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(SessionRegistryStatusDeltaUpdatesCaches);
         TEST_METHOD(LatestBuiltinAgentReportWinsForPane);
         TEST_METHOD(AgentSnapshotTiesPreserveLastReceivedPaneReport);
+        TEST_METHOD(SessionSnapshotsUseOwnedMasterPipe);
         TEST_METHOD(AgentSnapshotSelectionIsIndependentOfRowOrder);
         TEST_METHOD(BottomBarSessionsButtonFollowsLayout);
         TEST_METHOD(BottomBarSessionsButtonDispatchesExistingAction);
@@ -7904,6 +7905,24 @@ namespace TerminalAppLocalTests
         Page::_RichTabAgentInfo custom{ "new-custom-session", "Working", "custom:wrapper", std::nullopt, paneId };
         VERIFY_IS_TRUE(Page::_ShouldReplaceSnapshotAgentState(copilot, custom, &custom));
         VERIFY_IS_FALSE(Page::_ShouldReplaceSnapshotAgentState(custom, copilot, &custom));
+    }
+
+    void TabTests::SessionSnapshotsUseOwnedMasterPipe()
+    {
+        using Page = winrt::TerminalApp::implementation::TerminalPage;
+        const std::wstring pipe{ L"\\\\.\\pipe\\wta-master-owned fixture" };
+        VERIFY_ARE_EQUAL(
+            std::wstring{ L"sessions list --json --include-status --master \"\\\\.\\pipe\\wta-master-owned fixture\"" },
+            Page::_BuildSessionsListArguments(pipe, false));
+        VERIFY_ARE_EQUAL(
+            std::wstring{ L"sessions list --origin shell --json --include-status --master \"\\\\.\\pipe\\wta-master-owned fixture\"" },
+            Page::_BuildSessionsListArguments(pipe, true));
+        VERIFY_ARE_EQUAL(
+            std::wstring{ L"sessions list --json --include-status" },
+            Page::_BuildSessionsListArguments({}, false));
+        VERIFY_ARE_EQUAL(
+            std::wstring{ L"sessions list --origin shell --json --include-status" },
+            Page::_BuildSessionsListArguments({}, true));
     }
 
     void TabTests::AgentSnapshotSelectionIsIndependentOfRowOrder()
