@@ -28,8 +28,10 @@ An unbound native pane has a registry observation keyed by its actual pane
 GUID, not an invented ACP session ID or a resumable history row. A known
 explicit resume can bind a real row using its exact provider, conversation ID
 and execution source. Existing authoritative born-bound assignment may arrive
-before or after observation admission. History discovery alone cannot promote
-an unknown pane into a conversation.
+before or after observation admission. When the transport source is unknown,
+Terminal accepts the source of a qualified canonical pane observation without
+inferring a transport source; known sources must still match. History discovery
+alone cannot promote an unknown pane into a conversation.
 
 The existing parsed OSC 9;4 progress reports map to the existing agent statuses:
 Idle (0/4), Working (1/3, displayed as Active), and Error (2). Paused progress

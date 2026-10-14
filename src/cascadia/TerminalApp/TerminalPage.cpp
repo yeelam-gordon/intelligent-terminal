@@ -11759,7 +11759,8 @@ namespace winrt::TerminalApp::implementation
                     if (!identity->agentSessionId.empty())
                     {
                         if (info->second.sessionId != identity->agentSessionId ||
-                            info->second.location != _NativeAgentObservationLocation(identity->location))
+                            (!identity->location.empty() &&
+                             info->second.location != _NativeAgentObservationLocation(identity->location)))
                         {
                             return std::nullopt;
                         }

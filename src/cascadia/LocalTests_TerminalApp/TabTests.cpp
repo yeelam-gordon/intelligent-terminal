@@ -9629,10 +9629,20 @@ namespace TerminalAppLocalTests
     void TabTests::VerticalTabHistoryTimeoutKeepsRowsWithoutError()
     {
         auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto uiThreadCleanup = wil::scope_exit([&]() {
+            LOG_IF_FAILED(RunOnUIThread([&]() { page = nullptr; }));
+        });
+        TestOnUIThread([&]() {
+            page->_tabStrip.HistoryActive(true);
+        });
+        _waitForContentTransferReviewUI([&]() {
+            page->UpdateLayout();
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            return strip->HistorySection() != nullptr && strip->HistoryMessage() != nullptr;
+        });
         TestOnUIThread([&]() {
             using Page = winrt::TerminalApp::implementation::TerminalPage;
             const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
-            page->_tabStrip.HistoryActive(true);
             const auto generation = page->_historyRequestGeneration;
             page->_CompleteSidebarHistoryRefresh(generation, page->_ParseSidebarHistorySnapshot(
                 R"({"history_status":"ready","sessions":[{"session_id":"cached","provider_id":"copilot","title":"Cached session","location":"Host","status":"Historical"}]})"));
@@ -9643,6 +9653,9 @@ namespace TerminalAppLocalTests
             page->_CompleteSidebarHistoryRefresh(generation, timeout);
             VERIFY_IS_TRUE(page->_tabStrip.HistoryError().empty());
             VERIFY_IS_FALSE(page->_tabStrip.HistoryLoading());
+            page->UpdateLayout();
+            VERIFY_IS_NOT_NULL(strip->HistorySection());
+            VERIFY_IS_NOT_NULL(strip->HistoryMessage());
             VERIFY_ARE_EQUAL(Visibility::Collapsed, strip->HistoryMessage().Visibility());
             VERIFY_IS_TRUE(page->_tabStrip.HistoryItems().GetAt(0) == item);
             VERIFY_IS_TRUE(page->_historyRetryDelay >= std::chrono::seconds{ 5 });
@@ -9691,9 +9704,19 @@ namespace TerminalAppLocalTests
     void TabTests::VerticalTabHistoryLoadingAndErrorsKeepRows()
     {
         auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto uiThreadCleanup = wil::scope_exit([&]() {
+            LOG_IF_FAILED(RunOnUIThread([&]() { page = nullptr; }));
+        });
+        TestOnUIThread([&]() {
+            page->_tabStrip.HistoryActive(true);
+        });
+        _waitForContentTransferReviewUI([&]() {
+            page->UpdateLayout();
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            return strip->HistorySection() != nullptr && strip->HistoryMessage() != nullptr;
+        });
         TestOnUIThread([&]() {
             const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
-            page->_tabStrip.HistoryActive(true);
             const auto generation = page->_historyRequestGeneration;
             const auto partial = R"({"history_status":"loading","sessions":[
                 {"session_id":"available","provider_id":"copilot","title":"Available session",
@@ -9720,6 +9743,9 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_FALSE(page->_tabStrip.HistoryError().empty());
                 VERIFY_IS_TRUE(page->_tabStrip.HistoryItems().GetAt(0) == item);
                 VERIFY_ARE_EQUAL(Visibility::Visible, strip->ItemsList().Visibility());
+                page->UpdateLayout();
+                VERIFY_IS_NOT_NULL(strip->HistorySection());
+                VERIFY_IS_NOT_NULL(strip->HistoryMessage());
                 VERIFY_ARE_EQUAL(Visibility::Visible, strip->HistoryMessage().Visibility());
                 VERIFY_IS_TRUE(strip->ItemsList().IsItemClickEnabled());
             }
@@ -16987,6 +17013,19 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(size_t{ 1 }, page->_ParseAgentStatusResponse(malformed).size());
             malformed.removeMember("native_pane_observations");
             VERIFY_ARE_EQUAL(size_t{ 1 }, page->_ParseAgentStatusResponse(malformed).size());
+            page->_paneAgentSessions.at(paneId).backend = L"";
+            page->_PublishNativeAgentObservation(control, "reset");
+            const auto unspecified = manager->NativeAgentObservationForContent(control.ContentId()).value();
+            VERIFY_IS_TRUE(unspecified.modeEpoch > identity.modeEpoch);
+            VERIFY_IS_TRUE(unspecified.location.empty());
+            VERIFY_ARE_EQUAL(identity.agentSessionId, unspecified.agentSessionId);
+            auto qualifiedHost = row;
+            qualifiedHost["mode_epoch"] = Json::UInt64{ unspecified.modeEpoch };
+            const auto projectedHost = project(qualifiedHost);
+            VERIFY_IS_TRUE(projectedHost.has_value());
+            VERIFY_ARE_EQUAL(std::string{ "Working" }, projectedHost.value().status);
+            VERIFY_IS_TRUE(projectedHost.value().location == Json::Value{ "Host" });
+            VERIFY_IS_TRUE(manager->NativeAgentObservationForContent(control.ContentId()).value().location.empty());
             page->_paneAgentSessions.at(paneId).backend = winrt::hstring{
                 ::Microsoft::Terminal::Settings::Model::AgentPaneBackend::Wsl(L"Ubuntu", L"copilot") };
             page->_PublishNativeAgentObservation(control, "reset");
@@ -16994,6 +17033,8 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(refined.modeEpoch > identity.modeEpoch);
             VERIFY_ARE_EQUAL(std::string{ "wsl:Ubuntu" }, refined.location);
             VERIFY_IS_FALSE(project(row).has_value());
+            qualifiedHost["mode_epoch"] = Json::UInt64{ refined.modeEpoch };
+            VERIFY_IS_FALSE(project(qualifiedHost).has_value());
             _applyNativeRegistrySnapshot(page, control, "Working");
             VERIFY_ARE_EQUAL(std::string{ "Working" }, page->_RichTabAgentInfoForControl(control).value().status);
             page->_TryPublishInteractiveResumeBinding(
