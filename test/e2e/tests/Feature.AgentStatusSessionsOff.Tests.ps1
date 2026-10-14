@@ -52,6 +52,31 @@ Describe 'Feature: native agent status with Sessions off' -Tag @('Feature', 'Age
             @("@echo off", ">>`"$receipt`" echo $provider fixture invoked", 'exit /b 1') |
                 Set-Content (Join-Path $script:wrapperDir "$provider.cmd") -Encoding ascii
         }
+        # ACP prefers extensions across PATH directories. Block every built-in
+        # executable before the host can start discovery, not just shell lookup.
+        $blockerSource = Join-Path $script:evidence 'Reject-Provider.cs'
+        @'
+using System;
+using System.IO;
+class RejectProvider {
+    static int Main() {
+        string name = Path.GetFileNameWithoutExtension(Environment.GetCommandLineArgs()[0]);
+        File.AppendAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", name + "-wrapper.log"), "fixture invoked\r\n");
+        return 3;
+    }
+}
+'@ | Set-Content $blockerSource
+        $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+        $blocker = Join-Path $script:evidence 'Reject-Provider.exe'
+        (Invoke-Native -FilePath $compiler -Arguments @('/nologo', '/target:exe', "/out:$blocker", $blockerSource) -TimeoutSec 20).ExitCode |
+            Should -Be 0
+        $script:blockerHash = (Get-FileHash $blocker).Hash
+        foreach ($provider in @($script:providers) + @('npx', 'antigravity')) {
+            Copy-Item $blocker (Join-Path $script:wrapperDir "$provider.exe")
+        }
+        foreach ($provider in @('npx', 'antigravity')) {
+            @('@echo off', 'exit /b 3') | Set-Content (Join-Path $script:wrapperDir "$provider.cmd") -Encoding ascii
+        }
         $automationHome = Join-Path $script:evidence 'automation-home'
         $script:isolatedEnvironment = @{
             USERPROFILE = $automationHome; HOME = $automationHome
@@ -61,7 +86,8 @@ Describe 'Feature: native agent status with Sessions off' -Tag @('Feature', 'Age
             CODEX_HOME = (Join-Path $automationHome '.codex')
             GEMINI_CLI_HOME = (Join-Path $automationHome '.gemini')
             OPENCODE_CONFIG_DIR = (Join-Path $automationHome '.config\opencode')
-            PATH = "$script:wrapperDir;$($script:target.InstallLocation);$env:PATH"
+            PATH = (@($script:wrapperDir, (Split-Path $pwsh), $script:target.InstallLocation,
+                (Join-Path $env:WINDIR 'System32'), $env:WINDIR) -join ';')
             WT_WTCLI_PATH = $script:target.WtcliPath; WTCLI_PATH = $script:target.WtcliPath
         }
         foreach ($key in $script:isolatedEnvironment.Keys) {
@@ -186,7 +212,7 @@ catch {
         }
         ($probe.environment.PATH -split ';') | Should -Contain $script:wrapperDir
         foreach ($provider in $script:providers) {
-            $expected = Join-Path $script:wrapperDir "$provider.cmd"
+            $expected = Join-Path $script:wrapperDir "$provider.exe"
             $probe.paths.$provider | Should -Be $expected
             $cli = @($probe.hook_status.clis | Where-Object name -EQ $provider)
             $cli | Should -HaveCount 1
@@ -602,6 +628,12 @@ catch {
 $ErrorActionPreference = 'Stop'
 $cli = @($args)
 if (($cli -join ' ') -ceq '--acp --stdio') {
+    $launcher = Get-CimInstance Win32_Process -Filter "ProcessId=$env:ITE2E_COPILOT_LAUNCHER_PID" -ErrorAction Stop
+    $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($launcher.ParentProcessId)" -ErrorAction Stop
+    @{ launcher_pid = $launcher.ProcessId; launcher_path = $launcher.ExecutablePath; args = $cli
+        parent_pid = $parent.ProcessId; parent_path = $parent.ExecutablePath; parent_command = $parent.CommandLine
+        copilot_home = $env:COPILOT_HOME; userprofile = $env:USERPROFILE } |
+        ConvertTo-Json -Compress | Add-Content '__ACP_LAUNCH__'
     & '__ACP__' -LogPath '__LOG__' -HistoryPath '__HISTORY__'
     exit 0
 }
@@ -616,6 +648,7 @@ exit 1
 '@
         foreach ($replacement in @{
             '__ACP__' = $acp; '__LOG__' = $logPath; '__HISTORY__' = $historyPath; '__SID__' = $sid
+            '__ACP_LAUNCH__' = (Join-Path $script:evidence 'known-acp-launch.jsonl')
             '__LAUNCH__' = $launchPath; '__EMITTER__' = $script:fixture; '__SIGNAL__' = $signal
             '__RECEIPT__' = $receipt; '__TITLE__' = $title
         }.GetEnumerator()) {
@@ -623,8 +656,47 @@ exit 1
         }
         $dispatchCode | Set-Content $dispatcher
         $pwsh = (Get-Command pwsh.exe -ErrorAction Stop).Source
-        @('@echo off', "`"$pwsh`" -NoProfile -File `"$dispatcher`" %*", 'exit /b %errorlevel%') |
-            Set-Content (Join-Path $script:wrapperDir 'copilot.cmd') -Encoding ascii
+        $launcherSource = @'
+using System;
+using System.Diagnostics;
+class CopilotFixture {
+    static int Main(string[] args) {
+        bool acp = args.Length == 2 && args[0] == "--acp" && args[1] == "--stdio";
+        bool resume = args.Length == 2 && args[0] == "--resume" && args[1] == "__SID__";
+        if (!acp && !resume) return 3;
+        var start = new ProcessStartInfo(@"__PWSH__");
+        start.UseShellExecute = false;
+        start.Arguments = "-NoProfile -File \"__DISPATCH__\" " + args[0] + " " + args[1];
+        start.EnvironmentVariables["ITE2E_COPILOT_LAUNCHER_PID"] = Process.GetCurrentProcess().Id.ToString();
+        using (var child = Process.Start(start)) {
+            child.WaitForExit();
+            return child.ExitCode;
+        }
+    }
+}
+'@
+        $launcherSource = $launcherSource.Replace('__SID__', $sid).Replace('__PWSH__', $pwsh.Replace('"', '""')).
+            Replace('__DISPATCH__', $dispatcher.Replace('\', '\\').Replace('"', '\"'))
+        $sourcePath = Join-Path $script:evidence 'CopilotFixture.cs'
+        $launcherSource | Set-Content $sourcePath
+        $ownedExe = Join-Path $script:wrapperDir 'copilot.exe'
+        (Get-FileHash $ownedExe).Hash | Should -Be $script:blockerHash
+        @(Get-CimInstance Win32_Process -Filter "Name='copilot.exe'" |
+            Where-Object ExecutablePath -eq $ownedExe) | Should -HaveCount 0
+        $compiledExe = Join-Path $script:evidence 'Known-Copilot.exe'
+        if (Test-Path $compiledExe) { throw 'Owned compiler output already exists.' }
+        $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+        (Invoke-Native -FilePath $compiler -Arguments @('/nologo', '/target:exe', "/out:$compiledExe", $sourcePath) -TimeoutSec 20).ExitCode |
+            Should -Be 0
+        [IO.File]::Move($compiledExe, $ownedExe, $true)
+        (Invoke-Native -FilePath $ownedExe -Arguments @('--resume', $otherSid) -TimeoutSec 5).ExitCode | Should -Be 3
+        (Invoke-Native -FilePath $ownedExe -Arguments @('--version') -TimeoutSec 5).ExitCode | Should -Be 3
+        (Get-Command copilot.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source |
+            Should -Be $ownedExe
+        $resolver = Invoke-Wta -App $script:app -Arguments @('hooks', 'status', '--json') -TimeoutSec 10
+        @($resolver.clis | Where-Object name -eq copilot)[0].binary_path | Should -Be $ownedExe
+        @{ path = $ownedExe; sha256 = (Get-FileHash $ownedExe).Hash; wrong_resume_exit = 3; unsupported_exit = 3 } |
+            ConvertTo-Json | Set-Content (Join-Path $script:evidence 'known-owned-executable.json')
         Set-WtSetting -App $script:app -Key acpModel -Value '' | Out-Null
         Set-WtSetting -App $script:app -Key acpAgent -Value copilot | Out-Null
         Open-AgentPane -App $script:app | Out-Null
@@ -636,6 +708,16 @@ exit 1
         }
         $otherBefore = @($knownRows | Where-Object session_id -eq $otherSid)[0]
         (Get-Content $logPath -Raw) | Should -Match '(?m)^\d+\|list\|'
+        $acpLaunches = @(Get-Content (Join-Path $script:evidence 'known-acp-launch.jsonl') |
+            ForEach-Object { $_ | ConvertFrom-Json })
+        $acpLaunches.Count | Should -BeGreaterThan 0
+        foreach ($launchProof in $acpLaunches) {
+            $launchProof.launcher_path | Should -Be $ownedExe
+            $launchProof.parent_path | Should -Be $script:target.WtaPath
+            $launchProof.parent_command | Should -Match '\s--master\s'
+            $launchProof.copilot_home | Should -Be $script:isolatedEnvironment.COPILOT_HOME
+            $launchProof.userprofile | Should -Be $script:isolatedEnvironment.USERPROFILE
+        }
         $pipe = (Get-Content (Join-Path $script:app.LocalStateDir 'IntelligentTerminal\master-pipe.txt') -Raw).Trim()
         $rpc = [IO.Pipes.NamedPipeClientStream]::new('.', ($pipe -replace '^\\\\\.\\pipe\\', ''), [IO.Pipes.PipeDirection]::InOut)
         $reader = $null
@@ -742,5 +824,56 @@ exit 1
         $final = Get-StatusRegistrySnapshot
         @($final.sessions | Where-Object { $_.session_id -eq $sid -and $_.status -eq 'Attention' -and $_.provider_id -eq 'copilot' -and $_.location -eq 'Host' }) |
             Should -HaveCount 1
+    }
+
+    It 'Full trust Settings remains usable during native agent metadata refresh' {
+        Assert-StatusDeadline
+        $settingsHash = (Get-FileHash $script:app.SettingsPath).Hash
+        $beforeTabs = @(Get-WtTabs -App $script:app -WindowId $script:window | ForEach-Object tab_id)
+        $settingsTab = $null
+        try {
+            Send-WtWindowKey -App $script:app -Vk 0xBC -Ctrl -RequireForeground | Out-Null
+            Open-WtSettings -App $script:app -TimeoutSec 15 | Out-Null
+            $added = @(Get-WtTabs -App $script:app -WindowId $script:window |
+                Where-Object { $_.tab_id -notin $beforeTabs })
+            $added | Should -HaveCount 1 -Because 'only the newly opened Settings tab may be closed'
+            $settingsTab = $added[0].tab_id
+            Invoke-SettingsNav -App $script:app -NavItem AIAgentsNavItem | Out-Null
+            foreach ($selector in @('AcpAgent', 'ShowTokenUsageAndCostToggle')) {
+                $element = Get-UiElement -App $script:app -Selector $selector
+                $element | Should -Not -BeNullOrEmpty
+                $element.isOffscreen | Should -BeFalse
+            }
+            Send-StatusSignal $script:native -State 1
+            Assert-Status $script:native Active
+            Send-StatusSignal $script:native -Kind bell
+            Assert-Status $script:native 'Waiting for input'
+            Invoke-SettingsNav -App $script:app -NavItem AppearanceNavItem | Out-Null
+            Invoke-SettingsNav -App $script:app -NavItem AIAgentsNavItem | Out-Null
+            Test-UiElementExists -App $script:app -Selector AcpAgent -TimeoutSec 5 | Should -BeTrue
+            $script:app.OwnedProcess.HasExited | Should -BeFalse
+            $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+            $errors = @($root.FindAll([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                -not $_.Current.IsOffscreen -and
+                ($_.Current.ClassName -match 'ContentDialog' -or
+                    ($_.Current.ControlType -eq [Windows.Automation.ControlType]::Window -and $_.Current.Name -eq 'Error'))
+            })
+            $errors | Should -HaveCount 0 -Because 'Settings must not display an error dialog'
+            (Get-FileHash $script:app.SettingsPath).Hash | Should -Be $settingsHash -Because 'navigation must not save settings'
+        }
+        finally {
+            Get-UiTree -App $script:app -Depth 22 |
+                Set-Content (Join-Path $script:evidence 'fulltrust-settings-ui.txt')
+            if ($settingsTab -and -not $script:app.OwnedProcess.HasExited -and
+                (Test-UiElementExists -App $script:app -Selector SettingsNav -TimeoutSec 1)) {
+                Send-WtWindowKey -App $script:app -Vk 0x57 -Ctrl -Shift -RequireForeground | Out-Null
+                Wait-Until -TimeoutSec 5 -Because 'only the new Settings tab closes' -Condition {
+                    $tabs = @(Get-WtTabs -App $script:app -WindowId $script:window | ForEach-Object tab_id)
+                    $tabs.Count -eq $beforeTabs.Count -and -not @($beforeTabs | Where-Object { $_ -notin $tabs }).Count
+                } | Out-Null
+            }
+        }
+        Assert-Status $script:native 'Waiting for input'
     }
 }

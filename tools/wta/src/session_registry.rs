@@ -2105,6 +2105,13 @@ fn apply_native_observation_locked(
     }) {
         return false;
     }
+    let generic_activity = matches!(
+        event.event,
+        NativeObservationKind::Bell
+            | NativeObservationKind::Progress {
+                progress_state: 0 | 1 | 3 | 4
+            }
+    );
     let (status, active, removed) = match event.event {
         NativeObservationKind::Reset { tracking_enabled } => {
             (AgentStatus::Idle, !tracking_enabled, false)
@@ -2215,11 +2222,21 @@ fn apply_native_observation_locked(
             .get_mut(identity)
             .filter(|_| active && !continuation)
         {
-            row.status = Some(status);
-            row.current_tool = None;
-            row.attention_reason = None;
-            row.last_error = None;
-            row.last_activity_at_ms = Some(observation.last_activity_at_ms);
+            // Generic terminal progress does not prove that a canonical
+            // request for input was answered. Native-only BEL has no such context.
+            let canonical_attention = row.status == Some(AgentStatus::Attention)
+                && (row.attention_reason.is_some()
+                    || row
+                        .current_tool
+                        .as_deref()
+                        .is_some_and(crate::agent_sessions::is_user_input_tool));
+            if !(generic_activity && canonical_attention) {
+                row.status = Some(status);
+                row.current_tool = None;
+                row.attention_reason = None;
+                row.last_error = None;
+                row.last_activity_at_ms = Some(observation.last_activity_at_ms);
+            }
         }
     }
     state.native_panes.insert(
@@ -3448,6 +3465,18 @@ mod tests {
             assert!(!registry.apply_native_observation(event).await);
             transferred.event = NativeObservationKind::Progress { progress_state: 1 };
             assert!(registry.apply_native_observation(transferred.clone()).await);
+            if known {
+                assert_eq!(
+                    registry.native_pane_observations().await[0].status,
+                    AgentStatus::Attention
+                );
+                registry
+                    .apply_event(SessionEvent::ToolCompleted {
+                        key: "real-session".into(),
+                    })
+                    .await;
+                registry.apply_native_observation(transferred.clone()).await;
+            }
             assert_eq!(
                 registry.native_pane_observations().await[0].status,
                 AgentStatus::Working
@@ -3560,6 +3589,155 @@ mod tests {
             assert_eq!(native.status, status);
             assert_eq!(native.last_activity_at_ms, observed.last_activity_at_ms + 1);
         }
+    }
+
+    #[tokio::test]
+    async fn native_observation_generic_progress_preserves_canonical_attention() {
+        let (registry, identity) = native_bound_registry().await;
+        registry
+            .apply_native_observation(native_event(
+                serde_json::json!({"kind":"reset", "tracking_enabled":false}),
+                1,
+            ))
+            .await;
+        registry
+            .apply_event(SessionEvent::ToolStarting {
+                key: "real-session".into(),
+                tool_name: "prompt".into(),
+            })
+            .await;
+        registry
+            .apply_event(SessionEvent::Notification {
+                key: "real-session".into(),
+                message: "input requested".into(),
+            })
+            .await;
+        let waiting = registry.lookup_identity(&identity).await.unwrap();
+        for progress in [1, 3, 0, 4] {
+            registry
+                .apply_native_observation(native_event(
+                    serde_json::json!({"kind":"progress", "progress_state":progress}),
+                    1,
+                ))
+                .await;
+            assert_eq!(
+                registry.lookup_identity(&identity).await,
+                Some(waiting.clone())
+            );
+            assert_eq!(
+                registry.native_pane_observations().await[0].status,
+                AgentStatus::Attention
+            );
+        }
+        registry
+            .apply_native_observation(native_event(serde_json::json!({"kind":"bell"}), 1))
+            .await;
+        assert_eq!(registry.lookup_identity(&identity).await, Some(waiting));
+        registry
+            .apply_event(SessionEvent::ToolCompleted {
+                key: "real-session".into(),
+            })
+            .await;
+        assert_eq!(
+            registry.lookup_identity(&identity).await.unwrap().status,
+            Some(AgentStatus::Idle)
+        );
+        registry
+            .apply_native_observation(native_event(
+                serde_json::json!({"kind":"progress", "progress_state":1}),
+                1,
+            ))
+            .await;
+        assert_eq!(
+            registry.lookup_identity(&identity).await.unwrap().status,
+            Some(AgentStatus::Working)
+        );
+        registry
+            .apply_event(SessionEvent::Notification {
+                key: "real-session".into(),
+                message: "ready for next request".into(),
+            })
+            .await;
+        registry
+            .apply_event(SessionEvent::ToolStarting {
+                key: "real-session".into(),
+                tool_name: "prompt".into(),
+            })
+            .await;
+        registry
+            .apply_native_observation(native_event(
+                serde_json::json!({"kind":"progress", "progress_state":3}),
+                1,
+            ))
+            .await;
+        let working = registry.lookup_identity(&identity).await.unwrap();
+        assert_eq!(working.status, Some(AgentStatus::Working));
+        assert!(working.attention_reason.is_none());
+        let mut tool_wait = working;
+        tool_wait.status = Some(AgentStatus::Attention);
+        tool_wait.current_tool = Some("ask_user".into());
+        registry.upsert(tool_wait.clone()).await;
+        registry
+            .apply_native_observation(native_event(
+                serde_json::json!({"kind":"progress", "progress_state":1}),
+                1,
+            ))
+            .await;
+        assert_eq!(registry.lookup_identity(&identity).await, Some(tool_wait));
+    }
+
+    #[tokio::test]
+    async fn native_observation_bell_fallback_clears_and_explicit_error_overrides_attention() {
+        let (registry, identity) = native_bound_registry().await;
+        registry
+            .apply_native_observation(native_event(
+                serde_json::json!({"kind":"reset", "tracking_enabled":false}),
+                1,
+            ))
+            .await;
+        for (progress, status) in [
+            (1, AgentStatus::Working),
+            (3, AgentStatus::Working),
+            (0, AgentStatus::Idle),
+            (4, AgentStatus::Idle),
+        ] {
+            registry
+                .apply_native_observation(native_event(serde_json::json!({"kind":"bell"}), 1))
+                .await;
+            let attention = registry.lookup_identity(&identity).await.unwrap();
+            assert_eq!(attention.status, Some(AgentStatus::Attention));
+            assert!(attention.current_tool.is_none());
+            assert!(attention.attention_reason.is_none());
+            registry
+                .apply_native_observation(native_event(
+                    serde_json::json!({"kind":"progress", "progress_state":progress}),
+                    1,
+                ))
+                .await;
+            assert_eq!(
+                registry.lookup_identity(&identity).await.unwrap().status,
+                Some(status)
+            );
+        }
+        registry
+            .apply_event(SessionEvent::Notification {
+                key: "real-session".into(),
+                message: "input requested".into(),
+            })
+            .await;
+        registry
+            .apply_native_observation(native_event(
+                serde_json::json!({"kind":"progress", "progress_state":2}),
+                1,
+            ))
+            .await;
+        let error = registry.lookup_identity(&identity).await.unwrap();
+        assert_eq!(error.status, Some(AgentStatus::Error));
+        assert!(error.attention_reason.is_none());
+        assert_eq!(
+            registry.native_pane_observations().await[0].status,
+            AgentStatus::Error
+        );
     }
 
     fn info(id: &str, pane: Option<&str>) -> SessionInfo {

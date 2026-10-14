@@ -36,8 +36,11 @@ presentation is unchanged. BEL maps to the existing Attention status, displayed
 as Waiting for input, and retains the existing tab bell handling. Here Waiting
 for input includes both needing a response and finishing work ready for the
 next human request; BEL does not prove a mandatory response or approval.
-The next progress event clears this attention observation and maps to
-Working, Error, or Idle. OSC 9;4;0 alone clears progress to Idle and does not
+The next progress event clears native-only BEL attention and maps to Working,
+Error, or Idle. Generic progress does not dismiss a canonical input request
+with an existing attention reason or input-tool context; its matching completion
+or a new prompt supplies the transition. Focusing the tab only dismisses its
+bell indicator, not its registry activity. OSC 9;4;0 alone clears progress to Idle and does not
 prove that the process has ended. With Sessions OFF, only disappearance of the pane ID ends native
 ownership. OSC 133;D and a retained pane's Closed/Failed connection do not prove
 the agent has ended, and do not expire status, provider identity, or explicit

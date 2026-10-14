@@ -28,6 +28,7 @@
 #include "../TerminalSettingsAppAdapterLib/TerminalSettings.h"
 #include "../TerminalApp/TerminalSettingsCache.h"
 #include "../TerminalApp/TerminalPaneContent.h"
+#include "../TerminalApp/SettingsPaneContent.h"
 #include "../WinRTUtils/inc/Utils.h"
 #include "../inc/AgentPaneRestore.h"
 #include "../inc/AgentPaneBackend.h"
@@ -464,6 +465,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(AgentsViewShowsLiveTabsAndExcludesLiveHistory);
         TEST_METHOD(AgentsViewUsesOpenPaneSessionBinding);
         TEST_METHOD(AgentsViewDeduplicatesQualifiedHistoryIdentity);
+        TEST_METHOD(AgentsViewDeduplicatesCanonicalNativeSessionWithoutLocalBinding);
         TEST_METHOD(VerticalTabHistoryStartupLoading);
         TEST_METHOD(VerticalTabHistoryLoadingAndErrorsKeepRows);
         TEST_METHOD(VerticalTabHistoryTimeoutKeepsRowsWithoutError);
@@ -9417,6 +9419,88 @@ namespace TerminalAppLocalTests
             page->_paneAgentSessions.erase(paneId);
             page->_ApplyTabListProjection();
             VERIFY_ARE_EQUAL(3u, page->_tabStrip.HistoryItems().Size());
+        });
+    }
+
+    void TabTests::AgentsViewDeduplicatesCanonicalNativeSessionWithoutLocalBinding()
+    {
+        using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
+        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto uiThreadCleanup = wil::scope_exit([&]() {
+            RunOnUIThread([&]() { page = nullptr; });
+        });
+        TestOnUIThread([&]() {
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
+            page->_SyncNativeAgentStatusMode();
+            const winrt::guid paneId{ L"{91911111-2222-3333-4444-555555555555}" };
+            const auto connection = winrt::make_self<TestConnection>(paneId, State::Connected);
+            NewTerminalArgs args;
+            args.NativeAgentProviderId(L"copilot");
+            const auto pane = page->_MakePane(args, nullptr, *connection);
+            const auto control = pane->GetTerminalControl();
+            VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(pane));
+            VERIFY_IS_FALSE(page->_paneAgentSessions.contains(paneId));
+            const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
+            const auto identity = manager->NativeAgentObservationForContent(control.ContentId()).value();
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip);
+            const auto makeItem = [](const wchar_t* sessionId, const wchar_t* provider, const wchar_t* source, const wchar_t* paneId) {
+                auto item = winrt::make<winrt::TerminalApp::implementation::TabStripHistoryItem>();
+                item.SessionId(sessionId);
+                item.AgentId(provider);
+                item.AgentSource(source);
+                item.PaneSessionId(paneId);
+                item.Title(L"Identical conversation title");
+                item.Status(L"Working");
+                item.IsLive(true);
+                return item;
+            };
+            const auto paneIdString = ::Microsoft::Console::Utils::GuidToPlainString(paneId);
+            const auto represented = makeItem(L"canonical-session", L"copilot", L"host", paneIdString.c_str());
+            const auto otherSession = makeItem(L"other-session", L"copilot", L"host", paneIdString.c_str());
+            const auto otherSource = makeItem(L"canonical-session", L"copilot", L"wsl", L"92911111-2222-3333-4444-555555555555");
+            otherSource.WslDistro(L"Ubuntu");
+            const auto otherProvider = makeItem(L"canonical-session", L"claude", L"host", L"93911111-2222-3333-4444-555555555555");
+            page->_tabStrip.HistoryActive(true);
+            strip->CommitHistorySnapshot({ represented, otherSession, otherSource, otherProvider });
+            VERIFY_ARE_EQUAL(4u, page->_tabStrip.HistoryItems().Size());
+
+            Json::Value response;
+            response["sessions"] = Json::arrayValue;
+            Json::Value row;
+            row["pane_id"] = _formatPaneId(paneId);
+            row["provider_id"] = "copilot";
+            row["agent_session_id"] = "canonical-session";
+            row["location"] = "Host";
+            row["status"] = "Working";
+            row["window_id"] = Json::UInt64{ identity.windowId };
+            row["tab_id"] = identity.tabId;
+            row["mode_epoch"] = Json::UInt64{ identity.modeEpoch };
+            const auto apply = [&](const Json::Value& observation) {
+                response["native_pane_observations"] = Json::arrayValue;
+                response["native_pane_observations"].append(observation);
+                const auto snapshot = page->_BuildAgentStatusSnapshot(page->_ParseAgentStatusResponse(response), {});
+                page->_richTabAgentStatusByPaneId = snapshot.byPane;
+                page->_ApplyTabListProjection();
+            };
+            apply(row);
+            const auto canonical = page->_RichTabAgentInfoForControl(control);
+            VERIFY_IS_TRUE(canonical.has_value());
+            VERIFY_ARE_EQUAL(std::string{ "canonical-session" }, canonical.value().sessionId);
+            VERIFY_IS_FALSE(page->_paneAgentSessions.contains(paneId));
+            VERIFY_ARE_EQUAL(identity.modeEpoch, manager->NativeAgentObservationForContent(control.ContentId()).value().modeEpoch);
+            VERIFY_ARE_EQUAL(3u, page->_tabStrip.HistoryItems().Size());
+            VERIFY_IS_TRUE(page->_tabStrip.HistoryItems().GetAt(0) == otherSession);
+            VERIFY_IS_TRUE(page->_tabStrip.HistoryItems().GetAt(1) == otherSource);
+            VERIFY_IS_TRUE(page->_tabStrip.HistoryItems().GetAt(2) == otherProvider);
+            auto unknown = row;
+            unknown.removeMember("agent_session_id");
+            apply(unknown);
+            VERIFY_ARE_EQUAL(4u, page->_tabStrip.HistoryItems().Size());
+            auto stale = row;
+            stale["mode_epoch"] = Json::UInt64{ identity.modeEpoch + 1 };
+            apply(stale);
+            VERIFY_ARE_EQUAL(4u, page->_tabStrip.HistoryItems().Size());
+            VERIFY_IS_FALSE(page->_paneAgentSessions.contains(paneId));
         });
     }
 

@@ -2263,6 +2263,20 @@ namespace winrt::TerminalApp::implementation
                 if (const auto impl = _GetTabImpl(tab); impl && impl->GetRootPane())
                 {
                     impl->GetRootPane()->WalkTree([&](const auto& pane) {
+                        if (const auto control = pane->GetTerminalControl())
+                        {
+                            const auto canonical = _RichTabAgentInfoForControl(control);
+                            const auto connection = control.Connection();
+                            if (canonical && connection && !canonical->sessionId.empty() && !canonical->providerId.empty() &&
+                                canonical->paneSessionId == connection.SessionId() &&
+                                canonical->paneSessionId == pane->GetSessionId())
+                            {
+                                representedSessions.push_back({ winrt::to_hstring(canonical->sessionId),
+                                                                winrt::to_hstring(canonical->providerId),
+                                                                winrt::hstring{ ::Microsoft::Console::Utils::GuidToPlainString(connection.SessionId()) } });
+                                return;
+                            }
+                        }
                         if (const auto binding = _paneAgentSessions.find(pane->GetSessionId());
                             binding != _paneAgentSessions.end() && !binding->second.sessionId.empty())
                         {
