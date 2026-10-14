@@ -16456,6 +16456,8 @@ namespace TerminalAppLocalTests
             });
         };
         const auto verifyBellRequestsInput = [&]() {
+            // WarningBell has a one-second leading-edge throttle.
+            Sleep(1100);
             TestOnUIThread([&]() {
                 tab->Focus(FocusState::Unfocused);
                 tab->ShowBellIndicator(false);
