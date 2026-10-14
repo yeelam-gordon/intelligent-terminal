@@ -750,6 +750,30 @@ the agent confirms the switch.
 
 ### Native status observations when session tracking is off
 
+Managed Terminal masters receive `WTA_MASTER_GENERATION`, a positive decimal
+u64 reserved for that successfully launched receiver. Full sessions-list replies
+carry optional `native_observation_receiver_generation` (u64) and
+`native_observation_listener_ready` (bool). Ready starts false and becomes true
+only after the master's token-verified WT listener subscription marker; a
+successful snapshot alone is not readiness. The marker triggers the existing
+registry-changed invalidation. Ready is a subscription-established marker for
+this receiver lifetime, not a health poll.
+
+Managed `native_agent_observation` and restored `session_born_bound` events
+must include matching `receiver_generation` and wait for ready. Missing/stale
+generations are rejected for every observation kind, including BEL and removal.
+Masters without this environment variable retain legacy admission and omit the
+receiver metadata. Invalid supplied generations fail startup rather than
+downgrading to unmanaged behavior.
+
+Restored births use the existing `session_born_bound` COM topic and existing
+`pane_id`, exact `agent_session_id`, `agent`, `cwd`, tab/window identity and
+optional `wsl_distro` fields. Master handles birth before the following native
+reset on its ordered event reader, reusing the existing born-bound reducer;
+late duplicate helper RPCs do not overwrite live activity. Only Terminal-created
+or previously qualified actual identities may be replayed. Unknown panes get
+no synthetic conversation ID or history matching; no activity is copied.
+
 Terminal publishes `method: "native_agent_observation"` through the existing
 COM event subscription. Its `params` object contains:
 

@@ -463,6 +463,8 @@ mod tests {
             HistoryLoadStatus::Error,
         ] {
             let mut snapshot = SessionsListResponse {
+                native_observation_receiver_generation: None,
+                native_observation_listener_ready: None,
                 native_pane_observations: Vec::new(),
                 sessions: vec![
                     row("older", SessionOrigin::Unknown, 1),

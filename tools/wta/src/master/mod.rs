@@ -520,6 +520,8 @@ impl SessionLifecycleGate {
 /// notifications from the agent CLI) and each helper's `acp::Agent`
 /// impl (receives requests from one helper).
 struct MasterStateInner {
+    native_observation_receiver_generation: Option<u64>,
+    native_observation_listener_ready: std::sync::atomic::AtomicBool,
     /// Weak cache of lifecycle gates. Qualified operations share a raw-ID
     /// read barrier and take an instance-specific mutex, so equal raw IDs from
     /// different agent processes can proceed independently. Legacy raw-ID
@@ -5067,7 +5069,14 @@ async fn run_master_loop(config: MasterConfig, pipe_name: String) -> Result<()> 
             .local_addr()
             .context("read master session MCP HTTP endpoint")?
     );
+    let native_observation_receiver_generation = match std::env::var("WTA_MASTER_GENERATION") {
+        Ok(value) => Some(parse_native_observation_receiver_generation(&value)?),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(error).context("read WTA_MASTER_GENERATION"),
+    };
     let inner = Arc::new(MasterStateInner {
+        native_observation_receiver_generation,
+        native_observation_listener_ready: std::sync::atomic::AtomicBool::new(false),
         session_lifecycle_gates: Mutex::new(SessionLifecycleGateTable::default()),
         session_to_helper: Mutex::new(LiveRouteTable::default()),
         session_mcp_endpoints: session_mcp::Endpoints::new(session_mcp_endpoint),
@@ -7838,6 +7847,12 @@ where
         Some(history_status.status),
         history_status.error_kind,
         state.registry.native_pane_observations().await,
+        state.native_observation_receiver_generation,
+        state.native_observation_receiver_generation.map(|_| {
+            state
+                .native_observation_listener_ready
+                .load(std::sync::atomic::Ordering::Acquire)
+        }),
     );
     Ok(acp::schema::v1::ExtResponse::new(raw.into()))
 }
@@ -10576,6 +10591,29 @@ async fn resolve_master_hook_key(
 /// helpers happen to be running. Helpers observe the same broadcast but only
 /// maintain their own pane→session binding; they do not forward hooks. Shell
 /// prompt markers are reconciled on this stream too, in order after births.
+fn parse_native_observation_receiver_generation(value: &str) -> anyhow::Result<u64> {
+    anyhow::ensure!(
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()),
+        "WTA_MASTER_GENERATION must be a positive decimal u64"
+    );
+    let generation = value
+        .parse::<u64>()
+        .context("parse WTA_MASTER_GENERATION")?;
+    anyhow::ensure!(generation != 0, "WTA_MASTER_GENERATION must be nonzero");
+    Ok(generation)
+}
+
+fn native_observation_matches_receiver(state: &MasterStateInner, generation: Option<u64>) -> bool {
+    state
+        .native_observation_receiver_generation
+        .is_none_or(|owned| {
+            state
+                .native_observation_listener_ready
+                .load(std::sync::atomic::Ordering::Acquire)
+                && generation == Some(owned)
+        })
+}
+
 async fn handle_master_wt_event(state: &Arc<MasterStateInner>, event_json: serde_json::Value) {
     let method = event_json
         .get("method")
@@ -10586,9 +10624,73 @@ async fn handle_master_wt_event(state: &Arc<MasterStateInner>, event_json: serde
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
 
+    if method == "wt_listener_ready" {
+        state
+            .native_observation_listener_ready
+            .store(true, std::sync::atomic::Ordering::Release);
+        broadcast_session_status_change(state, None).await;
+        return;
+    }
+
+    if method == "session_born_bound" {
+        if !native_observation_matches_receiver(
+            state,
+            params
+                .get("receiver_generation")
+                .and_then(serde_json::Value::as_u64),
+        ) {
+            tracing::debug!(target: "master_wt_event", "restored birth rejected for listener readiness or receiver generation");
+            return;
+        }
+        let field = |name| {
+            params
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+        };
+        let key = field("agent_session_id");
+        let pane = field("pane_id");
+        let agent = field("agent");
+        if key.is_empty()
+            || key.starts_with("pane:")
+            || pane.is_empty()
+            || agent.is_empty()
+            || !(crate::agent_registry::is_known_id(agent)
+                || agent
+                    .strip_prefix("custom:")
+                    .is_some_and(|name| !name.is_empty()))
+        {
+            tracing::warn!(target: "master_wt_event", "ignoring incomplete restored born-bound identity");
+            return;
+        }
+        let event = crate::agent_sessions::SessionEvent::SessionStarted {
+            key: key.to_string(),
+            cli_source: crate::session_registry::SessionHookCliSource::Known(agent.to_string())
+                .into(),
+            pane_session_id: pane.to_string(),
+            cwd: std::path::PathBuf::from(field("cwd")),
+            title: String::new(),
+        };
+        let distro = params
+            .get("wsl_distro")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        if let Err(error) = handle_session_born_bound(state, event, distro).await {
+            tracing::warn!(target: "master_wt_event", %error, "ordered restored born-bound event failed");
+        }
+        return;
+    }
+
     if method == "native_agent_observation" {
         match serde_json::from_value::<crate::session_registry::NativeAgentObservation>(params) {
             Ok(event) => {
+                if !native_observation_matches_receiver(state, event.receiver_generation) {
+                    tracing::debug!(target: "master_wt_event",
+                        owned_generation = ?state.native_observation_receiver_generation,
+                        "native observation rejected before listener readiness or for receiver generation mismatch");
+                    return;
+                }
                 if state.registry.apply_native_observation(event).await {
                     broadcast_session_status_change(state, None).await;
                 }

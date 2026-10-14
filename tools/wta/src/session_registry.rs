@@ -429,6 +429,10 @@ pub struct SessionsListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub native_pane_observations: Vec<NativePaneObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_observation_receiver_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_observation_listener_ready: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_status: Option<HistoryLoadStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_error_kind: Option<HistoryErrorKind>,
@@ -443,6 +447,8 @@ pub struct NativeAgentObservation {
     pub window_id: u64,
     pub tab_id: String,
     pub mode_epoch: u64,
+    #[serde(default)]
+    pub receiver_generation: Option<u64>,
     #[serde(default)]
     pub agent_session_id: Option<String>,
     #[serde(default)]
@@ -663,10 +669,14 @@ pub fn build_sessions_list_response(
     history_status: Option<HistoryLoadStatus>,
     history_error_kind: Option<HistoryErrorKind>,
     native_pane_observations: Vec<NativePaneObservation>,
+    native_observation_receiver_generation: Option<u64>,
+    native_observation_listener_ready: Option<bool>,
 ) -> Box<serde_json::value::RawValue> {
     let response = SessionsListResponse {
         sessions,
         native_pane_observations,
+        native_observation_receiver_generation,
+        native_observation_listener_ready,
         history_status,
         history_error_kind,
     };
@@ -3151,7 +3161,8 @@ mod tests {
         assert_eq!(registry.snapshot().await[0].status, Some(AgentStatus::Idle));
         let native = registry.native_pane_observations().await;
         assert!(native[0].agent_session_id.is_none());
-        let wire = build_sessions_list_response(registry.snapshot().await, None, None, native);
+        let wire =
+            build_sessions_list_response(registry.snapshot().await, None, None, native, None, None);
         let parsed = parse_sessions_list_response(&wire).unwrap();
         assert_eq!(parsed.sessions.len(), 1);
         assert_eq!(
@@ -4118,6 +4129,24 @@ mod tests {
                 distro: "Ubuntu".into()
             }
         );
+    }
+
+    #[test]
+    fn native_receiver_metadata_round_trips_and_legacy_fields_remain_optional() {
+        let raw =
+            build_sessions_list_response(Vec::new(), None, None, Vec::new(), Some(7), Some(false));
+        let parsed = parse_sessions_list_response(&raw).unwrap();
+        assert_eq!(parsed.native_observation_receiver_generation, Some(7));
+        assert_eq!(parsed.native_observation_listener_ready, Some(false));
+        let legacy = build_sessions_list_response(Vec::new(), None, None, Vec::new(), None, None);
+        let value: serde_json::Value = serde_json::from_str(legacy.get()).unwrap();
+        assert!(value
+            .get("native_observation_receiver_generation")
+            .is_none());
+        assert!(value.get("native_observation_listener_ready").is_none());
+        let parsed = parse_sessions_list_response(&legacy).unwrap();
+        assert!(parsed.native_observation_receiver_generation.is_none());
+        assert!(parsed.native_observation_listener_ready.is_none());
     }
 
     fn info(id: &str, pane: Option<&str>) -> SessionInfo {
@@ -5474,7 +5503,8 @@ mod tests {
             bound_pid: None,
             born_bound_pane: false,
         };
-        let raw = build_sessions_list_response(vec![row.clone()], None, None, Vec::new());
+        let raw =
+            build_sessions_list_response(vec![row.clone()], None, None, Vec::new(), None, None);
         let parsed = parse_sessions_list_response(&raw).expect("response parses");
         assert_eq!(parsed.sessions, vec![row]);
     }
@@ -6313,6 +6343,8 @@ mod tests {
         info.cli_source = Some(crate::agent_sessions::CliSource::Copilot);
         info.last_activity_at_ms = Some(42);
         let resp = SessionsListResponse {
+            native_observation_receiver_generation: None,
+            native_observation_listener_ready: None,
             sessions: vec![info.clone()],
             native_pane_observations: Vec::new(),
             history_status: Some(HistoryLoadStatus::Ready),
@@ -6331,7 +6363,14 @@ mod tests {
             (HistoryLoadStatus::Ready, "ready"),
             (HistoryLoadStatus::Error, "error"),
         ] {
-            let raw = build_sessions_list_response(Vec::new(), Some(status), None, Vec::new());
+            let raw = build_sessions_list_response(
+                Vec::new(),
+                Some(status),
+                None,
+                Vec::new(),
+                None,
+                None,
+            );
             let json: serde_json::Value = serde_json::from_str(raw.get()).unwrap();
             assert_eq!(json["history_status"], wire);
             let parsed = parse_sessions_list_response(&raw).unwrap();
@@ -6355,6 +6394,8 @@ mod tests {
             Some(HistoryLoadStatus::Error),
             Some(HistoryErrorKind::Timeout),
             Vec::new(),
+            None,
+            None,
         );
         let json: serde_json::Value = serde_json::from_str(raw.get()).unwrap();
         assert_eq!(json["history_status"], "error");
@@ -6388,6 +6429,8 @@ mod tests {
             Some(HistoryLoadStatus::Ready),
             None,
             Vec::new(),
+            None,
+            None,
         );
         let json: serde_json::Value = serde_json::from_str(raw.get()).unwrap();
         assert!(json.get("history_error_kind").is_none());
