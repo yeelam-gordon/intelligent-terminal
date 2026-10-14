@@ -1,12 +1,14 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 # Real provider-labelled COM creation -> child stdout -> ConPTY parser -> Sidebar metadata.
-# No hooks, ACP prompts, status injection or inferred conversation IDs.
-# Known resume uses an exact fixture conversation ID; policy and removal need separate proof.
+# No hooks, status injection or inferred conversation IDs.
+# Known resume uses separately seeded real Copilot history; this suite sends no ACP prompts.
 # Without Sessions/hooks, command completion or retained connection state cannot
 # prove that the native agent ended; its pane ID must disappear.
 Describe 'Feature: native agent status with Sessions off' -Tag @('Feature', 'AgentStatusSessionsOff') {
     BeforeAll {
         Import-Module (Join-Path $PSScriptRoot '..\ItE2E\ItE2E.psd1') -Force
+        # Cache the absolute UI tool before provider containment narrows PATH.
+        & (Get-Module ItE2E) { Get-WinAppPath } | Out-Null
         . (Join-Path $PSScriptRoot 'helpers\SidebarExpansionEvents.ps1')
         Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
         $script:app = $null
@@ -33,6 +35,28 @@ Describe 'Feature: native agent status with Sessions off' -Tag @('Feature', 'Age
             if (-not $entry.Hash) { throw 'Supply exact-source deployed App and WTA SHA256 receipts.' }
             (Get-FileHash -LiteralPath $entry.Path).Hash | Should -Be $entry.Hash
         }
+        if (-not $env:ITE2E_COPILOT_SEED_RECEIPT) {
+            throw 'Supply the isolated real Copilot seeded-acp-history-receipt.json; never use personal history.'
+        }
+        $script:copilotSeed = Get-Content -LiteralPath $env:ITE2E_COPILOT_SEED_RECEIPT -Raw |
+            ConvertFrom-Json -ErrorAction Stop
+        $script:copilotSeed.Verdict | Should -Be TWO_REAL_SEEDED_IDS_VERIFIED_IN_ACP_HISTORY
+        $script:copilotSeed.AgentInfo.name | Should -Be Copilot
+        $script:copilotSeed.ExecutionSource | Should -Match '^Host\b'
+        $script:copilotSeed.UnexpectedHistoryCount | Should -Be 0
+        $script:copilotSeed.ExpectedRows | Should -HaveCount 2
+        @($script:copilotSeed.ExpectedRows.sessionId | Select-Object -Unique) | Should -HaveCount 2
+        $script:copilotSeed.USERPROFILE | Should -Match '(?i)automation|smoke|probe|test-runs'
+        [IO.Path]::GetFullPath($script:copilotSeed.USERPROFILE) |
+            Should -Not -Be ([IO.Path]::GetFullPath($env:USERPROFILE))
+        foreach ($row in $script:copilotSeed.ExpectedRows) {
+            [guid]::Parse($row.sessionId) | Should -Not -Be ([guid]::Empty)
+            $row.title | Should -Match '^auto:smoke:status-off:'
+            Test-Path -LiteralPath $row.cwd -PathType Container | Should -BeTrue
+        }
+        [IO.Path]::GetFullPath($script:copilotSeed.COPILOT_HOME) |
+            Should -Be ([IO.Path]::GetFullPath((Join-Path $script:copilotSeed.USERPROFILE '.copilot')))
+        (Get-FileHash -LiteralPath $script:copilotSeed.Executable).Hash | Should -Be $script:copilotSeed.SHA256
         $script:originalHashes = @{}
         foreach ($path in @($script:target.SettingsPath, $script:target.StatePath)) {
             if ((Test-Path "$path.e2ebak") -or (Test-Path "$path.e2ebak.missing")) {
@@ -43,6 +67,7 @@ Describe 'Feature: native agent status with Sessions off' -Tag @('Feature', 'Age
         $root = if ($env:ITE2E_ARTIFACT_ROOT) { $env:ITE2E_ARTIFACT_ROOT } else { Join-Path $PSScriptRoot '..\artifacts' }
         $script:evidence = Join-Path ([IO.Path]::GetFullPath($root)) ('sessions-off-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $script:evidence | Out-Null
+        Copy-Item -LiteralPath $env:ITE2E_COPILOT_SEED_RECEIPT -Destination (Join-Path $script:evidence 'copilot-seed-receipt.json')
         $pwsh = (Get-Command pwsh.exe -ErrorAction Stop).Source
         $script:wrapperDir = Join-Path $script:evidence 'hook-cli-wrappers'
         New-Item -ItemType Directory -Path $script:wrapperDir | Out-Null
@@ -52,8 +77,8 @@ Describe 'Feature: native agent status with Sessions off' -Tag @('Feature', 'Age
             @("@echo off", ">>`"$receipt`" echo $provider fixture invoked", 'exit /b 1') |
                 Set-Content (Join-Path $script:wrapperDir "$provider.cmd") -Encoding ascii
         }
-        # ACP prefers extensions across PATH directories. Block every built-in
-        # executable before the host can start discovery, not just shell lookup.
+        # These shims isolate shell lookup and hook reconciliation. WTA refreshes
+        # child PATH from the registry; its real ACP children use automation homes.
         $blockerSource = Join-Path $script:evidence 'Reject-Provider.cs'
         @'
 using System;
@@ -77,15 +102,15 @@ class RejectProvider {
         foreach ($provider in @('npx', 'antigravity')) {
             @('@echo off', 'exit /b 3') | Set-Content (Join-Path $script:wrapperDir "$provider.cmd") -Encoding ascii
         }
-        $automationHome = Join-Path $script:evidence 'automation-home'
+        $automationHome = $script:copilotSeed.USERPROFILE
         $script:isolatedEnvironment = @{
             USERPROFILE = $automationHome; HOME = $automationHome
-            XDG_CONFIG_HOME = (Join-Path $automationHome '.config')
+            XDG_CONFIG_HOME = (Join-Path $script:evidence 'automation-config')
             COPILOT_HOME = (Join-Path $automationHome '.copilot')
             CLAUDE_CONFIG_DIR = (Join-Path $automationHome '.claude')
             CODEX_HOME = (Join-Path $automationHome '.codex')
             GEMINI_CLI_HOME = (Join-Path $automationHome '.gemini')
-            OPENCODE_CONFIG_DIR = (Join-Path $automationHome '.config\opencode')
+            OPENCODE_CONFIG_DIR = (Join-Path $script:evidence 'automation-config\opencode')
             PATH = (@($script:wrapperDir, (Split-Path $pwsh), $script:target.InstallLocation,
                 (Join-Path $env:WINDIR 'System32'), $env:WINDIR) -join ';')
             WT_WTCLI_PATH = $script:target.WtcliPath; WTCLI_PATH = $script:target.WtcliPath
@@ -285,6 +310,7 @@ catch {
         }
         function Save-StatusDiagnostic {
             param($Fixture, [string]$Phase)
+            $fileTitle = $Fixture.Title -replace '[<>:"/\\|?*]', '_'
             try {
                 $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
                 $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
@@ -306,10 +332,10 @@ catch {
                     settings_disk = Invoke-WtCli -App $script:app -Arguments @('get-settings')
                     registry = try { Get-StatusRegistrySnapshot } catch { @{ diagnostic_error = $_.ToString() } }
                 } | ConvertTo-Json -Depth 16 |
-                    Set-Content (Join-Path $script:evidence "$($Fixture.Title)-$Phase-diagnostic.json")
+                    Set-Content (Join-Path $script:evidence "$fileTitle-$Phase-diagnostic.json")
             }
             catch {
-                $_ | Out-String | Set-Content (Join-Path $script:evidence "$($Fixture.Title)-$Phase-diagnostic-error.txt")
+                $_ | Out-String | Set-Content (Join-Path $script:evidence "$fileTitle-$Phase-diagnostic-error.txt")
             }
         }
         function Send-StatusSignal {
@@ -608,35 +634,21 @@ catch {
         Assert-NoFabricatedBinding $script:native
     }
     It 'Known native resume shares canonical status across tabs Recent and session list' {
-        $sid = [guid]::NewGuid().ToString()
-        $otherSid = [guid]::NewGuid().ToString()
-        $title = 'Known-resume-' + $sid.Substring(0, 8)
-        $historyPath = Join-Path $script:evidence 'known-history.json'
-        $logPath = Join-Path $script:evidence 'known-acp.log'
+        $seedRows = @($script:copilotSeed.ExpectedRows | Sort-Object title)
+        $sid = $seedRows[0].sessionId
+        $otherSid = $seedRows[1].sessionId
+        # The resumed native tab deliberately takes the unrelated history title.
+        # Exact conversation identity, not the displayed title, must deduplicate it.
+        $title = $seedRows[1].title
+        $selectedTitle = $seedRows[0].title
         $launchPath = Join-Path $script:evidence 'known-native-launch.json'
         $signal = Join-Path $script:evidence 'known-native.signal.json'
         $receipt = Join-Path $script:evidence 'known-native.receipt.txt'
-        $otherCwd = Join-Path $script:evidence 'other-conversation'
-        New-Item -ItemType Directory $otherCwd | Out-Null
-        @{ sessions = @(
-            @{ sessionId = $sid; title = $title; cwd = $script:evidence; updatedAt = '2020-01-02T00:00:00Z' },
-            @{ sessionId = $otherSid; title = $title; cwd = $otherCwd; updatedAt = '2020-01-01T00:00:00Z' }
-        ) } | ConvertTo-Json -Depth 6 | Set-Content $historyPath
+        $otherCwd = Split-Path $seedRows[1].cwd -Leaf
         $dispatcher = Join-Path $script:evidence 'Dispatch-CopilotFixture.ps1'
-        $acp = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-AcpChatAgent.ps1')).Path
         $dispatchCode = @'
 $ErrorActionPreference = 'Stop'
 $cli = @($args)
-if (($cli -join ' ') -ceq '--acp --stdio') {
-    $launcher = Get-CimInstance Win32_Process -Filter "ProcessId=$env:ITE2E_COPILOT_LAUNCHER_PID" -ErrorAction Stop
-    $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($launcher.ParentProcessId)" -ErrorAction Stop
-    @{ launcher_pid = $launcher.ProcessId; launcher_path = $launcher.ExecutablePath; args = $cli
-        parent_pid = $parent.ProcessId; parent_path = $parent.ExecutablePath; parent_command = $parent.CommandLine
-        copilot_home = $env:COPILOT_HOME; userprofile = $env:USERPROFILE } |
-        ConvertTo-Json -Compress | Add-Content '__ACP_LAUNCH__'
-    & '__ACP__' -LogPath '__LOG__' -HistoryPath '__HISTORY__'
-    exit 0
-}
 if ($cli.Count -eq 2 -and $cli[0] -ceq '--resume' -and $cli[1] -ceq '__SID__' -and $env:WT_SESSION) {
     @{ args = $cli; session_id = $cli[1]; pane_session_id = $env:WT_SESSION; pid = $PID; provider = 'copilot'; location = 'Host' } |
         ConvertTo-Json -Compress | Set-Content '__LAUNCH__'
@@ -647,8 +659,7 @@ if ($cli.Count -eq 2 -and $cli[0] -ceq '--resume' -and $cli[1] -ceq '__SID__' -a
 exit 1
 '@
         foreach ($replacement in @{
-            '__ACP__' = $acp; '__LOG__' = $logPath; '__HISTORY__' = $historyPath; '__SID__' = $sid
-            '__ACP_LAUNCH__' = (Join-Path $script:evidence 'known-acp-launch.jsonl')
+            '__SID__' = $sid
             '__LAUNCH__' = $launchPath; '__EMITTER__' = $script:fixture; '__SIGNAL__' = $signal
             '__RECEIPT__' = $receipt; '__TITLE__' = $title
         }.GetEnumerator()) {
@@ -661,9 +672,8 @@ using System;
 using System.Diagnostics;
 class CopilotFixture {
     static int Main(string[] args) {
-        bool acp = args.Length == 2 && args[0] == "--acp" && args[1] == "--stdio";
         bool resume = args.Length == 2 && args[0] == "--resume" && args[1] == "__SID__";
-        if (!acp && !resume) return 3;
+        if (!resume) return 3;
         var start = new ProcessStartInfo(@"__PWSH__");
         start.UseShellExecute = false;
         start.Arguments = "-NoProfile -File \"__DISPATCH__\" " + args[0] + " " + args[1];
@@ -707,18 +717,28 @@ class CopilotFixture {
             if ($rows.Count -eq 2 -and @($rows | Where-Object { $_.provider_id -ne 'copilot' -or $_.location -ne 'Host' }).Count -eq 0) { $rows }
         }
         $otherBefore = @($knownRows | Where-Object session_id -eq $otherSid)[0]
-        (Get-Content $logPath -Raw) | Should -Match '(?m)^\d+\|list\|'
-        $acpLaunches = @(Get-Content (Join-Path $script:evidence 'known-acp-launch.jsonl') |
-            ForEach-Object { $_ | ConvertFrom-Json })
-        $acpLaunches.Count | Should -BeGreaterThan 0
-        foreach ($launchProof in $acpLaunches) {
-            $launchProof.launcher_path | Should -Be $ownedExe
-            $launchProof.parent_path | Should -Be $script:target.WtaPath
-            $launchProof.parent_command | Should -Match '\s--master\s'
-            $launchProof.copilot_home | Should -Be $script:isolatedEnvironment.COPILOT_HOME
-            $launchProof.userprofile | Should -Be $script:isolatedEnvironment.USERPROFILE
-        }
         $pipe = (Get-Content (Join-Path $script:app.LocalStateDir 'IntelligentTerminal\master-pipe.txt') -Raw).Trim()
+        $masters = @(Get-CimInstance Win32_Process -Filter "Name='wta.exe'" | Where-Object {
+            $_.ExecutablePath -eq $script:target.WtaPath -and
+            $_.CommandLine -match '\s--master\s' -and $_.CommandLine.Contains($pipe)
+        })
+        $masters | Should -HaveCount 1
+        $masters[0].ParentProcessId | Should -Be $script:app.Pid
+        (Get-FileHash -LiteralPath $masters[0].ExecutablePath).Hash | Should -Be $env:ITE2E_EXPECTED_WTA_SHA256
+        $realChildren = @(Get-CimInstance Win32_Process -Filter "Name='copilot.exe'" | Where-Object {
+            $_.ParentProcessId -eq $masters[0].ProcessId -and $_.CommandLine -match '\s--acp\b' -and
+            $_.ExecutablePath -ne $ownedExe -and
+            (Get-FileHash -LiteralPath $_.ExecutablePath).Hash -eq $script:copilotSeed.SHA256
+        })
+        $realChildren | Should -HaveCount 1 -Because 'actual Copilot ACP, not the native-only emitter, must own the seeded history'
+        @{
+            child_pid = $realChildren[0].ProcessId; child_path = $realChildren[0].ExecutablePath
+            child_sha256 = (Get-FileHash -LiteralPath $realChildren[0].ExecutablePath).Hash
+            parent_pid = $masters[0].ProcessId; parent_path = $masters[0].ExecutablePath
+            parent_start = $masters[0].CreationDate; pipe = $pipe
+            seeded_home = $script:isolatedEnvironment.COPILOT_HOME
+            provider = 'copilot'; location = 'Host'; verified_history = $knownRows
+        } | ConvertTo-Json -Depth 12 | Set-Content (Join-Path $script:evidence 'known-real-acp-launch.json')
         $rpc = [IO.Pipes.NamedPipeClientStream]::new('.', ($pipe -replace '^\\\\\.\\pipe\\', ''), [IO.Pipes.PipeDirection]::InOut)
         $reader = $null
         $writer = $null
@@ -784,6 +804,11 @@ class CopilotFixture {
             $bound = @($current.sessions | Where-Object session_id -eq $sid)[0]
             $bound.provider_id | Should -Be copilot
             $bound.location | Should -Be Host
+            $nativeObservation = @($current.native_pane_observations | Where-Object agent_session_id -eq $sid)
+            $nativeObservation | Should -HaveCount 1
+            $nativeObservation[0].provider_id | Should -Be copilot
+            $nativeObservation[0].location | Should -Be Host
+            [string]$nativeObservation[0].window_id | Should -Be $script:window
             $other = @($current.sessions | Where-Object session_id -eq $otherSid)
             $other | Should -HaveCount 1
             $other[0].pane_session_id | Should -BeNullOrEmpty
@@ -808,18 +833,31 @@ class CopilotFixture {
             if ($rows.Count -eq 2 -and $historyRows.Count -eq 1) {
                 $parts = @($historyRows[0].FindAll([Windows.Automation.TreeScope]::Descendants,
                     [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name })
-                if (($parts -join ' ') -match [regex]::Escape('other-conversation')) {
+                if (($parts -join ' ') -match [regex]::Escape($otherCwd)) {
                     @($rows | ForEach-Object { $_.Current.Name }); $parts
                 }
             }
         }
         $recent | Set-Content (Join-Path $script:evidence 'known-recent-dedup.txt')
+        $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+        $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+            [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'ItemsList'))
+        $list | Should -Not -BeNullOrEmpty
+        $selectedHistory = @($list.FindAll([Windows.Automation.TreeScope]::Children,
+            [Windows.Automation.Condition]::TrueCondition) | Where-Object {
+            -not $_.Current.IsOffscreen -and $_.Current.Name.Contains($selectedTitle) -and
+            $_.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'HistoryProviderIcon'))
+        })
+        $selectedHistory | Should -HaveCount 0 -Because 'the resumed exact identity must disappear from Recent despite its changed native title'
         Open-SessionList -App $script:app -TimeoutSec 15 | Out-Null
         $helper = Get-AgentPaneSession -App $script:app
         Wait-Until -TimeoutSec 10 -Because 'classic sessions renders both real identities with one attention badge' -Condition {
             $text = Get-AgentPaneText -App $script:app -PaneSessionId $helper.PaneSessionId -MaxLines 100
-            $rows = @($text -split "`n" | Where-Object { $_.Contains($title) })
-            if ($rows.Count -eq 2 -and @($rows | Where-Object { $_ -match 'Waiting for input' }).Count -eq 1) { $text }
+            $selectedRows = @($text -split "`n" | Where-Object { $_.Contains($selectedTitle) })
+            $otherRows = @($text -split "`n" | Where-Object { $_.Contains($title) })
+            if ($selectedRows.Count -eq 1 -and $selectedRows[0] -match 'Waiting for input' -and
+                $otherRows.Count -eq 1 -and $otherRows[0] -notmatch 'Waiting for input') { $text }
         } | Set-Content (Join-Path $script:evidence 'known-classic-sessions.txt')
         $final = Get-StatusRegistrySnapshot
         @($final.sessions | Where-Object { $_.session_id -eq $sid -and $_.status -eq 'Attention' -and $_.provider_id -eq 'copilot' -and $_.location -eq 'Host' }) |
@@ -840,14 +878,59 @@ class CopilotFixture {
             $settingsTab = $added[0].tab_id
             Invoke-SettingsNav -App $script:app -NavItem AIAgentsNavItem | Out-Null
             foreach ($selector in @('AcpAgent', 'ShowTokenUsageAndCostToggle')) {
+                $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+                $root.Current.ProcessId | Should -Be $script:app.Pid
+                $peer = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                    [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, $selector))
+                $peer | Should -Not -BeNullOrEmpty
+                if ($peer.Current.IsOffscreen) {
+                    $pattern = $null
+                    if ($peer.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$pattern)) {
+                        ([Windows.Automation.ScrollItemPattern]$pattern).ScrollIntoView()
+                    }
+                    else {
+                        $ancestor = [Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($peer)
+                        while ($ancestor -and $ancestor.Current.ProcessId -eq $script:app.Pid) {
+                            if ($ancestor.TryGetCurrentPattern([Windows.Automation.ScrollPattern]::Pattern, [ref]$pattern)) { break }
+                            $ancestor = [Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($ancestor)
+                        }
+                        $pattern | Should -Not -BeNullOrEmpty -Because 'the Settings control must have a supported scroll owner'
+                        $scroll = [Windows.Automation.ScrollPattern]$pattern
+                        for ($step = 0; $step -lt 12 -and $peer.Current.IsOffscreen; $step++) {
+                            $amount = if ($peer.Current.BoundingRectangle.Top -lt $ancestor.Current.BoundingRectangle.Top) {
+                                [Windows.Automation.ScrollAmount]::SmallDecrement
+                            } else { [Windows.Automation.ScrollAmount]::SmallIncrement }
+                            $scroll.Scroll([Windows.Automation.ScrollAmount]::NoAmount, $amount)
+                            Start-Sleep -Milliseconds 100
+                        }
+                    }
+                    Wait-Until -TimeoutSec 3 -Because "owned Settings control $selector is scrolled into view" -Condition {
+                        -not $peer.Current.IsOffscreen
+                    } | Out-Null
+                }
                 $element = Get-UiElement -App $script:app -Selector $selector
                 $element | Should -Not -BeNullOrEmpty
                 $element.isOffscreen | Should -BeFalse
+                $element.isEnabled | Should -BeTrue
             }
+            $toggle = $peer.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+            $originalToggleState = $toggle.Current.ToggleState
+            Invoke-UiElement -App $script:app -Selector ShowTokenUsageAndCostToggle -TimeoutSec 5 | Out-Null
+            Wait-Until -TimeoutSec 3 -Because 'the visible Settings toggle responds to the real UI action' -Condition {
+                $toggle.Current.ToggleState -ne $originalToggleState
+            } | Out-Null
+            Get-UiElement -App $script:app -Selector ShowTokenUsageAndCostToggle |
+                ConvertTo-Json -Depth 8 | Set-Content (Join-Path $script:evidence 'fulltrust-settings-toggled.json')
             Send-StatusSignal $script:native -State 1
             Assert-Status $script:native Active
             Send-StatusSignal $script:native -Kind bell
             Assert-Status $script:native 'Waiting for input'
+            Invoke-UiElement -App $script:app -Selector ShowTokenUsageAndCostToggle -TimeoutSec 5 | Out-Null
+            Wait-Until -TimeoutSec 3 -Because 'the real UI action restores the original Settings toggle state' -Condition {
+                $toggle.Current.ToggleState -eq $originalToggleState
+            } | Out-Null
+            Get-UiElement -App $script:app -Selector ShowTokenUsageAndCostToggle |
+                ConvertTo-Json -Depth 8 | Set-Content (Join-Path $script:evidence 'fulltrust-settings-toggle-restored.json')
             Invoke-SettingsNav -App $script:app -NavItem AppearanceNavItem | Out-Null
             Invoke-SettingsNav -App $script:app -NavItem AIAgentsNavItem | Out-Null
             Test-UiElementExists -App $script:app -Selector AcpAgent -TimeoutSec 5 | Should -BeTrue

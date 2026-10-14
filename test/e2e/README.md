@@ -91,7 +91,7 @@ authenticated ACP agents. Available suites (results depend on the selected packa
 | `Feature.SidebarUpgrade.Tests.ps1` | Superseding PM/UX: persisted once-only Horizontal migration and later explicit Horizontal restart, independently pending introduction, absent flags/fresh FRE gate, real palette collapse deferral, exact-shell owned second-window suppression, actual rendered tip/restart suppression; real state.json sharing fault, visible warning, Horizontal memory/disk rollback and released-lock retry. No ACL/registry changes, provider quota or callback fault proxies; exact Dev hashes and inactive package required | 6 (authored, not live accepted) |
 | `Feature.SidebarProviderAppearance.Tests.ps1` | PR #1070: horizontal-first provider creation, native identity/layout preservation, and scoped Light/Dark header evidence; rendered foreground requires independent visual review | 2 |
 | `Feature.McpDelegatedAgentIdentity.Tests.ps1` | PR #1070: canonical provider bootstrap and identity-only hot updates across session MCP, helper, and native creation; controlled agent fixtures and ordinary-shell negative control | 1 |
-| `Feature.AgentStatusSessionsOff.Tests.ps1` | Real COM-created native stdout crosses ConPTY into master-owned observations and Sidebar metadata. C429 covers two independent same-provider panes, ordinary-shell/unknown-identity negatives and native OSC/BEL status. C430 covers ON suppression and newer OFF epochs. C431 resumes one exact built-in Copilot/Host mock history ID and checks canonical binding, tab metadata, Recent dedup and classic session rendering against a same-title/different-ID negative. Preferred-extension rejection executables contain all providers before host startup; only the owned Copilot executable is atomically replaced for C431. C432 opens the installed full-trust Settings editor, navigates Agents/Appearance during native metadata refresh, rejects errors/crashes, preserves settings bytes and closes only the new Settings tab. Timeout UIA diagnostics remain. Policy and pane-removal proof remain separate | 4 authored; parse/discovery are not runtime proof. Fresh V15 execution pending for all four. Prior e153/v14 C429/C430 passed; C431 failed because the old command wrapper lost executable resolution. Those results do not validate the repaired fixture or V15. Requires exact private PFN, separate product/source receipts, App/WTA hashes and inactivity; four-minute deadline, five-minute child lifetime, exact-owned cleanup and restored isolated runner environment |
+| `Feature.AgentStatusSessionsOff.Tests.ps1` | Real COM-created native stdout crosses ConPTY into master-owned observations and Sidebar metadata. C429 covers independent same-provider panes and shell/unknown-identity negatives. C430 covers ON suppression and newer OFF epochs. C431 uses two separately seeded real Copilot/Host history IDs, verifies the actual ACP executable hash/master parent, and resumes only the selected ID through a native-only emitter. The native title deliberately collides with unrelated history: canonical binding, Recent dedup and classic rendering must agree. Shell/hook shims do not contain registry-PATH ACP discovery; real providers initialize under automation homes without suite prompts. C432 scrolls the exact Settings control into view, verifies real toggle/restore actions and Agents/Appearance navigation during native metadata refresh. Policy/removal proof remains separate | 4 authored. Actual V16/fcb full run passed C429/C430 and failed C431's native observation location gate and C432's offscreen action. After scroll/toggle and fresh per-run XDG corrections, focused C432 passed (1 passed, 3 filtered NotRun); C431 remains pending a corrected WTA build. These results do not validate newer product sources. Requires `ITE2E_COPILOT_SEED_RECEIPT`, exact private PFN/source/payload receipts and inactive package. Four-minute suite deadline, five-minute emitter lifetime, exact-owned cleanup; automation conversations are preserved |
 | `Feature.AgentPaneInteraction.Tests.ps1` | open/hide/focus, input/rendering, slash, Copilot chat | 14 |
 | `Feature.AgentHotkeys.Tests.ps1` | Physical WT-window accelerators for agent pane/delegation; History navigation preserves search-off state and exact shell/Agent input focus, while explicit shared-search entry retains search-focus baselines and existing on-state/query. Sidebar hotkeys preserve drafts and tab-search focus, including keyboard focus on the titlebar rail toggle. The public palette action retains visibility toggling; mixed pointer sessions, horizontal suppression, and effective Expand/Collapse hints remain covered | 14 |
 | `Feature.AgentProtocolExperience.Tests.ps1` | PRs #599/#601/#606/#610/#611/#612/#616/#634/#683: intent-based terminal actions (including empty workspaces and configured delegation), ACP tool/transcript rendering, clarification input, session configuration, model title, and replacement cleanup across the deployed helper/master boundary | 8 |
@@ -647,6 +647,41 @@ Three planes, all built on self-verifying primitives:
 …plus verification oracles: `Assert-Setting`, `Assert-Ui`/`Assert-Xaml`,
 `Assert-Script`, `Assert-Pane`, `Assert-WtEvent`, `Assert-Log`, and the AI oracle
 `Assert-AI` (LLM judge wrapping an agent CLI's print mode, e.g. `copilot -p`).
+
+### Sessions-off real Copilot history prerequisite
+
+`Feature.AgentStatusSessionsOff` requires `ITE2E_COPILOT_SEED_RECEIPT` pointing
+to an actual `seeded-acp-history-receipt.json` from headless Copilot validation,
+not synthetic history or the user's normal home. In a fresh automation working
+directory and dedicated `COPILOT_HOME`/`HOME`/`USERPROFILE`, run exactly two named
+CLI seeds (distinct `auto:smoke:status-off:<run-id>:1` and `:2` names, distinct
+working directories), with a 120-second process deadline each:
+
+```powershell
+& $absoluteCopilotExe --name $structuredName --no-custom-instructions --silent `
+    --prompt 'Reply with OK. Do not use tools or read files.'
+```
+
+Use existing authentication only; never copy credentials or perform account
+login/switching. Confirm both actual IDs, names and directories using ACP
+`initialize` and `session/list` under the same home. The receipt contains
+`Verdict = TWO_REAL_SEEDED_IDS_VERIFIED_IN_ACP_HISTORY`, `AgentInfo.name = Copilot`,
+`ExecutionSource` beginning `Host`, the actual `Executable` and `SHA256`,
+`COPILOT_HOME`, `USERPROFILE`, `UnexpectedHistoryCount = 0`, and the two unchanged
+ACP rows in `ExpectedRows` (`sessionId`, `title`, `cwd`, `updatedAt`). Preserve
+the seeding/process/history receipts. Session creation alone is insufficient:
+unprompted sessions were absent from history in the capability probe.
+
+The suite reuses that home directly, verifies the installed executable hash,
+then independently queries the product's canonical Copilot/Host identities.
+It sends no additional real-agent prompt. `XDG_CONFIG_HOME` and
+`OPENCODE_CONFIG_DIR` are fresh per-run directories: prior ON reconciliation
+must not make a later run inherit an installed OpenCode hook from the reusable
+Copilot seed home. Other built-ins can initialize
+automatically: their configured automation homes isolate state, while rejection
+shims cover shell lookup/hook reconciliation only. Do not claim they prevent
+ACP startup through WTA's registry-first child PATH. Preserve all automation
+conversations and evidence; deletion requires the separate reviewed cleanup.
 
 ## Prerequisites
 
