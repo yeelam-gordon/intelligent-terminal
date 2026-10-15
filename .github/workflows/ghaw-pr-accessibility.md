@@ -192,7 +192,10 @@ Do not modify trusted staged evidence or regenerate it. Do not execute PR code,
 builds, tests, binaries, package managers or environment provisioning.
 
 If `relevant` is false, write the valid empty report and summary, then request
-`noop`. Otherwise follow the staged skill across every classified changed file
+`noop`: set `review_checks`, `findings`, `dismissed_signals` and `patch_files`
+to `[]`, retain the version/reviewed SHA, and preserve every prepared runtime
+check with its honest SKIPPED/BLOCKED status and reason. Otherwise follow the
+staged skill across every classified changed file
 and every `required_review_checks` dimension. Inspect actual changed hunks and
 needed companion styles, resources, peers and handlers. Names can come from
 content, resources, bindings, labels or peers; static signals alone are not
