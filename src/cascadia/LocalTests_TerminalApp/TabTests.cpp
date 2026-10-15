@@ -8480,7 +8480,10 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(winrt::hstring{ L"Ubuntu" }, rows.GetAt(0).WslDistro());
             rowChanges.clear();
             viewportChanges.clear();
-            impl->CommitHistorySnapshot({ makeItem(L"unrelated", L"Historical"), otherSource }, true);
+            const auto reorderedSource = makeItem(L"resumed", L"Historical");
+            reorderedSource.AgentSource(L"wsl");
+            reorderedSource.WslDistro(L"Ubuntu");
+            impl->CommitHistorySnapshot({ makeItem(L"unrelated", L"Historical"), reorderedSource }, true);
             view.strip.UpdateLayout();
             VERIFY_IS_TRUE(rows.GetAt(0) == unrelated);
             VERIFY_IS_TRUE(rows.GetAt(1) == otherSource);
@@ -11998,6 +12001,10 @@ namespace TerminalAppLocalTests
         HistoryTestView view;
         const auto strip = view.strip;
         const auto impl = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(strip);
+        _waitForContentTransferReviewUI([&]() {
+            strip.UpdateLayout();
+            return impl->HistorySection() != nullptr && impl->HistoryMessage() != nullptr;
+        });
         TestOnUIThread([&]() {
             const auto item = winrt::make<winrt::TerminalApp::implementation::TabStripHistoryItem>();
             item.SessionId(L"represented-idle-session");

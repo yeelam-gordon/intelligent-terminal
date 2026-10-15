@@ -449,6 +449,10 @@ while the Agents view is loaded and expanded. Age text is recalculated when the
 elapsed-minute bucket changes, and only changed text raises a property notification.
 This does not request a session snapshot or replace unchanged list rows; selection,
 focus, and scroll position are preserved. Search terms follow the updated age text.
+Successive registry snapshots also preserve surviving Recent session rows by
+their full provider/session/backend identity. Status and pane-binding changes
+update the retained row in place; genuine membership or ordering changes insert,
+remove, or move only the affected rows instead of replacing unchanged neighbors.
 Collapsing or unloading the sidebar, or leaving Agents, stops the local timer;
 showing it again immediately corrects cached ages. Session data refreshes and
 retry backoff remain independent, so retained ages continue advancing during a
