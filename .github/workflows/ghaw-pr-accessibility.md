@@ -249,7 +249,7 @@ remote publication; do not claim builds or tests passed.
 ## Results
 | Severity | Disposition | File:line | Finding and user impact | Proposed fix commit | Blocker / reviewer action |
 | --- | --- | --- | --- | --- | --- |
-| HIGH | fixed | path:line | Concrete user impact | [commit SHA](https://github.com/owner/repo/commit/SHA) | Review proposed repair |
+| HIGH | fixed | path:line | Concrete user impact | [commit SHA](COMMIT_URL) | Review proposed repair |
 
 Proposed fixes were committed without building or testing. The original PR
 reviewer (human or agent) owns build/test validation and may revert any fix commit.
@@ -261,6 +261,9 @@ localization work. Cite actual source evidence; do not invent runtime PASS.
 
 Replace placeholders. Use one row per actual finding; put its own separate
 commit link in each fixed HIGH row. Other rows use `—` in the commit column.
+Construct each `COMMIT_URL` from `${{ github.server_url }}`, the trusted
+prepared `publication.repository`, and that finding's actual commit SHA:
+`SERVER/OWNER/REPO/commit/SHA`. Do not hard-code github.com.
 Order HIGH before MEDIUM before LOW, unresolved HIGH before fixed HIGH, then
 file/line. With no findings, say "No findings"; with no repair commits, omit the
 shared unbuilt/untested notice. Include that notice only once below the table,
