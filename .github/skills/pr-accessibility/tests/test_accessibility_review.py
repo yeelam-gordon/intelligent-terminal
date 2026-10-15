@@ -1262,6 +1262,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("original PR", workflow)
         self.assertIn("may revert any fix commit", workflow)
         self.assertIn("only once below the table", workflow)
+        self.assertIn("Include this paragraph only if repair commits exist; otherwise remove it.", workflow)
         self.assertNotIn("script: |", workflow)
         self.assertNotIn("summary.push(", workflow)
 
@@ -1356,6 +1357,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("push-to-pull-request-branch:", workflow)
         self.assertIn("fallback-as-pull-request: false", workflow)
         self.assertIn("--current-head \"$CURRENT_HEAD_SHA\"", workflow)
+        self.assertIn('gh api --hostname "${GITHUB_SERVER_URL#*://}"', workflow)
         frontmatter = workflow.split("---", 2)[1]
         self.assertNotIn("add-comment:", frontmatter)
         self.assertNotIn("submit-pull-request-review:", frontmatter)

@@ -151,7 +151,7 @@ post-steps:
       GH_AW_SAFE_OUTPUTS: ${{ steps.set-runtime-paths.outputs.GH_AW_SAFE_OUTPUTS }}
     run: |
       set -euo pipefail
-      CURRENT_HEAD_SHA="$(gh api "/repos/$REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)"
+      CURRENT_HEAD_SHA="$(gh api --hostname "${GITHUB_SERVER_URL#*://}" "/repos/$REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha)"
       TRUSTED_ACCESSIBILITY="$RUNNER_TEMP/gh-aw/accessibility-trusted"
       git --no-replace-objects -c core.fsmonitor=false fsck --no-reflogs
       python3 "$TRUSTED_ACCESSIBILITY/accessibility_review.py" validate \
@@ -251,6 +251,7 @@ remote publication; do not claim builds or tests passed.
 | --- | --- | --- | --- | --- | --- |
 | HIGH | fixed | path:line | Concrete user impact | [commit SHA](COMMIT_URL) | Review proposed repair |
 
+<!-- Include this paragraph only if repair commits exist; otherwise remove it. -->
 Proposed fixes were committed without building or testing. The original PR
 reviewer (human or agent) owns build/test validation and may revert any fix commit.
 
