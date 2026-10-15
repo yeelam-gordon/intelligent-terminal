@@ -441,6 +441,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(BottomBarSessionsButtonTracksVisibleView);
         TEST_METHOD(VerticalTabHistoryRelativeAge);
         TEST_METHOD(VerticalTabHistoryAgeUpdatesPreserveCollection);
+        TEST_METHOD(VerticalTabHistoryCloseRefreshPreservesVisualRows);
         TEST_METHOD(VerticalTabHistoryAgeSearchTracksClock);
         TEST_METHOD(VerticalTabHistoryAgeTimerFollowsVisibility);
         TEST_METHOD(VerticalTabHistoryMetadataLayout);
@@ -8323,6 +8324,181 @@ namespace TerminalAppLocalTests
                     VERIFY_ARE_EQUAL(expected, Page::_SidebarHistoryAgeText(last, calendarNow + 10 * 86'400'000ULL, locale));
                 }
             }
+        });
+    }
+
+    void TabTests::VerticalTabHistoryCloseRefreshPreservesVisualRows()
+    {
+        using Strip = winrt::TerminalApp::implementation::TabStrip;
+        using Row = winrt::TerminalApp::implementation::TabStripHistoryItem;
+        HistoryTestView view;
+        winrt::TerminalApp::TabStripHistoryItem unrelated{ nullptr };
+        winrt::Windows::UI::Xaml::Controls::ListViewItem unrelatedContainer{ nullptr };
+        const auto releaseOnUI = wil::scope_exit([&]() {
+            RunOnUIThread([&]() {
+                unrelatedContainer = nullptr;
+                unrelated = nullptr;
+            });
+        });
+        const auto makeItem = [](const wchar_t* id, const wchar_t* status) {
+            auto item = winrt::make<Row>();
+            item.SessionId(id);
+            item.AgentId(L"copilot");
+            item.AgentSource(L"host");
+            item.Title(id);
+            item.Status(status);
+            winrt::get_self<Row>(item)->UpdateStatusText(status);
+            item.IsLive(std::wstring_view{ status } == L"Working");
+            item.IsHistorical(!item.IsLive());
+            if (std::wstring_view{ id } == L"resumed")
+            {
+                item.PaneSessionId(L"11111111-2222-3333-4444-555555555555");
+            }
+            return item;
+        };
+        TestOnUIThread([&]() {
+            const auto impl = winrt::get_self<Strip>(view.strip);
+            if (impl->_historyAgeTimer)
+            {
+                impl->_historyAgeTimer.Stop();
+            }
+            view.strip.Width(360);
+            view.strip.Height(500);
+            unrelated = makeItem(L"unrelated", L"Historical");
+            impl->CommitHistorySnapshot({ makeItem(L"resumed", L"Working"), unrelated }, true);
+            impl->SetRepresentedHistorySessions({
+                { L"resumed", L"copilot", L"11111111-2222-3333-4444-555555555555" } });
+            view.strip.UpdateLayout();
+        });
+        _waitForContentTransferReviewUI([&]() {
+            const auto impl = winrt::get_self<Strip>(view.strip);
+            view.strip.UpdateLayout();
+            return impl->ItemsList().ContainerFromItem(unrelated) != nullptr;
+        });
+        TestOnUIThread([&]() {
+            const auto impl = winrt::get_self<Strip>(view.strip);
+            const auto rows = view.strip.HistoryItems();
+            unrelatedContainer = impl->ItemsList().ContainerFromItem(unrelated).as<ListViewItem>();
+            std::vector<CollectionChange> rowChanges;
+            std::vector<CollectionChange> viewportChanges;
+            const auto rowToken = rows.VectorChanged(winrt::auto_revoke, [&](auto&&, const IVectorChangedEventArgs& args) {
+                rowChanges.push_back(args.CollectionChange());
+            });
+            const auto viewportToken = impl->_viewportItems.VectorChanged(winrt::auto_revoke, [&](auto&&, const IVectorChangedEventArgs& args) {
+                viewportChanges.push_back(args.CollectionChange());
+            });
+            impl->SetRepresentedHistorySessions({});
+            view.strip.UpdateLayout();
+            const auto returned = rows.GetAt(0);
+            const auto unrelatedSurvivedClose = impl->ItemsList().ContainerFromItem(unrelated) == unrelatedContainer;
+            VERIFY_ARE_EQUAL(size_t{ 1 }, rowChanges.size());
+            VERIFY_ARE_EQUAL(CollectionChange::ItemInserted, rowChanges[0]);
+            VERIFY_ARE_EQUAL(size_t{ 1 }, viewportChanges.size());
+            VERIFY_ARE_EQUAL(CollectionChange::ItemInserted, viewportChanges[0]);
+            rowChanges.clear();
+            viewportChanges.clear();
+            impl->CommitHistorySnapshot({ makeItem(L"resumed", L"Ended"), makeItem(L"unrelated", L"Historical") }, true);
+            view.strip.UpdateLayout();
+            Log::Comment(NoThrowString().Format(
+                L"Recent close phase=Ended: row events=%u; viewport events=%u; stable resumed=%u",
+                static_cast<unsigned>(rowChanges.size()), static_cast<unsigned>(viewportChanges.size()),
+                static_cast<unsigned>(returned == rows.GetAt(0))));
+            impl->CommitHistorySnapshot({ makeItem(L"resumed", L"Historical"), makeItem(L"unrelated", L"Historical") }, true);
+            view.strip.UpdateLayout();
+            const auto statusRowChanges = rowChanges.size();
+            const auto statusViewportChanges = viewportChanges.size();
+            const auto resets = std::count(rowChanges.begin(), rowChanges.end(), CollectionChange::Reset) +
+                std::count(viewportChanges.begin(), viewportChanges.end(), CollectionChange::Reset);
+            rowChanges.clear();
+            viewportChanges.clear();
+            impl->CommitHistorySnapshot({ makeItem(L"resumed", L"Historical"), makeItem(L"unrelated", L"Historical") }, true);
+            view.strip.UpdateLayout();
+            Log::Comment(NoThrowString().Format(
+                L"Recent close oracle: status row events=%u; status viewport events=%u; resets=%u; duplicate row events=%u; duplicate viewport events=%u; stable resumed=%u; unrelated container survived=%u",
+                static_cast<unsigned>(statusRowChanges), static_cast<unsigned>(statusViewportChanges),
+                static_cast<unsigned>(resets),
+                static_cast<unsigned>(rowChanges.size()), static_cast<unsigned>(viewportChanges.size()),
+                static_cast<unsigned>(returned == rows.GetAt(0)), static_cast<unsigned>(unrelatedSurvivedClose)));
+            VERIFY_ARE_EQUAL(2u, rows.Size());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"resumed" }, rows.GetAt(0).SessionId());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"unrelated" }, rows.GetAt(1).SessionId());
+            for (const auto& row : rows)
+            {
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, row.AgentId());
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"host" }, row.AgentSource());
+                VERIFY_IS_TRUE(row.WslDistro().empty());
+                VERIFY_IS_TRUE(row.SessionUniverse().empty());
+            }
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"Historical" }, rows.GetAt(0).Status());
+            VERIFY_IS_TRUE(rows.GetAt(0) == returned, L"Status-only snapshots must update the returned row in place.");
+            VERIFY_IS_TRUE(rows.GetAt(1) == unrelated);
+            VERIFY_IS_TRUE(unrelatedSurvivedClose, L"Returning one Recent row must not rebuild its unchanged neighbor.");
+            VERIFY_ARE_EQUAL(size_t{ 0 }, statusRowChanges);
+            VERIFY_ARE_EQUAL(size_t{ 0 }, statusViewportChanges);
+            VERIFY_ARE_EQUAL(decltype(resets){ 0 }, resets);
+            VERIFY_IS_TRUE(rowChanges.empty());
+            VERIFY_IS_TRUE(viewportChanges.empty());
+            const auto container = impl->ItemsList().ContainerFromItem(returned).as<ListViewItem>();
+            const auto changed = makeItem(L"resumed", L"Working");
+            changed.PaneSessionId(L"22222222-2222-3333-4444-555555555555");
+            winrt::get_self<Row>(changed)->OtherWindow(true);
+            winrt::get_self<Row>(changed)->UpdateStatusText(L"Working");
+            impl->CommitHistorySnapshot({ changed, makeItem(L"unrelated", L"Historical") }, true);
+            view.strip.UpdateLayout();
+            VERIFY_IS_TRUE(rows.GetAt(0) == returned);
+            VERIFY_IS_TRUE(impl->_historySnapshot[0] == changed);
+            VERIFY_IS_TRUE(impl->ItemsList().ContainerFromItem(returned) == container);
+            VERIFY_ARE_EQUAL(changed.PaneSessionId(), returned.PaneSessionId());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"Working" }, returned.Status());
+            VERIFY_IS_TRUE(returned.IsLive());
+            VERIFY_IS_FALSE(returned.IsHistorical());
+            const auto root = container.ContentTemplateRoot().as<FrameworkElement>();
+            const auto statusText = root.FindName(L"HistoryStatusText").as<winrt::TerminalApp::HighlightedTextControl>();
+            const auto windowHint = root.FindName(L"HistoryWindowHintText").as<winrt::TerminalApp::HighlightedTextControl>();
+            VERIFY_ARE_EQUAL(changed.StatusLabelText(), statusText.Text());
+            VERIFY_IS_TRUE(changed.StatusTextStyle() == statusText.TextBlockStyle());
+            VERIFY_ARE_EQUAL(Visibility::Visible, statusText.Visibility());
+            VERIFY_ARE_EQUAL(changed.WindowHintText(), windowHint.Text());
+            VERIFY_IS_TRUE(rowChanges.empty());
+            VERIFY_IS_TRUE(viewportChanges.empty());
+
+            const auto otherSource = makeItem(L"resumed", L"Working");
+            otherSource.AgentSource(L"wsl");
+            otherSource.WslDistro(L"Ubuntu");
+            impl->CommitHistorySnapshot({ otherSource, makeItem(L"unrelated", L"Historical") }, true);
+            view.strip.UpdateLayout();
+            VERIFY_IS_TRUE(rows.GetAt(0) == otherSource);
+            VERIFY_IS_FALSE(rows.GetAt(0) == returned, L"A different full history key must replace membership.");
+            VERIFY_IS_TRUE(rows.GetAt(1) == unrelated);
+            VERIFY_ARE_EQUAL(size_t{ 2 }, rowChanges.size());
+            VERIFY_ARE_EQUAL(CollectionChange::ItemRemoved, rowChanges[0]);
+            VERIFY_ARE_EQUAL(CollectionChange::ItemInserted, rowChanges[1]);
+            VERIFY_ARE_EQUAL(size_t{ 2 }, viewportChanges.size());
+            VERIFY_ARE_EQUAL(CollectionChange::ItemRemoved, viewportChanges[0]);
+            VERIFY_ARE_EQUAL(CollectionChange::ItemInserted, viewportChanges[1]);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"wsl" }, rows.GetAt(0).AgentSource());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"Ubuntu" }, rows.GetAt(0).WslDistro());
+            rowChanges.clear();
+            viewportChanges.clear();
+            impl->CommitHistorySnapshot({ makeItem(L"unrelated", L"Historical"), otherSource }, true);
+            view.strip.UpdateLayout();
+            VERIFY_IS_TRUE(rows.GetAt(0) == unrelated);
+            VERIFY_IS_TRUE(rows.GetAt(1) == otherSource);
+            unrelatedContainer = impl->ItemsList().ContainerFromItem(unrelated).as<ListViewItem>();
+            VERIFY_ARE_EQUAL(size_t{ 2 }, rowChanges.size());
+            VERIFY_ARE_EQUAL(CollectionChange::ItemRemoved, rowChanges[0]);
+            VERIFY_ARE_EQUAL(CollectionChange::ItemInserted, rowChanges[1]);
+            rowChanges.clear();
+            viewportChanges.clear();
+            impl->CommitHistorySnapshot({ makeItem(L"unrelated", L"Historical") }, true);
+            view.strip.UpdateLayout();
+            VERIFY_ARE_EQUAL(1u, rows.Size());
+            VERIFY_IS_TRUE(rows.GetAt(0) == unrelated);
+            VERIFY_IS_TRUE(impl->ItemsList().ContainerFromItem(unrelated) == unrelatedContainer);
+            VERIFY_ARE_EQUAL(size_t{ 1 }, rowChanges.size());
+            VERIFY_ARE_EQUAL(CollectionChange::ItemRemoved, rowChanges[0]);
+            VERIFY_ARE_EQUAL(size_t{ 1 }, viewportChanges.size());
+            VERIFY_ARE_EQUAL(CollectionChange::ItemRemoved, viewportChanges[0]);
         });
     }
 
