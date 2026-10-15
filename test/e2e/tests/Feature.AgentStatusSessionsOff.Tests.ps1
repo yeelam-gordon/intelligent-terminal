@@ -135,7 +135,10 @@ $last = ''
 $clock = [Diagnostics.Stopwatch]::StartNew()
 while ($clock.Elapsed.TotalSeconds -lt $LifetimeSec) {
     if (Test-Path -LiteralPath $Signal) {
-        $line = Get-Content -LiteralPath $Signal -Raw
+        $stream = [IO.File]::Open($Signal, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+            [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        $reader = [IO.StreamReader]::new($stream)
+        try { $line = $reader.ReadToEnd() } finally { $reader.Dispose() }
         if ($line -and $line -ne $last) {
             $last = $line
             $request = $line | ConvertFrom-Json
@@ -362,7 +365,7 @@ catch {
             $request = @{ kind = $Kind; state = $State; token = $token } | ConvertTo-Json -Compress
             $staging = "$($Fixture.Signal).next"
             [IO.File]::WriteAllText($staging, $request)
-            Move-Item -LiteralPath $staging -Destination $Fixture.Signal -Force
+            [IO.File]::Move($staging, $Fixture.Signal, $true)
             if ($Kind -ne 'close') {
                 Wait-Until -TimeoutSec 10 -Because 'the real child emitted the exact signal' -Condition {
                     Assert-StatusDeadline
@@ -510,9 +513,11 @@ catch {
                 }
             }
             finally {
-                # Existing harness enforces run/PID/path/start receipts, finite
-                # graceful close then exact-owned fallback and inactive restore.
-                Stop-Terminal -App $script:app -GraceSec 8
+                Stop-Terminal -App $script:app -GraceSec 8 -RestoreSettings $false
+                Wait-Until -TimeoutSec 5 -IntervalSec 0.25 -Because 'owned shutdown publications finish before restoring configuration' -Condition {
+                    -not @(Get-WtProcessesForApp -App $script:app -IncludePackageExecutables).Count
+                } | Out-Null
+                Restore-WtConfig -App $script:app
             }
         }
         elseif ($script:ownsConfig -and $script:target -and
@@ -744,10 +749,10 @@ class CopilotFixture {
             $_.ExecutablePath -ne $ownedExe -and
             (Get-FileHash -LiteralPath $_.ExecutablePath).Hash -eq $script:copilotSeed.SHA256
         })
-        $realChildren | Should -HaveCount 1 -Because 'actual Copilot ACP, not the native-only emitter, must own the seeded history'
+        $realChildren | Should -Not -BeNullOrEmpty -Because 'actual Copilot ACP, not the native-only emitter, must own the seeded history; pooled chat and isolated history queries may coexist'
         @{
-            child_pid = $realChildren[0].ProcessId; child_path = $realChildren[0].ExecutablePath
-            child_sha256 = (Get-FileHash -LiteralPath $realChildren[0].ExecutablePath).Hash
+            actual_acp_children = @($realChildren | Select-Object ProcessId, ExecutablePath, CreationDate, CommandLine)
+            child_sha256 = $script:copilotSeed.SHA256
             parent_pid = $masters[0].ProcessId; parent_path = $masters[0].ExecutablePath
             parent_start = $masters[0].CreationDate; pipe = $pipe
             seeded_home = $script:isolatedEnvironment.COPILOT_HOME

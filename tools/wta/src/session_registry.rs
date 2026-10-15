@@ -3461,7 +3461,12 @@ mod tests {
             assert_eq!(observations[0].provider_id, provider);
             assert!(registry.snapshot().await.is_empty());
         }
-        for provider in ["custom:", "custom:   ", "custom:test\tbad", "powershell"] {
+        for provider in [
+            "custom:",
+            "custom:   ",
+            concat!("custom:test", "\t", "bad"),
+            "powershell",
+        ] {
             let registry = InMemoryRegistry::new();
             let mut event = native_event(
                 serde_json::json!({"kind":"reset", "tracking_enabled":false}),
