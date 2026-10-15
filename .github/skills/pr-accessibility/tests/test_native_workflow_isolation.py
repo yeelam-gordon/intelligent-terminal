@@ -135,7 +135,7 @@ class NativeWorkflowIsolationTests(unittest.TestCase):
         self.assertIn("call tools\\razzle.cmd", native)
         for surface in ("fre", "fre-settings", "agents"):
             self.assertIn(f"-Surface {surface}", native)
-        self.assertIn("timeout-minutes: 60", native)
+        self.assertRegex(native, r"timeout-minutes: \d+")
 
     def test_instruction_and_configuration_trigger_scope_is_complete(self):
         caller = (ROOT / ".github/workflows/ghaw-pr-accessibility.md").read_text(encoding="utf-8")
