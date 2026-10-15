@@ -271,9 +271,49 @@ namespace winrt::TerminalApp::implementation
         if (const auto& content{ sender.try_as<winrt::Microsoft::Terminal::Control::ControlInteractivity>() })
         {
             const auto& contentId{ content.Id() };
+            std::optional<NativeAgentObservationIdentity> retired;
             {
                 std::lock_guard lock{ _mutex };
+                if (const auto found = _content.find(contentId);
+                    found != _content.end() && !_nativeAgentSessionEventsEnabled &&
+                    !found->second.agentHelper && found->second.observation.modeEpoch != 0)
+                {
+                    retired = found->second.observation;
+                }
                 _content.erase(contentId);
+            }
+            if (retired)
+            {
+                Json::Value event;
+                event["type"] = "event";
+                event["method"] = "native_agent_observation";
+                auto& params = event["params"];
+                params["kind"] = "removed";
+                params["pane_id"] = winrt::to_string(::Microsoft::Console::Utils::GuidToPlainString(content.Core().Connection().SessionId()));
+                params["provider_id"] = winrt::to_string(retired->providerId);
+                params["window_id"] = Json::UInt64{ retired->windowId };
+                params["tab_id"] = retired->tabId;
+                params["mode_epoch"] = Json::UInt64{ retired->modeEpoch };
+                if (retired->receiverGeneration != 0)
+                {
+                    params["receiver_generation"] = Json::UInt64{ retired->receiverGeneration };
+                }
+                if (!retired->agentSessionId.empty())
+                {
+                    params["agent_session_id"] = retired->agentSessionId;
+                    const auto& source = retired->location;
+                    if (source == "Host")
+                    {
+                        params["location"] = "Host";
+                    }
+                    else if (source.starts_with("wsl:") && source.size() > 4)
+                    {
+                        params["location"]["Wsl"]["distro"] = source.substr(4);
+                    }
+                }
+                Json::StreamWriterBuilder writer;
+                writer["indentation"] = "";
+                DetachedSessionEvent.raise(*this, winrt::to_hstring(Json::writeString(writer, event)));
             }
             LOG_HR_IF(E_ABORT, !_dispatcher.TryEnqueue([weak = get_weak(), contentId]() {
                 if (const auto self = weak.get())

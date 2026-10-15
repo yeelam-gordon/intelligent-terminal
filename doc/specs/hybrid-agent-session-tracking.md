@@ -29,6 +29,10 @@ before reannouncing each window's retained native panes with fresh epochs and
 their current parsed progress. Proven creator or previously qualified pane
 identity is born-bound before admission; unknown panes remain conversation-less.
 This recovery retains identity, not prior activity or BEL attention.
+Within the same master generation, a ready snapshot also acknowledges each
+pane's admitted epoch. Missing admissions are retried with the same epoch;
+acknowledged panes are left alone. This retry does not replay old progress or
+BEL, so activity missed during a subscription gap waits for a fresh signal.
 
 An unbound native pane has a registry observation keyed by its actual pane
 GUID, not an invented ACP session ID or a resumable history row. A known
@@ -46,6 +50,8 @@ presentation is unchanged. BEL maps to the existing Attention status, displayed
 as Waiting for input, and retains the existing tab bell handling. Here Waiting
 for input includes both needing a response and finishing work ready for the
 next human request; BEL does not prove a mandatory response or approval.
+Native status observes the unthrottled parsed bell source; the existing
+one-second throttle still applies to visual bell feedback.
 The next progress event clears native-only BEL attention and maps to Working,
 Error, or Idle. Generic progress does not dismiss a canonical input request
 with an existing attention reason or input-tool context; its matching completion
@@ -60,6 +66,9 @@ BEL/progress callbacks through admission epochs. WTA retains activity across a
 same-owner OFF transfer or reconnect while updating routing context; older
 epochs cannot update the new owner. Splitting, reparenting or transferring
 content must not attribute one pane's signal to another.
+Actual content retirement publishes removal before its identity is discarded,
+including automatic `closeOnExit` retirement of a tab or split leaf. Detaching
+or transferring retained content is not retirement.
 
 New native launches remain provider-known but session-unknown without hooks.
 Historical ACP list rows contain `updated_at`, exposed as `started_at`, not a
@@ -450,7 +459,7 @@ elapsed-minute bucket changes, and only changed text raises a property notificat
 This does not request a session snapshot or replace unchanged list rows; selection,
 focus, and scroll position are preserved. Search terms follow the updated age text.
 Successive registry snapshots also preserve surviving Recent session rows by
-their full provider/session/backend identity. Status and pane-binding changes
+their full provider/session/backend identity. Status, subtitle age and pane-binding changes
 update the retained row in place; genuine membership or ordering changes insert,
 remove, or move only the affected rows instead of replacing unchanged neighbors.
 Collapsing or unloading the sidebar, or leaving Agents, stops the local timer;
@@ -524,6 +533,25 @@ retain the previous snapshot and display a warning alongside it. Refresh errors
 and activation errors are independent: a successful refresh clears only the
 refresh warning, not a failed focus/resume result. Existing localized error
 messages are reused.
+
+Provider ACP history queries are separate from these short-lived sidebar list
+commands. Each pooled command/source owns a reusable history-only ACP process;
+chat, Autofix and session restoration keep using the original shared chat agent.
+Only one provider query is outstanding, even after a soft timeout. Its response
+receiver survives the 5/10/20/40/60-second absolute wait checkpoints; after 60
+seconds, checks continue once a minute. Three consecutive responses under five
+seconds reduce the wait budget by one step. Successful queries impose five
+seconds from completion before another send. Completed failures impose
+5/10/20/40/60-second backoff; neither manual refresh nor initialization bypasses
+or resets it.
+
+A query still unresolved after 300 seconds retires the history instance. Its
+Windows launcher and descendants are contained in a private Job Object; WSL
+queries have an identity-checked process group and stdin-EOF cleanup guardian.
+Replacement waits for confirmed exit and failure backoff. Unconfirmed cleanup
+keeps the old instance quarantined across chat-agent replacement. Late retired
+responses cannot mutate the registry, and cached rows remain usable. Hooks only
+schedule the existing worker and never await a slow history response.
 
 Consecutive list failures impose a 5, 10, 20, 40, then 60-second retry delay,
 measured from completion. Both registry notifications and the 60-second timer

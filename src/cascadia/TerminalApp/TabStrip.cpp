@@ -2794,6 +2794,7 @@ namespace winrt::TerminalApp::implementation
                 {
                     const auto current = _historyItems.GetAt(index);
                     const auto incoming = visibleItems[index];
+                    current.Subtitle(incoming.Subtitle());
                     if (_sameHistoryItem(current, incoming, false))
                     {
                         const auto nativeCurrent = winrt::get_self<TabStripHistoryItem>(current);

@@ -1518,6 +1518,15 @@ pub trait SessionRegistry: Send + Sync {
         false
     }
 
+    async fn register_native_born_binding(
+        &self,
+        _identity: &SessionIdentity,
+        _pane: &str,
+        _cwd: &std::path::Path,
+    ) -> bool {
+        false
+    }
+
     async fn native_pane_observations(&self) -> Vec<NativePaneObservation> {
         Vec::new()
     }
@@ -1763,6 +1772,74 @@ pub(crate) fn title_is_displayable(cli: Option<&CliSource>, title: &str) -> bool
 
 #[async_trait::async_trait]
 impl SessionRegistry for InMemoryRegistry {
+    async fn register_native_born_binding(
+        &self,
+        identity: &SessionIdentity,
+        pane: &str,
+        cwd: &std::path::Path,
+    ) -> bool {
+        let Some(key) = identity.history_key.as_ref() else {
+            return false;
+        };
+        if key.session_id != identity.session_id.to_string()
+            || !key.location.is_actionable()
+            || pane.is_empty()
+        {
+            return false;
+        }
+        let mut state = self.inner.lock().await;
+        let pane = pane_key(pane);
+        if state
+            .active_by_pane
+            .get(&pane)
+            .is_some_and(|owner| owner != identity)
+        {
+            return false;
+        }
+        if let Some(row) = state.sessions.get(identity) {
+            if row.origin == Some(SessionOrigin::AgentPane)
+                || (row
+                    .pane_session_id
+                    .as_deref()
+                    .is_some_and(|owner| pane_key(owner) != pane)
+                    && !matches!(
+                        row.status,
+                        Some(AgentStatus::Ended | AgentStatus::Historical)
+                    ))
+            {
+                return false;
+            }
+        }
+        let created = !state.sessions.contains_key(identity);
+        if created {
+            let mut row = SessionInfo::new(identity.session_id.clone(), cwd.to_path_buf());
+            row.provider_id = Some(key.provider_id.clone());
+            row.cli_source = Some(SessionHookCliSource::Known(key.provider_id.clone()).into());
+            row.location = key.location.clone();
+            row.session_universe = key.session_universe.clone();
+            row.status = Some(AgentStatus::Idle);
+            row.last_activity_at_ms = Some(now_ms());
+            upsert_locked(&mut state, row);
+        }
+        let revived = mark_resume_dispatched_identity_locked(&mut state, identity)
+            .is_some_and(|(changed, _)| changed);
+        let assigned =
+            assign_resume_pane_identity_locked(&mut state, identity, pane.clone(), now_ms());
+        let confirmed = state.sessions.get_mut(identity).is_some_and(|row| {
+            let changed = !row.born_bound_pane;
+            row.born_bound_pane = true;
+            changed
+        });
+        let bind_native = state.native_panes.get(&pane).is_some_and(|native| {
+            native.bound_identity.is_none()
+                && native_bound_identity(&state, &native.observation).as_ref() == Some(identity)
+        });
+        if let Some(native) = state.native_panes.get_mut(&pane).filter(|_| bind_native) {
+            native.bound_identity = Some(identity.clone());
+        }
+        created || revived || assigned || confirmed || bind_native
+    }
+
     async fn apply_native_watcher_activity(
         &self,
         cli: &CliSource,
@@ -3836,6 +3913,72 @@ mod tests {
         assert_eq!(
             registry.native_pane_observations().await[0].status,
             AgentStatus::Error
+        );
+    }
+
+    #[tokio::test]
+    async fn native_birth_registration_preserves_activity_and_requires_exact_ownership() {
+        let registry = InMemoryRegistry::new();
+        let cwd = std::path::Path::new("C:\\repo");
+        let mut owner =
+            qualified_info("confirmed-birth", "copilot", SessionLocation::Host, "owner");
+        owner.pane_session_id = Some(NATIVE_PANE.into());
+        owner.status = Some(AgentStatus::Attention);
+        owner.current_tool = Some("ask_user".into());
+        owner.attention_reason = Some("ask_user".into());
+        owner.last_activity_at_ms = Some(123);
+        let identity = SessionIdentity::from_info(&owner);
+        registry.upsert(owner.clone()).await;
+        for (provider, location) in [
+            ("claude", SessionLocation::Host),
+            (
+                "copilot",
+                SessionLocation::Wsl {
+                    distro: "Ubuntu".into(),
+                },
+            ),
+        ] {
+            let other = qualified_info("confirmed-birth", provider, location, "other");
+            let other_identity = SessionIdentity::from_info(&other);
+            registry.upsert(other).await;
+            assert!(
+                !registry
+                    .register_native_born_binding(&other_identity, NATIVE_PANE, cwd)
+                    .await
+            );
+        }
+        assert!(
+            !registry
+                .register_native_born_binding(&identity, "another-pane", cwd)
+                .await
+        );
+        assert_eq!(registry.lookup_identity(&identity).await.unwrap(), owner);
+        assert!(
+            registry
+                .register_native_born_binding(&identity, NATIVE_PANE, cwd)
+                .await
+        );
+        owner.born_bound_pane = true;
+        assert_eq!(registry.lookup_identity(&identity).await.unwrap(), owner);
+        assert!(
+            !registry
+                .register_native_born_binding(&identity, NATIVE_PANE, cwd)
+                .await
+        );
+        assert_eq!(registry.lookup_identity(&identity).await.unwrap(), owner);
+
+        let helper_registry = InMemoryRegistry::new();
+        owner.origin = Some(SessionOrigin::AgentPane);
+        owner.born_bound_pane = false;
+        helper_registry.upsert(owner.clone()).await;
+        assert!(
+            !helper_registry
+                .register_native_born_binding(&identity, NATIVE_PANE, cwd)
+                .await
+        );
+        assert_eq!(
+            helper_registry.lookup_identity(&identity).await.unwrap(),
+            owner
         );
     }
 
