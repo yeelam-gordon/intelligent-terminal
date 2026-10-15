@@ -644,6 +644,7 @@ def _verify_publication(root: Path, expected_head: str, fixed: list[dict[str, An
         if len(entries) != 1 or not isinstance(entries[0], dict) or entries[0].get("type") != mode:
             raise ValueError(f"publication requires exactly one {mode} request")
         if not fixed:
+            # Report-only runs authenticate noop above; they have no repair transport.
             return errors
         context = prepared.get("publication", {})
         entry = entries[0]
