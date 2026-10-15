@@ -486,6 +486,12 @@ struct NativePaneState {
     bound_identity: Option<SessionIdentity>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct NativePaneBindingPredecessor {
+    pub agent_session_id: String,
+    pub mode_epoch: u64,
+}
+
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoryLoadStatus {
@@ -1523,6 +1529,8 @@ pub trait SessionRegistry: Send + Sync {
         _identity: &SessionIdentity,
         _pane: &str,
         _cwd: &std::path::Path,
+        _mode_epoch: Option<u64>,
+        _predecessor: Option<&NativePaneBindingPredecessor>,
     ) -> bool {
         false
     }
@@ -1777,6 +1785,8 @@ impl SessionRegistry for InMemoryRegistry {
         identity: &SessionIdentity,
         pane: &str,
         cwd: &std::path::Path,
+        mode_epoch: Option<u64>,
+        predecessor: Option<&NativePaneBindingPredecessor>,
     ) -> bool {
         let Some(key) = identity.history_key.as_ref() else {
             return false;
@@ -1789,13 +1799,6 @@ impl SessionRegistry for InMemoryRegistry {
         }
         let mut state = self.inner.lock().await;
         let pane = pane_key(pane);
-        if state
-            .active_by_pane
-            .get(&pane)
-            .is_some_and(|owner| owner != identity)
-        {
-            return false;
-        }
         if let Some(row) = state.sessions.get(identity) {
             if row.origin == Some(SessionOrigin::AgentPane)
                 || (row
@@ -1808,6 +1811,33 @@ impl SessionRegistry for InMemoryRegistry {
                     ))
             {
                 return false;
+            }
+        }
+        let previous = state
+            .active_by_pane
+            .get(&pane)
+            .filter(|owner| *owner != identity)
+            .cloned();
+        if let Some(previous) = previous.as_ref() {
+            let authorized = state.native_panes.get(&pane).is_some_and(|native| {
+                native.bound_identity.as_ref() == Some(previous)
+                    && native_bound_identity(&state, &native.observation).as_ref() == Some(previous)
+                    && predecessor.is_some_and(|expected| {
+                        expected.agent_session_id == previous.session_id.to_string()
+                            && expected.mode_epoch == native.observation.mode_epoch
+                    })
+                    && mode_epoch.is_some_and(|epoch| epoch > native.observation.mode_epoch)
+            });
+            if !authorized {
+                return false;
+            }
+            // Explicit foreground replacement is not evidence of process exit.
+            // Detach before assignment, whose normal resume path ends competitors.
+            state.active_by_pane.remove(&pane);
+            if let Some(row) = state.sessions.get_mut(previous) {
+                row.pane_session_id = None;
+                row.status = Some(AgentStatus::Historical);
+                row.born_bound_pane = false;
             }
         }
         let created = !state.sessions.contains_key(identity);
@@ -1823,6 +1853,20 @@ impl SessionRegistry for InMemoryRegistry {
         }
         let revived = mark_resume_dispatched_identity_locked(&mut state, identity)
             .is_some_and(|(changed, _)| changed);
+        if previous.is_some() {
+            let row = state.sessions.get(identity).cloned();
+            if let (Some(native), Some(row)) = (state.native_panes.get_mut(&pane), row) {
+                // Keep the old epoch until the ordered Reset admits the new one,
+                // but never attribute the old owner's activity to its successor.
+                native.bound_identity = Some(identity.clone());
+                native.observation.agent_session_id = Some(identity.session_id.to_string());
+                native.observation.provider_id = key.provider_id.clone();
+                native.observation.location = Some(key.location.clone());
+                native.observation.status = row.status.unwrap_or(AgentStatus::Idle);
+                native.observation.last_activity_at_ms =
+                    row.last_activity_at_ms.unwrap_or_else(now_ms);
+            }
+        }
         let assigned =
             assign_resume_pane_identity_locked(&mut state, identity, pane.clone(), now_ms());
         let confirmed = state.sessions.get_mut(identity).is_some_and(|row| {
@@ -2306,6 +2350,20 @@ fn apply_native_observation_locked(
                     .and_then(|_| native_bound_identity(state, &observation))
             })
     };
+    // A different foreground identity needs its authorized birth first. In
+    // particular, a lost birth must not consume A's epoch and prevent retry.
+    if reset
+        && active
+        && observation.agent_session_id.is_some()
+        && old.is_some_and(|old| {
+            old.bound_identity.as_ref().is_some_and(|owner| {
+                state.active_by_pane.get(&pane) == Some(owner)
+                    && bound_identity.as_ref() != Some(owner)
+            })
+        })
+    {
+        return false;
+    }
     // A higher epoch can re-admit the same OFF owner after a transfer or
     // reconnect. This is a context update, not a fresh OFF activity baseline.
     let continuation = reset
@@ -3690,10 +3748,58 @@ mod tests {
             };
             transferred.agent_session_id = Some("different-owner".into());
             transferred.mode_epoch = 5;
-            registry.apply_native_observation(transferred).await;
+            assert_eq!(registry.apply_native_observation(transferred).await, !known);
             let new_owner = registry.native_pane_observations().await.remove(0);
-            assert_eq!(new_owner.status, AgentStatus::Idle);
-            assert!(new_owner.agent_session_id.is_none());
+            if known {
+                assert_eq!(new_owner.status, AgentStatus::Attention);
+                assert_eq!(new_owner.agent_session_id.as_deref(), Some("real-session"));
+                assert_eq!(new_owner.mode_epoch, 4);
+            } else {
+                assert_eq!(new_owner.status, AgentStatus::Idle);
+                assert!(new_owner.agent_session_id.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn native_observation_on_clear_and_provider_only_reset_do_not_require_birth() {
+        for (tracking_enabled, incoming_id) in
+            [(true, Some("different-owner")), (true, None), (false, None)]
+        {
+            let (registry, identity) = native_bound_registry().await;
+            assert!(
+                registry
+                    .apply_native_observation(native_event(
+                        serde_json::json!({"kind":"reset", "tracking_enabled":false}),
+                        1,
+                    ))
+                    .await
+            );
+            let owner = registry.lookup_identity(&identity).await.unwrap();
+            let reset = native_event(
+                serde_json::json!({
+                    "kind":"reset", "tracking_enabled":tracking_enabled,
+                    "provider_id":"claude", "agent_session_id":incoming_id
+                }),
+                2,
+            );
+            assert!(registry.apply_native_observation(reset.clone()).await);
+            assert_eq!(registry.lookup_identity(&identity).await.unwrap(), owner);
+            let observations = registry.native_pane_observations().await;
+            if tracking_enabled {
+                assert!(observations.is_empty());
+                let mut stale_off = reset;
+                stale_off.event = NativeObservationKind::Reset {
+                    tracking_enabled: false,
+                };
+                assert!(!registry.apply_native_observation(stale_off).await);
+                assert!(registry.native_pane_observations().await.is_empty());
+            } else {
+                assert_eq!(observations.len(), 1);
+                assert_eq!(observations[0].provider_id, "claude");
+                assert!(observations[0].agent_session_id.is_none());
+                assert_eq!(observations[0].mode_epoch, 2);
+            }
         }
     }
 
@@ -3919,6 +4025,22 @@ mod tests {
             registry.native_pane_observations().await[0].status,
             AgentStatus::Error
         );
+        assert!(
+            registry
+                .apply_native_observation(native_event(
+                    serde_json::json!({"kind":"progress", "progress_state":0}),
+                    1,
+                ))
+                .await
+        );
+        let idle = registry.lookup_identity(&identity).await.unwrap();
+        assert_eq!(idle.status, Some(AgentStatus::Idle));
+        assert!(idle.attention_reason.is_none());
+        assert!(idle.current_tool.is_none());
+        assert_eq!(
+            registry.native_pane_observations().await[0].status,
+            AgentStatus::Idle
+        );
     }
 
     #[tokio::test]
@@ -3948,26 +4070,26 @@ mod tests {
             registry.upsert(other).await;
             assert!(
                 !registry
-                    .register_native_born_binding(&other_identity, NATIVE_PANE, cwd)
+                    .register_native_born_binding(&other_identity, NATIVE_PANE, cwd, None, None)
                     .await
             );
         }
         assert!(
             !registry
-                .register_native_born_binding(&identity, "another-pane", cwd)
+                .register_native_born_binding(&identity, "another-pane", cwd, None, None)
                 .await
         );
         assert_eq!(registry.lookup_identity(&identity).await.unwrap(), owner);
         assert!(
             registry
-                .register_native_born_binding(&identity, NATIVE_PANE, cwd)
+                .register_native_born_binding(&identity, NATIVE_PANE, cwd, None, None)
                 .await
         );
         owner.born_bound_pane = true;
         assert_eq!(registry.lookup_identity(&identity).await.unwrap(), owner);
         assert!(
             !registry
-                .register_native_born_binding(&identity, NATIVE_PANE, cwd)
+                .register_native_born_binding(&identity, NATIVE_PANE, cwd, None, None)
                 .await
         );
         assert_eq!(registry.lookup_identity(&identity).await.unwrap(), owner);
@@ -3978,7 +4100,7 @@ mod tests {
         helper_registry.upsert(owner.clone()).await;
         assert!(
             !helper_registry
-                .register_native_born_binding(&identity, NATIVE_PANE, cwd)
+                .register_native_born_binding(&identity, NATIVE_PANE, cwd, None, None)
                 .await
         );
         assert_eq!(

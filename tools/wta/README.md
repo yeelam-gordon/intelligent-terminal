@@ -886,6 +886,13 @@ pane binding without changing its current activity; a subsequent reset may omit
 location only when that authoritative binding already supplies it. Registration
 uses the exact provider/backend identity even when another backend has the same
 raw session ID; generic hook and helper-RPC reducers remain unchanged.
+For an explicit different-session replacement in the same pane, birth may also
+carry `expected_previous_binding` with `agent_session_id` and `mode_epoch`.
+Together with the birth's newer `mode_epoch`, this authorizes an atomic handoff
+only from that exact native owner. A stale or missing predecessor cannot steal
+the binding. The old conversation becomes unbound Historical, not process-exited.
+Same-owner replay remains idempotent; ON retirement and provider-only unknown
+admissions retain their existing behavior.
 
 Terminal publishes `method: "native_agent_observation"` through the existing
 COM event subscription. Its `params` object contains:

@@ -1150,6 +1150,46 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(std::string{ "resumed-session" }, events[1]["params"]["agent_session_id"].asString());
             VERIFY_IS_FALSE(page->_paneAgentSessions.contains(paneId));
             VERIFY_IS_FALSE(page->_interactiveResumeSessions.contains(paneId));
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
+            page->_SyncNativeAgentStatusMode();
+            const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
+            VERIFY_IS_TRUE(manager->NativeAgentProviderId(control.ContentId()).empty());
+            VERIFY_IS_FALSE(manager->NativeAgentObservationForContent(control.ContentId()).has_value());
+
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(true);
+            page->_SyncNativeAgentStatusMode();
+            page->_TryPublishInteractiveResumeBinding(control, paneIdText, tabId, L"copilot", L"superseded-resume");
+            Json::Value replacement;
+            replacement["params"]["event"] = "agent.session.start";
+            replacement["params"]["pane_id"] = paneIdText;
+            replacement["params"]["agent_session_id"] = "superseded-resume";
+            replacement["params"]["agent"] = "claude";
+            page->OnPaneAgentSessionChanged(winrt::to_hstring(Json::writeString(Json::StreamWriterBuilder{}, replacement)));
+            replacement["params"]["event"] = "agent.session.end";
+            replacement["params"]["agent"] = "copilot";
+            page->OnPaneAgentSessionChanged(winrt::to_hstring(Json::writeString(Json::StreamWriterBuilder{}, replacement)));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, page->_paneAgentSessions.at(paneId).agent);
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
+            page->_SyncNativeAgentStatusMode();
+            VERIFY_IS_TRUE(manager->NativeAgentProviderId(control.ContentId()).empty());
+
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(true);
+            page->_SyncNativeAgentStatusMode();
+            const auto launchedConnection = winrt::make_self<TestConnection>(
+                winrt::guid{ L"{5d9cc4ac-1a11-4bb0-99ca-82a71e94fa79}" },
+                winrt::Microsoft::Terminal::TerminalConnection::ConnectionState::Connected);
+            NewTerminalArgs launchedArgs;
+            launchedArgs.NativeAgentProviderId(L"copilot");
+            const auto launchedPane = page->_MakePane(launchedArgs, nullptr, *launchedConnection);
+            VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(launchedPane));
+            const auto launchedControl = launchedPane->GetTerminalControl();
+            const auto launchedId = _formatPaneId(launchedConnection->SessionId());
+            const auto launchedTabId = page->_FindTabIdForControl(launchedControl);
+            page->_TryPublishInteractiveResumeBinding(launchedControl, launchedId, launchedTabId, L"claude", L"temporary-resume");
+            page->_CompleteInteractiveResumeBinding(launchedId, launchedTabId);
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
+            page->_SyncNativeAgentStatusMode();
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, manager->NativeAgentProviderId(launchedControl.ContentId()));
         });
     }
 
@@ -17669,6 +17709,14 @@ namespace TerminalAppLocalTests
         // alone does not establish a mandatory response or approval.
         emit(u"\x1b]9;4;1;50\x1b\\");
         waitStatus("Working");
+        const auto beforeProgressBurst = observedCount;
+        emit(u"\x1b]9;4;2;20\x1b\\\x1b]9;4;0\x1b\\");
+        waitStatus("Idle");
+        TestOnUIThread([&]() {
+            VERIFY_ARE_EQUAL(beforeProgressBurst + 2, observations.size());
+            VERIFY_ARE_EQUAL(uint64_t{ 2 }, observations[beforeProgressBurst]["progress_state"].asUInt64());
+            VERIFY_ARE_EQUAL(uint64_t{ 0 }, observations[beforeProgressBurst + 1]["progress_state"].asUInt64());
+        });
         Sleep(1100);
         const auto beforeRapidBellSequence = observedCount;
         emit(u"\a\x1b]9;4;1;50\x1b\\\a");
@@ -17863,9 +17911,9 @@ namespace TerminalAppLocalTests
             const auto status = manager->NativeAgentObservationForContent(contentId);
             VERIFY_IS_TRUE(status.has_value());
             VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, status.value().providerId);
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, manager->NativeAgentProviderId(contentId));
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, manager->NativeAgentProviderIdForPane(paneId));
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, savedProvider());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, manager->NativeAgentProviderId(contentId));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, manager->NativeAgentProviderIdForPane(paneId));
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, savedProvider());
             VERIFY_IS_FALSE(page->_RichTabAgentInfoForControl(control).has_value());
             page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
             page->_SyncNativeAgentStatusMode();
@@ -18337,6 +18385,32 @@ namespace TerminalAppLocalTests
                 VERIFY_ARE_EQUAL(_formatPaneId(connection->SessionId()), event["params"]["pane_id"].asString());
                 VERIFY_ARE_EQUAL(std::string{ "73411111-1111-2222-3333-444444444444" }, event["params"]["agent_session_id"].asString());
             }
+            const auto firstEpoch = events[1]["params"]["mode_epoch"].asUInt64();
+            page->_CompleteInteractiveResumeBinding(_formatPaneId(connection->SessionId()), page->_FindTabIdForControl(control));
+            VERIFY_IS_TRUE(page->_paneAgentSessions.contains(connection->SessionId()));
+            page->_TryPublishInteractiveResumeBinding(
+                control, _formatPaneId(connection->SessionId()), page->_FindTabIdForControl(control),
+                L"copilot", L"73411111-1111-2222-3333-555555555555");
+            VERIFY_ARE_EQUAL(size_t{ 4 }, events.size());
+            const auto verifyPredecessor = [&](const Json::Value& birth) {
+                VERIFY_ARE_EQUAL(std::string{ "73411111-1111-2222-3333-444444444444" },
+                                 birth["params"]["expected_previous_binding"]["agent_session_id"].asString());
+                VERIFY_ARE_EQUAL(firstEpoch, birth["params"]["expected_previous_binding"]["mode_epoch"].asUInt64());
+            };
+            verifyPredecessor(events[2]);
+            _applyNativeRegistrySnapshot(page, control, "Idle");
+            auto& staleAdmission = page->_richTabAgentStatusByPaneId.at(connection->SessionId());
+            staleAdmission.sessionId = "73411111-1111-2222-3333-444444444444";
+            staleAdmission.modeEpoch = firstEpoch;
+            events.clear();
+            page->_ReplayNativeAgentObservationsForReceiver(7);
+            VERIFY_ARE_EQUAL(size_t{ 2 }, events.size());
+            verifyPredecessor(events[0]);
+            events.clear();
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(true);
+            page->_SyncNativeAgentStatusMode();
+            VERIFY_ARE_EQUAL(size_t{ 1 }, events.size());
+            VERIFY_IS_TRUE(events[0]["params"]["tracking_enabled"].asBool());
         });
     }
 

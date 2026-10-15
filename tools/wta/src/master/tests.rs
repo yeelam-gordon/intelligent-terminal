@@ -1979,6 +1979,129 @@ async fn native_receiver_ordered_birth_reset_preserves_late_rpc_activity() {
 }
 
 #[tokio::test]
+async fn native_receiver_explicit_foreground_handoff_after_off_completion() {
+    use crate::agent_sessions::{AgentStatus, SessionEvent};
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let mut state = make_state();
+    Arc::get_mut(&mut state)
+        .unwrap()
+        .native_observation_receiver_generation = Some(7);
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"wt_listener_ready","params":{}}),
+    )
+    .await;
+    let pane = "00112233-4455-6677-8899-aabbccddeeff";
+    let birth = |id: &str, epoch: u64| {
+        serde_json::json!({
+            "method":"session_born_bound", "params":{
+                "pane_id":pane, "agent_session_id":id, "agent":"copilot",
+                "cwd":"C:\\repo", "mode_epoch":epoch, "receiver_generation":7
+            }
+        })
+    };
+    let observation = |id: &str, epoch: u64, kind: &str| {
+        serde_json::json!({
+            "method":"native_agent_observation", "params":{
+                "pane_id":pane, "provider_id":"copilot", "agent_session_id":id,
+                "window_id":0, "tab_id":"tab", "mode_epoch":epoch, "kind":kind,
+                "tracking_enabled":false, "progress_state":1, "receiver_generation":7
+            }
+        })
+    };
+    let a = acp::schema::v1::SessionId::new("foreground-a");
+    let b = acp::schema::v1::SessionId::new("foreground-b");
+    handle_master_wt_event(&state, birth("foreground-a", 10)).await;
+    handle_master_wt_event(&state, observation("foreground-a", 10, "reset")).await;
+    handle_master_wt_event(&state, observation("foreground-a", 10, "progress")).await;
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"vt_sequence","params":{
+            "pane_id":pane, "sequence":"osc:133;A"
+        }}),
+    )
+    .await;
+    let retained = state.registry.lookup(&a).await.unwrap();
+    assert_eq!(retained.status, Some(AgentStatus::Working));
+    assert_eq!(retained.pane_session_id.as_deref(), Some(pane));
+
+    // A lost birth must not let its Reset evict A's admission.
+    handle_master_wt_event(&state, observation("foreground-b", 11, "reset")).await;
+    assert_eq!(
+        state.registry.native_pane_observations().await[0]
+            .agent_session_id
+            .as_deref(),
+        Some("foreground-a")
+    );
+    for (id, helper) in [("helper-owned", true), ("another-pane-owned", false)] {
+        use crate::agent_sessions::{CliSource, SessionOrigin};
+        let mut row = crate::session_registry::SessionInfo::new(
+            acp::schema::v1::SessionId::new(id),
+            "C:\\repo".into(),
+        );
+        row.provider_id = Some("copilot".into());
+        row.cli_source = Some(CliSource::Copilot);
+        row.location = crate::agent_sessions::SessionLocation::Host;
+        row.status = Some(AgentStatus::Working);
+        row.pane_session_id = Some("11112233-4455-6677-8899-aabbccddeeff".into());
+        if helper {
+            row.origin = Some(SessionOrigin::AgentPane);
+        }
+        state.registry.upsert(row.clone()).await;
+        let mut invalid = birth(id, 11);
+        invalid["params"]["expected_previous_binding"] =
+            serde_json::json!({"agent_session_id":"foreground-a","mode_epoch":10});
+        handle_master_wt_event(&state, invalid).await;
+        assert_eq!(state.registry.lookup(&row.session_id).await.unwrap(), row);
+        assert_eq!(state.registry.lookup(&a).await.unwrap(), retained);
+    }
+    for predecessor in [
+        serde_json::Value::Null,
+        serde_json::json!({"agent_session_id":"wrong","mode_epoch":10}),
+        serde_json::json!({"agent_session_id":"foreground-a","mode_epoch":9}),
+    ] {
+        let mut invalid = birth("foreground-b", 11);
+        invalid["params"]["expected_previous_binding"] = predecessor;
+        handle_master_wt_event(&state, invalid).await;
+        assert!(state.registry.lookup(&b).await.is_none());
+    }
+    let mut stale = birth("foreground-b", 10);
+    stale["params"]["expected_previous_binding"] =
+        serde_json::json!({"agent_session_id":"foreground-a","mode_epoch":10});
+    handle_master_wt_event(&state, stale).await;
+    assert!(state.registry.lookup(&b).await.is_none());
+    let mut next = birth("foreground-b", 11);
+    next["params"]["expected_previous_binding"] =
+        serde_json::json!({"agent_session_id":"foreground-a","mode_epoch":10});
+    handle_master_wt_event(&state, next.clone()).await;
+    let old = state.registry.lookup(&a).await.unwrap();
+    assert_eq!(old.status, Some(AgentStatus::Historical));
+    assert!(old.pane_session_id.is_none());
+    assert_eq!(old.last_activity_at_ms, retained.last_activity_at_ms);
+    let new = state.registry.lookup(&b).await.unwrap();
+    assert_eq!(new.status, Some(AgentStatus::Idle));
+    assert_eq!(new.pane_session_id.as_deref(), Some(pane));
+    handle_master_wt_event(&state, next.clone()).await;
+    assert_eq!(state.registry.lookup(&b).await.unwrap(), new);
+    handle_master_wt_event(&state, observation("foreground-b", 11, "reset")).await;
+    state
+        .registry
+        .apply_event(SessionEvent::Notification {
+            key: "foreground-b".into(),
+            message: "ask_user".into(),
+        })
+        .await;
+    let attention = state.registry.lookup(&b).await.unwrap();
+    handle_master_wt_event(&state, next).await;
+    assert_eq!(state.registry.lookup(&b).await.unwrap(), attention);
+    for kind in ["progress", "bell", "removed", "reset"] {
+        handle_master_wt_event(&state, observation("foreground-a", 10, kind)).await;
+    }
+    assert_eq!(state.registry.lookup(&b).await.unwrap(), attention);
+    assert_eq!(state.registry.lookup(&a).await.unwrap(), old);
+}
+
+#[tokio::test]
 async fn native_receiver_birth_preserves_other_backend_with_the_same_session_id() {
     use crate::agent_sessions::{AgentStatus, CliSource, SessionLocation};
     use crate::session_registry::{SessionIdentity, SessionInfo};

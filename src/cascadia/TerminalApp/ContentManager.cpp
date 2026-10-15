@@ -58,7 +58,9 @@ namespace winrt::TerminalApp::implementation
     {
         std::lock_guard lock{ _mutex };
         const auto it = _content.find(contentId);
-        return it == _content.end() ? winrt::hstring{} : it->second.nativeAgentProviderId;
+        return it == _content.end() ? winrt::hstring{} :
+               !it->second.explicitNativeAgentProviderId.empty() ?
+                   it->second.explicitNativeAgentProviderId : it->second.nativeAgentProviderId;
     }
 
     winrt::hstring ContentManager::NativeAgentProviderIdForPane(const winrt::guid& paneId) const
@@ -69,7 +71,8 @@ namespace winrt::TerminalApp::implementation
             const auto connection = content.core.Core().Connection();
             if (connection && connection.SessionId() == paneId)
             {
-                return content.nativeAgentProviderId;
+                return !content.explicitNativeAgentProviderId.empty() ?
+                           content.explicitNativeAgentProviderId : content.nativeAgentProviderId;
             }
         }
         return {};
@@ -92,10 +95,6 @@ namespace winrt::TerminalApp::implementation
         if (const auto it = _content.find(contentId); it != _content.end())
         {
             it->second.explicitNativeAgentProviderId = providerId;
-            if (!_nativeAgentSessionEventsEnabled)
-            {
-                it->second.nativeAgentProviderId = providerId;
-            }
         }
     }
 
@@ -171,13 +170,6 @@ namespace winrt::TerminalApp::implementation
                 const auto content = _content.find(entry.first);
                 return content == _content.end() || !content->second.agentHelper;
             });
-            for (auto& [id, content] : _content)
-            {
-                if (!content.explicitNativeAgentProviderId.empty())
-                {
-                    content.nativeAgentProviderId = content.explicitNativeAgentProviderId;
-                }
-            }
         }
     }
 

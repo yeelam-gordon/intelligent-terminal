@@ -42,6 +42,12 @@ before or after observation admission. When the transport source is unknown,
 Terminal accepts the source of a qualified canonical pane observation without
 inferring a transport source; known sources must still match. History discovery
 alone cannot promote an unknown pane into a conversation.
+An explicit resume of a different conversation in the same retained pane is
+not recovery replay. Its ordered birth supplies the expected previous session
+and admission epoch; WTA validates that predecessor and a newer epoch atomically
+before replacing foreground ownership. The previous conversation becomes
+unbound Historical, not Ended: replacement does not prove that its process exited.
+An explicit different-owner OFF reset cannot bypass this handoff if birth was lost.
 
 The existing parsed OSC 9;4 progress reports map to the existing agent statuses:
 Idle (0/4), Working (1/3, displayed as Active), and Error (2). Paused progress
@@ -52,6 +58,9 @@ for input includes both needing a response and finishing work ready for the
 next human request; BEL does not prove a mandatory response or approval.
 Native status observes the unthrottled parsed bell source; the existing
 one-second throttle still applies to visual bell feedback.
+Each progress event also retains its parsed state before UI dispatch. A queued
+Error-to-Idle burst therefore reaches the registry as two ordered observations,
+even when the final rendered progress state is already Idle.
 The next progress event clears native-only BEL attention and maps to Working,
 Error, or Idle. Generic progress does not dismiss a canonical input request
 with an existing attention reason or input-tool context; its matching completion
@@ -69,6 +78,11 @@ content must not attribute one pane's signal to another.
 Actual content retirement publishes removal before its identity is discarded,
 including automatic `closeOnExit` retirement of a tab or split leaf. Detaching
 or transferring retained content is not retirement.
+While Sessions is ON, matching resume completion or supersession clears the
+temporary explicit provider along with its binding. That provider is never
+promoted into independent launch ownership, so switching OFF cannot turn the
+completed resume's ordinary shell into a native agent. Independent launch
+ownership remains intact.
 
 New native launches remain provider-known but session-unknown without hooks.
 Historical ACP list rows contain `updated_at`, exposed as `started_at`, not a
@@ -78,7 +92,8 @@ external session or an updated old session. Discovery therefore never guesses
 a new pane's session ID, including concurrent and ambiguous lists. Explicit
 recent-session resume retains its known binding under the actual connection
 SessionId even without a saved pane ID. Explicit binding ownership transfers with
-the pane between windows and remains until that pane is removed, including after
+the pane between windows and remains until the pane is removed or a later
+authoritative explicit resume replaces that conversation, including after
 command marks or retained Closed/Failed connection states. The existing Sessions
 ON hook/completion policy is unchanged. A reused saved pane GUID cannot
 inherit the closed pane's explicit ownership marker.

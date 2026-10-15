@@ -10709,6 +10709,19 @@ async fn handle_master_wt_event(state: &Arc<MasterStateInner>, event_json: serde
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
         if state.native_observation_receiver_generation.is_some() {
+            let predecessor = match params.get("expected_previous_binding") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(value) => match serde_json::from_value::<
+                    crate::session_registry::NativePaneBindingPredecessor,
+                >(value.clone())
+                {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        tracing::warn!(target: "master_wt_event", %error, "invalid native birth predecessor");
+                        return;
+                    }
+                },
+            };
             let location =
                 distro
                     .as_ref()
@@ -10733,6 +10746,8 @@ async fn handle_master_wt_event(state: &Arc<MasterStateInner>, event_json: serde
                         &identity,
                         pane,
                         std::path::Path::new(field("cwd")),
+                        params.get("mode_epoch").and_then(serde_json::Value::as_u64),
+                        predecessor.as_ref(),
                     )
                     .await;
                 if applied {
