@@ -48,6 +48,7 @@ use std::sync::{Arc, OnceLock, Weak};
 /// back-pressure the agent CLI's I/O loop and freeze every other
 /// helper sharing this master.
 const NOTIF_CHANNEL_CAPACITY: usize = 1024;
+const AGENT_INITIALIZE_TIMEOUT_SECS: u64 = 60;
 const SESSION_NEW_TIMEOUT_SECS: u64 = 120;
 const SESSION_LOAD_TIMEOUT_SECS: u64 = 55;
 const SESSION_ROLLBACK_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -5853,6 +5854,26 @@ fn format_startup_stderr(lines: &[String]) -> String {
     out
 }
 
+async fn initialize_agent(
+    connection: &conn::ClientLink,
+) -> std::result::Result<
+    acp::Result<acp::schema::v1::InitializeResponse>,
+    tokio::time::error::Elapsed,
+> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(AGENT_INITIALIZE_TIMEOUT_SECS),
+        connection.initialize(
+            acp::schema::v1::InitializeRequest::new(acp::schema::ProtocolVersion::V1)
+                .client_capabilities(acp::schema::v1::ClientCapabilities::new().terminal(true))
+                .client_info(
+                    acp::schema::v1::Implementation::new("wta-master", env!("CARGO_PKG_VERSION"))
+                        .title("Windows Terminal Agent (master)"),
+                ),
+        ),
+    )
+    .await
+}
+
 async fn spawn_one_agent(
     state: &Arc<MasterStateInner>,
     cell: &AgentCell,
@@ -5912,8 +5933,6 @@ async fn spawn_one_agent(
         .stdout
         .take()
         .ok_or_else(|| anyhow!("agent CLI child has no stdout"))?;
-    let is_npx = spawn_result.is_npx;
-
     // Routine stderr stays at debug because it may contain prompt / file
     // content. Pre-initialize stderr is buffered and promoted to warning only
     // if startup fails, so release logs retain package-manager diagnostics.
@@ -6061,21 +6080,10 @@ async fn spawn_one_agent(
     // I/O task, and (via the empty `OnceCell`) triggered repeated respawns.
     let mut child = spawn_result.child;
 
-    // Initialize this CLI. npx adapter cold starts can be slow, so keep
+    // Initialize this CLI. Native and npx cold starts can be slow, so keep
     // the same generous timeout the single-agent master used.
-    let init_timeout_secs = if is_npx { 60 } else { 15 };
-    let init_outcome = tokio::time::timeout(
-        std::time::Duration::from_secs(init_timeout_secs),
-        conn.initialize(
-            acp::schema::v1::InitializeRequest::new(acp::schema::ProtocolVersion::V1)
-                .client_capabilities(acp::schema::v1::ClientCapabilities::new().terminal(true))
-                .client_info(
-                    acp::schema::v1::Implementation::new("wta-master", env!("CARGO_PKG_VERSION"))
-                        .title("Windows Terminal Agent (master)"),
-                ),
-        ),
-    )
-    .await;
+    let init_timeout_secs = AGENT_INITIALIZE_TIMEOUT_SECS;
+    let init_outcome = initialize_agent(&conn).await;
 
     let mut init_resp = match init_outcome {
         Ok(Ok(resp)) => {
@@ -8107,17 +8115,19 @@ where
     }
 
     sessions.sort_by(|l, r| l.session_id.0.cmp(&r.session_id.0));
+    let (pane_statuses, native_pane_observations) = state.registry.pane_status_snapshot().await;
     let raw = crate::session_registry::build_sessions_list_response(
         sessions,
         Some(history_status.status),
         history_status.error_kind,
-        state.registry.native_pane_observations().await,
+        native_pane_observations,
         state.native_observation_receiver_generation,
         state.native_observation_receiver_generation.map(|_| {
             state
                 .native_observation_listener_ready
                 .load(std::sync::atomic::Ordering::Acquire)
         }),
+        pane_statuses,
     );
     Ok(acp::schema::v1::ExtResponse::new(raw.into()))
 }
@@ -8297,26 +8307,6 @@ async fn execute_session_activation(
     state: &MasterStateInner,
     parsed: &crate::session_registry::SessionActivateParams,
 ) -> crate::session_registry::SessionActivateResponse {
-    execute_session_activation_with_probe(state, parsed, |row| async move {
-        crate::session_watcher::copilot_status::activation_status(&row).await
-    })
-    .await
-}
-
-async fn execute_session_activation_with_probe<F, Fut>(
-    state: &MasterStateInner,
-    parsed: &crate::session_registry::SessionActivateParams,
-    probe: F,
-) -> crate::session_registry::SessionActivateResponse
-where
-    F: FnOnce(crate::session_registry::SessionInfo) -> Fut,
-    Fut: std::future::Future<
-        Output = Result<
-            Option<crate::agent_sessions::AgentStatus>,
-            crate::session_watcher::copilot_status::ProbeError,
-        >,
-    >,
-{
     use crate::agent_sessions::{AgentStatus, SessionOrigin};
     use crate::session_mgmt::{
         decide_enter_action, liveness_from_status, EnterAction, RowSnapshot,
@@ -8363,46 +8353,13 @@ where
         }
     };
 
-    let Some(mut row) = state.registry.lookup_identity(&parsed.identity).await else {
+    let Some(row) = state.registry.lookup_identity(&parsed.identity).await else {
         return respond!(
             "not_found",
             false,
             Some("The selected session is no longer available.".to_string())
         );
     };
-    if crate::session_watcher::copilot_status::eligible(&row) {
-        let evidence = probe(row.clone()).await;
-        // Hook registration during the probe is authoritative; never apply stale
-        // external evidence to a live IT registration or persist it in the registry.
-        let Some(current) = state.registry.lookup_identity(&parsed.identity).await else {
-            return respond!(
-                "not_found",
-                false,
-                Some("The selected session is no longer available.".to_string())
-            );
-        };
-        row = current;
-        if crate::session_watcher::copilot_status::eligible(&row) {
-            match evidence {
-                Ok(Some(AgentStatus::InUse)) => {
-                    return respond!(
-                        "not_resumable",
-                        false,
-                        Some("The selected session is already in use.".to_string())
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!(target: "copilot_status", ?error, "activation in-use verification unavailable");
-                    return respond!(
-                        "not_resumable",
-                        false,
-                        Some("Session ownership could not be verified; try again.".to_string())
-                    );
-                }
-                Ok(_) => {}
-            }
-        }
-    }
     let status = row.status.clone().unwrap_or(AgentStatus::Historical);
     let liveness = liveness_from_status(&status, row.pane_session_id.clone());
     // Focusing an existing live pane does not require a launchable provider.
@@ -8634,6 +8591,8 @@ where
                             Unknown
                         );
                     };
+                    let lifecycle_gate = session_lifecycle_gate(state, &row.session_id).await;
+                    let lifecycle_guard = lifecycle_gate.lock().await;
                     if state
                         .registry
                         .mark_resume_dispatched_identity(&parsed.identity)
@@ -8677,6 +8636,24 @@ where
                             Unknown
                         );
                     }
+                    // A new native binding needs the same watcher ownership as
+                    // /sessions resume. An earlier hook on this exact pane wins.
+                    if binding_changed
+                        && matches!(row.location, crate::agent_sessions::SessionLocation::Host)
+                        && row.session_universe.is_none()
+                        && state
+                            .registry
+                            .lookup(&row.session_id)
+                            .await
+                            .is_some_and(|current| {
+                                crate::session_registry::SessionIdentity::from_info(&current)
+                                    == parsed.identity
+                            })
+                    {
+                        state.hook_owned.lock().await.remove(&row.session_id);
+                        state.born_bound.lock().await.insert(row.session_id.clone());
+                    }
+                    drop(lifecycle_guard);
                     broadcast_session_status_change(state, None).await;
                     if let Some(binding) = crate::wt_protocol_events::resumed_pane_binding_event(
                         &provider_id,
@@ -9018,39 +8995,40 @@ async fn apply_watcher_event(
         return;
     }
 
-    // Hybrid dedup — the watcher is a *fallback*. Coordinate with authoritative
-    // producers:
-    //   1. a real hook / ACP agent-pane event recorded the session in
-    //      `hook_owned` → drop (the hook owns binding AND activity); or
-    //   2. it's an already-bound fallback row (`born_bound`)
-    //      → the watcher supplies STATUS only (handled just below); or
-    //   3. anything else (a user-typed CLI, or a machine-wide copilot/claude in
-    //      VS Code / another terminal) → drop below; we can't bind it to a pane.
-    if state.hook_owned.lock().await.contains(&sid) {
-        return;
-    }
-
-    // The row already has a live, vetted pane binding. The watcher only moves
-    // status and never changes that binding.
-    if state.born_bound.lock().await.contains(&sid) {
-        let key = emitted.key.clone();
-        let activity_only = session_event_is_activity_only(&emitted.event);
-        let applied = state.registry.apply_event(emitted.event).await;
-        if applied {
-            broadcast_session_status_change(
-                state,
-                Some(key.as_str()).filter(|_| applied && activity_only),
-            )
-            .await;
+    let activity_only = session_event_is_activity_only(&emitted.event);
+    let applied = {
+        // Serialize the ownership check and activity update with resume and
+        // real hooks, so a watcher cannot overwrite a hook that just took over.
+        let gate = session_lifecycle_gate(state, &sid).await;
+        let _guard = gate.lock().await;
+        if state.hook_owned.lock().await.contains(&sid)
+            || !state.born_bound.lock().await.contains(&sid)
+        {
+            return;
         }
-        try_refresh_title_via_acp(state, &acp::schema::v1::SessionId::new(key)).await;
-        return;
-    }
 
-    // Neither hook-owned nor born-bound: a user-typed shell-pane session, or a
-    // machine-wide CLI running in VS Code / another terminal. Surfacing it once
-    // required pane-binding via the removed PEB reader (`proc_bind`), so there
-    // is nothing left to do — drop it.
+        // Watcher records are native, provider-specific evidence. A raw ID
+        // alone cannot identify a WSL, ACP, or colliding history row.
+        let Some(row) = state.registry.lookup(&sid).await else {
+            return;
+        };
+        if row.location != crate::agent_sessions::SessionLocation::Host
+            || row.session_universe.is_some()
+            || row.origin == Some(crate::agent_sessions::SessionOrigin::AgentPane)
+            || row.cli_source.as_ref() != Some(&emitted.cli)
+        {
+            return;
+        }
+        state.registry.apply_event(emitted.event).await
+    };
+    if applied {
+        broadcast_session_status_change(
+            state,
+            Some(emitted.key.as_str()).filter(|_| activity_only),
+        )
+        .await;
+    }
+    try_refresh_title_via_acp(state, &sid).await;
 }
 
 fn build_agent_sessions_retired_event(

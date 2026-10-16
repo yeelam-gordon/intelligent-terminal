@@ -653,6 +653,7 @@ mod tests {
             HistoryLoadStatus::Error,
         ] {
             let mut snapshot = SessionsListResponse {
+                pane_statuses: Vec::new(),
                 native_observation_receiver_generation: None,
                 native_observation_listener_ready: None,
                 native_pane_observations: Vec::new(),

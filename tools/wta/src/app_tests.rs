@@ -1940,7 +1940,41 @@ fn claude_permission_prompt_notification_still_sets_attention() {
     );
 }
 
-/// The filter is a denylist of one known-inert type, not an allowlist of known
+#[test]
+fn copilot_shell_completed_notification_leaves_activity_unchanged() {
+    use crate::agent_sessions::{AgentStatus, CliSource};
+
+    for type_field in ["notificationType", "notification_type"] {
+        for status in [
+            None,
+            Some(AgentStatus::Idle),
+            Some(AgentStatus::Working),
+            Some(AgentStatus::Attention),
+        ] {
+            let facts = AgentEventFacts {
+                key: "copilot-sid".into(),
+                session_known: status.is_some(),
+                session_status: status,
+                pane_owned_by_other: false,
+            };
+            let mut payload = json!({ "message": "Background shell command completed" });
+            payload[type_field] = json!("shell_completed");
+            let plan = plan_agent_event(
+                "agent.notification",
+                &payload,
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                &CliSource::Copilot,
+                &facts,
+            );
+            assert!(
+                plan.events.is_empty(),
+                "shell_completed must not change activity or create a session"
+            );
+        }
+    }
+}
+
+/// The filter is a denylist of known-inert types, not an allowlist of known
 /// types: CLIs that send no `notification_type` at all (Copilot, Gemini,
 /// OpenCode) and any type Claude adds later must keep reaching Attention.
 /// Under-reporting silently loses an approval request; over-reporting only
@@ -1951,6 +1985,10 @@ fn notification_without_a_known_type_still_sets_attention() {
     for payload in [
         json!({ "message": "approve: rm -rf foo" }),
         json!({ "message": "something new", "notification_type": "some_future_prompt" }),
+        json!({ "message": "approve command", "notificationType": "permission_prompt" }),
+        json!({ "message": "answer question", "notificationType": "elicitation_dialog" }),
+        json!({ "message": "agent completed", "notificationType": "agent_completed" }),
+        json!({ "message": "detached shell completed", "notificationType": "shell_detached_completed" }),
     ] {
         let mut reg = AgentSessionRegistry::new();
         reg.apply(SessionEvent::SessionStarted {
@@ -8798,6 +8836,40 @@ fn modified_enter_on_live_row_dispatches_nothing() {
 // effect (or NotResumable hint). One or two representative cases
 // per variant is enough; session_mgmt holds the truth table.
 
+#[test]
+fn external_in_use_row_dispatches_cli_resume_instead_of_focus() {
+    use crate::agent_sessions::{AgentStatus, CliSource, SessionEvent};
+
+    let mut app = test_app();
+    app.window_id = Some("42".into());
+    app.agent_sessions.apply(SessionEvent::SessionStarted {
+        key: "external-in-use".into(),
+        cli_source: CliSource::Copilot,
+        pane_session_id: "untrusted-pane".into(),
+        cwd: std::env::current_dir().unwrap(),
+        title: "External session".into(),
+    });
+    let mut row = app
+        .agent_sessions
+        .get(&"external-in-use".to_string())
+        .unwrap()
+        .clone();
+    row.status = AgentStatus::InUse;
+
+    app.activate_agent_session_routed(&row);
+
+    let command = app.last_dispatched_command_for_test().unwrap();
+    assert_eq!(command.kind, DispatchedCommandKind::NewTabResume);
+    assert!(command
+        .argv
+        .join(" ")
+        .contains("copilot --resume external-in-use"));
+    assert!(!command
+        .argv
+        .iter()
+        .any(|arg| arg.contains("untrusted-pane")));
+}
+
 /// A Class A row selected from a cross-provider history surface routes to
 /// ResumeInAgentPane using the selected row's provider and location.
 #[test]
@@ -13452,6 +13524,256 @@ fn diagnostic_setup_options_route_auth_by_agent() {
 }
 
 #[test]
+fn authentication_setup_subtitle_matches_selected_actions() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    for agent_id in ["claude", "codex", "opencode"] {
+        let mut app = test_app();
+        app.current_agent_id = agent_id.into();
+        app.handle_event(AppEvent::AcpAuthenticationMethods {
+            agent_id: agent_id.into(),
+            source: app.current_agent_source.clone(),
+            methods: vec![agent_client_protocol::schema::v1::AuthMethod::Agent(
+                agent_client_protocol::schema::v1::AuthMethodAgent::new(
+                    "external-account",
+                    "Existing account",
+                ),
+            )],
+        });
+        app.handle_event(AppEvent::AgentError {
+            session_id: None,
+            failure: crate::protocol::acp::failure::AgentFailure::AuthRequired {
+                message: "Sign in required".into(),
+            },
+            message: "Sign in required".into(),
+        });
+
+        let setup = app.setup.as_ref().expect("authentication setup");
+        assert!(matches!(
+            setup.options.as_slice(),
+            [SetupOption::Retry, SetupOption::ChooseAgentSource]
+        ));
+        assert_eq!(
+            setup.subtitle,
+            format!(
+                "{} {} {}",
+                t!(
+                    "setup.subtitle.authentication_required",
+                    agent = crate::agent_registry::lookup_profile_by_id(agent_id).display_name
+                ),
+                t!("setup.auth.external_sign_in"),
+                "To switch agents, go to Intelligent Terminal Settings > Agent.",
+            ),
+            "{agent_id} must describe external sign-in when only external retry is offered"
+        );
+        assert!(
+            !render_to_text(&mut app, 140, 20).contains("Select a sign-in method"),
+            "the external-login screen must not advertise a method picker"
+        );
+    }
+}
+
+#[test]
+fn authentication_setup_shares_sign_in_content_for_device_and_protocol_flows() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    for agent_id in ["copilot", "antigravity", "gemini", "custom:example"] {
+        for source in [
+            crate::agent_source::AgentSource::Host,
+            crate::agent_source::AgentSource::Wsl {
+                distro: "ExampleDistro".into(),
+            },
+        ] {
+            let mut app = test_app();
+            app.current_agent_id = agent_id.into();
+            app.current_agent_source = source.clone();
+            app.acp_auth_methods = vec![agent_client_protocol::schema::v1::AuthMethod::Agent(
+                agent_client_protocol::schema::v1::AuthMethodAgent::new(
+                    "advertised",
+                    "Advertised method",
+                ),
+            )];
+            app.handle_event(AppEvent::AgentError {
+                session_id: None,
+                failure: crate::protocol::acp::failure::AgentFailure::AuthRequired {
+                    message: "Sign in required".into(),
+                },
+                message: "Sign in required".into(),
+            });
+            let setup = app.setup.as_ref().unwrap();
+            assert!(matches!(
+                setup.options.as_slice(),
+                [SetupOption::SignIn { agent_id: offered, .. }, SetupOption::ChooseAgentSource]
+                    if offered == agent_id
+            ));
+            assert_eq!(setup.preflight.agent_id, agent_id);
+            assert_eq!(
+                setup.subtitle,
+                format!(
+                    "{} {} {}",
+                    t!(
+                        "setup.subtitle.authentication_required",
+                        agent = crate::agent_registry::lookup_profile_by_id(agent_id).display_name
+                    ),
+                    t!("setup.auth.sign_in"),
+                    "To switch agents, go to Intelligent Terminal Settings > Agent.",
+                )
+            );
+            assert_eq!(app.current_agent_source, source);
+            assert!(
+                !render_to_text(&mut app, 140, 20).contains("Select a sign-in method"),
+                "initial SignIn is not the method picker"
+            );
+        }
+    }
+}
+
+#[test]
+fn authentication_setup_requires_usable_methods_before_offering_protocol_sign_in() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    for agent_id in ["antigravity", "gemini", "custom:example"] {
+        for methods in [
+            vec![],
+            vec![agent_client_protocol::schema::v1::AuthMethod::Agent(
+                agent_client_protocol::schema::v1::AuthMethodAgent::new("", "Invalid method"),
+            )],
+        ] {
+            let mut app = test_app();
+            app.current_agent_id = agent_id.into();
+            app.acp_auth_methods = methods;
+            let (options, subtitle) = app.authentication_setup_presentation(agent_id);
+            assert!(matches!(
+                options.as_slice(),
+                [SetupOption::RetryConnection, SetupOption::ChooseAgentSource]
+            ));
+            assert_eq!(
+                subtitle,
+                format!(
+                    "{} {}",
+                    t!(
+                        "setup.subtitle.authentication_required",
+                        agent = crate::agent_registry::lookup_profile_by_id(agent_id).display_name
+                    ),
+                    "To switch agents, go to Intelligent Terminal Settings > Agent.",
+                ),
+                "no instructions for an unavailable authentication action"
+            );
+        }
+    }
+    let app = test_app();
+    assert!(matches!(
+        app.authentication_setup_presentation("copilot").0[0],
+        SetupOption::SignIn { .. }
+    ));
+}
+
+#[test]
+fn authentication_setup_recovery_reuses_initial_actions_and_content() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    for agent_id in [
+        "copilot",
+        "antigravity",
+        "gemini",
+        "codex",
+        "custom:example",
+    ] {
+        let mut app = test_app();
+        app.current_agent_id = agent_id.into();
+        app.acp_auth_methods = vec![agent_client_protocol::schema::v1::AuthMethod::Agent(
+            agent_client_protocol::schema::v1::AuthMethodAgent::new("advertised", "Method"),
+        )];
+        app.handle_event(AppEvent::AgentError {
+            session_id: None,
+            failure: crate::protocol::acp::failure::AgentFailure::AuthRequired {
+                message: "Sign in required".into(),
+            },
+            message: "Sign in required".into(),
+        });
+        let initial = render_to_text(&mut app, 140, 20);
+        app.show_signin_setup_screen_with_status(
+            agent_id,
+            agent_status_for_test(
+                agent_id,
+                crate::agent_registry::lookup_profile_by_id(agent_id).display_name,
+                true,
+            ),
+        );
+        assert_eq!(render_to_text(&mut app, 140, 20), initial);
+        assert_eq!(app.setup.as_ref().unwrap().preflight.agent_id, agent_id);
+    }
+}
+
+#[test]
+fn authentication_setup_missing_cli_recovery_does_not_advertise_sign_in() {
+    let _locale = crate::test_support::lock_locale();
+    let mut app = test_app();
+    app.current_agent_id = "copilot".into();
+    app.current_tab_mut()
+        .messages
+        .push(ChatMessage::Error("Previous authentication failure".into()));
+    app.show_signin_setup_screen_with_status(
+        "copilot",
+        agent_status_for_test("copilot", "GitHub Copilot", false),
+    );
+    let setup = app.setup.as_ref().unwrap();
+    assert_eq!(setup.reason, SetupReason::AgentMissing);
+    assert!(matches!(setup.preflight.cli_status, CheckStatus::Failed(_)));
+    assert!(!setup
+        .options
+        .iter()
+        .any(|option| matches!(option, SetupOption::SignIn { .. })));
+    assert!(setup
+        .options
+        .iter()
+        .any(|option| matches!(option, SetupOption::Recheck)));
+    assert!(!app
+        .current_tab()
+        .messages
+        .iter()
+        .any(|message| matches!(message, ChatMessage::Error(_))));
+}
+
+#[test]
+fn authentication_setup_wsl_escape_and_timeout_keep_device_sign_in_available() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    let mut app = test_app();
+    app.current_agent_id = "copilot".into();
+    let source = crate::agent_source::AgentSource::Wsl {
+        distro: "ExampleDistro".into(),
+    };
+    app.current_agent_source = source.clone();
+    app.mode = AppMode::Auth;
+    app.auth = Some(AuthState {
+        agent_id: "copilot".into(),
+        agent_name: "GitHub Copilot".into(),
+        login_command: "wsl.exe -d ExampleDistro -- copilot login".into(),
+        checking: false,
+        status_message: String::new(),
+        enterprise_mode: false,
+        enterprise_host: String::new(),
+    });
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let escaped = render_to_text(&mut app, 140, 20);
+    assert!(matches!(
+        app.setup.as_ref().unwrap().options[0],
+        SetupOption::SignIn { .. }
+    ));
+    app.mode = AppMode::Chat;
+    app.setup = None;
+    app.state = ConnectionState::Connecting("reconnecting".into());
+    app.auth_recovery_state = AuthRecoveryState::Connecting;
+    app.handle_event(AppEvent::AuthRecoveryTimedOut {
+        agent_id: "copilot".into(),
+        generation: app.auth_recovery_generation,
+    });
+    assert_eq!(render_to_text(&mut app, 140, 20), escaped);
+    assert_eq!(app.current_agent_source, source);
+}
+
+#[test]
 fn protocol_auth_onboarding_offers_product_sign_in_instead_of_external_retry() {
     for (id, name) in [("antigravity", "Google Antigravity"), ("gemini", "Gemini")] {
         let status = agent_status_for_test(id, name, true);
@@ -13484,6 +13806,7 @@ fn protocol_auth_onboarding_copilot_login_preserves_selected_wsl_source() {
 
 #[test]
 fn protocol_auth_onboarding_selects_advertised_method_and_cancels_without_quitting() {
+    let _locale = crate::test_support::lock_locale();
     let mut app = test_app();
     app.current_agent_id = "antigravity".into();
     app.current_agent_source = crate::agent_source::AgentSource::Wsl {
@@ -13533,6 +13856,155 @@ fn protocol_auth_onboarding_selects_advertised_method_and_cancels_without_quitti
     assert!(!app.should_quit);
     assert!(!app.acp_authentication_pending());
     assert_eq!(app.setup.as_ref().unwrap().phase, SetupPhase::Ready);
+    assert_eq!(
+        app.setup.as_ref().unwrap().subtitle,
+        format!(
+            "{} {} {}",
+            t!(
+                "setup.subtitle.authentication_required",
+                agent = "Google Antigravity"
+            ),
+            t!("setup.auth.select_method"),
+            "To switch agents, go to Intelligent Terminal Settings > Agent.",
+        )
+    );
+}
+
+#[test]
+fn authentication_setup_connection_failure_only_offers_supported_recovery() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    for agent_id in ["copilot", "codex", "antigravity", "custom:example"] {
+        let mut app = test_app();
+        app.current_agent_id = agent_id.into();
+        app.acp_auth_methods = vec![agent_client_protocol::schema::v1::AuthMethod::Agent(
+            agent_client_protocol::schema::v1::AuthMethodAgent::new("advertised", "Method"),
+        )];
+        app.show_connection_failure_setup("Unable to reconnect".into());
+        let setup = app.setup.as_ref().unwrap();
+        let protocol_sign_in = agent_id == "antigravity" || agent_id.starts_with("custom:");
+        assert_eq!(
+            matches!(setup.options[0], SetupOption::SignIn { .. }),
+            protocol_sign_in,
+            "a non-auth connection failure must retain RetryConnection for {agent_id}"
+        );
+        if protocol_sign_in {
+            assert!(setup.subtitle.contains(t!("setup.auth.sign_in").as_ref()));
+            assert!(setup
+                .subtitle
+                .ends_with("To switch agents, go to Intelligent Terminal Settings > Agent."));
+            assert!(setup.subtitle.starts_with(
+                t!(
+                    "setup.subtitle.connection_failed",
+                    agent = crate::agent_registry::lookup_profile_by_id(agent_id).display_name
+                )
+                .as_ref()
+            ));
+        } else {
+            assert!(matches!(setup.options[0], SetupOption::RetryConnection));
+            assert_eq!(
+                setup.subtitle,
+                t!(
+                    "setup.subtitle.connection_failed",
+                    agent = crate::agent_registry::lookup_profile_by_id(agent_id).display_name
+                )
+                .into_owned()
+            );
+        }
+        assert!(matches!(
+            &setup.phase,
+            SetupPhase::Failed {
+                kind: SetupFailureKind::Connection,
+                message
+            } if message == "Unable to reconnect"
+        ));
+    }
+}
+
+#[test]
+fn authentication_setup_custom_retry_preserves_resolved_command_and_source() {
+    let _locale = crate::test_support::lock_locale();
+    for source in [
+        crate::agent_source::AgentSource::Host,
+        crate::agent_source::AgentSource::Wsl {
+            distro: "ExampleDistro".into(),
+        },
+    ] {
+        let mut app = test_app();
+        let command = "example-acp --stdio --workspace \"Example Project\"";
+        app.current_agent_id = "custom:example".into();
+        app.current_agent_source = source.clone();
+        app.set_master_pipe_acp_params(
+            "example-master-pipe".into(),
+            command.into(),
+            Some("custom:example".into()),
+            None,
+            None,
+            source.clone(),
+            None,
+            Some("owner-tab".into()),
+            Arc::clone(&app.shell_mgr),
+            true,
+        );
+        app.show_connection_failure_setup("Unable to reconnect".into());
+        assert_eq!(
+            app.setup.as_ref().unwrap().preflight.agent_id,
+            "custom:example"
+        );
+        app.handle_setup_enter(SetupOption::RetryConnection);
+        let params = app.deferred_acp.as_ref().unwrap();
+        assert_eq!(params.agent_cmd, command);
+        assert_eq!(params.agent_id.as_deref(), Some("custom:example"));
+        assert_eq!(params.agent_source, source);
+        assert_eq!(app.current_agent_source, source);
+        assert!(app.reconnect_after_transport_retired);
+        assert!(!app.pending_acp_start);
+        app.handle_event(AppEvent::AgentTransportRetired);
+        assert!(app.pending_acp_start);
+        assert!(matches!(
+            app.setup.as_ref().unwrap().phase,
+            SetupPhase::Reconnecting
+        ));
+    }
+}
+
+#[test]
+fn authentication_setup_picker_keeps_only_usable_methods_and_shared_guidance() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    let mut app = test_app();
+    app.current_agent_id = "custom:example".into();
+    app.acp_auth_methods = vec![
+        agent_client_protocol::schema::v1::AuthMethod::Agent(
+            agent_client_protocol::schema::v1::AuthMethodAgent::new("", "Invalid method"),
+        ),
+        agent_client_protocol::schema::v1::AuthMethod::Agent(
+            agent_client_protocol::schema::v1::AuthMethodAgent::new("advertised", "Valid method"),
+        ),
+    ];
+    app.show_signin_setup_screen("custom:example".into());
+    app.handle_setup_enter(app.setup.as_ref().unwrap().options[0].clone());
+    let setup = app.setup.as_ref().unwrap();
+    assert!(matches!(
+        setup.options.as_slice(),
+        [SetupOption::Authenticate { method_id, .. }, SetupOption::ChooseAgentSource]
+            if method_id == "advertised"
+    ));
+    assert_eq!(
+        setup.subtitle,
+        format!(
+            "{} {} {}",
+            t!("setup.subtitle.authentication_required", agent = "Agent"),
+            t!("setup.auth.select_method"),
+            "To switch agents, go to Intelligent Terminal Settings > Agent.",
+        )
+    );
+    let text = render_to_text(&mut app, 140, 20);
+    assert!(text.contains("Valid method"));
+    assert!(!text.contains("Invalid method"));
+    assert!(!text.contains(t!("setup.auth.sign_in").as_ref()));
+    let wrapped_text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(wrapped_text.contains("To switch agents, go to Intelligent Terminal Settings > Agent."));
 }
 
 #[test]

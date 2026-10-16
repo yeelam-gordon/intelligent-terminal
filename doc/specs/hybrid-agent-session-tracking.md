@@ -1,5 +1,57 @@
 # Hooks-Fallback Agent Session Watcher (Hybrid Tracking)
 
+## Shared read model: pane metadata and Recent conversations
+
+Pane identity and conversation identity have different lifetimes. A live agent
+pane is identified by its existing Terminal connection GUID and can display
+activity before an agent session ID is known. A conversation is identified by
+its qualified provider, execution/history store and real agent session ID; it
+can remain in Recent after its pane disappears. Neither identity is a
+placeholder for the other.
+
+WTA owns conversation discovery, confirmed associations and effective agent
+activity. Terminal owns actual pane existence and the immutable launch facts
+it publishes. The existing snapshot carries two read projections:
+
+| Projection | Required key | Optional relationship |
+| --- | --- | --- |
+| `pane_statuses` | Terminal pane GUID | Confirmed agent conversation ID |
+| `sessions` | Qualified real conversation identity | Associated live pane GUID |
+
+Tab and pane metadata consume only the pane projection. Recent consumes the
+conversation projection, retaining its existing shell-origin, visibility and
+represented-session filters. A shared snapshot does not make the conversation
+ID mandatory for every record. List-inferred associations remain advisory
+metadata, never the confirmed relationship used for control or resume.
+
+```text
+Existing hooks / parsed OSC/BEL / pane lifecycle
+                       |
+             Existing COM and WTA model
+                       |
+            One shared UI snapshot request
+                       |
+              +--------+---------+
+              |                  |
+        pane_statuses          sessions
+        key: pane GUID         key: conversation
+              |                  |
+        Tab/pane metadata     Recent + filters
+```
+
+This is a read-side diagram; it does not replace the existing signal,
+creation or exact-resume flows. Shared refreshes reuse the existing bounded
+request and retry machinery, without a new polling loop. A hidden or cancelled
+Recent projection must not cancel a request still serving pane metadata.
+
+UI presentation owns labels, icons, filtering and command availability, not
+conversation matching or agent activity transitions. Status getters are
+lookups: registration occurs at pane creation/attachment, setting changes,
+ownership changes and receiver readiness/recovery. Retained launch facts and
+versioned transport/replay receipts are legitimate host state, not another
+activity authority. Existing SDK routing and conversation IDs remain unchanged;
+no new MVVM framework, generic store or conversation-ID migration is required.
+
 ## Sessions OFF: native observations in the shared registry
 
 Terminal uses `EffectiveAgentSessionManagementEnabled()` (the user setting
@@ -299,8 +351,17 @@ registry lookup for the real native CLI session ID, not the helper's ACP ID.
 This known binding keeps the resumed tab visible under Agents only before its
 first hook. Idle is an initial baseline, not evidence that the CLI loaded or
 that subsequent activity is being observed.
-This initialization does not change subsequent hook-loss activity behavior,
-watcher ownership, or saved-layout restore routing.
+For an unambiguous native host row, a newly assigned resume pane also registers
+`born_bound` watcher ownership and clears the previous generation's hook claim.
+The binding and ownership transition share the hook lifecycle gate. If a real
+hook already bound that exact pane during tab creation, its activity and
+ownership remain authoritative. No helper subscription or hook installation is
+required for this native activity fallback; saved-layout restore routing is
+unchanged.
+
+Watcher ownership checks and activity updates share that lifecycle gate too.
+Native file records only update a unique row for the matching CLI, never a WSL,
+agent-pane, alternate-universe, or ambiguous raw-ID row.
 
 **Resume pane ownership.** `ResumePaneAssigned` marks the row's pane binding
 `born_bound_pane` (`session_registry.rs`). WTA creates the resume pane and binds
@@ -569,6 +630,15 @@ Activation has a separate busy state from list loading: existing rows and the se
 query stay visible without the full-list loading spinner while focus/resume runs.
 Repeated activation clicks are ignored until completion, and background snapshots
 cannot clear the activation guard. Closing History resets that guard.
+
+External Copilot **In use** evidence is informational, not a resume restriction.
+Selecting such a row resumes it through the CLI in a new tab; activation does not
+probe external ownership or wait for an in-use lock to be released. Failure to
+read ownership evidence likewise does not block resume. The session list still
+shows **In use** when supported by external evidence. A live session with an
+authoritative Terminal pane binding continues to focus that pane instead of
+starting another CLI. The agent CLI remains responsible for accepting the resume
+request and handling any concurrent access to its session store.
 
 History list requests are single-flight per window. Notifications received during
 activation are coalesced and serviced after activation completes, without hiding

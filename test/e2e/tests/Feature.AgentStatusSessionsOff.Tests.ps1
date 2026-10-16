@@ -455,8 +455,17 @@ catch {
             $snapshot = ConvertFrom-Json -InputObject $result.StdOut -NoEnumerate -ErrorAction Stop
             $snapshot | Should -BeOfType [pscustomobject]
             $snapshot.PSObject.Properties.Name | Should -Contain sessions
+            $snapshot.PSObject.Properties.Name | Should -Contain pane_statuses
             $snapshot.PSObject.Properties.Name | Should -Contain history_status
             ($snapshot.sessions -is [array]) | Should -BeTrue -Because 'including an empty sessions array is mandatory'
+            ($snapshot.pane_statuses -is [array]) | Should -BeTrue
+            @($snapshot.pane_statuses | ForEach-Object { $_.pane_id } | Select-Object -Unique) |
+                Should -HaveCount (@($snapshot.pane_statuses).Count)
+            foreach ($paneStatus in $snapshot.pane_statuses) {
+                [guid]::Parse($paneStatus.pane_id) | Should -Not -Be ([guid]::Empty)
+                $paneStatus.provider_id | Should -Not -BeNullOrEmpty
+                $paneStatus.status | Should -Not -BeNullOrEmpty
+            }
             # History discovery failures are independent of this successful
             # full-registry response; they do not invalidate live pane bindings.
             $snapshot.history_status | Should -BeIn @('loading', 'ready', 'error')
@@ -493,8 +502,17 @@ catch {
                     $rows = @($captured.Snapshot.native_pane_observations | Where-Object {
                         ([string]$_.pane_id).Trim('{}') -eq ([string]$Fixture.Pane.session_id).Trim('{}')
                     })
-                    if ($rows.Count -eq 1 -and $rows[0].status -eq $Status) { $rows[0] }
+                    $paneStatuses = @($captured.Snapshot.pane_statuses | Where-Object {
+                        ([string]$_.pane_id).Trim('{}') -eq ([string]$Fixture.Pane.session_id).Trim('{}')
+                    })
+                    if ($rows.Count -eq 1 -and $rows[0].status -eq $Status -and
+                        $paneStatuses.Count -eq 1 -and $paneStatuses[0].status -eq $Status) { $rows[0] }
                 }
+                $paneStatus = @($captured.Snapshot.pane_statuses | Where-Object {
+                    ([string]$_.pane_id).Trim('{}') -eq ([string]$Fixture.Pane.session_id).Trim('{}')
+                })[0]
+                $paneStatus.agent_session_id | Should -BeNullOrEmpty
+                $paneStatus.provider_id | Should -Be copilot
                 $observation.provider_id | Should -Be copilot
                 [string]$observation.window_id | Should -Be $script:window
                 $observation.agent_session_id | Should -BeNullOrEmpty -Because 'a new native pane has no known conversation ID'
@@ -933,10 +951,14 @@ class CopilotFixture {
                 $observations = @($snapshot.native_pane_observations | Where-Object {
                     ([string]$_.pane_id).Trim('{}') -eq ([string]$launch.pane_session_id).Trim('{}')
                 })
+                $paneStatuses = @($snapshot.pane_statuses | Where-Object {
+                    ([string]$_.pane_id).Trim('{}') -eq ([string]$launch.pane_session_id).Trim('{}')
+                })
                 if ($rows.Count -eq 1 -and $rows[0].status -eq $step.Status -and
                     ([string]$rows[0].pane_session_id).Trim('{}') -eq ([string]$launch.pane_session_id).Trim('{}') -and
                     $observations.Count -eq 1 -and $observations[0].agent_session_id -eq $sid -and
-                    $observations[0].status -eq $step.Status) { $snapshot }
+                    $observations[0].status -eq $step.Status -and $paneStatuses.Count -eq 1 -and
+                    $paneStatuses[0].agent_session_id -eq $sid -and $paneStatuses[0].status -eq $step.Status) { $snapshot }
             }
             $bound = @($current.sessions | Where-Object session_id -eq $sid)[0]
             $bound.provider_id | Should -Be copilot
