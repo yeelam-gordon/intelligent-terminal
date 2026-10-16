@@ -297,7 +297,7 @@ catch {
             if ($Kind -in @('delegate', 'delegate-prompt')) {
                 $previousPane = Get-ActivePane -App $script:app
                 $delegate = @('delegate', '--agent', 'copilot', '--delegate-agent', $command,
-                    '--delegate-agent-id', 'custom:sessions-off-fixture', '--delegate-source', 'host',
+                    '--delegate-agent-id', 'custom:Sessions-Off-Fixture', '--delegate-source', 'host',
                     '--cwd', $script:evidence)
                 if ($Kind -eq 'delegate-prompt') { $delegate += 'controlled startup prompt' }
                 $result = Invoke-Wta -App $script:app -Arguments $delegate -Raw -TimeoutSec 20

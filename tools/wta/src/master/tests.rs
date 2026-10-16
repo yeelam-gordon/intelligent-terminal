@@ -1849,6 +1849,37 @@ fn native_receiver_generation_requires_positive_decimal_u64() {
 }
 
 #[tokio::test]
+async fn native_launch_source_dispatch_normalizes_custom_provider_case_without_activity() {
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let state = make_state();
+    let pane = "00112233-4455-6677-8899-aabbccddeeff";
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"native_agent_observation","params":{
+            "pane_id":pane,"provider_id":"custom:MiXeD","window_id":0,"tab_id":"tab",
+            "mode_epoch":1,"pane_created_at_ms":1000,"pane_creation_sequence":42,
+            "kind":"reset","tracking_enabled":false
+        }}),
+    )
+    .await;
+    let mut expected = state.registry.native_pane_observations().await[0].clone();
+    assert_eq!(expected.provider_id, "custom:mixed");
+    assert_eq!(expected.status, crate::agent_sessions::AgentStatus::Idle);
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"type":"event","method":"agent_event","params":{
+            "event":"agent.pane.launch.source","pane_id":pane,
+            "agent":"custom:MiXeD","location":"Host"
+        }}),
+    )
+    .await;
+    expected.location = Some(crate::agent_sessions::SessionLocation::Host);
+    assert_eq!(state.registry.native_pane_observations().await[0], expected);
+    assert!(state.registry.snapshot().await.is_empty());
+    assert!(state.session_to_helper.lock().await.is_empty());
+}
+
+#[tokio::test]
 async fn native_receiver_unmanaged_master_preserves_legacy_admission() {
     let _capture = crate::wt_protocol_events::capture_test_published_events();
     let state = make_state();

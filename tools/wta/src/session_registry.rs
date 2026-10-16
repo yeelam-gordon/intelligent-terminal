@@ -1985,7 +1985,7 @@ impl SessionRegistry for InMemoryRegistry {
         let Some(native) = state.native_panes.get_mut(&pane_key(pane)) else {
             return false;
         };
-        if native.observation.provider_id != provider
+        if native.observation.provider_id != provider.trim().to_ascii_lowercase()
             || native.observation.agent_session_id.is_some()
             || native.bound_identity.is_some()
             || native
