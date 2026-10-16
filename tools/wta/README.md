@@ -20,6 +20,40 @@ The binary is output to
 target in this repo: the package project prefers that output over the host-target
 fallback.
 
+### Performance analysis
+
+From the repository root, with Clippy available for the active toolchain:
+
+```powershell
+cargo wta-perf
+cargo wta-perf-extended
+```
+
+These standard Cargo aliases in `.cargo\config.toml` check all targets in the
+WTA manifest for `x86_64-pc-windows-msvc` in the default debug profile, using
+`--frozen` and JSON diagnostics. Restore dependencies separately beforehand if
+they are not cached; frozen analysis does not download them or update the lockfile.
+The aliases retain the static-CRT target settings and normal compiler/Clippy
+warnings. `cargo build` itself does not run Clippy.
+
+`wta-perf` explicitly warns on `clippy::vec_init_then_push`,
+`clippy::slow_vector_initialization`, and `clippy::await_holding_lock`.
+The recursive `wta-perf-extended` alias additionally warns on the individual nursery
+check `clippy::needless_collect` and pedantic check `clippy::large_futures`,
+without enabling those entire lint groups. Extra alias arguments are after
+Clippy's existing `--`, so do not append Cargo options such as `--release`.
+Both aliases intentionally use the same fixed target and build profile.
+They can analyze local work, branches, or pull requests; neither is PR-specific.
+
+Diagnostics are advisory leads, not automatic HIGH-severity findings or safe
+fixes. Inspect the actual scopes and callers and compare base/head using the same
+toolchain, target, configuration, and scope. Unavailable checks or compilation
+failures are not clean coverage. Local Clippy availability does not establish
+availability on CI's `ms-prod-1.93` MSRustup toolchain: verify that pinned
+toolchain's Clippy component and these checks before enabling normal CI analysis.
+The corresponding opt-in C++ profile is documented in
+[the build guide](../../doc/building.md#opt-in-c-performance-analysis).
+
 ### How WTA runs
 
 WTA is normally launched **by Windows Terminal**, not by hand. WT spawns one
@@ -188,10 +222,24 @@ sessions already registered by other paths are not filtered out of the sidebar.
 Discovery never automatically installs a native agent CLI. The pinned Claude and
 Codex ACP adapters are separate: their cache presence is not checked, and the
 existing `npx -y` launch behavior may download and bootstrap an uncached adapter
-during initial startup or a later refresh that starts a provider. This is allowed
-and may require network access; discovery is not an offline-only operation. See
+during initial startup or a later refresh that starts a provider. Similarly,
+when Antigravity's ordinary `agy` CLI is detected, starting its ACP connection can
+prepare the pinned standalone ACP server and companion. Complete existing ACP
+installations are preserved. These dependency preparations may require network
+access; background startup is not an offline-only operation. See
 [Installing dependencies](../../doc/installing-dependencies.md) for the native CLI
 and ACP wrapper prerequisites.
+
+The read-only `probe-host-agents` and `probe-agent-sources` availability commands
+only report readiness or bootstrap eligibility; they do not install dependencies.
+
+WSL ACP launches start Bash directly as the selected distribution's default user.
+The login-shell environment is loaded without sending the generated launch script
+through an extra default shell, preserving managed-cache paths and quoted arguments.
+
+The WSL Session MCP relay also requires native Python 3 in that user's login
+environment. It is separate from Antigravity's bundled ACP runtime; preparing
+the ACP dependency does not install Python.
 
 Tab/pane agent metadata and Sidebar Recent share a bounded
 `wta sessions list --json --include-status` snapshot request. Recent applies
@@ -974,6 +1022,12 @@ to a pending pane record. This is not a canonical binding, action route or
 process-liveness claim. Explicit resume identity remains authoritative.
 Historical status does not overwrite observed pane activity, and discovery
 does not add a query or polling worker.
+While such a pane is pending, the existing retained history request follows
+pagination to a complete inventory under its original deadlines. Partial
+pages cannot prove uniqueness. The pane projection carries the inferred
+qualified key only for Recent duplicate suppression in its owning window;
+closing the pane or returning to ON restores that historical row without
+inventing a canonical live binding.
 
 Send `reset`
 with a strictly increasing per-pane `mode_epoch` on initial admission and mode

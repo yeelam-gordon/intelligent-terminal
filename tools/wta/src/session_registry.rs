@@ -458,6 +458,9 @@ pub struct PaneAgentStatus {
     pub status: AgentStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session_id: Option<String>,
+    /// Presentation-only correlation; never a confirmed binding or action route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inferred_history_key: Option<HistoryRowKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_activity_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1156,6 +1159,9 @@ pub enum SessionHookParams {
     ToolCompleted {
         key: crate::agent_sessions::AgentKey,
     },
+    ToolReturned {
+        key: crate::agent_sessions::AgentKey,
+    },
     Notification {
         key: crate::agent_sessions::AgentKey,
         message: String,
@@ -1233,6 +1239,7 @@ impl From<&crate::agent_sessions::SessionEvent> for SessionHookParams {
                 tool_name: tool_name.clone(),
             },
             SessionEvent::ToolCompleted { key } => Self::ToolCompleted { key: key.clone() },
+            SessionEvent::ToolReturned { key } => Self::ToolReturned { key: key.clone() },
             SessionEvent::Notification { key, message } => Self::Notification {
                 key: key.clone(),
                 message: message.clone(),
@@ -1321,6 +1328,7 @@ impl From<SessionHookParams> for crate::agent_sessions::SessionEvent {
                 Self::ToolStarting { key, tool_name }
             }
             SessionHookParams::ToolCompleted { key } => Self::ToolCompleted { key },
+            SessionHookParams::ToolReturned { key } => Self::ToolReturned { key },
             SessionHookParams::Notification { key, message } => Self::Notification { key, message },
             SessionHookParams::SessionStopped { key, reason } => {
                 Self::SessionStopped { key, reason }
@@ -1727,6 +1735,14 @@ pub trait SessionRegistry: Send + Sync {
         Vec::new()
     }
 
+    async fn has_pending_native_inference(
+        &self,
+        _provider: &str,
+        _location: &SessionLocation,
+    ) -> bool {
+        false
+    }
+
     /// Read effective pane metadata and its legacy native diagnostic view under
     /// the same registry lock, so OFF precedence cannot race a mode transition.
     async fn pane_status_snapshot(&self) -> (Vec<PaneAgentStatus>, Vec<NativePaneObservation>);
@@ -2003,6 +2019,27 @@ pub(crate) fn title_is_displayable(cli: Option<&CliSource>, title: &str) -> bool
 
 #[async_trait::async_trait]
 impl SessionRegistry for InMemoryRegistry {
+    async fn has_pending_native_inference(
+        &self,
+        provider: &str,
+        location: &SessionLocation,
+    ) -> bool {
+        let state = self.inner.lock().await;
+        let now = now_ms();
+        state.native_panes.values().any(|pane| {
+            let row = &pane.observation;
+            row.provider_id.eq_ignore_ascii_case(provider)
+                && row.location.as_ref() == Some(location)
+                && row.agent_session_id.is_none()
+                && pane.bound_identity.is_none()
+                && row.inferred_history_key.is_none()
+                && !pane.inference_blocked
+                && row
+                    .pane_created_at_ms
+                    .is_some_and(|birth| now.saturating_sub(birth) <= 5 * 60 * 1000)
+        })
+    }
+
     async fn refine_native_launch_source(
         &self,
         pane: &str,
@@ -2041,8 +2078,8 @@ impl SessionRegistry for InMemoryRegistry {
         completed_at_ms: u64,
         listing_complete: bool,
     ) -> bool {
-        // Five minutes is a launch-correlation window, NOT the discovery cadence.
-        // SDK updated_at is activity, not birth: even a unique match stays advisory.
+        // Bound query start and provider activity, not delivery of a retained
+        // slow response. SDK updated_at is activity, not session birth.
         const STARTUP_WINDOW_MS: u64 = 5 * 60 * 1000;
         let mut state = self.inner.lock().await;
         let scope = (provider.to_ascii_lowercase(), location.clone());
@@ -2075,7 +2112,7 @@ impl SessionRegistry for InMemoryRegistry {
                     && row.inferred_agent_session_id.is_none()
                     && !pane.inference_blocked
                     && birth <= started_at_ms
-                    && completed_at_ms.saturating_sub(birth) <= STARTUP_WINDOW_MS)
+                    && started_at_ms.saturating_sub(birth) <= STARTUP_WINDOW_MS)
                     .then(|| (birth, sequence, id.clone()))
             })
             .collect();
@@ -2097,10 +2134,7 @@ impl SessionRegistry for InMemoryRegistry {
                 continue;
             }
             if !state.native_listing_evidence.contains_key(&key) {
-                if previously_listed.contains(&id)
-                    || state.known_raw_ids.contains(&id)
-                    || panes.is_empty()
-                {
+                if previously_listed.contains(&id) || state.known_raw_ids.contains(&id) {
                     continue;
                 }
                 state.native_listing_evidence.insert(
@@ -2161,6 +2195,15 @@ impl SessionRegistry for InMemoryRegistry {
             .known_raw_ids
             .extend(rows.iter().map(|row| row.session_id.to_string()));
         if !listing_complete || panes.is_empty() {
+            if !listing_complete && !panes.is_empty() {
+                tracing::debug!(
+                    target: "session_registry",
+                    provider,
+                    pending_panes = panes.len(),
+                    candidates = candidates.len(),
+                    "native identity correlation waits for complete session inventory"
+                );
+            }
             return false;
         }
         candidates.sort_by_key(|(activity, _)| *activity);
@@ -2177,6 +2220,14 @@ impl SessionRegistry for InMemoryRegistry {
                     activity < birth || activity - birth > STARTUP_WINDOW_MS
                 })
         {
+            tracing::debug!(
+                target: "session_registry",
+                provider,
+                pending_panes = panes.len(),
+                candidates = candidates.len(),
+                ambiguous,
+                "native identity correlation rejected ambiguous inventory or ordering"
+            );
             for (_, _, pane) in &panes {
                 if let Some(native) = state.native_panes.get_mut(pane) {
                     native.inference_blocked = true;
@@ -2388,6 +2439,7 @@ impl SessionRegistry for InMemoryRegistry {
                         provider_id: row.provider_id.clone(),
                         status: row.status.clone(),
                         agent_session_id: row.agent_session_id.clone(),
+                        inferred_history_key: row.inferred_history_key.clone(),
                         last_activity_at_ms: Some(row.last_activity_at_ms),
                         cwd: pane_status_cwd(&row.provider_id, None, row.cwd.as_ref()),
                         location: row.location.clone(),
@@ -2447,6 +2499,7 @@ impl SessionRegistry for InMemoryRegistry {
                     provider_id,
                     status,
                     agent_session_id: Some(row.session_id.to_string()),
+                    inferred_history_key: None,
                     last_activity_at_ms: row.last_activity_at_ms,
                     cwd,
                     location: row.location.is_actionable().then(|| row.location.clone()),
@@ -3762,6 +3815,28 @@ fn apply_event_locked(
             entry.last_activity_at_ms = Some(now);
             true
         }
+        SessionEvent::ToolReturned { key } => {
+            let sid = acp::schema::v1::SessionId::new(key);
+            let Some(identity) = unique_identity_for_raw(state, &sid) else {
+                return false;
+            };
+            let Some(entry) = state.sessions.get_mut(&identity) else {
+                return false;
+            };
+            if entry.cli_source != Some(CliSource::Copilot)
+                || !matches!(
+                    entry.status,
+                    Some(AgentStatus::Working | AgentStatus::Attention)
+                )
+            {
+                return false;
+            }
+            entry.status = Some(AgentStatus::Working);
+            entry.current_tool = None;
+            entry.attention_reason = None;
+            entry.last_activity_at_ms = Some(now);
+            true
+        }
         SessionEvent::ToolCompleted { key } => {
             let sid = acp::schema::v1::SessionId::new(key);
             let Some(identity) = qualified_activity
@@ -4134,10 +4209,17 @@ mod tests {
         assert_eq!(response.pane_statuses, panes);
         assert_eq!(response.native_pane_observations.len(), 2);
         let value: serde_json::Value = serde_json::from_str(wire.get()).unwrap();
-        assert!(value["pane_statuses"][0]
-            .get("inferred_history_key")
-            .is_none());
-        assert!(value["pane_statuses"][0].get("agent_session_id").is_none());
+        let advisory = value["pane_statuses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|pane| pane["pane_id"] == NATIVE_PANE)
+            .unwrap();
+        assert_eq!(
+            advisory["inferred_history_key"]["session_id"],
+            "advisory-only"
+        );
+        assert!(advisory.get("agent_session_id").is_none());
         assert_eq!(response.native_observation_receiver_generation, Some(4));
         assert_eq!(response.native_observation_listener_ready, Some(true));
     }
@@ -4418,6 +4500,100 @@ mod tests {
         for row in rows {
             registry.upsert_if_absent(row.clone()).await;
         }
+    }
+
+    #[tokio::test]
+    async fn native_list_evidence_survives_delayed_pane_admission_and_slow_launch() {
+        let registry = InMemoryRegistry::new();
+        let birth = 1_000_000;
+        let discovered = birth + 180_000;
+        let row = listed_native("slow-native", discovered - 1_000);
+        assert!(
+            !registry
+                .enrich_native_from_listing(
+                    "copilot",
+                    &SessionLocation::Host,
+                    &[row.clone()],
+                    &HashSet::new(),
+                    birth - 1_000,
+                    discovered,
+                    false,
+                )
+                .await
+        );
+        registry.upsert_if_absent(row.clone()).await;
+        pending_native(&registry, NATIVE_PANE, birth, 42).await;
+        assert!(
+            registry
+                .enrich_native_from_listing(
+                    "copilot",
+                    &SessionLocation::Host,
+                    &[row],
+                    &HashSet::from(["slow-native".to_string()]),
+                    discovered + 1_000,
+                    discovered + 180_000,
+                    true,
+                )
+                .await
+        );
+        let (panes, _) = registry.pane_status_snapshot().await;
+        assert_eq!(panes.len(), 1);
+        assert!(panes[0].agent_session_id.is_none());
+        assert_eq!(
+            panes[0].inferred_history_key.as_ref().unwrap().session_id,
+            "slow-native"
+        );
+        assert!(registry.inner.lock().await.active_by_pane.is_empty());
+        let history = registry.snapshot().await;
+        assert_eq!(history.len(), 1);
+        assert!(history[0].pane_session_id.is_none());
+        assert_eq!(history[0].status, Some(AgentStatus::Historical));
+        assert!(
+            registry
+                .apply_native_observation(native_event(serde_json::json!({"kind":"removed"}), 1))
+                .await
+        );
+        assert!(registry.pane_status_snapshot().await.0.is_empty());
+        assert_eq!(registry.snapshot().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn native_pending_inventory_request_is_limited_to_eligible_pane_lifetime() {
+        let registry = InMemoryRegistry::new();
+        pending_native(&registry, NATIVE_PANE, now_ms() - 180_000, 42).await;
+        assert!(
+            registry
+                .has_pending_native_inference("copilot", &SessionLocation::Host)
+                .await
+        );
+        assert!(
+            !registry
+                .has_pending_native_inference("claude", &SessionLocation::Host)
+                .await
+        );
+        assert!(
+            !registry
+                .has_pending_native_inference(
+                    "copilot",
+                    &SessionLocation::Wsl {
+                        distro: "Ubuntu".into()
+                    },
+                )
+                .await
+        );
+        assert!(
+            registry
+                .apply_native_observation(native_event(
+                    serde_json::json!({"kind":"reset", "tracking_enabled":true}),
+                    2,
+                ))
+                .await
+        );
+        assert!(
+            !registry
+                .has_pending_native_inference("copilot", &SessionLocation::Host)
+                .await
+        );
     }
 
     #[tokio::test]
@@ -4724,7 +4900,7 @@ mod tests {
     async fn native_list_inference_rejects_known_delayed_and_out_of_order_discovery() {
         for (started, completed, known) in [
             (999, 3000, false),
-            (2000, 301001, false),
+            (301001, 302001, false),
             (2000, 3000, true),
         ] {
             let registry = InMemoryRegistry::new();
@@ -9419,6 +9595,9 @@ mod tests {
             },
             SessionEvent::ToolCompleted {
                 key: "tool-completed".to_string(),
+            },
+            SessionEvent::ToolReturned {
+                key: "tool-returned".to_string(),
             },
             SessionEvent::Notification {
                 key: "notification".to_string(),

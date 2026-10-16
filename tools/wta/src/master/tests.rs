@@ -17526,15 +17526,20 @@ fn listing_agent_from(
 /// agent the user switched to until Terminal was restarted.
 #[tokio::test]
 async fn native_list_inference_runs_through_existing_complete_history_ingestion() {
-    assert_native_list_inference_ingestion(None).await;
+    assert_native_list_inference_ingestion(None, false).await;
 }
 
 #[tokio::test]
-async fn native_list_inference_rejects_cursor_bearing_partial_history_ingestion() {
-    assert_native_list_inference_ingestion(Some("second-page".into())).await;
+async fn native_list_inference_ingests_candidate_from_later_inventory_page() {
+    assert_native_list_inference_ingestion(None, true).await;
 }
 
-async fn assert_native_list_inference_ingestion(next_cursor: Option<String>) {
+#[tokio::test]
+async fn native_list_inference_rejects_repeated_cursor_inventory() {
+    assert_native_list_inference_ingestion(Some("second-page".into()), false).await;
+}
+
+async fn assert_native_list_inference_ingestion(next_cursor: Option<String>, later_page: bool) {
     use crate::agent_sessions::{AgentStatus, CliSource};
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -17562,14 +17567,54 @@ async fn assert_native_list_inference_ingestion(next_cursor: Option<String>) {
                     .unwrap()
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap();
-            let agent = listing_agent(CliSource::Copilot, &[]);
-            agent.history_refresh.gate.lock().await.query =
-                history::HistoryQuery::mock(client_connection_to_listing_agent_with_cursor(
-                    vec!["fresh-native".into()],
-                    Some(activity),
-                    next_cursor.clone(),
-                ));
-            assert_eq!(seed_host_and_broadcast(&state, &agent).await, Some(1));
+            let mut paged_requests = None;
+            let agent = if later_page {
+                let mut old = history_row("old-history", "Old history");
+                old.updated_at = Some(
+                    time::OffsetDateTime::from_unix_timestamp_nanos(
+                        i128::from(now - 60_000) * 1_000_000,
+                    )
+                    .unwrap()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap(),
+                );
+                let mut first = acp::schema::v1::ListSessionsResponse::new(vec![old]);
+                first.next_cursor = Some("second-page".into());
+                let mut candidate = history_row("fresh-native", "Recent native");
+                candidate.updated_at = Some(activity.clone());
+                let (agent, requests) = paged_history_agent(
+                    "copilot",
+                    HashMap::from([
+                        (None, first),
+                        (
+                            Some("second-page".into()),
+                            acp::schema::v1::ListSessionsResponse::new(vec![candidate]),
+                        ),
+                    ]),
+                );
+                paged_requests = Some(requests);
+                agent
+            } else {
+                let agent = listing_agent(CliSource::Copilot, &[]);
+                agent.history_refresh.gate.lock().await.query =
+                    history::HistoryQuery::mock(client_connection_to_listing_agent_with_cursor(
+                        vec!["fresh-native".into()],
+                        Some(activity),
+                        next_cursor.clone(),
+                    ));
+                agent
+            };
+            assert_eq!(
+                seed_host_and_broadcast(&state, &agent).await,
+                next_cursor
+                    .is_none()
+                    .then_some(if later_page { 2 } else { 1 })
+            );
+            if let Some(requests) = &mut paged_requests {
+                assert_eq!(requests.try_recv().unwrap(), None);
+                assert_eq!(requests.try_recv().unwrap().as_deref(), Some("second-page"));
+                assert!(requests.try_recv().is_err());
+            }
             let native = &state.registry.native_pane_observations().await[0];
             assert_eq!(
                 native.inferred_agent_session_id.as_deref(),
@@ -17577,10 +17622,59 @@ async fn assert_native_list_inference_ingestion(next_cursor: Option<String>) {
             );
             assert!(native.agent_session_id.is_none());
             assert_eq!(native.status, AgentStatus::Working);
-            let history = state.registry.lookup(&"fresh-native".into()).await.unwrap();
-            assert_eq!(history.status, Some(AgentStatus::Historical));
-            assert!(history.pane_session_id.is_none());
+            let history = state.registry.lookup(&"fresh-native".into()).await;
+            if next_cursor.is_none() {
+                let history = history.unwrap();
+                assert_eq!(history.status, Some(AgentStatus::Historical));
+                assert!(history.pane_session_id.is_none());
+            } else {
+                assert!(
+                    history.is_none(),
+                    "malformed inventory must not ingest partial pages"
+                );
+            }
             assert!(state.session_to_helper.lock().await.is_empty());
+            if later_page {
+                assert!(
+                    !state
+                        .registry
+                        .has_pending_native_inference(
+                            "copilot",
+                            &crate::agent_sessions::SessionLocation::Host
+                        )
+                        .await,
+                    "inference completion restores ordinary discovery"
+                );
+                let mut refresh = agent.history_refresh.gate.lock().await;
+                refresh.query =
+                    history::HistoryQuery::mock(client_connection_to_listing_agent_with_cursor(
+                        vec!["old-history".into()],
+                        None,
+                        Some("second-page".into()),
+                    ));
+                assert_eq!(
+                    sync_host_history(&state, &agent, &mut refresh, false)
+                        .await
+                        .unwrap()
+                        .1,
+                    1
+                );
+                assert!(!refresh.query.last_response_complete());
+                assert!(
+                    state
+                        .registry
+                        .lookup(&"fresh-native".into())
+                        .await
+                        .is_some(),
+                    "a partial page cannot delete a row discovered in a complete inventory"
+                );
+                assert_eq!(
+                    state.registry.native_pane_observations().await[0]
+                        .inferred_agent_session_id
+                        .as_deref(),
+                    Some("fresh-native")
+                );
+            }
         })
         .await;
 }
@@ -18239,6 +18333,107 @@ async fn native_off_watcher_rejects_unknown_backend_and_removed_bindings() {
 }
 
 // ── Hybrid event-dedup: hooks / born-bound win, watcher is fallback ──
+
+#[tokio::test]
+async fn copilot_completion_hooks_resume_activity_without_file_events() {
+    use crate::agent_sessions::{AgentStatus, CliSource, SessionEvent};
+
+    let state = make_state();
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let key = "copilot-completion-hooks";
+    let sid = SessionId::new(key);
+    let hook = |event: &str| {
+        serde_json::json!({
+            "method": "agent_event",
+            "params": {
+                "event": event,
+                "cli_source": "copilot",
+                "agent_session_id": key,
+                "pane_id": "owner",
+                "payload": {"cwd": "C:\\repo", "message": "waiting for input"},
+            },
+        })
+    };
+    let watcher = |event| crate::session_watcher::Emitted {
+        cli: CliSource::Copilot,
+        key: key.into(),
+        event,
+    };
+    handle_master_wt_event(&state, hook("agent.prompt.submit")).await;
+    apply_watcher_event(
+        &state,
+        watcher(SessionEvent::Notification {
+            key: key.into(),
+            message: "file-only approval".into(),
+        }),
+    )
+    .await;
+    assert_eq!(
+        state.registry.lookup(&sid).await.unwrap().status,
+        Some(AgentStatus::Working)
+    );
+    for notification_type in ["permission_prompt", "elicitation_dialog"] {
+        let mut notification = hook("agent.notification");
+        notification["params"]["payload"]["notificationType"] =
+            serde_json::json!(notification_type);
+        handle_master_wt_event(&state, notification).await;
+        apply_watcher_event(
+            &state,
+            watcher(SessionEvent::ToolStarting {
+                key: key.into(),
+                tool_name: "file-only activity".into(),
+            }),
+        )
+        .await;
+        handle_master_wt_event(&state, hook("agent.tool.failed")).await;
+        assert_eq!(
+            state.registry.lookup(&sid).await.unwrap().status,
+            Some(AgentStatus::Attention)
+        );
+        crate::wt_protocol_events::take_test_published_events();
+        handle_master_wt_event(&state, hook("agent.tool.finished")).await;
+        let row = state.registry.lookup(&sid).await.unwrap();
+        assert_eq!(row.status, Some(AgentStatus::Working));
+        assert!(row.current_tool.is_none());
+        assert!(row.attention_reason.is_none());
+        assert_eq!(row.pane_session_id.as_deref(), Some("owner"));
+        let events = crate::wt_protocol_events::take_test_published_events();
+        assert_eq!(events.len(), 1);
+        let delta: serde_json::Value = serde_json::from_str(&events[0]).unwrap();
+        assert_eq!(delta["method"], "session_registry_changed");
+        assert_eq!(delta["params"]["session_id"], key);
+        assert_eq!(delta["params"]["pane_session_id"], "owner");
+        assert_eq!(delta["params"]["status"], "Working");
+    }
+    handle_master_wt_event(&state, hook("agent.stop")).await;
+    assert_eq!(
+        state.registry.lookup(&sid).await.unwrap().status,
+        Some(AgentStatus::Idle)
+    );
+    handle_master_wt_event(&state, hook("agent.tool.finished")).await;
+    assert_eq!(
+        state.registry.lookup(&sid).await.unwrap().status,
+        Some(AgentStatus::Idle),
+        "a late tool return must not reactivate the completed turn",
+    );
+    handle_master_wt_event(&state, hook("agent.error")).await;
+    handle_master_wt_event(&state, hook("agent.tool.finished")).await;
+    assert_eq!(
+        state.registry.lookup(&sid).await.unwrap().status,
+        Some(AgentStatus::Error)
+    );
+    state
+        .registry
+        .apply_event(SessionEvent::PaneClosed {
+            pane_session_id: "owner".into(),
+        })
+        .await;
+    handle_master_wt_event(&state, hook("agent.tool.finished")).await;
+    assert_eq!(
+        state.registry.lookup(&sid).await.unwrap().status,
+        Some(AgentStatus::Ended)
+    );
+}
 
 #[tokio::test]
 async fn watcher_event_dropped_when_session_is_hook_owned() {

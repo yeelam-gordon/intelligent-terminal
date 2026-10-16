@@ -17,6 +17,7 @@ Describe 'Feature: native agent status with Sessions off' -Tag @('Feature', 'Age
         $script:fixtures = @()
         $script:runnerEnvironment = @{}
         $script:hookIsolationVerified = $false
+        $script:sidebarScopeToRestore = $null
         if (-not $env:ITE2E_PACKAGE -or $env:ITE2E_PACKAGE -in @('Auto', 'Dev', 'Store')) {
             throw 'Pin the owned isolated Dev package family; ordinary Dev and Store are forbidden.'
         }
@@ -129,7 +130,7 @@ class RejectProvider {
             (Join-Path $automationHome 'AppData\Roaming') -Force | Out-Null
         $script:fixture = Join-Path $script:evidence 'Emit-NativeStatus.ps1'
         @'
-param([string]$Signal, [string]$Receipt, [string]$Title, [int]$LifetimeSec = 300)
+param([string]$Signal, [string]$Receipt, [string]$Title, [int]$LifetimeSec = 540)
 [Console]::Write([char]27 + ']0;' + $Title + [char]27 + '\')
 $last = ''
 $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -166,6 +167,8 @@ exit 124
         $profile = '{' + [guid]::NewGuid().ToString() + '}'
         $script:ownsConfig = $true
         $script:app = Start-Terminal -Package $env:ITE2E_PACKAGE -PassFre $true -State @{
+            featureRolloutId = '{00000000-0000-0000-0000-000000000001}'
+            sidebarRolloutVersion = 1; sidebarRolloutAssignment = 'Sidebar'
             sidebarLayoutMigrationCompleted = $true; sidebarIntroductionShown = $true
         } -Settings @{
             language = 'en-US'; tabLayout = 'vertical'; startupActions = ''
@@ -188,6 +191,7 @@ exit 124
         $settingsReadByHost = Invoke-WtCli -App $script:app -Arguments @('get-settings')
         $settingsReadByHost.defaultProfile | Should -Be $profile
         $settingsReadByHost.agentSessionManagementEnabled | Should -BeFalse
+        $settingsReadByHost.tabLayout | Should -Be vertical
         $initialTabs = @(Get-WtTabs -App $script:app -WindowId $script:window)
         $initialTabs | Should -HaveCount 1
         $initialTabs[0].title | Should -Be 'Sessions-off control' -Because 'the actual host must load the fixture profile, not fallback defaults'
@@ -275,8 +279,8 @@ catch {
         } | ConvertTo-Json | Set-Content (Join-Path $script:evidence 'host-activation-isolation.json')
         $script:hookIsolationVerified = [bool]($directHost -or $shimHost)
         function Assert-StatusDeadline {
-            if ($script:suiteClock.Elapsed.TotalSeconds -ge 300) {
-                throw 'Sessions-off suite exceeded its five-minute outer deadline.'
+            if ($script:suiteClock.Elapsed.TotalSeconds -ge 480) {
+                throw 'Sessions-off suite exceeded its eight-minute outer deadline.'
             }
             foreach ($fixture in $script:fixtures) {
                 if (Test-Path "$($fixture.Receipt).failure.json") {
@@ -290,7 +294,7 @@ catch {
             $title = "IT-status-$Kind-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
             $signal = Join-Path $script:evidence "$title.signal.json"
             $receipt = Join-Path $script:evidence "$title.receipt.txt"
-            $command = "`"$pwsh`" -NoProfile -File `"$script:fixture`" -Signal `"$signal`" -Receipt `"$receipt`" -Title $title -LifetimeSec 300"
+            $command = "`"$pwsh`" -NoProfile -File `"$script:fixture`" -Signal `"$signal`" -Receipt `"$receipt`" -Title $title -LifetimeSec 540"
             $args = @('new-tab', '-c', $command, '-n', $title, '-d', $script:evidence)
             if ($Kind -eq 'native') { $args += @('--agent-provider', 'copilot') }
             $createdAfterMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -561,6 +565,21 @@ catch {
         }
         $script:otherNative.Creation.Sequence | Should -BeGreaterThan $script:native.Creation.Sequence
     }
+    AfterEach {
+        if ($script:sidebarScopeToRestore) {
+            $scope = $script:sidebarScopeToRestore
+            Set-TestSidebarScope -App $script:app -AgentsOnly $scope.AgentsOnly -Recent $scope.Recent
+            Wait-Until -TimeoutSec 15 -Because 'the Sidebar preference save completes before the next settings mutation' -Condition {
+                $disk = Get-Content -LiteralPath $script:app.SettingsPath -Raw | ConvertFrom-Json
+                $hostSettings = Invoke-WtCli -App $script:app -Arguments @('get-settings')
+                [bool]$disk.sidebarShowAgentsOnly -eq $scope.AgentsOnly -and
+                    [bool]$disk.sidebarShowRecentAgentSessions -eq $scope.Recent -and
+                    [bool]$hostSettings.sidebarShowAgentsOnly -eq $scope.AgentsOnly -and
+                    [bool]$hostSettings.sidebarShowRecentAgentSessions -eq $scope.Recent
+            } | Should -BeTrue
+            $script:sidebarScopeToRestore = $null
+        }
+    }
     AfterAll {
         try {
         if ($script:app) {
@@ -669,13 +688,24 @@ catch {
                 $complete.Count -gt 0
             } | Out-Null
             $stage = "$($script:historyPath).next"
-            @{ sessions = @($rows[1], $rows[0]) } | ConvertTo-Json -Depth 8 | Set-Content $stage
+            $unrelated = @{
+                sessionId = [guid]::NewGuid().ToString(); title = 'controlled unrelated Recent sentinel'
+                cwd = $script:evidence
+                updatedAt = [DateTimeOffset]::FromUnixTimeMilliseconds($delegates[0].Creation.Time - 1000).ToString('o')
+            }
+            @{ sessions = @($unrelated, $rows[1], $rows[0]); pageSize = 1 } |
+                ConvertTo-Json -Depth 8 | Set-Content $stage
             [IO.File]::Move($stage, $script:historyPath, $true)
             $matched = Wait-Until -TimeoutSec 20 -Because 'existing ACP discovery enriches ordered pending panes without control bindings' -Condition {
                 $snapshot = Get-StatusRegistrySnapshot
                 $found = @($snapshot.native_pane_observations | Where-Object inferred_agent_session_id -In $rows.sessionId)
-                if ($found.Count -eq 2 -and @($found | Where-Object status -NE Working).Count -eq 0) { $snapshot }
+                $historyRows = @($snapshot.sessions | Where-Object session_id -In $rows.sessionId)
+                if ($found.Count -eq 2 -and $historyRows.Count -eq 2 -and
+                    @($found | Where-Object status -NE Working).Count -eq 0) { $snapshot }
             }
+            $matched | ConvertTo-Json -Depth 16 | Set-Content (Join-Path $script:evidence 'delegate-list-enrichment.json')
+            @(Get-Content (Join-Path $script:evidence 'acp.log') | Where-Object { $_ -match '\|list-page\|[^|]+\|2\|1$' }).Count |
+                Should -BeGreaterThan 0 -Because 'the inferred native sessions require the completed three-page inventory'
             for ($i = 0; $i -lt $delegates.Count; $i++) {
                 $row = @($matched.native_pane_observations | Where-Object {
                     ([string]$_.pane_id).Trim('{}') -eq ([string]$delegates[$i].Pane.session_id).Trim('{}')
@@ -690,8 +720,31 @@ catch {
                 $sessions | Should -HaveCount 1
                 $sessions[0].pane_session_id |
                     Should -BeNullOrEmpty -Because 'a guess never authorizes live control or SDK status routing'
+                $paneStatuses = @($matched.pane_statuses | Where-Object {
+                    ([string]$_.pane_id).Trim('{}') -eq ([string]$delegates[$i].Pane.session_id).Trim('{}')
+                })
+                $paneStatuses | Should -HaveCount 1
+                $paneStatuses[0].agent_session_id | Should -BeNullOrEmpty
+                $paneStatuses[0].inferred_history_key.session_id | Should -Be $rows[$i].sessionId
             }
-            $matched | ConvertTo-Json -Depth 16 | Set-Content (Join-Path $script:evidence 'delegate-list-enrichment.json')
+            $scope = Invoke-WtCli -App $script:app -Arguments @('get-settings')
+            $script:sidebarScopeToRestore = @{
+                AgentsOnly = [bool]$scope.sidebarShowAgentsOnly
+                Recent = [bool]$scope.sidebarShowRecentAgentSessions
+            }
+            Set-TestSidebarScope -App $script:app -AgentsOnly $true -Recent $true
+            Wait-Until -TimeoutSec 15 -Because 'inferred delegate conversations are hidden from Recent while unrelated history remains visible' -Condition {
+                $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+                $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                    [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'ItemsList'))
+                $historyRows = @($list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) |
+                    Where-Object {
+                        -not $_.Current.IsOffscreen -and
+                        @((Get-StatusRowParts $_) | Where-Object { $_.Current.AutomationId -eq 'HistoryProviderIcon' }).Count -gt 0
+                    })
+                if (@($historyRows | Where-Object { $_.Current.Name.Contains($unrelated.title) }).Count -eq 1 -and
+                    @($historyRows | Where-Object { $_.Current.Name.Contains('controlled inferred ') }).Count -eq 0) { $true }
+            } | Should -BeTrue
         }
         finally {
             foreach ($fixture in $delegates) { Close-WtPane -App $script:app -SessionId $fixture.Pane.session_id }
@@ -702,6 +755,17 @@ catch {
                 ([string]$_.pane_id).Trim('{}') -in @($delegates.Pane.session_id | ForEach-Object { $_.Trim('{}') })
             }).Count
         } | Out-Null
+        Wait-Until -TimeoutSec 15 -Because 'closing delegate panes restores their conversations to Recent' -Condition {
+            $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+            $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'ItemsList'))
+            $historyRows = @($list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) |
+                Where-Object {
+                    -not $_.Current.IsOffscreen -and
+                    @((Get-StatusRowParts $_) | Where-Object { $_.Current.AutomationId -eq 'HistoryProviderIcon' }).Count -gt 0
+                })
+            if (@($historyRows | Where-Object { $_.Current.Name.Contains('controlled inferred ') }).Count -eq 2) { $true }
+        } | Should -BeTrue
     }
     It 'Sessions on without hooks suppresses native OSC and BEL fallback' {
         if (-not $script:hookIsolationVerified) {

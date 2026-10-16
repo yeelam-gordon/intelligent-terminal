@@ -12679,6 +12679,22 @@ namespace winrt::TerminalApp::implementation
                 info.windowId = row["window_id"].asUInt64();
                 info.tabId = row["tab_id"].asString();
                 info.location = row["location"];
+                const auto& key = row["inferred_history_key"];
+                if (!key.isNull())
+                {
+                    if (info.sessionId.empty() && key.isObject() &&
+                        key["session_id"].isString() && !key["session_id"].asString().empty() &&
+                        key["provider_id"].isString() && key["provider_id"].asString() == provider &&
+                        !info.location.isNull() && key["location"] == info.location &&
+                        (key["session_universe"].isNull() || key["session_universe"].isString()))
+                    {
+                        info.inferredHistoryKey = key;
+                    }
+                    else
+                    {
+                        LOG_HR_MSG(E_INVALIDARG, "WTA pane status has an invalid advisory history identity");
+                    }
+                }
             }
             rows.push_back(std::move(info));
         }
@@ -12822,6 +12838,10 @@ namespace winrt::TerminalApp::implementation
                         page->_RefreshRichTabForTab(*tab, false, false);
                         page->_RefreshTabStripPaneItems(tab);
                     }
+                }
+                if (receiverMatches)
+                {
+                    page->_ApplyTabListProjection();
                 }
             }
         }

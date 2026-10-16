@@ -417,6 +417,7 @@ pub async fn preflight_agent_in_source(
     let status = crate::agent_check::check_agent_in_source(agent_id, source).await;
     PreflightResult {
         agent_id: agent_id.to_string(),
+        acp_bootstrap_available: status.acp_bootstrap_available(),
         display_name: status.display_name,
         cli_status: if status.cli_found {
             CheckStatus::Passed
@@ -540,7 +541,8 @@ pub struct AgentEventFacts {
 #[derive(Debug, Default)]
 pub struct AgentEventPlan {
     /// Session events to apply, in emit order. Empty when the hook is
-    /// deliberately ignored (tool completions, `idle_prompt` notifications).
+    /// deliberately ignored (informational notifications and other providers'
+    /// tool completions).
     pub events: Vec<crate::agent_sessions::SessionEvent>,
     /// Set when a real `agent.session.started` should supersede any
     /// `pane:`-keyed placeholder previously minted for this pane.
@@ -726,38 +728,37 @@ pub fn plan_agent_event(
             key,
             tool_name: "prompt".to_string(),
         },
-        // Tool completion does NOT end the turn. Copilot and Gemini fire a
-        // `tool.finished` per tool — often several per turn, in parallel
-        // batches — but the agent keeps working until it emits `agent.stop`.
-        // Mapping each completion to `ToolCompleted` made multi-tool turns
-        // flicker to Idle and sit there during the agent's between-tool
-        // thinking. The arm stays so an older installed bundle that still
-        // emits them is ignored rather than mis-routed.
-        "agent.tool.completed" | "agent.tool.finished" | "agent.tool.failed" => {
-            plan.events.clear();
-            return plan;
+        // Successful Copilot tool returns resume activity, not Idle. Other providers
+        // retain the legacy no-op; agent.stop still owns the turn-end transition.
+        "agent.tool.completed" | "agent.tool.finished" => {
+            if *cli_source == crate::agent_sessions::CliSource::Copilot {
+                SessionEvent::ToolReturned { key }
+            } else {
+                plan.events.clear();
+                return plan;
+            }
         }
         "agent.stop" | "agent.subagent.stop" => SessionEvent::ToolCompleted { key },
         "agent.notification" => {
-            // Claude's `Notification` hook covers two cases. `permission_prompt`
-            // is genuinely Attention: nothing proceeds until the user acts.
-            // `idle_prompt` fires *after* `agent.stop` already moved the row to
-            // Idle, so treating it as Attention would park every session at
-            // "waiting for your input" between turns. Unknown types stay
-            // Attention on purpose — over-reporting costs a stale badge the
-            // next event clears, under-reporting loses a permission request.
+            // Background work and idle reminders do not block the owning session.
+            // Drop them rather than resetting activity: a pending approval may
+            // still need Attention. Unknown types stay visible as Attention.
             let notification_type = payload
                 .get("notification_type")
                 .and_then(|v| v.as_str())
+                .filter(|value| !value.is_empty())
+                .or_else(|| payload.get("notificationType").and_then(|v| v.as_str()))
                 .unwrap_or("");
-            let copilot_shell_completed =
-                matches!(cli_source, crate::agent_sessions::CliSource::Copilot)
-                    && payload
-                        .get("notificationType")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(notification_type)
-                        == "shell_completed";
-            if notification_type == "idle_prompt" || copilot_shell_completed {
+            if notification_type == "idle_prompt"
+                || (matches!(cli_source, crate::agent_sessions::CliSource::Copilot)
+                    && matches!(
+                        notification_type,
+                        "shell_completed"
+                            | "shell_detached_completed"
+                            | "agent_completed"
+                            | "agent_idle"
+                    ))
+            {
                 plan.events.clear();
                 return plan;
             }
@@ -2589,7 +2590,13 @@ impl App {
             .filter(|profile| {
                 (!self.host_agent_allowlist_present
                     || self.allowed_agent_ids.iter().any(|id| id == profile.id))
-                    && crate::agent_check::find_acp_exe(profile.id).is_some()
+                    && (crate::agent_check::find_acp_exe(profile.id).is_some()
+                        || (profile.id == crate::agent_registry::ANTIGRAVITY_AGENT_ID
+                            && crate::agent_check::check_host_agent_availability(
+                                profile.id,
+                                crate::agent_check::host_npx_available(),
+                            )
+                            .acp_bootstrap_available))
             })
             .map(|profile| {
                 let source = crate::agent_source::AgentSource::Host;
@@ -4443,7 +4450,8 @@ impl App {
         let current_status = if matches!(
             self.current_agent_source,
             crate::agent_source::AgentSource::Wsl { .. }
-        ) {
+        ) && !result.acp_bootstrap_available
+        {
             None
         } else {
             Some(crate::agent_check::AgentStatus {
@@ -4453,31 +4461,34 @@ impl App {
                 cli_path: result.cli_path.clone(),
                 install_hint: result.install_hint.clone(),
                 auth_hint: result.auth_hint.clone(),
-                auto_installable: result.agent_id.eq_ignore_ascii_case("copilot"),
+                auto_installable: result.agent_id.eq_ignore_ascii_case("copilot")
+                    || result.acp_bootstrap_available,
             })
         };
         let options = build_setup_options(&reason, current_status.as_ref());
         let title = reason.title().to_string();
-        let subtitle =
-            if let crate::agent_source::AgentSource::Wsl { distro } = &self.current_agent_source {
-                t!(
-                    "setup.subtitle.wsl_agent_missing",
-                    agent = &result.display_name,
-                    distro = distro
-                )
-                .into_owned()
-            } else if current_status
-                .as_ref()
-                .is_some_and(crate::agent_check::AgentStatus::can_auto_install)
-            {
-                t!(
-                    "setup.subtitle.copilot_missing",
-                    agent = &result.display_name
-                )
-                .into_owned()
-            } else {
-                t!("setup.subtitle.agent_missing", agent = &result.display_name).into_owned()
-            };
+        let subtitle = if result.acp_bootstrap_available {
+            t!("setup.subtitle.acp_missing", agent = &result.display_name).into_owned()
+        } else if let crate::agent_source::AgentSource::Wsl { distro } = &self.current_agent_source
+        {
+            t!(
+                "setup.subtitle.wsl_agent_missing",
+                agent = &result.display_name,
+                distro = distro
+            )
+            .into_owned()
+        } else if current_status
+            .as_ref()
+            .is_some_and(crate::agent_check::AgentStatus::can_auto_install)
+        {
+            t!(
+                "setup.subtitle.copilot_missing",
+                agent = &result.display_name
+            )
+            .into_owned()
+        } else {
+            t!("setup.subtitle.agent_missing", agent = &result.display_name).into_owned()
+        };
         self.mode = AppMode::Setup;
         self.preflight_setup_active = true;
         self.setup = Some(SetupState {
@@ -4517,6 +4528,7 @@ impl App {
             selected_index: 0,
             preflight: PreflightResult {
                 agent_id,
+                acp_bootstrap_available: false,
                 display_name: profile.display_name.to_string(),
                 cli_status: CheckStatus::Passed,
                 cli_path: None,
@@ -5168,6 +5180,21 @@ impl App {
     }
 
     pub(crate) fn start_agent_install(&mut self, agent_id: String) {
+        if self.host_agent_allowlist_present
+            && !self
+                .allowed_agent_ids
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(&agent_id))
+        {
+            tracing::warn!(target: "agent_install", agent = %agent_id, "policy blocked agent installation");
+            if let Some(setup) = self.setup.as_mut() {
+                setup.phase = SetupPhase::Failed {
+                    kind: SetupFailureKind::Install,
+                    message: t!("setup.title.not_available").into_owned(),
+                };
+            }
+            return;
+        }
         if self.setup.as_ref().is_some_and(SetupState::is_busy) {
             return;
         }
@@ -5184,10 +5211,12 @@ impl App {
             binding_generation: self.agent_binding_generation,
             agent_source: self.current_agent_source.clone(),
         });
+        let source = self.current_agent_source.clone();
         if let Some(ref tx) = self.event_tx {
             let tx = tx.clone();
             tokio::task::spawn_local(async move {
-                let result = crate::agent_check::install(&agent_id, |_line| {}).await;
+                let result =
+                    crate::agent_check::install_in_source(&agent_id, &source, |_line| {}).await;
                 tracing::info!(agent = %agent_id, ?result, "agent install completed");
                 let _ = tx.send(AppEvent::AgentInstallComplete {
                     request_id,
@@ -5206,8 +5235,13 @@ impl App {
         }
     }
 
-    pub(crate) fn try_start_fre_auto_install(&mut self) -> bool {
-        if !self.auto_install_selected_agent || self.pending_agent_install.is_some() {
+    pub(crate) fn try_start_automatic_agent_install(&mut self) -> bool {
+        let bootstrap_acp = self
+            .current_agent_id
+            .eq_ignore_ascii_case(crate::agent_registry::ANTIGRAVITY_AGENT_ID);
+        if (!self.auto_install_selected_agent && !bootstrap_acp)
+            || self.pending_agent_install.is_some()
+        {
             return false;
         }
         let install_agent = self.setup.as_ref().and_then(|setup| {
@@ -5216,7 +5250,12 @@ impl App {
             }
             setup.options.iter().find_map(|option| match option {
                 SetupOption::Install { agent_id, .. }
-                    if agent_id.eq_ignore_ascii_case("copilot") =>
+                    if (self.auto_install_selected_agent
+                        && agent_id.eq_ignore_ascii_case("copilot"))
+                        || (bootstrap_acp
+                            && agent_id.eq_ignore_ascii_case(
+                                crate::agent_registry::ANTIGRAVITY_AGENT_ID,
+                            )) =>
                 {
                     Some(agent_id.clone())
                 }
@@ -5739,6 +5778,7 @@ impl App {
         if !agent_status.cli_found {
             self.show_preflight_setup(PreflightResult {
                 agent_id: agent_id.to_string(),
+                acp_bootstrap_available: agent_status.acp_bootstrap_available(),
                 display_name: agent_status.display_name,
                 cli_status: CheckStatus::Failed(t!("agent.status.not_found").into_owned()),
                 cli_path: agent_status.cli_path,
@@ -5756,6 +5796,7 @@ impl App {
             selected_index: 0,
             preflight: PreflightResult {
                 agent_id: agent_id.to_string(),
+                acp_bootstrap_available: false,
                 display_name: profile.display_name.to_string(),
                 cli_status: CheckStatus::Passed,
                 cli_path: agent_status.cli_path,

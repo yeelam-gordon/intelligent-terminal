@@ -267,6 +267,7 @@ fn agent_rebind_event_for_window(
 fn passed_preflight(agent_id: &str, display_name: &str) -> PreflightResult {
     PreflightResult {
         agent_id: agent_id.into(),
+        acp_bootstrap_available: false,
         display_name: display_name.into(),
         cli_status: CheckStatus::Passed,
         cli_path: Some(format!(r"C:\Agents\{agent_id}.exe")),
@@ -1573,7 +1574,7 @@ fn sessionless_notification_falls_back_to_recent_live_cli_session() {
     );
 }
 
-/// Turn-based hook status (multi-tool turn bug): Copilot/Gemini fire a
+/// Turn-based hook status (multi-tool turn bug): Copilot fires a
 /// `tool.finished` per tool — several per turn, in parallel batches — but
 /// the agent keeps working until `agent.stop`. A `tool.finished` must NOT
 /// demote the row to Idle (only `agent.stop` ends the turn); otherwise a
@@ -1632,12 +1633,44 @@ fn copilot_tool_finished_keeps_working_only_agent_stop_idles() {
         "tool completions never end the turn",
     );
 
+    route(&mut reg, "agent.notification");
+    route(&mut reg, "agent.tool.failed");
+    assert_eq!(
+        reg.get(&sid.to_string()).unwrap().status,
+        AgentStatus::Attention
+    );
+    route(&mut reg, "agent.tool.finished");
+    let row = reg.get(&sid.to_string()).unwrap();
+    assert_eq!(row.status, AgentStatus::Working);
+    assert!(row.current_tool.is_none());
+    assert!(row.attention_reason.is_none());
+
     // Only agent.stop ends the turn → Idle.
     route(&mut reg, "agent.stop");
     assert_eq!(
         reg.get(&sid.to_string()).unwrap().status,
         AgentStatus::Idle,
         "agent.stop owns the turn-end → Idle",
+    );
+    route(&mut reg, "agent.tool.finished");
+    assert_eq!(
+        reg.get(&sid.to_string()).unwrap().status,
+        AgentStatus::Idle,
+        "a late tool return must not reactivate the completed turn",
+    );
+    route(&mut reg, "agent.error");
+    route(&mut reg, "agent.tool.finished");
+    assert_eq!(
+        reg.get(&sid.to_string()).unwrap().status,
+        AgentStatus::Error
+    );
+    reg.apply(SessionEvent::PaneClosed {
+        pane_session_id: pane.into(),
+    });
+    route(&mut reg, "agent.tool.finished");
+    assert_eq!(
+        reg.get(&sid.to_string()).unwrap().status,
+        AgentStatus::Ended
     );
 }
 
@@ -1941,6 +1974,131 @@ fn claude_permission_prompt_notification_still_sets_attention() {
 }
 
 #[test]
+fn copilot_background_notifications_preserve_session_activity() {
+    use crate::agent_sessions::{AgentSessionRegistry, CliSource, SessionEvent};
+
+    let key = "copilot-sid".to_string();
+    let pane = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    for activity in [
+        SessionEvent::ToolStarting {
+            key: key.clone(),
+            tool_name: "prompt".into(),
+        },
+        SessionEvent::ToolCompleted { key: key.clone() },
+        SessionEvent::Notification {
+            key: key.clone(),
+            message: "Permission needed".into(),
+        },
+    ] {
+        for type_field in ["notificationType", "notification_type"] {
+            for notification_type in [
+                "shell_completed",
+                "shell_detached_completed",
+                "agent_completed",
+                "agent_idle",
+            ] {
+                let mut reg = AgentSessionRegistry::new();
+                reg.apply(SessionEvent::SessionStarted {
+                    key: key.clone(),
+                    cli_source: CliSource::Copilot,
+                    pane_session_id: pane.into(),
+                    cwd: std::path::PathBuf::from("C:\\repo"),
+                    title: "copilot".into(),
+                });
+                reg.apply(activity.clone());
+                let before = reg.get(&key).unwrap().clone();
+                reg.take_dirty();
+
+                let mut payload = json!({ "message": "Background work completed" });
+                payload[type_field] = json!(notification_type);
+                let params = json!({
+                    "event": "agent.notification",
+                    "cli_source": "copilot",
+                    "agent_session_id": key,
+                    "payload": payload,
+                });
+                let mut applied = Vec::new();
+                let changed = route_agent_event_to_registry_with_hook_sink(
+                    &mut reg,
+                    pane,
+                    &params,
+                    |event| applied.push(event),
+                );
+
+                let after = reg.get(&key).unwrap();
+                assert_eq!(
+                    after.status, before.status,
+                    "{type_field}={notification_type}"
+                );
+                assert_eq!(after.current_tool, before.current_tool);
+                assert_eq!(after.attention_reason, before.attention_reason);
+                assert!(!changed);
+                assert!(!reg.take_dirty());
+                assert!(applied.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn copilot_background_notification_does_not_create_a_session() {
+    use crate::agent_sessions::AgentSessionRegistry;
+
+    let mut reg = AgentSessionRegistry::new();
+    let params = json!({
+        "event": "agent.notification",
+        "cli_source": "copilot",
+        "agent_session_id": "copilot-sid",
+        "payload": {
+            "message": "Shell command has completed successfully",
+            "notificationType": "shell_completed",
+        },
+    });
+    let mut applied = Vec::new();
+    let changed = route_agent_event_to_registry_with_hook_sink(
+        &mut reg,
+        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        &params,
+        |event| applied.push(event),
+    );
+    assert!(reg.iter_sorted().is_empty());
+    assert!(!changed);
+    assert!(applied.is_empty());
+}
+
+#[test]
+fn copilot_actionable_notifications_still_set_attention() {
+    use crate::agent_sessions::{AgentSessionRegistry, AgentStatus};
+
+    for type_field in ["notificationType", "notification_type"] {
+        for notification_type in ["permission_prompt", "elicitation_dialog"] {
+            let mut reg = AgentSessionRegistry::new();
+            let mut payload = json!({ "message": "User action needed" });
+            payload[type_field] = json!(notification_type);
+            let params = json!({
+                "event": "agent.notification",
+                "cli_source": "copilot",
+                "agent_session_id": "copilot-sid",
+                "payload": payload,
+            });
+            route_agent_event_to_registry_with_hook_sink(
+                &mut reg,
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                &params,
+                |_| {},
+            );
+
+            let session = reg.get(&"copilot-sid".to_string()).unwrap();
+            assert_eq!(session.status, AgentStatus::Attention);
+            assert_eq!(
+                session.attention_reason.as_deref(),
+                Some("User action needed")
+            );
+        }
+    }
+}
+
+#[test]
 fn copilot_shell_completed_notification_leaves_activity_unchanged() {
     use crate::agent_sessions::{AgentStatus, CliSource};
 
@@ -1975,8 +2133,7 @@ fn copilot_shell_completed_notification_leaves_activity_unchanged() {
 }
 
 /// The filter is a denylist of known-inert types, not an allowlist of known
-/// types: CLIs that send no `notification_type` at all (Copilot, Gemini,
-/// OpenCode) and any type Claude adds later must keep reaching Attention.
+/// types: CLIs that send no type and any type added later must keep reaching Attention.
 /// Under-reporting silently loses an approval request; over-reporting only
 /// costs a badge the next event clears.
 #[test]
@@ -1985,10 +2142,9 @@ fn notification_without_a_known_type_still_sets_attention() {
     for payload in [
         json!({ "message": "approve: rm -rf foo" }),
         json!({ "message": "something new", "notification_type": "some_future_prompt" }),
+        json!({ "message": "something new", "notificationType": "some_future_prompt" }),
         json!({ "message": "approve command", "notificationType": "permission_prompt" }),
         json!({ "message": "answer question", "notificationType": "elicitation_dialog" }),
-        json!({ "message": "agent completed", "notificationType": "agent_completed" }),
-        json!({ "message": "detached shell completed", "notificationType": "shell_detached_completed" }),
     ] {
         let mut reg = AgentSessionRegistry::new();
         reg.apply(SessionEvent::SessionStarted {
@@ -6334,6 +6490,7 @@ fn settings_agent_rebind_targets_owner_and_resets_only_agent_state() {
 
     app.handle_event(AppEvent::PreflightComplete(PreflightResult {
         agent_id: "copilot".into(),
+        acp_bootstrap_available: false,
         display_name: "GitHub Copilot".into(),
         cli_status: CheckStatus::Failed("stale result".into()),
         cli_path: None,
@@ -6555,6 +6712,7 @@ fn settings_agent_rebind_missing_target_enters_install_setup_after_retirement() 
         generation: 1,
         result: PreflightResult {
             agent_id: "copilot".into(),
+            acp_bootstrap_available: false,
             display_name: "GitHub Copilot".into(),
             cli_status: CheckStatus::Failed("Not found on PATH".into()),
             cli_path: None,
@@ -6666,6 +6824,7 @@ fn settings_agent_rebind_invalidates_completed_older_target_preflight() {
         generation: 2,
         result: PreflightResult {
             agent_id: "codex".into(),
+            acp_bootstrap_available: false,
             display_name: "Codex".into(),
             cli_status: CheckStatus::Failed("Not found on PATH".into()),
             cli_path: None,
@@ -13736,6 +13895,50 @@ fn authentication_setup_missing_cli_recovery_does_not_advertise_sign_in() {
 }
 
 #[test]
+fn authentication_setup_missing_acp_recovery_keeps_source_bootstrap() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    for source in [
+        crate::agent_source::AgentSource::Host,
+        crate::agent_source::AgentSource::Wsl {
+            distro: "ExampleDistro".into(),
+        },
+    ] {
+        for available in [true, false] {
+            let mut app = test_app();
+            app.current_agent_id = "antigravity".into();
+            app.current_agent_source = source.clone();
+            let mut status = agent_status_for_test("antigravity", "Google Antigravity", false);
+            status.auto_installable = available;
+
+            app.show_signin_setup_screen_with_status("antigravity", status);
+
+            let setup = app.setup.as_ref().unwrap();
+            assert_eq!(setup.reason, SetupReason::AgentMissing);
+            assert_eq!(setup.preflight.acp_bootstrap_available, available);
+            assert_eq!(
+                setup.options.iter().any(|option| matches!(
+                    option,
+                    SetupOption::Install { agent_id, .. } if agent_id == "antigravity"
+                )),
+                available
+            );
+            assert!(!setup
+                .options
+                .iter()
+                .any(|option| matches!(option, SetupOption::SignIn { .. })));
+            if available {
+                assert_eq!(
+                    setup.subtitle,
+                    t!("setup.subtitle.acp_missing", agent = "Google Antigravity")
+                );
+            }
+            assert_eq!(app.current_agent_source, source);
+        }
+    }
+}
+
+#[test]
 fn authentication_setup_wsl_escape_and_timeout_keep_device_sign_in_available() {
     let _locale = crate::test_support::lock_locale();
     rust_i18n::set_locale("en-US");
@@ -14412,6 +14615,7 @@ fn duplicate_startup_preflight_does_not_replace_active_install() {
 
     app.handle_event(AppEvent::PreflightComplete(PreflightResult {
         agent_id: "copilot".into(),
+        acp_bootstrap_available: false,
         display_name: "GitHub Copilot".into(),
         cli_status: CheckStatus::Failed("Not found on PATH".into()),
         cli_path: None,
@@ -14462,6 +14666,7 @@ fn late_fre_auto_install_event_is_consumed_after_passed_preflight() {
 
     app.handle_event(AppEvent::PreflightComplete(PreflightResult {
         agent_id: "copilot".into(),
+        acp_bootstrap_available: false,
         display_name: "GitHub Copilot".into(),
         cli_status: CheckStatus::Passed,
         cli_path: Some("copilot.exe".into()),
@@ -14548,6 +14753,131 @@ fn install_completion_cannot_reconnect_after_binding_change() {
     assert!(app.pending_agent_install.is_none());
     assert_eq!(app.current_agent_id, "claude");
     assert!(!app.pending_acp_start);
+}
+
+#[test]
+fn antigravity_install_completion_cannot_cross_execution_sources() {
+    let mut app = test_app();
+    app.current_agent_id = "antigravity".into();
+    app.current_agent_source = crate::agent_source::AgentSource::Wsl {
+        distro: "Ubuntu".into(),
+    };
+    app.pending_agent_install = Some(PendingAgentInstall {
+        request_id: 1,
+        agent_id: "antigravity".into(),
+        binding_generation: app.agent_binding_generation,
+        agent_source: crate::agent_source::AgentSource::Host,
+    });
+    app.handle_event(AppEvent::AgentInstallComplete {
+        request_id: 1,
+        agent_id: "antigravity".into(),
+        outcome: crate::agent_check::AgentInstallOutcome::Installed,
+    });
+    assert!(app.pending_agent_install.is_none());
+    assert!(!app.pending_acp_start);
+    assert_eq!(
+        app.current_agent_source,
+        crate::agent_source::AgentSource::Wsl {
+            distro: "Ubuntu".into()
+        }
+    );
+}
+
+#[test]
+fn antigravity_wsl_install_completion_preserves_an_already_connected_transport() {
+    for was_connected in [true, false] {
+        let mut app = test_app();
+        let source = crate::agent_source::AgentSource::Wsl {
+            distro: "Ubuntu".into(),
+        };
+        app.set_master_pipe_acp_params(
+            "master-pipe".into(),
+            "agy_acp_server.par --uid=".into(),
+            Some("antigravity".into()),
+            None,
+            None,
+            source.clone(),
+            None,
+            Some(DEFAULT_TAB_ID.into()),
+            Arc::clone(&app.shell_mgr),
+            true,
+        );
+        app.current_agent_id = "antigravity".into();
+        app.current_agent_source = source.clone();
+        app.state = if was_connected {
+            ConnectionState::Connected
+        } else {
+            ConnectionState::Disconnected
+        };
+        app.pending_acp_start = false;
+        app.reconnect_after_transport_retired = false;
+        app.pending_agent_install = Some(PendingAgentInstall {
+            request_id: 1,
+            agent_id: "antigravity".into(),
+            binding_generation: app.agent_binding_generation,
+            agent_source: source,
+        });
+
+        app.handle_event(AppEvent::AgentInstallComplete {
+            request_id: 1,
+            agent_id: "antigravity".into(),
+            outcome: crate::agent_check::AgentInstallOutcome::Installed,
+        });
+
+        assert!(app.pending_agent_install.is_none());
+        assert!(!app.pending_acp_start);
+        if was_connected {
+            assert_eq!(app.state, ConnectionState::Connected);
+            assert!(!app.reconnect_after_transport_retired);
+        } else {
+            assert!(matches!(app.state, ConnectionState::Connecting(_)));
+            assert!(app.reconnect_after_transport_retired);
+        }
+    }
+}
+
+#[test]
+fn antigravity_policy_blocks_install_before_any_background_work() {
+    let mut app = test_app();
+    app.current_agent_id = "antigravity".into();
+    app.host_agent_allowlist_present = true;
+    app.allowed_agent_ids = vec!["copilot".into()];
+    app.start_agent_install("antigravity".into());
+    assert!(app.pending_agent_install.is_none());
+    assert!(!app.pending_acp_start);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn antigravity_cli_only_preflight_starts_one_source_bound_install() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for source in [
+                crate::agent_source::AgentSource::Host,
+                crate::agent_source::AgentSource::Wsl {
+                    distro: "Ubuntu".into(),
+                },
+            ] {
+                let mut app = test_app();
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                app.set_event_tx(tx);
+                app.current_agent_id = "antigravity".into();
+                app.current_agent_source = source.clone();
+                let mut preflight = passed_preflight("antigravity", "Google Antigravity");
+                preflight.cli_status = CheckStatus::Failed("ACP dependency missing".into());
+                preflight.acp_bootstrap_available = true;
+                app.show_preflight_setup(preflight);
+                assert!(app.try_start_automatic_agent_install());
+                assert!(!app.try_start_automatic_agent_install());
+                let pending = app.pending_agent_install.as_ref().unwrap();
+                assert_eq!(pending.agent_id, "antigravity");
+                assert_eq!(pending.agent_source, source);
+                assert!(matches!(
+                    app.setup.as_ref().unwrap().phase,
+                    SetupPhase::Installing
+                ));
+            }
+        })
+        .await;
 }
 
 #[test]

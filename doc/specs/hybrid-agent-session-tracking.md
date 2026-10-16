@@ -23,6 +23,14 @@ conversation projection, retaining its existing shell-origin, visibility and
 represented-session filters. A shared snapshot does not make the conversation
 ID mandatory for every record. List-inferred associations remain advisory
 metadata, never the confirmed relationship used for control or resume.
+The pane projection carries their qualified history key separately. Recent
+uses that key only to suppress the duplicate conversation while its native
+pane is represented in the current window. It does not assign a live pane to
+the conversation or borrow its status. Removing the pane or clearing OFF
+ownership removes the advisory suppression, so the conversation returns to Recent.
+The full conversation snapshot is retained. Suppression belongs to the existing
+represented-session visibility filter, not parsing, so pane removal restores
+the cached row immediately without waiting for discovery or its retry backoff.
 
 ```text
 Existing hooks / parsed OSC/BEL / pane lifecycle
@@ -164,6 +172,18 @@ therefore metadata, never proof of ownership: it cannot set canonical live pane
 bindings, route control actions or be replayed as a confirmed identity. Explicit
 identity wins over inference. No additional query, polling loop or cadence is
 introduced.
+
+When an eligible native pane is waiting for correlation, the existing retained
+history request follows its `session/list` cursors to a complete inventory.
+Pages share the original request's soft/hard deadlines and survive soft
+timeouts; there is no per-pane query or new worker/cadence. Ordinary discovery
+without a pending native pane retains its existing first-page behavior.
+An incomplete inventory cannot establish uniqueness. First-list evidence is
+retained even if pane admission or source delivery is delayed; known IDs and
+evidence first observed before pane creation still cannot become new launches.
+The five-minute launch window bounds query start and provider activity, not
+delivery of a retained slow inventory. A response that finishes later remains
+eligible when its underlying query and activity evidence qualify.
 
 Explicit recent-session resume uses the same pane creation metadata and retains
 its known binding under the actual connection
@@ -311,6 +331,16 @@ Watcher processing then, in order:
 
 There is no ordering requirement and the row identity is the same session id
 throughout, so no duplicate is ever produced.
+
+### Hook-owned Copilot activity
+
+Hook-owned sessions do not supplement hooks with transcript permission events.
+Copilot's `PostToolUse` restores Working after a successful tool return;
+`Stop` owns Idle, and late tool returns do not reactivate an Idle turn.
+This intentionally uses the latest session-level hook,
+not per-request approval correlation: a tool can remain Waiting while it runs,
+and another parallel tool's return may replace an outstanding wait. The original
+born-bound, hookless file-watcher fallback is unchanged.
 
 ### Born-bound activity fallback
 

@@ -5895,6 +5895,16 @@ async fn spawn_one_agent(
     };
     let telemetry_model_source =
         provider_binding.telemetry_model_source(&resolved_agent_id, source);
+    if let Err(error) = crate::antigravity_acp::prepare(agent_cmd, agent_id, source).await {
+        crate::telemetry::log_agent_cold_start_complete(
+            &resolved_agent_id,
+            source_kind,
+            cold_start_started.elapsed().as_secs_f64() * 1000.0,
+            false,
+            "DependencyInstallFailed",
+        );
+        return Err(error).context("failed to prepare the agent's ACP dependency");
+    }
     let mut spawn_result = match spawn_agent_process_for_source_with_provider(
         agent_cmd,
         None,
@@ -6885,6 +6895,7 @@ fn session_event_is_activity_only(event: &crate::agent_sessions::SessionEvent) -
         event,
         SessionEvent::ToolStarting { .. }
             | SessionEvent::ToolCompleted { .. }
+            | SessionEvent::ToolReturned { .. }
             | SessionEvent::Notification { .. }
             | SessionEvent::WorkingDirectoryChanged { .. }
     )
@@ -6933,6 +6944,7 @@ async fn publish_session_status_delta(state: &MasterStateInner, session_id: &str
 async fn host_session_list_raw(
     agent: &AgentCli,
     refresh: &mut HistoryRefreshState,
+    complete_inventory: bool,
 ) -> Result<acp::schema::v1::ListSessionsResponse, HistoryRefreshFailure> {
     if agent
         .cached_init_resp
@@ -6967,6 +6979,7 @@ async fn host_session_list_raw(
         .poll(
             agent.history_refresh.target.get(),
             &agent.history_refresh.cancelled,
+            complete_inventory,
         )
         .await
 }
@@ -7191,7 +7204,11 @@ async fn sync_host_history(
                 .collect(),
         );
     }
-    let listing = match host_session_list_raw(agent, refresh).await {
+    let complete_inventory = state
+        .registry
+        .has_pending_native_inference(&agent.resolved_agent_id, &agent.source.session_location())
+        .await;
+    let listing = match host_session_list_raw(agent, refresh, complete_inventory).await {
         Ok(listing) => listing,
         Err(error) => {
             if !refresh.query.in_flight() {
@@ -7268,7 +7285,13 @@ async fn sync_host_history(
     // one delete the other's rows on every poll, forever.
     let (prunable_ids, previously_listed): (std::collections::HashSet<String>, _) = {
         let mut ever = agent.listed_ever.lock().await;
-        let prunable = ever.difference(&listed_ids).cloned().collect();
+        // A full inference inventory may have populated rows beyond page one.
+        // A later ordinary first-page refresh cannot prove those rows deleted.
+        let prunable = if refresh.query.last_response_complete() {
+            ever.difference(&listed_ids).cloned().collect()
+        } else {
+            HashSet::new()
+        };
         let previous = ever.clone();
         ever.extend(listed_ids.iter().cloned());
         (prunable, previous)
@@ -7898,8 +7921,9 @@ fn request_host_history_discovery(state: &Arc<MasterStateInner>) {
             let discovery = tokio::task::spawn_blocking(move || {
                 let npx_available = crate::agent_check::host_npx_available();
                 host_history_agent_ids(allowed_ids.as_ref(), |agent_id| {
-                    crate::agent_check::check_host_agent_availability(agent_id, npx_available)
-                        .launch_ready
+                    let status =
+                        crate::agent_check::check_host_agent_availability(agent_id, npx_available);
+                    status.launch_ready || status.acp_bootstrap_available
                 })
             })
             .await;
@@ -11406,6 +11430,7 @@ fn session_event_key(event: &crate::agent_sessions::SessionEvent) -> Option<&str
         | SessionEvent::WorkingDirectoryChanged { key, .. }
         | SessionEvent::ToolStarting { key, .. }
         | SessionEvent::ToolCompleted { key }
+        | SessionEvent::ToolReturned { key }
         | SessionEvent::Notification { key, .. }
         | SessionEvent::SessionStopped { key, .. }
         | SessionEvent::SessionStoppedIfOwner { key, .. }

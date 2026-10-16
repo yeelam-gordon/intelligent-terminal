@@ -1001,6 +1001,7 @@ namespace winrt::TerminalApp::implementation
             uint64_t windowId{ 0 };
             std::string tabId;
             Json::Value location;
+            Json::Value inferredHistoryKey;
         };
         static bool _IsBuiltinAgentProviderId(std::string_view id);
         static bool _ShouldUseIncomingAgentProvider(std::string_view existingProviderId, std::string_view incomingProviderId);
