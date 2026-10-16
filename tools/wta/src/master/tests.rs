@@ -1764,6 +1764,79 @@ fn make_state() -> Arc<MasterStateInner> {
     make_state_with_retirement_pending_timeout(SESSION_CLOSE_TIMEOUT)
 }
 
+#[tokio::test]
+async fn native_launch_source_dispatch_refines_only_admitted_unbound_pane_in_place() {
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let state = make_state();
+    let pane = "00112233-4455-6677-8899-aabbccddeeff";
+    let source = |provider: &str, location: serde_json::Value| {
+        serde_json::json!({
+            "type":"event","method":"agent_event",
+            "params":{"event":"agent.pane.launch.source","pane_id":pane,"agent":provider,"location":location}
+        })
+    };
+    handle_master_wt_event(&state, source("copilot", serde_json::json!("Host"))).await;
+    assert!(state.registry.native_pane_observations().await.is_empty());
+    let mut native = serde_json::json!({
+        "pane_id":pane,"provider_id":"copilot","window_id":0,"tab_id":"tab",
+        "mode_epoch":1,"pane_created_at_ms":1000,"pane_creation_sequence":42,
+        "kind":"reset","tracking_enabled":false
+    });
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"native_agent_observation","params":native.clone()}),
+    )
+    .await;
+    native["kind"] = serde_json::json!("progress");
+    native["progress_state"] = serde_json::json!(1);
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"native_agent_observation","params":native.clone()}),
+    )
+    .await;
+    let before = state.registry.native_pane_observations().await[0].clone();
+    handle_master_wt_event(&state, source("claude", serde_json::json!("Host"))).await;
+    handle_master_wt_event(&state, source("copilot", serde_json::json!("Unknown"))).await;
+    assert_eq!(state.registry.native_pane_observations().await[0], before);
+    handle_master_wt_event(&state, source("copilot", serde_json::json!("Host"))).await;
+    let mut expected = before;
+    expected.location = Some(crate::agent_sessions::SessionLocation::Host);
+    assert_eq!(state.registry.native_pane_observations().await[0], expected);
+    handle_master_wt_event(
+        &state,
+        source("copilot", serde_json::json!({"Wsl":{"distro":"Ubuntu"}})),
+    )
+    .await;
+    handle_master_wt_event(&state, source("copilot", serde_json::json!("Host"))).await;
+    assert_eq!(state.registry.native_pane_observations().await[0], expected);
+    native["kind"] = serde_json::json!("bell");
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"native_agent_observation","params":native.clone()}),
+    )
+    .await;
+    let row = &state.registry.native_pane_observations().await[0];
+    assert_eq!(row.status, crate::agent_sessions::AgentStatus::Attention);
+    assert_eq!(row.location, expected.location);
+    assert_eq!(row.mode_epoch, 1);
+    native["kind"] = serde_json::json!("reset");
+    native["mode_epoch"] = serde_json::json!(2);
+    native["agent_session_id"] = serde_json::json!("explicit");
+    native["location"] = serde_json::json!("Unknown");
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"native_agent_observation","params":native}),
+    )
+    .await;
+    handle_master_wt_event(&state, source("copilot", serde_json::json!("Host"))).await;
+    assert_eq!(
+        state.registry.native_pane_observations().await[0].location,
+        Some(crate::agent_sessions::SessionLocation::Unknown)
+    );
+    assert!(state.registry.snapshot().await.is_empty());
+    assert!(state.session_to_helper.lock().await.is_empty());
+}
+
 #[test]
 fn native_receiver_generation_requires_positive_decimal_u64() {
     assert_eq!(
@@ -1962,10 +2035,14 @@ async fn native_receiver_ordered_birth_reset_preserves_late_rpc_activity() {
     );
     state
         .registry
-        .apply_event(SessionEvent::Notification {
-            key: "restored-real".into(),
-            message: "ask_user".into(),
-        })
+        .apply_native_watcher_activity(
+            &crate::agent_sessions::CliSource::Copilot,
+            "restored-real",
+            SessionEvent::Notification {
+                key: "restored-real".into(),
+                message: "ask_user".into(),
+            },
+        )
         .await;
     handle_master_wt_event(
         &state,
@@ -14707,6 +14784,21 @@ fn row_refreshable_skips_only_definitively_cross_cli() {
 /// Mock agent CLI that answers `session/list` with a fixed id set, so the
 /// per-agent history seed can be exercised without a real CLI.
 fn client_connection_to_listing_agent(ids: Vec<String>) -> conn::ClientLink {
+    client_connection_to_listing_agent_with_activity(ids, None)
+}
+
+fn client_connection_to_listing_agent_with_activity(
+    ids: Vec<String>,
+    activity: Option<String>,
+) -> conn::ClientLink {
+    client_connection_to_listing_agent_with_cursor(ids, activity, None)
+}
+
+fn client_connection_to_listing_agent_with_cursor(
+    ids: Vec<String>,
+    activity: Option<String>,
+    next_cursor: Option<String>,
+) -> conn::ClientLink {
     let (client_pipe, agent_pipe) = tokio::io::duplex(8192);
     let (client_read, client_write) = tokio::io::split(client_pipe);
     let (agent_read, agent_write) = tokio::io::split(agent_pipe);
@@ -14719,17 +14811,23 @@ fn client_connection_to_listing_agent(ids: Vec<String>) -> conn::ClientLink {
                   responder: acp::Responder<acp::schema::v1::ListSessionsResponse>,
                   _cx| {
                 let ids = ids.clone();
+                let activity = activity.clone();
+                let next_cursor = next_cursor.clone();
                 async move {
                     let rows: Vec<acp::schema::v1::SessionInfo> = ids
                         .iter()
                         .map(|id| {
-                            acp::schema::v1::SessionInfo::new(
+                            let mut row = acp::schema::v1::SessionInfo::new(
                                 acp::schema::v1::SessionId::new(id.clone()),
                                 std::path::PathBuf::from("C:\\repo"),
-                            )
+                            );
+                            row.updated_at = activity.clone();
+                            row
                         })
                         .collect();
-                    responder.respond(acp::schema::v1::ListSessionsResponse::new(rows))
+                    let mut response = acp::schema::v1::ListSessionsResponse::new(rows);
+                    response.next_cursor = next_cursor;
+                    responder.respond(response)
                 }
             },
             acp::on_receive_request!(),
@@ -14812,6 +14910,64 @@ fn controlled_history_agent(
         .process = Some(history::HistoryProcess::mock(client));
     inner.resolved_agent_id = provider.to_string();
     inner.cmd_key = format!("controlled-{provider}-{}", inner.source);
+    (agent, receiver)
+}
+
+fn paged_history_agent(
+    provider: &str,
+    pages: HashMap<Option<String>, acp::schema::v1::ListSessionsResponse>,
+) -> (Arc<AgentCli>, mpsc::UnboundedReceiver<Option<String>>) {
+    let (observed, receiver) = mpsc::unbounded_channel();
+    let pages = Arc::new(pages);
+    let (client_pipe, agent_pipe) = tokio::io::duplex(8192);
+    let (client_read, client_write) = tokio::io::split(client_pipe);
+    let (agent_read, agent_write) = tokio::io::split(agent_pipe);
+    let builder = acp::Agent
+        .builder()
+        .name("paged-history")
+        .on_receive_request(
+            move |request: acp::schema::v1::ListSessionsRequest,
+                  responder: acp::Responder<acp::schema::v1::ListSessionsResponse>,
+                  _cx| {
+                let pages = Arc::clone(&pages);
+                let observed = observed.clone();
+                async move {
+                    let cursor = request.cursor;
+                    observed.send(cursor.clone()).unwrap();
+                    match pages.get(&cursor) {
+                        Some(page) => responder.respond(page.clone()),
+                        None => responder.respond_with_error(acp::Error::internal_error()),
+                    }
+                }
+            },
+            acp::on_receive_request!(),
+        );
+    let (_, agent_io) = conn::spawn_agent(
+        builder,
+        conn::byte_streams(agent_write.compat_write(), agent_read.compat()),
+    );
+    let (client, client_io) = conn::spawn_client(
+        acp::Client.builder().name("paged-history-client"),
+        conn::byte_streams(client_write.compat_write(), client_read.compat()),
+    );
+    tokio::task::spawn_local(async move {
+        let _ = agent_io.await;
+    });
+    tokio::task::spawn_local(async move {
+        let _ = client_io.await;
+    });
+    let mut agent = listing_agent_from(
+        crate::agent_sessions::CliSource::from_agent_id(provider),
+        crate::agent_source::AgentSource::Host,
+        &[],
+    );
+    let inner = Arc::get_mut(&mut agent).unwrap();
+    Arc::get_mut(&mut inner.history_refresh.gate)
+        .unwrap()
+        .get_mut()
+        .query
+        .process = Some(history::HistoryProcess::mock(client));
+    inner.resolved_agent_id = provider.into();
     (agent, receiver)
 }
 
@@ -14926,6 +15082,526 @@ async fn history_refresh_coalesces_waiters_and_queries_history_and_titles_once()
             assert_eq!(updated.title.as_deref(), Some("Generated summary"));
             assert_eq!(updated.status, live.status);
             assert_eq!(updated.pane_session_id, live.pane_session_id);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn pooled_copilot_cwd_updates_bound_registry_without_replacing_history() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            let (agent, mut requests) =
+                controlled_history_agent("copilot", crate::agent_source::AgentSource::Host);
+            let sid = SessionId::new("live-cwd");
+            let mut live =
+                crate::session_registry::SessionInfo::new(sid.clone(), PathBuf::from("C:\\old"));
+            live.provider_id = Some("copilot".into());
+            live.location = crate::agent_sessions::SessionLocation::Host;
+            live.status = Some(crate::agent_sessions::AgentStatus::Idle);
+            live.cli_source = Some(crate::agent_sessions::CliSource::Copilot);
+            live.pane_session_id = Some("bound-pane".into());
+            state.registry.upsert(live).await;
+            let original = state.registry.lookup(&sid).await.unwrap();
+            let activity = original.last_activity_at_ms;
+            let (tx, mut notifications) = mpsc::unbounded_channel();
+            state
+                .helper_ext_subscribers
+                .lock()
+                .await
+                .insert(HelperId(1), tx);
+
+            let refresh = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
+            let reply = async {
+                let mut row = history_row("live-cwd", "Current session");
+                row.cwd = PathBuf::from("C:\\from-acp");
+                requests.recv().await.unwrap().send(Ok(vec![row])).unwrap();
+            };
+            let (count, ()) = tokio::join!(refresh, reply);
+            assert_eq!(count, Some(1));
+            let after = state.registry.lookup(&sid).await.unwrap();
+            assert_eq!(after.cwd, PathBuf::from("C:\\from-acp"));
+            assert_eq!(after.pane_session_id.as_deref(), Some("bound-pane"));
+            assert_eq!(after.last_activity_at_ms, activity);
+            assert!(notifications.try_recv().is_ok());
+
+            tokio::time::advance(HISTORY_REFRESH_INTERVAL).await;
+            let refresh = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
+            let reply = async {
+                requests
+                    .recv()
+                    .await
+                    .unwrap()
+                    .send(Err(acp::Error::internal_error()))
+                    .unwrap();
+            };
+            let (failure, ()) = tokio::join!(refresh, reply);
+            assert!(failure.is_none());
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().cwd,
+                PathBuf::from("C:\\from-acp"),
+                "a failed ACP poll cannot restore the old hook cwd"
+            );
+
+            state
+                .registry
+                .apply_event(
+                    crate::agent_sessions::SessionEvent::WorkingDirectoryChanged {
+                        key: sid.to_string(),
+                        pane_session_id: "bound-pane".into(),
+                        cwd: PathBuf::from("C:\\hook-after-acp"),
+                    },
+                )
+                .await;
+            tokio::time::advance(HISTORY_REFRESH_INTERVAL).await;
+            let refresh = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
+            let reply = async {
+                requests.recv().await.unwrap().send(Ok(vec![])).unwrap();
+            };
+            let (count, ()) = tokio::join!(refresh, reply);
+            assert_eq!(count, Some(0));
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().cwd,
+                PathBuf::from("C:\\hook-after-acp"),
+                "only a complete list without the session releases ACP priority"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn pooled_claude_cwd_preserves_unlisted_session_and_adopts_new_listing() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            let (agent, mut requests) =
+                controlled_history_agent("claude", crate::agent_source::AgentSource::Host);
+            let sid = SessionId::new("claude-live");
+            let mut live =
+                crate::session_registry::SessionInfo::new(sid.clone(), PathBuf::from("C:\\start"));
+            live.provider_id = Some("claude".into());
+            live.location = crate::agent_sessions::SessionLocation::Host;
+            live.cli_source = Some(crate::agent_sessions::CliSource::Claude);
+            live.status = Some(crate::agent_sessions::AgentStatus::Idle);
+            live.pane_session_id = Some("claude-pane".into());
+            state.registry.upsert(live).await;
+
+            let refresh = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
+            let reply = async { requests.recv().await.unwrap().send(Ok(vec![])).unwrap() };
+            assert_eq!(tokio::join!(refresh, reply).0, Some(0));
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().cwd,
+                PathBuf::from("C:\\start")
+            );
+
+            tokio::time::advance(HISTORY_REFRESH_INTERVAL).await;
+            let refresh = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic);
+            let reply = async {
+                let mut row = history_row("claude-live", "Saved session");
+                row.cwd = PathBuf::from("C:\\new");
+                requests.recv().await.unwrap().send(Ok(vec![row])).unwrap();
+            };
+            assert_eq!(tokio::join!(refresh, reply).0, Some(1));
+            let updated = state.registry.lookup(&sid).await.unwrap();
+            assert_eq!(updated.cwd, PathBuf::from("C:\\new"));
+            assert_eq!(updated.pane_session_id.as_deref(), Some("claude-pane"));
+            assert_eq!(
+                updated.status,
+                Some(crate::agent_sessions::AgentStatus::Idle)
+            );
+
+            tokio::time::advance(HISTORY_REFRESH_INTERVAL).await;
+            let refresh = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic);
+            let reply = async {
+                requests
+                    .recv()
+                    .await
+                    .unwrap()
+                    .send(Err(acp::Error::internal_error()))
+                    .unwrap();
+            };
+            assert!(tokio::join!(refresh, reply).0.is_none());
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().cwd,
+                PathBuf::from("C:\\new"),
+                "an ACP failure must not restore the stale startup cwd"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn opencode_acp_cwd_requires_v2_server_identity() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut agent = listing_agent(crate::agent_sessions::CliSource::OpenCode, &[]);
+            assert!(!host_acp_cwd_enabled(&agent), "missing version is not V2");
+            let agent = Arc::get_mut(&mut agent).unwrap();
+            for version in ["1.18.14", "v1.19.0", "2.0.24-rc", "2.invalid", "3.0.0"] {
+                agent.cached_init_resp.agent_info =
+                    Some(acp::schema::v1::Implementation::new("OpenCode", version));
+                assert!(!host_acp_cwd_enabled(agent), "{version}");
+            }
+            for version in ["2.0.0", "2.0.24", "v2.1.0"] {
+                agent.cached_init_resp.agent_info =
+                    Some(acp::schema::v1::Implementation::new("OpenCode", version));
+                assert!(host_acp_cwd_enabled(agent), "{version}");
+            }
+            agent.cached_init_resp.agent_info =
+                Some(acp::schema::v1::Implementation::new("other", "2.0.24"));
+            assert!(!host_acp_cwd_enabled(agent));
+            agent.cached_init_resp.agent_info =
+                Some(acp::schema::v1::Implementation::new("OpenCode", "2.0.24"));
+            agent.source = crate::agent_source::AgentSource::Wsl {
+                distro: "Debian".into(),
+            };
+            assert!(!host_acp_cwd_enabled(agent));
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn pooled_opencode_v2_cwd_adopts_listing_but_v1_keeps_hook() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for (version, expected) in [("1.18.14", "C:\\hook"), ("2.0.24", "C:\\from-acp")] {
+                let state = make_state();
+                let (mut agent, mut requests) =
+                    controlled_history_agent("opencode", crate::agent_source::AgentSource::Host);
+                Arc::get_mut(&mut agent)
+                    .unwrap()
+                    .cached_init_resp
+                    .agent_info = Some(acp::schema::v1::Implementation::new("OpenCode", version));
+                let sid = SessionId::new("opencode-live");
+                let mut live = crate::session_registry::SessionInfo::new(
+                    sid.clone(),
+                    PathBuf::from("C:\\start"),
+                );
+                live.provider_id = Some("opencode".into());
+                live.location = crate::agent_sessions::SessionLocation::Host;
+                live.cli_source = Some(crate::agent_sessions::CliSource::OpenCode);
+                live.status = Some(crate::agent_sessions::AgentStatus::Idle);
+                live.pane_session_id = Some("opencode-pane".into());
+                state.registry.upsert(live).await;
+                state
+                    .registry
+                    .apply_event(
+                        crate::agent_sessions::SessionEvent::WorkingDirectoryChanged {
+                            key: sid.to_string(),
+                            pane_session_id: "opencode-pane".into(),
+                            cwd: PathBuf::from("C:\\hook"),
+                        },
+                    )
+                    .await;
+
+                let refresh =
+                    refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
+                let reply = async {
+                    let mut row = history_row("opencode-live", "Current session");
+                    row.cwd = PathBuf::from("C:\\from-acp");
+                    requests.recv().await.unwrap().send(Ok(vec![row])).unwrap();
+                };
+                assert_eq!(tokio::join!(refresh, reply).0, Some(1));
+                let current = state.registry.lookup(&sid).await.unwrap();
+                assert_eq!(current.cwd, PathBuf::from(expected), "{version}");
+                assert_eq!(current.pane_session_id.as_deref(), Some("opencode-pane"));
+                assert_eq!(
+                    current.status,
+                    Some(crate::agent_sessions::AgentStatus::Idle)
+                );
+            }
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn pooled_opencode_v2_late_listing_cannot_override_newer_hook_cwd() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            let (mut agent, mut requests) =
+                controlled_history_agent("opencode", crate::agent_source::AgentSource::Host);
+            Arc::get_mut(&mut agent)
+                .unwrap()
+                .cached_init_resp
+                .agent_info = Some(acp::schema::v1::Implementation::new("OpenCode", "2.0.24"));
+            let sid = SessionId::new("opencode-late");
+            let mut live = crate::session_registry::SessionInfo::new(
+                sid.clone(),
+                PathBuf::from("C:\\original"),
+            );
+            live.provider_id = Some("opencode".into());
+            live.location = crate::agent_sessions::SessionLocation::Host;
+            live.status = Some(crate::agent_sessions::AgentStatus::Idle);
+            live.pane_session_id = Some("opencode-pane".into());
+            state.registry.upsert(live).await;
+
+            let refresh = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
+            tokio::pin!(refresh);
+            let reply = tokio::select! {
+                reply = requests.recv() => reply.unwrap(),
+                _ = &mut refresh => panic!("query ended without a response"),
+            };
+            tokio::time::advance(std::time::Duration::from_secs(5)).await;
+            assert_eq!(refresh.await, None);
+            assert!(agent.history_refresh.gate.lock().await.query.in_flight());
+            state
+                .registry
+                .apply_event(
+                    crate::agent_sessions::SessionEvent::WorkingDirectoryChanged {
+                        key: sid.to_string(),
+                        pane_session_id: "opencode-pane".into(),
+                        cwd: PathBuf::from("C:\\new-hook"),
+                    },
+                )
+                .await;
+
+            let retry = refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate);
+            tokio::pin!(retry);
+            assert!(futures::poll!(&mut retry).is_pending());
+            assert!(
+                requests.try_recv().is_err(),
+                "retry retains the original query"
+            );
+            let mut old = history_row("opencode-late", "Old listing");
+            old.cwd = PathBuf::from("C:\\old-acp");
+            reply.send(Ok(vec![old])).unwrap();
+            assert_eq!(retry.await, Some(1));
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().cwd,
+                PathBuf::from("C:\\new-hook")
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn pooled_opencode_v2_finds_bound_cwd_on_later_page() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            let sid = SessionId::new("opencode-page-two");
+            let mut live =
+                crate::session_registry::SessionInfo::new(sid.clone(), PathBuf::from("C:\\old"));
+            live.provider_id = Some("opencode".into());
+            live.location = crate::agent_sessions::SessionLocation::Host;
+            live.status = Some(crate::agent_sessions::AgentStatus::Idle);
+            live.pane_session_id = Some("opencode-pane".into());
+            state.registry.upsert(live).await;
+            let mut first =
+                acp::schema::v1::ListSessionsResponse::new(vec![history_row("recent", "recent")]);
+            first.next_cursor = Some("page-2".into());
+            let mut moved = history_row("opencode-page-two", "moved");
+            moved.cwd = PathBuf::from("C:\\new");
+            let second = acp::schema::v1::ListSessionsResponse::new(vec![moved]);
+            let (mut agent, mut cursors) = paged_history_agent(
+                "opencode",
+                HashMap::from([(None, first), (Some("page-2".into()), second)]),
+            );
+            Arc::get_mut(&mut agent)
+                .unwrap()
+                .cached_init_resp
+                .agent_info = Some(acp::schema::v1::Implementation::new("OpenCode", "2.0.24"));
+            assert_eq!(
+                refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic).await,
+                Some(1)
+            );
+            assert_eq!(cursors.try_recv().unwrap(), None);
+            assert_eq!(cursors.try_recv().unwrap(), Some("page-2".into()));
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().cwd,
+                PathBuf::from("C:\\new")
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn completed_paginated_cwd_listing_releases_missing_session() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for complete in [true, false] {
+                let state = make_state();
+                let sid = SessionId::new("missing-page-two");
+                let mut live = crate::session_registry::SessionInfo::new(
+                    sid.clone(),
+                    PathBuf::from("C:\\start"),
+                );
+                live.provider_id = Some("copilot".into());
+                live.location = crate::agent_sessions::SessionLocation::Host;
+                live.cli_source = Some(crate::agent_sessions::CliSource::Copilot);
+                live.status = Some(crate::agent_sessions::AgentStatus::Idle);
+                live.pane_session_id = Some("bound-pane".into());
+                state.registry.upsert(live).await;
+
+                let mut first =
+                    acp::schema::v1::ListSessionsResponse::new(vec![history_row("front", "first")]);
+                first.next_cursor = Some("page-2".into());
+                let mut second = acp::schema::v1::ListSessionsResponse::new(vec![]);
+                if !complete {
+                    second.next_cursor = Some("missing-page".into());
+                }
+                let (agent, mut cursors) = paged_history_agent(
+                    "copilot",
+                    HashMap::from([(None, first), (Some("page-2".into()), second)]),
+                );
+                let original = state.registry.lookup(&sid).await.unwrap();
+                assert!(
+                    state
+                        .registry
+                        .adopt_acp_cwd_identity(
+                            &crate::session_registry::SessionIdentity::from_info(&original),
+                            original.cwd_revision(),
+                            agent.instance_id,
+                            PathBuf::from("C:\\acp"),
+                        )
+                        .await
+                );
+                state
+                    .registry
+                    .apply_event(
+                        crate::agent_sessions::SessionEvent::WorkingDirectoryChanged {
+                            key: sid.to_string(),
+                            pane_session_id: "bound-pane".into(),
+                            cwd: PathBuf::from("C:\\hook"),
+                        },
+                    )
+                    .await;
+                assert_eq!(
+                    state.registry.lookup(&sid).await.unwrap().cwd,
+                    PathBuf::from("C:\\acp")
+                );
+
+                assert_eq!(
+                    refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic).await,
+                    Some(1)
+                );
+                assert_eq!(cursors.try_recv().unwrap(), None);
+                assert_eq!(cursors.try_recv().unwrap(), Some("page-2".into()));
+                assert_eq!(
+                    state.registry.lookup(&sid).await.unwrap().cwd,
+                    PathBuf::from(if complete { "C:\\hook" } else { "C:\\acp" }),
+                    "complete={complete}"
+                );
+            }
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn later_page_claude_cwd_does_not_extend_first_page_history() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            let sid = SessionId::new("bound-page-two");
+            let mut live =
+                crate::session_registry::SessionInfo::new(sid.clone(), PathBuf::from("C:\\old"));
+            live.provider_id = Some("claude".into());
+            live.location = crate::agent_sessions::SessionLocation::Host;
+            live.status = Some(crate::agent_sessions::AgentStatus::Idle);
+            live.pane_session_id = Some("bound-pane".into());
+            state.registry.upsert(live).await;
+            let mut first = acp::schema::v1::ListSessionsResponse::new(vec![history_row(
+                "first-page",
+                "visible history",
+            )]);
+            first.next_cursor = Some("page-2".into());
+            let mut wanted = history_row("bound-page-two", "bound");
+            wanted.cwd = PathBuf::from("C:\\updated");
+            let second = acp::schema::v1::ListSessionsResponse::new(vec![
+                wanted,
+                history_row("page-two-history", "should stay hidden"),
+            ]);
+            let (agent, mut cursors) = paged_history_agent(
+                "claude",
+                HashMap::from([(None, first), (Some("page-2".to_string()), second)]),
+            );
+            assert_eq!(
+                refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic).await,
+                Some(1)
+            );
+            assert_eq!(cursors.try_recv().unwrap(), None);
+            assert_eq!(cursors.try_recv().unwrap(), Some("page-2".into()));
+            assert!(cursors.try_recv().is_err());
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().cwd,
+                PathBuf::from("C:\\updated")
+            );
+            let ids: HashSet<_> = state
+                .registry
+                .snapshot()
+                .await
+                .into_iter()
+                .map(|row| row.session_id.to_string())
+                .collect();
+            assert!(ids.contains("first-page"));
+            assert!(ids.contains("bound-page-two"));
+            assert!(!ids.contains("page-two-history"));
+            tokio::time::advance(HISTORY_REFRESH_INTERVAL).await;
+            assert_eq!(
+                refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Immediate).await,
+                Some(1)
+            );
+            assert_eq!(cursors.try_recv().unwrap(), None);
+            assert!(
+                cursors.try_recv().is_err(),
+                "manual refresh keeps its first-page latency budget"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn repeated_cwd_cursor_discards_partial_page_evidence() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            for id in ["wanted", "still-missing"] {
+                let mut row = crate::session_registry::SessionInfo::new(
+                    SessionId::new(id),
+                    PathBuf::from("C:\\old"),
+                );
+                row.provider_id = Some("copilot".into());
+                row.location = crate::agent_sessions::SessionLocation::Host;
+                row.status = Some(crate::agent_sessions::AgentStatus::Idle);
+                row.pane_session_id = Some(format!("pane-{id}"));
+                state.registry.upsert(row).await;
+            }
+            let mut first = acp::schema::v1::ListSessionsResponse::new(vec![history_row(
+                "front",
+                "first page",
+            )]);
+            first.next_cursor = Some("repeat".into());
+            let mut partial = acp::schema::v1::ListSessionsResponse::new(vec![history_row(
+                "wanted",
+                "second page",
+            )]);
+            partial.sessions[0].cwd = PathBuf::from("C:\\partial");
+            partial.next_cursor = Some("repeat".into());
+            let (agent, mut cursors) = paged_history_agent(
+                "copilot",
+                HashMap::from([(None, first), (Some("repeat".into()), partial)]),
+            );
+            assert_eq!(
+                refresh_agent_history(&state, &agent, HistoryRefreshTrigger::Periodic).await,
+                Some(1)
+            );
+            assert_eq!(cursors.try_recv().unwrap(), None);
+            assert_eq!(cursors.try_recv().unwrap(), Some("repeat".into()));
+            assert_eq!(
+                state
+                    .registry
+                    .lookup(&SessionId::new("wanted"))
+                    .await
+                    .unwrap()
+                    .cwd,
+                PathBuf::from("C:\\old")
+            );
+            assert!(state
+                .registry
+                .lookup(&SessionId::new("front"))
+                .await
+                .is_some());
         })
         .await;
 }
@@ -16622,6 +17298,67 @@ fn listing_agent_from(
 /// helper's per-CLI view filter then rendered an empty session list for every
 /// agent the user switched to until Terminal was restarted.
 #[tokio::test]
+async fn native_list_inference_runs_through_existing_complete_history_ingestion() {
+    assert_native_list_inference_ingestion(None).await;
+}
+
+#[tokio::test]
+async fn native_list_inference_rejects_cursor_bearing_partial_history_ingestion() {
+    assert_native_list_inference_ingestion(Some("second-page".into())).await;
+}
+
+async fn assert_native_list_inference_ingestion(next_cursor: Option<String>) {
+    use crate::agent_sessions::{AgentStatus, CliSource};
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let pane = "00112233-4455-6677-8899-aabbccddeeff";
+            let event = serde_json::from_value(serde_json::json!({
+                "pane_id":pane, "provider_id":"copilot", "window_id":7, "tab_id":"native",
+                "mode_epoch":1, "kind":"reset", "tracking_enabled":false, "location":"Host",
+                "pane_created_at_ms":now-1000, "pane_creation_sequence":42
+            }))
+            .unwrap();
+            assert!(state.registry.apply_native_observation(event).await);
+            let progress = serde_json::from_value(serde_json::json!({
+                "pane_id":pane, "provider_id":"copilot", "window_id":7, "tab_id":"native",
+                "mode_epoch":1, "kind":"progress", "progress_state":1
+            }))
+            .unwrap();
+            assert!(state.registry.apply_native_observation(progress).await);
+            let activity =
+                time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(now - 500) * 1_000_000)
+                    .unwrap()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap();
+            let agent = listing_agent(CliSource::Copilot, &[]);
+            agent.history_refresh.gate.lock().await.query =
+                history::HistoryQuery::mock(client_connection_to_listing_agent_with_cursor(
+                    vec!["fresh-native".into()],
+                    Some(activity),
+                    next_cursor.clone(),
+                ));
+            assert_eq!(seed_host_and_broadcast(&state, &agent).await, Some(1));
+            let native = &state.registry.native_pane_observations().await[0];
+            assert_eq!(
+                native.inferred_agent_session_id.as_deref(),
+                next_cursor.is_none().then_some("fresh-native")
+            );
+            assert!(native.agent_session_id.is_none());
+            assert_eq!(native.status, AgentStatus::Working);
+            let history = state.registry.lookup(&"fresh-native".into()).await.unwrap();
+            assert_eq!(history.status, Some(AgentStatus::Historical));
+            assert!(history.pane_session_id.is_none());
+            assert!(state.session_to_helper.lock().await.is_empty());
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn each_pooled_agent_seeds_and_stamps_its_own_history() {
     use crate::agent_sessions::CliSource;
 
@@ -18294,6 +19031,402 @@ async fn master_com_hook_source_unique_id_preserves_live_pane_corroboration() {
             assert!(state.hook_owned.lock().await.is_empty());
         }
     }
+}
+
+#[tokio::test]
+async fn master_opencode_end_from_old_pane_preserves_new_owner() {
+    use crate::agent_sessions::AgentStatus;
+
+    let state = make_state();
+    let sid = SessionId::new("opencode-rebound");
+    for (pane, event) in [
+        ("old-pane", "agent.session.start"),
+        ("new-pane", "agent.session.start"),
+        ("old-pane", "agent.session.end"),
+    ] {
+        handle_master_wt_event(
+            &state,
+            serde_json::json!({
+                "method": "agent_event",
+                "params": {
+                    "event": event,
+                    "cli_source": "opencode",
+                    "agent_session_id": "opencode-rebound",
+                    "pane_id": pane,
+                    "payload": { "cwd": "C:\\repo", "title": pane }
+                }
+            }),
+        )
+        .await;
+    }
+    let row = state
+        .registry
+        .lookup(&sid)
+        .await
+        .expect("new owner remains");
+    assert_eq!(row.pane_session_id.as_deref(), Some("new-pane"));
+    assert_eq!(row.status, Some(AgentStatus::Idle));
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({
+            "method": "agent_event",
+            "params": {
+                "event": "agent.session.end",
+                "cli_source": "opencode",
+                "agent_session_id": "opencode-rebound",
+                "pane_id": "new-pane",
+                "payload": {}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        state.registry.lookup(&sid).await.unwrap().status,
+        Some(AgentStatus::Ended)
+    );
+}
+
+#[tokio::test]
+async fn master_opencode_view_reclaims_session_after_other_pane_disposes() {
+    use crate::agent_sessions::AgentStatus;
+
+    for running in [false, true] {
+        let state = make_state();
+        let sid = SessionId::new("opencode-reclaimed");
+        let hook = |pane, event, reported_running| {
+            serde_json::json!({
+                "method": "agent_event",
+                "params": {
+                    "event": event,
+                    "cli_source": "opencode",
+                    "agent_session_id": "opencode-reclaimed",
+                    "pane_id": pane,
+                    "payload": { "cwd": "C:\\repo", "running": reported_running }
+                }
+            })
+        };
+        handle_master_wt_event(&state, hook("first-pane", "agent.session.start", running)).await;
+        if running {
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().status,
+                Some(AgentStatus::Working),
+                "a new running binding starts Working without a synthetic prompt"
+            );
+            handle_master_wt_event(&state, hook("first-pane", "agent.notification", false)).await;
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().status,
+                Some(AgentStatus::Attention)
+            );
+        }
+        handle_master_wt_event(&state, hook("second-pane", "agent.session.start", running)).await;
+        if running {
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().status,
+                Some(AgentStatus::Attention),
+                "a second TUI binding must preserve a live Attention state"
+            );
+        }
+        handle_master_wt_event(&state, hook("second-pane", "agent.session.end", false)).await;
+        handle_master_wt_event(&state, hook("first-pane", "agent.session.start", running)).await;
+        handle_master_wt_event(&state, hook("second-pane", "agent.session.end", false)).await;
+        let row = state
+            .registry
+            .lookup(&sid)
+            .await
+            .expect("view restores session");
+        assert_eq!(row.pane_session_id.as_deref(), Some("first-pane"));
+        assert_eq!(
+            row.status,
+            Some(if running {
+                AgentStatus::Working
+            } else {
+                AgentStatus::Idle
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn master_opencode_running_start_takes_over_an_occupied_pane() {
+    use crate::agent_sessions::AgentStatus;
+
+    for running in [false, true] {
+        let state = make_state();
+        let hook = |session, reported_running| {
+            serde_json::json!({
+                "method": "agent_event",
+                "params": {
+                    "event": "agent.session.start",
+                    "cli_source": "opencode",
+                    "agent_session_id": session,
+                    "pane_id": "shared-pane",
+                    "payload": { "cwd": "C:\\repo", "running": reported_running }
+                }
+            })
+        };
+        handle_master_wt_event(&state, hook("previous", false)).await;
+        handle_master_wt_event(&state, hook("current", running)).await;
+
+        let previous = state
+            .registry
+            .lookup(&SessionId::new("previous"))
+            .await
+            .unwrap();
+        let current = state
+            .registry
+            .lookup(&SessionId::new("current"))
+            .await
+            .unwrap();
+        assert_eq!(previous.status, Some(AgentStatus::Ended));
+        assert_eq!(previous.pane_session_id, None);
+        assert_eq!(current.pane_session_id.as_deref(), Some("shared-pane"));
+        assert_eq!(
+            current.status,
+            Some(if running {
+                AgentStatus::Working
+            } else {
+                AgentStatus::Idle
+            }),
+            "the new owner's running hint must apply after its explicit start"
+        );
+    }
+}
+
+#[tokio::test]
+async fn master_opencode_server_only_activity_requires_a_tui_binding() {
+    use crate::agent_sessions::AgentStatus;
+
+    let state = make_state();
+    let sid = SessionId::new("server-only");
+    let hook = |event, pane, payload| {
+        serde_json::json!({
+            "method": "agent_event",
+            "params": {
+                "event": event,
+                "cli_source": "opencode",
+                "agent_session_id": "server-only",
+                "pane_id": pane,
+                "payload": payload
+            }
+        })
+    };
+    let prompt = serde_json::json!({ "cwd": "C:\\repo", "pane_owner": false });
+    handle_master_wt_event(
+        &state,
+        hook("agent.prompt.submit", "server-pane", prompt.clone()),
+    )
+    .await;
+    handle_master_wt_event(
+        &state,
+        hook(
+            "agent.tool.starting",
+            "server-pane",
+            serde_json::json!({ "tool_name": "bash", "pane_owner": false }),
+        ),
+    )
+    .await;
+    assert!(
+        state.registry.lookup(&sid).await.is_none(),
+        "server-only activity must not create a row"
+    );
+    assert!(state.hook_owned.lock().await.is_empty());
+    handle_master_wt_event(
+        &state,
+        hook(
+            "agent.session.start",
+            "tui-pane",
+            serde_json::json!({ "cwd": "C:\\repo", "title": "Owned" }),
+        ),
+    )
+    .await;
+    handle_master_wt_event(
+        &state,
+        hook("agent.prompt.submit", "server-pane", prompt.clone()),
+    )
+    .await;
+    let row = state.registry.lookup(&sid).await.unwrap();
+    assert_eq!(row.status, Some(AgentStatus::Working));
+    assert_eq!(row.pane_session_id.as_deref(), Some("tui-pane"));
+    handle_master_wt_event(
+        &state,
+        hook(
+            "agent.session.end",
+            "tui-pane",
+            serde_json::json!({ "reason": "tui_disposed" }),
+        ),
+    )
+    .await;
+    handle_master_wt_event(&state, hook("agent.prompt.submit", "server-pane", prompt)).await;
+    let row = state.registry.lookup(&sid).await.unwrap();
+    assert_eq!(row.status, Some(AgentStatus::Ended));
+    assert_eq!(row.pane_session_id, None);
+}
+
+#[tokio::test]
+async fn master_opencode_unbind_preserves_live_server_session_and_rejects_stale_owner() {
+    use crate::agent_sessions::AgentStatus;
+
+    let state = make_state();
+    let sid = SessionId::new("server-lifecycle");
+    let hook = |event: &str, pane: &str, payload: serde_json::Value, provider: &str| {
+        serde_json::json!({
+            "method": "agent_event",
+            "params": {
+                "event": event, "cli_source": provider, "agent_session_id": "server-lifecycle",
+                "pane_id": pane, "payload": payload
+            }
+        })
+    };
+    let local = |event, pane| {
+        hook(
+            event,
+            pane,
+            serde_json::json!({"cwd":"C:\\repo"}),
+            "opencode",
+        )
+    };
+    let server = |event, payload| hook(event, "server-pane", payload, "opencode");
+    let server_payload = serde_json::json!({"pane_owner":false});
+    handle_master_wt_event(&state, server("agent.session.end", server_payload.clone())).await;
+    assert!(state.registry.lookup(&sid).await.is_none());
+    handle_master_wt_event(&state, local("agent.session.start", "first-pane")).await;
+    handle_master_wt_event(&state, local("agent.session.unbind", "wrong-pane")).await;
+    assert_eq!(
+        state
+            .registry
+            .lookup(&sid)
+            .await
+            .unwrap()
+            .pane_session_id
+            .as_deref(),
+        Some("first-pane")
+    );
+    handle_master_wt_event(
+        &state,
+        hook(
+            "agent.session.unbind",
+            "first-pane",
+            serde_json::json!({}),
+            "claude",
+        ),
+    )
+    .await;
+    assert_eq!(
+        state
+            .registry
+            .lookup(&sid)
+            .await
+            .unwrap()
+            .pane_session_id
+            .as_deref(),
+        Some("first-pane")
+    );
+    handle_master_wt_event(&state, local("agent.session.unbind", "first-pane")).await;
+    let row = state.registry.lookup(&sid).await.unwrap();
+    assert_eq!(row.status, Some(AgentStatus::Idle));
+    assert_eq!(row.pane_session_id, None);
+    handle_master_wt_event(
+        &state,
+        server(
+            "agent.session.renamed",
+            serde_json::json!({"pane_owner":false,"title":"unbound"}),
+        ),
+    )
+    .await;
+    assert_ne!(
+        state.registry.lookup(&sid).await.unwrap().title.as_deref(),
+        Some("unbound")
+    );
+    handle_master_wt_event(&state, local("agent.session.start", "second-pane")).await;
+    handle_master_wt_event(&state, local("agent.session.unbind", "first-pane")).await;
+    handle_master_wt_event(
+        &state,
+        server(
+            "agent.session.renamed",
+            serde_json::json!({"pane_owner":false,"title":"renamed"}),
+        ),
+    )
+    .await;
+    handle_master_wt_event(
+        &state,
+        server(
+            "agent.cwd.changed",
+            serde_json::json!({"pane_owner":false,"new_cwd":"C:\\moved"}),
+        ),
+    )
+    .await;
+    let row = state.registry.lookup(&sid).await.unwrap();
+    assert_eq!(row.pane_session_id.as_deref(), Some("second-pane"));
+    assert_eq!(row.title.as_deref(), Some("renamed"));
+    assert_eq!(row.cwd, PathBuf::from("C:\\moved"));
+    handle_master_wt_event(&state, server("agent.session.end", server_payload.clone())).await;
+    let row = state.registry.lookup(&sid).await.unwrap();
+    assert_eq!(row.status, Some(AgentStatus::Ended));
+    assert_eq!(row.pane_session_id, None);
+
+    handle_master_wt_event(&state, local("agent.session.start", "third-pane")).await;
+    handle_master_wt_event(&state, local("agent.session.unbind", "third-pane")).await;
+    handle_master_wt_event(&state, server("agent.session.end", server_payload)).await;
+    assert_eq!(
+        state.registry.lookup(&sid).await.unwrap().status,
+        Some(AgentStatus::Ended)
+    );
+
+    let other = make_state();
+    let other_sid = SessionId::new("server-lifecycle");
+    handle_master_wt_event(
+        &other,
+        hook(
+            "agent.session.start",
+            "other-pane",
+            serde_json::json!({"cwd":"C:\\other"}),
+            "claude",
+        ),
+    )
+    .await;
+    handle_master_wt_event(
+        &other,
+        server("agent.session.end", serde_json::json!({"pane_owner":false})),
+    )
+    .await;
+    assert_eq!(
+        other.registry.lookup(&other_sid).await.unwrap().status,
+        Some(AgentStatus::Idle),
+        "an OpenCode server event cannot end a different provider's row"
+    );
+}
+
+#[tokio::test]
+async fn master_opencode_rename_cannot_rebind_after_handoff() {
+    use crate::agent_sessions::AgentStatus;
+
+    let state = make_state();
+    let sid = SessionId::new("shared-rename");
+    let hook = |pane, event, title| {
+        serde_json::json!({
+            "method": "agent_event",
+            "params": {
+                "event": event,
+                "cli_source": "opencode",
+                "agent_session_id": "shared-rename",
+                "pane_id": pane,
+                "payload": { "cwd": "C:\\repo", "title": title }
+            }
+        })
+    };
+    handle_master_wt_event(&state, hook("old-pane", "agent.session.start", "Original")).await;
+    handle_master_wt_event(&state, hook("new-pane", "agent.session.start", "Current")).await;
+    handle_master_wt_event(&state, hook("new-pane", "agent.prompt.submit", "")).await;
+    handle_master_wt_event(&state, hook("old-pane", "agent.session.renamed", "Stale")).await;
+    let row = state.registry.lookup(&sid).await.unwrap();
+    assert_eq!(row.title.as_deref(), Some("Current"));
+    assert_eq!(row.pane_session_id.as_deref(), Some("new-pane"));
+    assert_eq!(row.status, Some(AgentStatus::Working));
+    handle_master_wt_event(&state, hook("new-pane", "agent.session.renamed", "Renamed")).await;
+    let row = state.registry.lookup(&sid).await.unwrap();
+    assert_eq!(row.title.as_deref(), Some("Renamed"));
+    assert_eq!(row.pane_session_id.as_deref(), Some("new-pane"));
+    assert_eq!(row.status, Some(AgentStatus::Working));
 }
 
 #[tokio::test]

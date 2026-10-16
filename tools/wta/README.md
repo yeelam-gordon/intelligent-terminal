@@ -394,7 +394,14 @@ wta list-windows --json                   # raw JSON output
 Short aliases are supported: `lsw`, `lst`, `lsp`, `neww`, `splitw`, `capturep`,
 `killp`, `setenv`, and `mon`.
 
-When `-t` (target pane) is omitted, the active pane is used automatically.
+`list-tabs` and `list-panes` accept `-w <window-id>` to select a window.
+They use the native `wtcli` default selection: the first-listed window, not the
+focused window. Without `-t`, `list-panes` lists the first tab in that window,
+not the active tab. Tab IDs are window-local, so use both `-w` and `-t` to query
+a specific window's tab; an explicit `-t` without `-w` queries across windows.
+
+For pane-targeting commands such as `capture-pane` and `kill-pane`, omitting `-t`
+uses the active pane automatically.
 
 ### Protocol Discovery & Environment Setup
 
@@ -444,6 +451,27 @@ shell, so any pane-launched process — including wta and wtcli — inherits it.
 |------|-------------|
 | `--json` | Output raw JSON instead of human-readable tables |
 | `--agent <CMD>` | Agent CLI command for ACP mode (default: `copilot --acp --stdio`) |
+| `--no-agent-markdown` | Keep the helper's agent replies and history as literal text after streaming |
+
+### Agent reply formatting
+
+Agent replies stream as plain text. When a response stops, WTA formats its
+received assistant text with `tui-markdown`, including partial replies after
+cancellation or an agent error and replies loaded from saved history. User
+prompts, thoughts, and tool output retain their existing presentation.
+
+**Markdown formatting** is on by default in first-run setup and Settings >
+Agents. Both use the global `renderAgentMarkdown` preference. Changes apply
+without restarting the terminal, helper, master, or agent session. A selected
+reply keeps its current display until the selection is cleared; completion
+and queued requests continue independently.
+
+Formatting uses pane-relative colors, hides heading markers, and retains code
+fences and language labels. It adds neither syntax highlighting nor interactive
+link actions. Raw source remains unchanged. If the package output cannot be
+projected safely within Ratatui's layout limits, WTA retains the raw display and
+records a diagnostic. Unchanged frames reuse compatible output; visible replies
+are rebuilt after width changes or cache eviction, not on every stream update.
 
 ## TUI Controls
 
@@ -879,7 +907,8 @@ optional `wsl_distro` fields. Master handles birth before the following native
 reset on its ordered event reader, reusing the existing qualified resume/binding helpers;
 late duplicate helper RPCs do not overwrite live activity. Only Terminal-created
 or previously qualified actual identities may be replayed. Unknown panes get
-no synthetic conversation ID or history matching; no activity is copied.
+no synthetic confirmed conversation ID; inferred list metadata cannot be
+replayed as ownership, and no activity is copied.
 Interactive known-session resumes use the same generation-qualified ordered
 birth path before OFF reset. The master confirms the exact active qualified
 pane binding without changing its current activity; a subsequent reset may omit
@@ -904,13 +933,41 @@ COM event subscription. Its `params` object contains:
   "window_id": 7,
   "tab_id": "stable-tab-id",
   "mode_epoch": 1,
+  "pane_created_at_ms": 1792108800000,
+  "pane_creation_sequence": 42,
   "kind": "reset",
   "tracking_enabled": false
 }
 ```
 
 `pane_id` is the actual connection GUID. The Terminal producer admits only
-Terminal-known agent panes, not agents inferred from shell output. Send `reset`
+Terminal-known agent panes, not agents inferred from shell output.
+`pane_created_at_ms` is captured once at actual content creation, not at first
+OSC, discovery or receiver readiness. `pane_creation_sequence` is the existing
+process-wide content ID used to order same-millisecond creations. Both survive
+partial updates, admission resets and retained-content moves. Older producers
+without creation metadata remain supported but cannot participate in timed
+list inference. Known execution `location` may be supplied without a session ID;
+absence never implies Host.
+
+After delegate creation, the existing `agent_event` broadcast envelope carries
+`params.event: "agent.pane.launch.source"` with the returned
+`pane_id`, canonical `agent` and selected `location` through the existing COM
+broadcast. Terminal accepts it only for the matching declared native pane and
+refines an unknown launch source once without changing its admission epoch.
+WTA merges the same source metadata into an already admitted pending pane,
+without changing activity or creating a pane from this metadata alone.
+The retained content metadata supplies the same source on later readiness,
+mode and transfer replays; it does not create a second activity store or turn
+an ordinary shell into an agent.
+
+Existing history discovery can attach a separately marked inferred identity
+to a pending pane record. This is not a canonical binding, action route or
+process-liveness claim. Explicit resume identity remains authoritative.
+Historical status does not overwrite observed pane activity, and discovery
+does not add a query or polling worker.
+
+Send `reset`
 with a strictly increasing per-pane `mode_epoch` on initial admission and mode
 changes. `tracking_enabled: false` establishes a fresh OFF baseline of Idle; `true`
 clears OFF ownership. Other events must match the admitted epoch and identity:

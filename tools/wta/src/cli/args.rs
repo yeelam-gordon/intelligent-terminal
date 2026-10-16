@@ -120,6 +120,10 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) no_autofix: bool,
 
+    /// Keep agent replies and history as raw text after streaming stops
+    #[arg(long)]
+    pub(crate) no_agent_markdown: bool,
+
     /// Host-resolved AllowAutoFix policy for telemetry, not an enforcement flag.
     #[arg(long, hide = true, value_parser = ["notConfigured", "enabled", "disabled", "unknown"])]
     pub(crate) autofix_policy_state: Option<String>,
@@ -272,10 +276,10 @@ pub(crate) enum Command {
     /// List panes in a tab
     #[command(alias = "lsp")]
     ListPanes {
-        /// Tab ID (defaults to active tab)
+        /// Tab ID (defaults to first tab in the selected or first-listed window)
         #[arg(short = 't', long)]
         tab_id: Option<String>,
-        /// Window ID (used with tab_id)
+        /// Window ID (limits the query; explicit tab IDs without it span windows)
         #[arg(short = 'w', long)]
         window_id: Option<String>,
     },

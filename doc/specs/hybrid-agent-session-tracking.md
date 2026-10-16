@@ -41,7 +41,7 @@ and execution source. Existing authoritative born-bound assignment may arrive
 before or after observation admission. When the transport source is unknown,
 Terminal accepts the source of a qualified canonical pane observation without
 inferring a transport source; known sources must still match. History discovery
-alone cannot promote an unknown pane into a conversation.
+alone cannot promote an inferred association into a confirmed pane binding.
 An explicit resume of a different conversation in the same retained pane is
 not recovery replay. Its ordered birth supplies the expected previous session
 and admission epoch; WTA validates that predecessor and a newer epoch atomically
@@ -56,6 +56,9 @@ presentation is unchanged. BEL maps to the existing Attention status, displayed
 as Waiting for input, and retains the existing tab bell handling. Here Waiting
 for input includes both needing a response and finishing work ready for the
 next human request; BEL does not prove a mandatory response or approval.
+Leftover unqualified COM hook activity cannot overwrite an active OFF native
+owner. Precisely qualified watcher evidence for an exact bound identity remains
+supported; ON and helper activity retain their existing paths.
 Native status observes the unthrottled parsed bell source; the existing
 one-second throttle still applies to visual bell feedback.
 Each progress event also retains its parsed state before UI dispatch. A queued
@@ -84,13 +87,34 @@ promoted into independent launch ownership, so switching OFF cannot turn the
 completed resume's ordinary shell into a native agent. Independent launch
 ownership remains intact.
 
-New native launches remain provider-known but session-unknown without hooks.
-Historical ACP list rows contain `updated_at`, exposed as `started_at`, not a
-genuine creation timestamp or launch ownership token. Neither FIFO matching,
-timestamp tolerance, nor a singleton same-provider result can distinguish an
-external session or an updated old session. Discovery therefore never guesses
-a new pane's session ID, including concurrent and ambiguous lists. Explicit
-recent-session resume retains its known binding under the actual connection
+The shared content factory records each actual pane's immutable UTC creation
+time and the existing process-wide content sequence before observation admission.
+The connection SessionId supplies pane identity; OSC does not discover it.
+Delayed WTA readiness, OSC/BEL updates, mode resets and retained-content moves
+do not retime creation. Managed native shortcut profiles supply their known
+Host source; delegate creation supplies its explicitly selected execution source.
+An unknown source is not assumed to be Host.
+
+New native launches initially have an Idle pane record with provider, creation
+metadata and no confirmed conversation ID. Existing ACP list results may enrich
+that record with a separately marked inferred session identity. Matching uses
+newly discovered unmapped IDs from the same provider and execution source,
+timestamp evidence within a five-minute launch window and the order of pending
+pane creations. Only complete discovery requests begun after pane creation
+qualify; stale, tied, extra, source-unknown or universe-qualified results leave
+the identity unknown. OSC partial updates retain creation
+and identity metadata; historical list status cannot overwrite live pane status.
+
+Historical ACP list rows contain an update timestamp, not necessarily a genuine
+creation timestamp or launch ownership token. Even a singleton result cannot
+exclude an independently created external session. An inferred association is
+therefore metadata, never proof of ownership: it cannot set canonical live pane
+bindings, route control actions or be replayed as a confirmed identity. Explicit
+identity wins over inference. No additional query, polling loop or cadence is
+introduced.
+
+Explicit recent-session resume uses the same pane creation metadata and retains
+its known binding under the actual connection
 SessionId even without a saved pane ID. Explicit binding ownership transfers with
 the pane between windows and remains until the pane is removed or a later
 authoritative explicit resume replaces that conversation, including after
@@ -100,10 +124,6 @@ inherit the closed pane's explicit ownership marker.
 
 The watcher design below describes registry tracking, not an authority to
 infer native pane identity when Sessions is OFF.
-
-Validation of the shared-registry path is pending fresh native and live
-C429/C430/C431 runs. Mapping-only native results and earlier acceptance of the
-removed Paused/Attention requested presentation do not validate this data flow.
 
 ## Abstract
 
@@ -485,8 +505,18 @@ zero, or invalid timestamps display Unknown, and future timestamps display just 
 Active uses a theme-aware green success accent, Waiting for input a yellow caution
 accent, and Error a red critical accent, matching the session management view.
 Only the status text is accented; the provider, distro name,
-age, and separators stay muted, and search matches remain highlighted. Host/WSL
-location remains searchable and available for routing; Host has no extra location
+age, and separators stay muted, and search matches remain highlighted.
+Live tab metadata and expanded split-pane metadata use the same status accents
+at full opacity. Only neutral text retains the existing 0.72 opacity, applied
+to its foreground rather than the entire metadata control.
+Only the provider's `agentStatus` field is colored; working-directory and Git
+fields retain their existing appearance, including when they contain the same
+text as a status label. Idle and non-actionable states retain the normal metadata
+color. Status colors follow theme changes without removing search emphasis.
+Live metadata text and its semantic status come from the same accepted provider
+request. While a refresh is queued, both retain the previous snapshot; a failed
+refresh clears that provider's metadata rather than recoloring stale text.
+Host/WSL location remains searchable and available for routing; Host has no extra location
 label. Status-only updates preserve the provider, distro name, and age from the
 latest snapshot.
 The live session bound to the current terminal pane has a selected background.

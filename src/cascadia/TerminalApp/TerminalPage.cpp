@@ -5,6 +5,7 @@
 #include "pch.h"
 #include "TerminalPage.h"
 #include "TabStrip.h"
+#include "TabHeaderControl.h"
 
 #include <iomanip>
 #include <icu.h>
@@ -857,7 +858,7 @@ namespace winrt::TerminalApp::implementation
                     {
                         page->_LogSidebarRowFieldsTelemetry("UserChange");
                     }
-                    if (sender.RichTabAgentStatusVisible())
+                    if (sender.RichTabAgentStatusVisible() || page->_RichTabCwdDependentFieldsVisible())
                     {
                         page->_RequestRichTabAgentStatusRefresh();
                     }
@@ -2885,6 +2886,7 @@ namespace winrt::TerminalApp::implementation
             globals.IsYoloModePolicyLocked(),
             AgentPolicyTelemetry::AutoFixPolicyName(AgentPolicy::GetAutoFixPolicy()),
             _isVerticalLayout,
+            globals.RenderAgentMarkdown(),
         };
     }
 
@@ -2902,6 +2904,7 @@ namespace winrt::TerminalApp::implementation
         params["autofix_enabled"] = config.autofixEnabled;
         params["autofix_policy_state"] = config.autofixPolicyState;
         params["sessions_in_sidebar"] = config.sessionsInSidebar;
+        params["render_agent_markdown"] = config.renderAgentMarkdown;
         params["delegate_agent"] = winrt::to_string(config.delegateAgent);
         params["delegate_agent_id"] = winrt::to_string(config.delegateAgentId);
         params["delegate_model"] = winrt::to_string(config.delegateModel);
@@ -2919,6 +2922,7 @@ namespace winrt::TerminalApp::implementation
     //   - yolo_enabled + yolo_policy_blocked : the per-tab desired state,
     //     resolved for that tab's current provider, and the administrative gate.
     //   - sessions_in_sidebar : the active window layout's session-list surface.
+    //   - render_agent_markdown : the helper's stopped-reply presentation.
     void TerminalPage::_EmitAgentRuntimeConfigIfChanged()
     {
         const auto current = _CaptureAgentRuntimeConfig();
@@ -2947,8 +2951,9 @@ namespace winrt::TerminalApp::implementation
                                  last.yoloEnabled != current.yoloEnabled ||
                                  last.yoloPolicyBlocked != current.yoloPolicyBlocked;
         const bool sessionsLayoutChanged = last.sessionsInSidebar != current.sessionsInSidebar;
+        const bool markdownChanged = last.renderAgentMarkdown != current.renderAgentMarkdown;
 
-        if (!autofixChanged && !autofixPolicyChanged && !delegateChanged && !customModelsChanged && !yoloChanged && !sessionsLayoutChanged)
+        if (!autofixChanged && !autofixPolicyChanged && !delegateChanged && !customModelsChanged && !yoloChanged && !sessionsLayoutChanged && !markdownChanged)
         {
             _lastAgentRuntimeConfig = current;
             return;
@@ -2980,7 +2985,11 @@ namespace winrt::TerminalApp::implementation
         {
             params["sessions_in_sidebar"] = current.sessionsInSidebar;
         }
-        const bool commonChanged = autofixChanged || autofixPolicyChanged || delegateChanged || customModelsChanged || sessionsLayoutChanged;
+        if (markdownChanged)
+        {
+            params["render_agent_markdown"] = current.renderAgentMarkdown;
+        }
+        const bool commonChanged = autofixChanged || autofixPolicyChanged || delegateChanged || customModelsChanged || sessionsLayoutChanged || markdownChanged;
         if (commonChanged)
         {
             _agentPaneLog("emitting agent_config_changed (hot settings update)");
@@ -3556,11 +3565,15 @@ namespace winrt::TerminalApp::implementation
             const auto lastActivityAtMs = params["last_activity_at_ms"].isUInt64() ?
                                               std::optional<uint64_t>{ params["last_activity_at_ms"].asUInt64() } :
                                               std::nullopt;
+            const auto cwd = params["cwd"].isString() && !params["cwd"].asString().empty() &&
+                                     !(providerId == "antigravity" && params.get("origin", "").asString() != "AgentPane") ?
+                                 std::optional<std::string>{ params["cwd"].asString() } :
+                                 std::nullopt;
             const auto paneSessionId = params["pane_session_id"].isString() ?
                                            params["pane_session_id"].asString() :
                                            std::string{};
             if (!sessionId.empty() && !status.empty() &&
-                _ApplyAgentSessionStatusDelta(sessionId, paneSessionId, providerId, lastActivityAtMs, status))
+                _ApplyAgentSessionStatusDelta(sessionId, paneSessionId, providerId, lastActivityAtMs, status, cwd))
             {
                 if (_AreRecentAgentSessionsVisible())
                 {
@@ -3581,7 +3594,8 @@ namespace winrt::TerminalApp::implementation
                                                      const std::string_view paneSessionId,
                                                      const std::string_view providerId,
                                                      const std::optional<uint64_t> lastActivityAtMs,
-                                                     const std::string_view status)
+                                                     const std::string_view status,
+                                                     std::optional<std::string> cwd)
     {
         if (sessionId.empty() ||
             (status != "Idle" &&
@@ -3604,7 +3618,7 @@ namespace winrt::TerminalApp::implementation
         {
             return false;
         }
-        const auto incoming = _RichTabAgentInfo{ sessionIdString, statusString, providerIdString, lastActivityAtMs, paneId };
+        const auto incoming = _RichTabAgentInfo{ sessionIdString, statusString, providerIdString, lastActivityAtMs, paneId, std::move(cwd) };
         const auto rejectsIncoming = [&](const auto& info) {
             return info.sessionId == sessionId && info.paneSessionId == paneId &&
                    !(info.providerId.empty() && !providerId.empty()) &&
@@ -3641,8 +3655,10 @@ namespace winrt::TerminalApp::implementation
                 info.providerId = report.providerId;
             }
             info.lastActivityAtMs = report.lastActivityAtMs;
+            info.cwd = report.cwd;
         };
         ++_richTabAgentStatusRequestGeneration;
+        _richTabAgentCwdAvailable = true;
         if (_richTabAgentStatusRefreshInFlight)
         {
             _richTabAgentStatusRefreshPending = true;
@@ -3659,7 +3675,7 @@ namespace winrt::TerminalApp::implementation
             if (const auto tab = _GetTabImpl(runtimeTab))
             {
                 _UpdateTabIcon(*tab);
-                if (_tabStrip.RichTabAgentStatusVisible())
+                if (_tabStrip.RichTabAgentStatusVisible() || _RichTabCwdDependentFieldsVisible())
                 {
                     if (const auto rootPane = tab->GetRootPane())
                     {
@@ -3761,6 +3777,7 @@ namespace winrt::TerminalApp::implementation
                 _pendingRestoredSessionBindings.erase(*paneSessionId);
                 _activeCliAgentPanes.erase(*paneSessionId);
                 _interactiveResumeSessions.erase(*paneSessionId);
+                _richTabEndedSessionByPaneId.erase(*paneSessionId);
             }
         });
     }
@@ -4236,6 +4253,10 @@ namespace winrt::TerminalApp::implementation
         if (!globals.EffectiveAutoFixEnabled())
         {
             helperCmd.append(L" --no-autofix");
+        }
+        if (!globals.RenderAgentMarkdown())
+        {
+            helperCmd.append(L" --no-agent-markdown");
         }
         appendHelperFlagValue(L"--autofix-policy-state", winrt::to_hstring(AgentPolicyTelemetry::AutoFixPolicyName(AgentPolicy::GetAutoFixPolicy())));
         // Settings-owned automatic approval for this binding. The shared
@@ -11066,6 +11087,40 @@ namespace winrt::TerminalApp::implementation
         _RaiseProtocolEvent("agent_event", params);
     }
 
+    void TerminalPage::_ReconcileShellPromptAgentExit(const TermControl& control)
+    {
+        const auto paneId = _TryParsePaneSessionId(_FindSessionIdForControl(control));
+        if (!paneId)
+        {
+            return;
+        }
+        const auto active = _activeCliAgentPanes.find(*paneId);
+        if (active == _activeCliAgentPanes.end() ||
+            !winrt::get_self<ContentManager>(_manager)->NativeAgentProviderId(control.ContentId()).empty())
+        {
+            return;
+        }
+        for (const auto& runtimeTab : _RuntimeTabs())
+        {
+            if (const auto tab = _GetTabImpl(runtimeTab))
+            {
+                if (const auto rootPane = tab->GetRootPane())
+                {
+                    if (const auto ownerPane = rootPane->FindPaneBySessionId(*paneId);
+                        ownerPane && ownerPane->GetContent().try_as<AgentPaneContent>())
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+
+        // The prompt retires activity, not the resumable binding used to restore this pane.
+        _richTabEndedSessionByPaneId.insert_or_assign(*paneId, winrt::to_string(active->second.sessionId));
+        _activeCliAgentPanes.erase(active);
+        _ApplyTabListProjection();
+    }
+
     void TerminalPage::OnPaneAgentSessionChanged(hstring eventJson)
     {
         // COM ingress updates the manager once through TrackPaneAgentSession.
@@ -11106,6 +11161,49 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
+        if (params["event"].isString() && params["event"].asString() == "agent.pane.launch.source")
+        {
+            std::string location;
+            const auto& value = params["location"];
+            if (value.isString() && value.asString() == "Host")
+            {
+                location = "Host";
+            }
+            else if (value.isObject() && value["Wsl"].isObject() &&
+                     value["Wsl"]["distro"].isString() && !value["Wsl"]["distro"].asString().empty())
+            {
+                location = "wsl:" + value["Wsl"]["distro"].asString();
+            }
+            if (!params["agent"].isString() || location.empty())
+            {
+                _agentPaneLog("invalid native agent launch source");
+                return;
+            }
+            _SyncNativeAgentStatusMode();
+            const auto manager = winrt::get_self<ContentManager>(_manager);
+            for (const auto& tab : _RuntimeTabs())
+            {
+                if (const auto tabImpl = _GetTabImpl(tab))
+                {
+                    if (const auto root = tabImpl->GetRootPane())
+                    {
+                        if (const auto pane = root->FindPaneBySessionId(*paneSessionId))
+                        {
+                            if (const auto control = pane->GetTerminalControl();
+                                control && manager->RefineNativeAgentLaunchLocation(
+                                    control.ContentId(), winrt::to_hstring(params["agent"].asString()), location))
+                            {
+                                _PublishNativeAgentObservation(control, "reset");
+                                _RaiseProtocolEvent("agent_event", params);
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
         _SyncNativeAgentStatusMode();
         if (!winrt::get_self<ContentManager>(_manager)->AcceptsAgentSessionEvents(*paneSessionId))
         {
@@ -11114,16 +11212,23 @@ namespace winrt::TerminalApp::implementation
         const auto eventName = params.get("event", "").asString();
         const bool sessionEnded = eventName == "agent.session.stopped" ||
                                   eventName == "agent.session.end";
+        const bool sessionUnbound = eventName == "agent.session.unbind";
         const bool sessionStarted = eventName == "agent.session.started" ||
                                     eventName == "agent.session.start";
         const bool promptSubmitted = eventName == "agent.prompt.submit";
         const auto agent = params.get("agent", params.get("cli_source", "")).asString();
+        const auto& payload = params["payload"];
+        const auto paneOwner = payload.isObject() ? payload.get("pane_owner", Json::Value{}) : Json::Value{};
+        if (agent == "opencode" && paneOwner.isBool() && !paneOwner.asBool())
+        {
+            return;
+        }
         auto resumeCommandline = params.get("resume_commandline", "").asString();
         if (resumeCommandline.empty() && !agent.empty() && !agentSessionId.empty())
         {
             resumeCommandline = winrt::to_string(_BuildAgentResumeCommandline(agent, agentSessionId));
         }
-        if (!eventName.empty() && !sessionEnded && !sessionStarted && !promptSubmitted)
+        if (!eventName.empty() && !sessionEnded && !sessionStarted && !promptSubmitted && !sessionUnbound)
         {
             return;
         }
@@ -11154,6 +11259,60 @@ namespace winrt::TerminalApp::implementation
                             }
                         }
                     };
+                    if (sessionUnbound)
+                    {
+                        const auto binding = _paneAgentSessions.find(*paneSessionId);
+                        if (agent != "opencode" || agentSessionId.empty() ||
+                            binding == _paneAgentSessions.end() ||
+                            binding->second.agent != L"opencode" ||
+                            binding->second.sessionId != winrt::to_hstring(agentSessionId))
+                        {
+                            return;
+                        }
+                        const auto interactiveOwner = _interactiveResumeSessions.find(*paneSessionId);
+                        if (interactiveOwner == _interactiveResumeSessions.end() ||
+                            (interactiveOwner->second.agent == L"opencode" &&
+                             interactiveOwner->second.sessionId == winrt::to_hstring(agentSessionId)))
+                        {
+                            clearExplicitResume();
+                        }
+                        _paneAgentSessions.erase(binding);
+                        if (const auto interactive = _interactiveResumeSessions.find(*paneSessionId);
+                            interactive != _interactiveResumeSessions.end() &&
+                            interactive->second.agent == L"opencode" &&
+                            interactive->second.sessionId == winrt::to_hstring(agentSessionId))
+                        {
+                            _interactiveResumeSessions.erase(interactive);
+                        }
+                        if (const auto active = _activeCliAgentPanes.find(*paneSessionId);
+                            active != _activeCliAgentPanes.end() &&
+                            active->second.sessionId == winrt::to_hstring(agentSessionId))
+                        {
+                            _activeCliAgentPanes.erase(active);
+                        }
+                        if (const auto pending = _pendingRestoredSessionBindings.find(*paneSessionId);
+                            pending != _pendingRestoredSessionBindings.end() &&
+                            pending->second.sessionId == winrt::to_hstring(agentSessionId))
+                        {
+                            _pendingRestoredSessionBindings.erase(pending);
+                        }
+                        if (const auto ended = _richTabEndedSessionByPaneId.find(*paneSessionId);
+                            ended != _richTabEndedSessionByPaneId.end() && ended->second == agentSessionId)
+                        {
+                            _richTabEndedSessionByPaneId.erase(ended);
+                        }
+                        if (_RichTabCwdDependentFieldsVisible())
+                        {
+                            if (const auto control = rootPane->FindPaneBySessionId(*paneSessionId)->GetTerminalControl())
+                            {
+                                _UpdateRichTabFirstPartyFields(control);
+                            }
+                            _RequestRichTabAgentStatusRefresh();
+                        }
+                        _UpdateTabIcon(*tabImpl);
+                        _ApplyTabListProjection(tab);
+                        return;
+                    }
                     if (sessionEnded)
                     {
                         if (const auto active = _activeCliAgentPanes.find(*paneSessionId);
@@ -11223,6 +11382,21 @@ namespace winrt::TerminalApp::implementation
                          agentSessionId.starts_with("sidekick-") ||
                          (agent.empty() && resumeCommandline.empty())))
                     {
+                        if (sessionStarted)
+                        {
+                            _richTabEndedSessionByPaneId.erase(*paneSessionId);
+                            if (_RichTabCwdDependentFieldsVisible())
+                            {
+                                if (const auto ownerPane = rootPane->FindPaneBySessionId(*paneSessionId))
+                                {
+                                    if (const auto control = ownerPane->GetTerminalControl())
+                                    {
+                                        _UpdateRichTabFirstPartyFields(control);
+                                    }
+                                }
+                                _RequestRichTabAgentStatusRefresh();
+                            }
+                        }
                         _UpdateTabIcon(*tabImpl);
                         _ApplyTabListProjection(tab);
                         return;
@@ -11334,6 +11508,36 @@ namespace winrt::TerminalApp::implementation
                         {
                             _agentPaneLog("OnPaneAgentSessionChanged: ignored prompt session " + agentSessionId + " for already-bound pane " + paneId);
                         }
+                    }
+                    if (sessionStarted)
+                    {
+                        _richTabEndedSessionByPaneId.erase(*paneSessionId);
+                    }
+                    else if (sessionEnded)
+                    {
+                        const auto endedId = winrt::to_hstring(agentSessionId);
+                        const auto active = _activeCliAgentPanes.find(*paneSessionId);
+                        const auto binding = _paneAgentSessions.find(*paneSessionId);
+                        const auto hasDifferentOwner =
+                            (active != _activeCliAgentPanes.end() && !active->second.sessionId.empty() &&
+                             active->second.sessionId != endedId) ||
+                            (binding != _paneAgentSessions.end() && !binding->second.sessionId.empty() &&
+                             binding->second.sessionId != endedId);
+                        if (!hasDifferentOwner)
+                        {
+                            _richTabEndedSessionByPaneId.insert_or_assign(*paneSessionId, agentSessionId);
+                        }
+                    }
+                    if (_RichTabCwdDependentFieldsVisible())
+                    {
+                        if (const auto ownerPane = rootPane->FindPaneBySessionId(*paneSessionId))
+                        {
+                            if (const auto control = ownerPane->GetTerminalControl())
+                            {
+                                _UpdateRichTabFirstPartyFields(control);
+                            }
+                        }
+                        _RequestRichTabAgentStatusRefresh();
                     }
                     _UpdateTabIcon(*tabImpl);
                     _ApplyTabListProjection(tab);
@@ -11685,6 +11889,10 @@ namespace winrt::TerminalApp::implementation
         if (existing)
         {
             broker.UpdateContext(*existing, workingDirectory, authoritative, shellType);
+            if (_RichTabCwdDependentFieldsVisible())
+            {
+                _UpdateRichTabFirstPartyFields(control);
+            }
             return;
         }
 
@@ -11716,6 +11924,10 @@ namespace winrt::TerminalApp::implementation
             _richTabAttachments.insert_or_assign(
                 key,
                 RichTabAttachment{ attachment, sessionId, reservation });
+        }
+        if (attachment != 0 && _RichTabCwdDependentFieldsVisible())
+        {
+            _UpdateRichTabFirstPartyFields(control);
         }
     }
 
@@ -12025,6 +12237,8 @@ namespace winrt::TerminalApp::implementation
         params["window_id"] = Json::UInt64{ identity.windowId };
         params["tab_id"] = identity.tabId;
         params["mode_epoch"] = Json::UInt64{ identity.modeEpoch };
+        params["pane_created_at_ms"] = Json::UInt64{ identity.paneCreatedAtMs };
+        params["pane_creation_sequence"] = Json::UInt64{ identity.paneCreationSequence };
         if (receiverGeneration != 0)
         {
             params["receiver_generation"] = Json::UInt64{ receiverGeneration };
@@ -12032,11 +12246,11 @@ namespace winrt::TerminalApp::implementation
         if (!identity.agentSessionId.empty())
         {
             params["agent_session_id"] = identity.agentSessionId;
-            const auto location = _NativeAgentObservationLocation(identity.location);
-            if (!location.isNull())
-            {
-                params["location"] = location;
-            }
+        }
+        const auto observationLocation = _NativeAgentObservationLocation(identity.location);
+        if (!observationLocation.isNull())
+        {
+            params["location"] = observationLocation;
         }
         const auto enabled = _settings.GlobalSettings().EffectiveAgentSessionManagementEnabled();
         if (!previous || previous->modeEpoch != identity.modeEpoch || birthBeforeReset)
@@ -12221,13 +12435,110 @@ namespace winrt::TerminalApp::implementation
         return std::nullopt;
     }
 
+    std::pair<bool, std::optional<std::string>> TerminalPage::_RichTabAgentCwdForControl(const TermControl& control)
+    {
+        const auto paneId = _TryParsePaneSessionId(_FindSessionIdForControl(control));
+        if (!paneId)
+        {
+            return { false, std::nullopt };
+        }
+        std::optional<std::string> expectedSession;
+        bool hasOwner = false;
+        if (const auto marker = _activeCliAgentPanes.find(*paneId);
+            marker != _activeCliAgentPanes.end())
+        {
+            hasOwner = true;
+            if (!marker->second.sessionId.empty())
+            {
+                expectedSession = winrt::to_string(marker->second.sessionId);
+            }
+        }
+        else if (const auto binding = _paneAgentSessions.find(*paneId);
+                 binding != _paneAgentSessions.end())
+        {
+            hasOwner = true;
+            if (!binding->second.sessionId.empty())
+            {
+                expectedSession = winrt::to_string(binding->second.sessionId);
+            }
+        }
+        if (!_activeCliAgentPanes.contains(*paneId) &&
+            _paneAgentSessions.contains(*paneId))
+        {
+            if (const auto ended = _richTabEndedSessionByPaneId.find(*paneId);
+                ended != _richTabEndedSessionByPaneId.end() &&
+                (!expectedSession || ended->second.empty() || ended->second == *expectedSession))
+            {
+                return { false, std::nullopt };
+            }
+        }
+        if (hasOwner && !expectedSession)
+        {
+            return { true, std::nullopt };
+        }
+        if (!hasOwner)
+        {
+            hasOwner = !winrt::get_self<ContentManager>(_manager)->NativeAgentProviderId(control.ContentId()).empty();
+            if (!hasOwner)
+            {
+                for (const auto& runtimeTab : _RuntimeTabs())
+                {
+                    if (const auto tab = _GetTabImpl(runtimeTab))
+                    {
+                        if (const auto rootPane = tab->GetRootPane();
+                            rootPane && rootPane->WalkTree([&](const auto& pane) {
+                                return pane->GetTerminalControl() == control &&
+                                       static_cast<bool>(pane->GetContent().try_as<AgentPaneContent>());
+                            }))
+                        {
+                            hasOwner = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        const auto info = _RichTabAgentInfoForControl(control);
+        const auto live = info &&
+                          (info->status == "Idle" || info->status == "Working" ||
+                           info->status == "Attention" || info->status == "Error") &&
+                          info->paneSessionId == paneId;
+        if (!live)
+        {
+            return { hasOwner, std::nullopt };
+        }
+        if (const auto ended = _richTabEndedSessionByPaneId.find(*paneId);
+            ended != _richTabEndedSessionByPaneId.end() &&
+            (ended->second.empty() || ended->second == info->sessionId))
+        {
+            return { expectedSession.has_value(), std::nullopt };
+        }
+        if (expectedSession && info->sessionId != *expectedSession)
+        {
+            return { true, std::nullopt };
+        }
+        if (!_richTabAgentCwdAvailable)
+        {
+            return { true, std::nullopt };
+        }
+        return { true, info->cwd };
+    }
+
+    bool TerminalPage::_RichTabCwdDependentFieldsVisible() const
+    {
+        return _tabStrip.RichTabWorkingDirectoryVisible() ||
+               _tabStrip.RichTabRepositoryVisible() ||
+               _tabStrip.RichTabBranchVisible() ||
+               _tabStrip.RichTabChangesVisible();
+    }
+
     std::unordered_map<std::string, std::string> TerminalPage::_BuildRichTabFirstPartyFields(const TermControl& control)
     {
         std::unordered_map<std::string, std::string> firstPartyFields;
         if (const auto agentInfo = _RichTabAgentInfoForControl(control))
         {
-            const auto text = _SidebarHistoryStatusText(agentInfo->status);
-            firstPartyFields.emplace("agentStatus", winrt::to_string(text));
+            firstPartyFields.emplace("agentStatus", winrt::to_string(_SidebarHistoryStatusText(agentInfo->status)));
+            firstPartyFields.emplace("agentStatusId", agentInfo->status);
         }
         firstPartyFields.emplace("branchLabel", winrt::to_string(RS_(L"VerticalTabsMetadataBranch/Text")));
         firstPartyFields.emplace("changesLabel", winrt::to_string(RS_(L"VerticalTabsMetadataChanges/Text")));
@@ -12250,7 +12561,8 @@ namespace winrt::TerminalApp::implementation
             return;
         }
         if (!_richTabAgentStatusSnapshotLoaded &&
-            !_richTabAgentStatusRefreshInFlight)
+            !_richTabAgentStatusRefreshInFlight &&
+            !_richTabAgentStatusAutoRefreshBlocked)
         {
             _RequestRichTabAgentStatusRefresh();
         }
@@ -12258,6 +12570,12 @@ namespace winrt::TerminalApp::implementation
         ::Microsoft::Terminal::RichTab::Provider::ProviderBroker::Instance().UpdateFirstPartyFields(
             attachment,
             _BuildRichTabFirstPartyFields(control));
+        if (_RichTabCwdDependentFieldsVisible())
+        {
+            const auto [active, cwd] = _RichTabAgentCwdForControl(control);
+            ::Microsoft::Terminal::RichTab::Provider::ProviderBroker::Instance().UpdateAgentWorkingDirectory(
+                attachment, active, cwd);
+        }
     }
 
     void TerminalPage::_RefreshRichTabForTab(Tab& tab, const bool activate, const bool refreshPaneItems)
@@ -12268,7 +12586,11 @@ namespace winrt::TerminalApp::implementation
             return;
         }
 
-        const auto pane = tab.GetActivePane();
+        // The auxiliary assistant is not a sidebar pane; its focus must not replace terminal metadata.
+        const auto activePane = tab.GetActivePane();
+        const auto pane = activePane && activePane->IsAgentPane() ?
+                              _SourceTerminalPaneForTab(tab.get_strong()) :
+                              activePane;
         const auto control = pane ? pane->GetTerminalControl() : nullptr;
         if (!control)
         {
@@ -12395,6 +12717,11 @@ namespace winrt::TerminalApp::implementation
                 _RichTabAgentInfo info{ session, row["status"].asString(), provider,
                     row["last_activity_at_ms"].isUInt64() ? std::optional<uint64_t>{ row["last_activity_at_ms"].asUInt64() } : std::nullopt,
                     paneId };
+                if (row["cwd"].isString() && !row["cwd"].asString().empty() &&
+                    !(provider == "antigravity" && row.get("origin", "").asString() != "AgentPane"))
+                {
+                    info.cwd = row["cwd"].asString();
+                }
                 if (native)
                 {
                     info.modeEpoch = row["mode_epoch"].asUInt64();
@@ -12408,6 +12735,19 @@ namespace winrt::TerminalApp::implementation
         append(response["sessions"], false);
         append(response["native_pane_observations"], true);
         return rows;
+    }
+
+    void TerminalPage::_InvalidateRichTabAgentCwdCache()
+    {
+        _richTabAgentCwdAvailable = false;
+        for (auto& [sessionId, info] : _richTabAgentStatusBySessionId)
+        {
+            info.cwd.reset();
+        }
+        for (auto& [paneId, info] : _richTabAgentStatusByPaneId)
+        {
+            info.cwd.reset();
+        }
     }
 
     safe_void_coroutine TerminalPage::_LoadRichTabAgentStatuses(const uint64_t generation)
@@ -12461,47 +12801,63 @@ namespace winrt::TerminalApp::implementation
             (receiverGeneration == 0 ||
              (response["native_observation_receiver_generation"].isUInt64() &&
               response["native_observation_receiver_generation"].asUInt64() == receiverGeneration));
-        if (generation == page->_richTabAgentStatusRequestGeneration && parsed && receiverMatches)
+        if (generation == page->_richTabAgentStatusRequestGeneration &&
+            receiverGeneration == currentReceiverGeneration && (receiverMatches || !parsed))
         {
-            for (const auto& runtimeTab : page->_RuntimeTabs())
+            if (receiverMatches)
             {
-                if (const auto tab = page->_GetTabImpl(runtimeTab); tab && tab->GetRootPane())
+                for (const auto& runtimeTab : page->_RuntimeTabs())
                 {
-                    tab->GetRootPane()->WalkTree([&](const auto& pane) {
-                        if (const auto control = pane->GetTerminalControl())
-                        {
-                            page->_PreserveNativeAgentIdentity(control);
-                        }
-                        return false;
-                    });
-                }
-            }
-            page->_richTabAgentStatusBySessionId = std::move(snapshot.bySession);
-            page->_richTabAgentStatusByPaneId = std::move(snapshot.byPane);
-            page->_nativeAgentStatusSnapshotReceiverGeneration = receiverGeneration;
-            page->_richTabAgentStatusSnapshotLoaded = true;
-            if (_NativeAgentReceiverSnapshotReady(response, receiverGeneration, currentReceiverGeneration))
-            {
-                page->_ReplayNativeAgentObservationsForReceiver(receiverGeneration);
-            }
-            for (const auto& runtimeTab : page->_RuntimeTabs())
-            {
-                if (const auto tab = page->_GetTabImpl(runtimeTab))
-                {
-                    page->_UpdateTabIcon(*tab);
-                    if (const auto rootPane = tab->GetRootPane())
+                    if (const auto tab = page->_GetTabImpl(runtimeTab); tab && tab->GetRootPane())
                     {
-                        rootPane->WalkTree([&](const auto& pane) {
+                        tab->GetRootPane()->WalkTree([&](const auto& pane) {
                             if (const auto control = pane->GetTerminalControl())
                             {
-                                page->_AttachOrUpdateRichTabControl(control);
-                                page->_UpdateRichTabFirstPartyFields(control);
+                                page->_PreserveNativeAgentIdentity(control);
                             }
                             return false;
                         });
                     }
-                    page->_RefreshRichTabForTab(*tab, false, false);
-                    page->_RefreshTabStripPaneItems(tab);
+                }
+                page->_richTabAgentStatusBySessionId = std::move(snapshot.bySession);
+                page->_richTabAgentStatusByPaneId = std::move(snapshot.byPane);
+                page->_nativeAgentStatusSnapshotReceiverGeneration = receiverGeneration;
+                page->_richTabAgentStatusSnapshotLoaded = true;
+                page->_richTabAgentCwdAvailable = true;
+                if (_NativeAgentReceiverSnapshotReady(response, receiverGeneration, currentReceiverGeneration))
+                {
+                    page->_ReplayNativeAgentObservationsForReceiver(receiverGeneration);
+                }
+            }
+            else
+            {
+                page->_InvalidateRichTabAgentCwdCache();
+            }
+            page->_richTabAgentStatusAutoRefreshBlocked = !parsed;
+            if (receiverMatches || page->_RichTabCwdDependentFieldsVisible())
+            {
+                for (const auto& runtimeTab : page->_RuntimeTabs())
+                {
+                    if (const auto tab = page->_GetTabImpl(runtimeTab))
+                    {
+                        if (receiverMatches)
+                        {
+                            page->_UpdateTabIcon(*tab);
+                        }
+                        if (const auto rootPane = tab->GetRootPane())
+                        {
+                            rootPane->WalkTree([&](const auto& pane) {
+                                if (const auto control = pane->GetTerminalControl())
+                                {
+                                    page->_AttachOrUpdateRichTabControl(control);
+                                    page->_UpdateRichTabFirstPartyFields(control);
+                                }
+                                return false;
+                            });
+                        }
+                        page->_RefreshRichTabForTab(*tab, false, false);
+                        page->_RefreshTabStripPaneItems(tab);
+                    }
                 }
             }
         }
@@ -12551,8 +12907,11 @@ namespace winrt::TerminalApp::implementation
                 {
                     continue;
                 }
-                if (const auto activePane = tab->GetActivePane();
-                    activePane && activePane->GetSessionId() == target)
+                const auto activePane = tab->GetActivePane();
+                const auto presentedPane = activePane && activePane->IsAgentPane() ?
+                                               _SourceTerminalPaneForTab(tab) :
+                                               activePane;
+                if (presentedPane && presentedPane->GetSessionId() == target)
                 {
                     tab->SetRichTabPresentation(update.presentation);
                 }
@@ -12822,6 +13181,10 @@ namespace winrt::TerminalApp::implementation
                             {
                                 if (const auto richTabControl = weakTerm.get())
                                 {
+                                    if (seqStr == "osc:133;A")
+                                    {
+                                        page->_ReconcileShellPromptAgentExit(richTabControl);
+                                    }
                                     page->_AttachOrUpdateRichTabControl(richTabControl);
                                     if (seqStr.starts_with("osc:133;D"))
                                     {
@@ -14156,6 +14519,8 @@ namespace winrt::TerminalApp::implementation
                 {
                     const auto& value = *presentation->second.presentation;
                     itemImpl->MetadataText(winrt::hstring{ value.text });
+                    itemImpl->MetadataHighlightRanges(TabHeaderControl::BuildMetadataHighlightRanges(value));
+                    itemImpl->MetadataHighlightColor(TabHeaderControl::AgentStatusHighlightColor(value.agentStatus));
                     itemImpl->MetadataVisibility(value.text.empty() ? Visibility::Collapsed : Visibility::Visible);
                     if (!value.accessibilityText.empty())
                     {
@@ -14599,6 +14964,7 @@ namespace winrt::TerminalApp::implementation
                     _explicitNativeAgentSessions.insert(paneId);
                 }
             }
+            moveBindings(source._richTabEndedSessionByPaneId, _richTabEndedSessionByPaneId);
         }
         try
         {
@@ -15659,7 +16025,8 @@ namespace winrt::TerminalApp::implementation
         // Do any initialization that needs to apply to _every_ TermControl we
         // create here.
         const auto content = winrt::get_self<ContentManager>(_manager)->CreateAgentCliCore(
-            *settings.DefaultSettings(), settings.UnfocusedSettings().try_as<IControlAppearance>(), connection, nativeAgentProviderId);
+            *settings.DefaultSettings(), settings.UnfocusedSettings().try_as<IControlAppearance>(), connection, nativeAgentProviderId,
+            !nativeAgentProviderId.empty() && settings.DefaultSettings()->UsesManagedAgentCommand() ? "Host" : "");
         const TermControl control{ content };
         return _SetupControl(control);
     }

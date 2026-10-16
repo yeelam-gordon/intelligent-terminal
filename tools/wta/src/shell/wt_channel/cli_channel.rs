@@ -960,6 +960,11 @@ impl WtChannel for CliChannel {
     ) -> anyhow::Result<serde_json::Value> {
         // Map protocol method names to wtcli subcommands + args.
         match method {
+            "publish" => {
+                let payload = params.to_string();
+                self.run_wtcli(&["publish", "--existing-only", &payload])
+                    .await
+            }
             "list_windows" => self.run_wtcli(&["list-windows"]).await,
             "list_tabs" => {
                 let mut args = vec!["list-tabs"];

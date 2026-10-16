@@ -5,6 +5,7 @@
 #include "ContentManager.h"
 #include "ContentManager.g.cpp"
 #include "TerminalPage.h"
+#include "../inc/AgentRegistry.h"
 
 #include <wil/token_helpers.h>
 #include <json/json.h>
@@ -34,14 +35,18 @@ namespace winrt::TerminalApp::implementation
     ControlInteractivity ContentManager::CreateAgentCliCore(const Microsoft::Terminal::Control::IControlSettings& settings,
                                                             const IControlAppearance& unfocusedAppearance,
                                                             const TerminalConnection::ITerminalConnection& connection,
-                                                            const winrt::hstring& providerId)
+                                                            const winrt::hstring& providerId,
+                                                            const std::string& nativeAgentLaunchLocation)
     {
+        const auto createdAtMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                          std::chrono::system_clock::now().time_since_epoch())
+                                                          .count());
         ControlInteractivity content{ settings, unfocusedAppearance, connection };
         content.Closed({ get_weak(), &ContentManager::_closedHandler });
 
         {
             std::lock_guard lock{ _mutex };
-            _content.emplace(content.Id(), TerminalContent{ content, providerId });
+            _content.emplace(content.Id(), TerminalContent{ content, providerId, createdAtMs, nativeAgentLaunchLocation });
         }
 
         return content;
@@ -98,6 +103,28 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
+    bool ContentManager::RefineNativeAgentLaunchLocation(
+        const uint64_t contentId, const winrt::hstring& providerId, const std::string& location)
+    {
+        std::lock_guard lock{ _mutex };
+        if (const auto it = _content.find(contentId);
+            it != _content.end() && !location.empty() && !it->second.agentHelper &&
+            !it->second.nativeAgentProviderId.empty() &&
+            ::Microsoft::Terminal::Settings::Model::AgentRegistry::AgentIdEquals(it->second.nativeAgentProviderId, providerId) &&
+            it->second.nativeAgentLaunchLocation.empty() && it->second.observation.agentSessionId.empty() &&
+            it->second.observation.qualifiedSessionId.empty() &&
+            (it->second.observation.location.empty() || it->second.observation.location == location))
+        {
+            it->second.nativeAgentLaunchLocation = location;
+            if (it->second.observation.modeEpoch != 0)
+            {
+                it->second.observation.location = location;
+            }
+            return true;
+        }
+        return false;
+    }
+
     ContentManager::NativeAgentObservationIdentity ContentManager::AdmitNativeAgentObservation(
         const uint64_t contentId, const uint64_t windowId, const std::string& tabId, const std::string& agentSessionId, const std::string& location, const bool reset, const uint64_t receiverGeneration)
     {
@@ -111,18 +138,20 @@ namespace winrt::TerminalApp::implementation
                 return {};
             }
             auto& identity = it->second.observation;
+            const auto& observationLocation = location.empty() ? it->second.nativeAgentLaunchLocation : location;
             if (reset || identity.modeEpoch == 0 || identity.providerId != provider ||
                 identity.windowId != windowId || identity.tabId != tabId ||
-                identity.agentSessionId != agentSessionId || identity.location != location ||
+                identity.agentSessionId != agentSessionId || identity.location != observationLocation ||
                 identity.receiverGeneration != receiverGeneration)
             {
                 const auto retainQualified = identity.providerId == provider &&
                     (agentSessionId.empty() ? identity.agentSessionId.empty() : identity.qualifiedSessionId == agentSessionId) &&
-                    (location.empty() || identity.qualifiedLocation == location);
+                    (observationLocation.empty() || identity.qualifiedLocation == observationLocation);
                 auto qualifiedSessionId = retainQualified ? identity.qualifiedSessionId : std::string{};
                 auto qualifiedLocation = retainQualified ? identity.qualifiedLocation : std::string{};
-                identity = { provider, ++_nativeAgentObservationGeneration, windowId, tabId, agentSessionId, location,
-                    !it->second.observationAdmitted, receiverGeneration, std::move(qualifiedSessionId), std::move(qualifiedLocation) };
+                identity = { provider, ++_nativeAgentObservationGeneration, windowId, tabId, agentSessionId, observationLocation,
+                    !it->second.observationAdmitted, receiverGeneration, std::move(qualifiedSessionId), std::move(qualifiedLocation),
+                    it->second.paneCreatedAtMs, contentId };
                 it->second.observationAdmitted = true;
             }
             return identity;
@@ -344,7 +373,15 @@ namespace winrt::TerminalApp::implementation
         const auto ended = name == "agent.session.end" || name == "agent.session.stopped";
         const auto started = name == "agent.session.start" || name == "agent.session.started";
         const auto prompt = name == "agent.prompt.submit";
-        if (!ended && !started && !prompt)
+        const auto unbound = name == "agent.session.unbind";
+        if (!ended && !started && !prompt && !unbound)
+        {
+            return;
+        }
+        const auto& payload = params["payload"];
+        const auto paneOwner = payload.isObject() ? payload.get("pane_owner", Json::Value{}) : Json::Value{};
+        if (params.get("agent", params.get("cli_source", "")).asString() == "opencode" &&
+            paneOwner.isBool() && !paneOwner.asBool())
         {
             return;
         }
@@ -363,7 +400,7 @@ namespace winrt::TerminalApp::implementation
         }
         const auto agentSessionId = winrt::to_hstring(params.get("agent_session_id", "").asString());
         const auto agent = winrt::to_hstring(params.get("agent", params.get("cli_source", "")).asString());
-        if (!ended && (agentSessionId.empty() || std::wstring_view{ agentSessionId }.starts_with(L"sidekick-") || agent.empty()))
+        if ((!ended || unbound) && (agentSessionId.empty() || std::wstring_view{ agentSessionId }.starts_with(L"sidekick-") || agent.empty()))
         {
             return;
         }
@@ -386,7 +423,14 @@ namespace winrt::TerminalApp::implementation
             return;
         }
         auto& policy = _agentBindings[contentId];
-        if (ended)
+        if (unbound)
+        {
+            if (agent == L"opencode" && policy.agent == agent && policy.agentSessionId == agentSessionId)
+            {
+                policy = {};
+            }
+        }
+        else if (ended)
         {
             if (agentSessionId.empty() || agentSessionId == policy.agentSessionId)
             {
@@ -397,6 +441,7 @@ namespace winrt::TerminalApp::implementation
         {
             policy.agentSessionId = agentSessionId;
             policy.eventJson = eventJson;
+            policy.agent = agent;
             std::lock_guard lock{ _mutex };
             if (const auto content = _content.find(contentId);
                 content != _content.end() && !content->second.nativeAgentProviderId.empty() &&

@@ -1,6 +1,6 @@
 #Requires -Modules @{ ModuleName='Pester'; ModuleVersion='5.0.0' }
 # Real provider-labelled COM creation -> child stdout -> ConPTY parser -> Sidebar metadata.
-# No hooks, status injection or inferred conversation IDs.
+# No hooks or status injection; list guesses remain separate from confirmed identity.
 # Known resume uses separately seeded real Copilot history; this suite sends no ACP prompts.
 # Without Sessions/hooks, command completion or retained connection state cannot
 # prove that the native agent ended; its pane ID must disappear.
@@ -134,8 +134,10 @@ param([string]$Signal, [string]$Receipt, [string]$Title, [int]$LifetimeSec = 300
 $last = ''
 $clock = [Diagnostics.Stopwatch]::StartNew()
 while ($clock.Elapsed.TotalSeconds -lt $LifetimeSec) {
-    if (Test-Path -LiteralPath $Signal) {
-        $stream = [IO.File]::Open($Signal, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+    $next = Get-ChildItem -LiteralPath ([IO.Path]::GetDirectoryName($Signal)) `
+        -Filter ([IO.Path]::GetFileName($Signal) + '.*.request') -File | Select-Object -First 1
+    if ($next) {
+        $stream = [IO.File]::Open($next.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read,
             [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
         $reader = [IO.StreamReader]::new($stream)
         try { $line = $reader.ReadToEnd() } finally { $reader.Dispose() }
@@ -147,6 +149,7 @@ while ($clock.Elapsed.TotalSeconds -lt $LifetimeSec) {
             else { [Console]::Write([char]27 + ']9;4;' + $request.state + ';50' + [char]27 + '\') }
             [Console]::Out.Flush()
             [IO.File]::WriteAllText($Receipt, $request.token)
+            Remove-Item -LiteralPath $next.FullName
         }
     }
     Start-Sleep -Milliseconds 50
@@ -157,6 +160,7 @@ exit 124
 '@ | Set-Content -LiteralPath $script:fixture
         $acp = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-AcpChatAgent.ps1')).Path
         $history = Join-Path $script:evidence 'acp-history.json'
+        $script:historyPath = $history
         @{ sessions = @() } | ConvertTo-Json | Set-Content -LiteralPath $history
         $code = "& '$($acp.Replace("'", "''"))' -LogPath '$($script:evidence.Replace("'", "''"))\acp.log' -HistoryPath '$($history.Replace("'", "''"))'"
         $profile = '{' + [guid]::NewGuid().ToString() + '}'
@@ -271,8 +275,8 @@ catch {
         } | ConvertTo-Json | Set-Content (Join-Path $script:evidence 'host-activation-isolation.json')
         $script:hookIsolationVerified = [bool]($directHost -or $shimHost)
         function Assert-StatusDeadline {
-            if ($script:suiteClock.Elapsed.TotalSeconds -ge 240) {
-                throw 'Sessions-off suite exceeded its four-minute outer deadline.'
+            if ($script:suiteClock.Elapsed.TotalSeconds -ge 300) {
+                throw 'Sessions-off suite exceeded its five-minute outer deadline.'
             }
             foreach ($fixture in $script:fixtures) {
                 if (Test-Path "$($fixture.Receipt).failure.json") {
@@ -286,12 +290,34 @@ catch {
             $title = "IT-status-$Kind-" + [guid]::NewGuid().ToString('N').Substring(0, 8)
             $signal = Join-Path $script:evidence "$title.signal.json"
             $receipt = Join-Path $script:evidence "$title.receipt.txt"
-            $command = "`"$pwsh`" -NoProfile -File `"$script:fixture`" -Signal `"$signal`" -Receipt `"$receipt`" -Title $title"
+            $command = "`"$pwsh`" -NoProfile -File `"$script:fixture`" -Signal `"$signal`" -Receipt `"$receipt`" -Title $title -LifetimeSec 300"
             $args = @('new-tab', '-c', $command, '-n', $title, '-d', $script:evidence)
             if ($Kind -eq 'native') { $args += @('--agent-provider', 'copilot') }
-            $pane = Invoke-WtCli -App $script:app -Arguments $args
+            $createdAfterMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            if ($Kind -in @('delegate', 'delegate-prompt')) {
+                $previousPane = Get-ActivePane -App $script:app
+                $delegate = @('delegate', '--agent', 'copilot', '--delegate-agent', $command,
+                    '--delegate-agent-id', 'custom:sessions-off-fixture', '--delegate-source', 'host',
+                    '--cwd', $script:evidence)
+                if ($Kind -eq 'delegate-prompt') { $delegate += 'controlled startup prompt' }
+                $result = Invoke-Wta -App $script:app -Arguments $delegate -Raw -TimeoutSec 20
+                $result.ExitCode | Should -Be 0 -Because $result.StdErr
+                $pane = Get-ActivePane -App $script:app
+                $pane.session_id | Should -Not -Be $previousPane.session_id
+                $actual = @(Get-WtPanes -App $script:app -TabId $pane.tab_id |
+                    Where-Object session_id -EQ $pane.session_id)
+                $actual | Should -HaveCount 1
+                $actual[0].native_agent_provider_id | Should -Be 'custom:sessions-off-fixture'
+            }
+            else {
+                $pane = Invoke-WtCli -App $script:app -Arguments $args
+            }
+            $createdBeforeMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
             $pane.session_id | Should -Not -BeNullOrEmpty
-            $fixture = [pscustomobject]@{ Pane = $pane; Title = $title; Signal = $signal; Receipt = $receipt; Kind = $Kind }
+            $fixture = [pscustomobject]@{
+                Pane = $pane; Title = $title; Signal = $signal; Receipt = $receipt; Kind = $Kind
+                CreatedAfterMs = $createdAfterMs; CreatedBeforeMs = $createdBeforeMs; Creation = $null
+            }
             $script:fixtures += $fixture
             $fixture
         }
@@ -364,8 +390,9 @@ catch {
             $token = [guid]::NewGuid().ToString('N')
             $request = @{ kind = $Kind; state = $State; token = $token } | ConvertTo-Json -Compress
             $staging = "$($Fixture.Signal).next"
+            $destination = "$($Fixture.Signal).$token.request"
             [IO.File]::WriteAllText($staging, $request)
-            [IO.File]::Move($staging, $Fixture.Signal, $true)
+            [IO.File]::Move($staging, $destination)
             if ($Kind -ne 'close') {
                 Wait-Until -TimeoutSec 10 -Because 'the real child emitted the exact signal' -Condition {
                     Assert-StatusDeadline
@@ -436,7 +463,8 @@ catch {
             if ($snapshot.PSObject.Properties.Name -contains 'native_pane_observations') {
                 ($snapshot.native_pane_observations -is [array]) | Should -BeTrue
                 foreach ($observation in $snapshot.native_pane_observations) {
-                    foreach ($key in @('pane_id', 'provider_id', 'window_id', 'tab_id', 'mode_epoch', 'status', 'last_activity_at_ms')) {
+                    foreach ($key in @('pane_id', 'provider_id', 'window_id', 'tab_id', 'mode_epoch',
+                        'pane_created_at_ms', 'pane_creation_sequence', 'status', 'last_activity_at_ms')) {
                         $observation.PSObject.Properties.Name | Should -Contain $key
                     }
                     [guid]::Parse($observation.pane_id) | Should -Not -Be ([guid]::Empty)
@@ -445,6 +473,8 @@ catch {
                     $observation.tab_id | Should -Not -BeNullOrEmpty
                     $observation.mode_epoch | Should -BeGreaterOrEqual 0
                     $observation.last_activity_at_ms | Should -BeGreaterThan 0
+                    $observation.pane_created_at_ms | Should -BeGreaterThan 0
+                    $observation.pane_creation_sequence | Should -BeGreaterThan 0
                 }
             }
             foreach ($session in $snapshot.sessions) {
@@ -469,6 +499,17 @@ catch {
                 [string]$observation.window_id | Should -Be $script:window
                 $observation.agent_session_id | Should -BeNullOrEmpty -Because 'a new native pane has no known conversation ID'
                 $observation.location | Should -BeNullOrEmpty
+                $observation.pane_created_at_ms | Should -BeGreaterOrEqual $Fixture.CreatedAfterMs
+                $observation.pane_created_at_ms | Should -BeLessOrEqual $Fixture.CreatedBeforeMs
+                if ($Fixture.Creation) {
+                    $observation.pane_created_at_ms | Should -Be $Fixture.Creation.Time
+                    $observation.pane_creation_sequence | Should -Be $Fixture.Creation.Sequence
+                }
+                else {
+                    $Fixture.Creation = @{
+                        Time = $observation.pane_created_at_ms; Sequence = $observation.pane_creation_sequence
+                    }
+                }
                 @($captured.Snapshot.sessions | Where-Object {
                     ([string]$_.pane_session_id).Trim('{}') -eq ([string]$Fixture.Pane.session_id).Trim('{}')
                 }) | Should -HaveCount 0 -Because 'pane observations are not invented ACP sessions'
@@ -498,7 +539,9 @@ catch {
         foreach ($fixture in @($script:native, $script:otherNative)) {
             $panes = @(Get-WtPanes -App $script:app -WindowId $script:window -TabId $fixture.Pane.tab_id)
             ($panes | Where-Object session_id -EQ $fixture.Pane.session_id).native_agent_provider_id | Should -Be copilot
+            Assert-RegistryObservation $fixture Idle
         }
+        $script:otherNative.Creation.Sequence | Should -BeGreaterThan $script:native.Creation.Sequence
     }
     AfterAll {
         try {
@@ -572,6 +615,75 @@ catch {
         Assert-Status $script:native Idle
         Send-StatusSignal $script:otherNative -State 0
         Assert-Status $script:otherNative Idle
+    }
+    It 'Sessions off new native panes retain creation metadata and infer list identity without control ownership' {
+        # Real launch-only and prompt delegate creation share the same immutable
+        # pane record; only SDK discovery supplies the separately marked guess.
+        $delegates = @(New-StatusFixture delegate; New-StatusFixture delegate-prompt)
+        try {
+            $rows = foreach ($fixture in $delegates) {
+                $row = @(Wait-Until -TimeoutSec 10 -Because 'the registry merges actual launch source with its admitted pane' -Condition {
+                    $snapshot = Get-StatusRegistrySnapshot
+                    $observations = @($snapshot.native_pane_observations | Where-Object {
+                        ([string]$_.pane_id).Trim('{}') -eq ([string]$fixture.Pane.session_id).Trim('{}')
+                    })
+                    if ($observations.Count -eq 1 -and $observations[0].location -eq 'Host') { $observations[0] }
+                })
+                $row | Should -HaveCount 1
+                $row[0].location | Should -Be Host
+                $row[0].pane_created_at_ms | Should -BeGreaterOrEqual $fixture.CreatedAfterMs
+                $row[0].pane_created_at_ms | Should -BeLessOrEqual $fixture.CreatedBeforeMs
+                $row[0].agent_session_id | Should -BeNullOrEmpty
+                $fixture.Creation = @{ Time = $row[0].pane_created_at_ms; Sequence = $row[0].pane_creation_sequence }
+                Send-StatusSignal $fixture -State 1
+                @{
+                    sessionId = [guid]::NewGuid().ToString()
+                    title = "controlled inferred $($fixture.Kind)"; cwd = $script:evidence
+                    updatedAt = [DateTimeOffset]::FromUnixTimeMilliseconds($row[0].pane_created_at_ms + 1).ToString('o')
+                }
+            }
+            Wait-Until -TimeoutSec 20 -Because 'an existing empty discovery completes after both launches before publishing fresh history' -Condition {
+                $complete = @(Get-Content (Join-Path $script:evidence 'acp.log') | Where-Object {
+                    $parts = $_ -split '\|'
+                    $parts.Count -ge 3 -and $parts[1] -eq 'list-complete' -and
+                        [DateTimeOffset]::Parse($parts[2]).ToUnixTimeMilliseconds() -gt $delegates[-1].CreatedBeforeMs
+                })
+                $complete.Count -gt 0
+            } | Out-Null
+            $stage = "$($script:historyPath).next"
+            @{ sessions = @($rows[1], $rows[0]) } | ConvertTo-Json -Depth 8 | Set-Content $stage
+            [IO.File]::Move($stage, $script:historyPath, $true)
+            $matched = Wait-Until -TimeoutSec 20 -Because 'existing ACP discovery enriches ordered pending panes without control bindings' -Condition {
+                $snapshot = Get-StatusRegistrySnapshot
+                $found = @($snapshot.native_pane_observations | Where-Object inferred_agent_session_id -In $rows.sessionId)
+                if ($found.Count -eq 2 -and @($found | Where-Object status -NE Working).Count -eq 0) { $snapshot }
+            }
+            for ($i = 0; $i -lt $delegates.Count; $i++) {
+                $row = @($matched.native_pane_observations | Where-Object {
+                    ([string]$_.pane_id).Trim('{}') -eq ([string]$delegates[$i].Pane.session_id).Trim('{}')
+                })
+                $row | Should -HaveCount 1
+                $row[0].inferred_agent_session_id | Should -Be $rows[$i].sessionId
+                $row[0].agent_session_id | Should -BeNullOrEmpty
+                $row[0].pane_created_at_ms | Should -Be $delegates[$i].Creation.Time
+                $row[0].pane_creation_sequence | Should -Be $delegates[$i].Creation.Sequence
+                $row[0].status | Should -Be Working
+                $sessions = @($matched.sessions | Where-Object session_id -EQ $rows[$i].sessionId)
+                $sessions | Should -HaveCount 1
+                $sessions[0].pane_session_id |
+                    Should -BeNullOrEmpty -Because 'a guess never authorizes live control or SDK status routing'
+            }
+            $matched | ConvertTo-Json -Depth 16 | Set-Content (Join-Path $script:evidence 'delegate-list-enrichment.json')
+        }
+        finally {
+            foreach ($fixture in $delegates) { Close-WtPane -App $script:app -SessionId $fixture.Pane.session_id }
+        }
+        Wait-Until -TimeoutSec 10 -Because 'actual pane retirement removes inferred live records' -Condition {
+            $snapshot = Get-StatusRegistrySnapshot
+            -not @($snapshot.native_pane_observations | Where-Object {
+                ([string]$_.pane_id).Trim('{}') -in @($delegates.Pane.session_id | ForEach-Object { $_.Trim('{}') })
+            }).Count
+        } | Out-Null
     }
     It 'Sessions on without hooks suppresses native OSC and BEL fallback' {
         if (-not $script:hookIsolationVerified) {
@@ -698,7 +810,12 @@ class CopilotFixture {
         start.Arguments = "-NoProfile -File \"__DISPATCH__\" " + args[0] + " " + args[1];
         start.EnvironmentVariables["ITE2E_COPILOT_LAUNCHER_PID"] = Process.GetCurrentProcess().Id.ToString();
         using (var child = Process.Start(start)) {
-            child.WaitForExit();
+            if (!child.WaitForExit(330000)) {
+                child.CloseMainWindow();
+                if (!child.WaitForExit(5000)) child.Kill();
+                if (!child.WaitForExit(5000)) return 124;
+                return 124;
+            }
             return child.ExitCode;
         }
     }
@@ -839,6 +956,35 @@ class CopilotFixture {
                 $text = Get-StatusText $native
                 if ($text -match [regex]::Escape($step.Text)) { $text }
             } | Set-Content (Join-Path $script:evidence "known-$($step.Status)-tab.txt")
+            $hookEvents = switch ($step.Status) {
+                Working { @('agent.stop') }
+                Idle { @('agent.tool.starting', 'agent.notification') }
+                default { @() }
+            }
+            foreach ($hookEvent in $hookEvents) {
+                $hook = @{
+                    type = 'event'; method = 'agent_event'; params = @{
+                        event = $hookEvent; pane_id = $launch.pane_session_id
+                        agent_session_id = $sid; cli_source = 'copilot'; agent = 'copilot'
+                        payload = @{ tool_name = 'auto:smoke:stale-hook'; message = 'auto:smoke:stale-hook' }
+                    }
+                } | ConvertTo-Json -Depth 8 -Compress
+                Invoke-WtCli -App $script:app -Arguments @('publish', '--existing-only', $hook) | Out-Null
+                Wait-Until -TimeoutSec 5 -Because 'the real master processes this exact leftover COM hook' -Condition {
+                    $log = Get-ItLogText -App $script:app -Name 'wta-main_master*.log' -SinceStart
+                    @($log -split "`n" | Where-Object {
+                        $_.Contains('processed COM agent hook') -and $_.Contains($sid) -and $_.Contains($hookEvent)
+                    }).Count -gt 0
+                } | Out-Null
+                $deadline = [datetime]::UtcNow.AddSeconds(2)
+                do {
+                    $protected = Get-StatusRegistrySnapshot
+                    @($protected.sessions | Where-Object session_id -EQ $sid)[0].status | Should -Be $step.Status
+                    @($protected.native_pane_observations | Where-Object agent_session_id -EQ $sid)[0].status |
+                        Should -Be $step.Status -Because 'Sessions OFF ignores unqualified COM activity, not qualified watcher evidence'
+                    Start-Sleep -Milliseconds 100
+                } while ([datetime]::UtcNow -lt $deadline)
+            }
         }
         Set-TestSidebarScope -App $script:app -AgentsOnly $true -Recent $true
         $recent = Wait-Until -TimeoutSec 10 -Because 'only the unrelated same-title history remains in Recent' -Condition {

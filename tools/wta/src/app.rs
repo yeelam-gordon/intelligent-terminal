@@ -94,6 +94,7 @@ fn agent_command_on_enter(input: &str, selected: Option<&AvailableAgent>) -> Opt
     })
 }
 
+mod agent_markdown;
 mod attachments;
 mod autofix;
 mod input_edit;
@@ -494,6 +495,7 @@ fn open_url_in_browser(url: &str) -> std::io::Result<()> {
 /// outside `USER_INPUT_TOOL_NAMES`.
 pub const CONSUMED_PAYLOAD_KEYS: &[&str] = &[
     "cwd",
+    "new_cwd",
     "title",
     "tool_name",
     "toolName",
@@ -502,6 +504,8 @@ pub const CONSUMED_PAYLOAD_KEYS: &[&str] = &[
     "notification_type",
     "reason",
     "error",
+    "pane_owner",
+    "running",
 ];
 
 /// Members of `payload.tool_input` the routing function reads when the tool is
@@ -524,6 +528,9 @@ pub struct AgentEventFacts {
     pub key: String,
     /// Whether a row already exists for `key`.
     pub session_known: bool,
+    /// Status before applying this event; a running OpenCode binding must not
+    /// overwrite live Attention when a second TUI views the session.
+    pub session_status: Option<crate::agent_sessions::AgentStatus>,
     /// An existing live session other than `key` owns the hook's pane.
     pub pane_owned_by_other: bool,
 }
@@ -592,8 +599,11 @@ pub fn plan_agent_event(
         event,
         "agent.session.started"
             | "agent.session.start"
+            | "agent.session.renamed"
             | "agent.session.stopped"
             | "agent.session.end"
+            | "agent.session.unbind"
+            | "agent.cwd.changed"
     ) && !facts.session_known;
     if facts.pane_owned_by_other
         && !matches!(event, "agent.session.started" | "agent.session.start")
@@ -609,6 +619,23 @@ pub fn plan_agent_event(
             pane_session_id: pane_session_id.to_string(),
             cwd: cwd.clone(),
             title: synth_title.clone(),
+        });
+    }
+    if facts.session_known
+        && matches!(
+            cli_source,
+            crate::agent_sessions::CliSource::Copilot
+                | crate::agent_sessions::CliSource::Claude
+                | crate::agent_sessions::CliSource::Codex
+                | crate::agent_sessions::CliSource::Gemini
+        )
+        && event == "agent.prompt.submit"
+        && !cwd.as_os_str().is_empty()
+    {
+        plan.events.push(SessionEvent::WorkingDirectoryChanged {
+            key: key.clone(),
+            pane_session_id: pane_session_id.to_string(),
+            cwd: cwd.clone(),
         });
     }
 
@@ -632,6 +659,37 @@ pub fn plan_agent_event(
                 synth_title
             },
         },
+        "agent.session.renamed"
+            if facts.session_known && *cli_source == crate::agent_sessions::CliSource::OpenCode =>
+        {
+            let Some(title) = payload
+                .get("title")
+                .and_then(|value| value.as_str())
+                .filter(|title| !title.trim().is_empty())
+            else {
+                return plan;
+            };
+            SessionEvent::SessionRenamed {
+                key,
+                pane_session_id: pane_session_id.to_string(),
+                title: title.to_string(),
+            }
+        }
+        "agent.cwd.changed" if facts.session_known => {
+            let Some(cwd) = payload
+                .get("new_cwd")
+                .or_else(|| payload.get("cwd"))
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+            else {
+                return plan;
+            };
+            SessionEvent::WorkingDirectoryChanged {
+                key,
+                pane_session_id: pane_session_id.to_string(),
+                cwd: PathBuf::from(cwd),
+            }
+        }
         "agent.tool.starting" => {
             let tool_name = payload
                 .get("tool_name")
@@ -712,6 +770,14 @@ pub fn plan_agent_event(
                 .unwrap_or("")
                 .to_string(),
         },
+        "agent.session.unbind"
+            if *cli_source == crate::agent_sessions::CliSource::OpenCode && facts.session_known =>
+        {
+            SessionEvent::SessionUnbound {
+                key,
+                pane_session_id: pane_session_id.to_string(),
+            }
+        }
         "agent.error" => SessionEvent::ConnectionFailed {
             pane_session_id: pane_session_id.to_string(),
             reason: payload
@@ -727,6 +793,22 @@ pub fn plan_agent_event(
         }
     };
     plan.events.push(primary);
+    if event == "agent.session.start"
+        && *cli_source == crate::agent_sessions::CliSource::OpenCode
+        && payload.get("running").and_then(|value| value.as_bool()) == Some(true)
+        && !matches!(
+            facts.session_status.as_ref(),
+            Some(
+                crate::agent_sessions::AgentStatus::Working
+                    | crate::agent_sessions::AgentStatus::Attention
+            )
+        )
+    {
+        plan.events.push(SessionEvent::ToolStarting {
+            key: facts.key.clone(),
+            tool_name: "prompt".to_string(),
+        });
+    }
     plan
 }
 
@@ -780,6 +862,19 @@ fn session_removed_matches_scope(
     params.history_key.as_ref().is_none_or(|key| {
         key.provider_id.eq_ignore_ascii_case(agent_id) && &key.location == location
     })
+}
+
+pub(crate) fn opencode_end_from_another_pane(
+    cli_source: &crate::agent_sessions::CliSource,
+    event: &str,
+    bound_pane: Option<&str>,
+    incoming_pane: &str,
+) -> bool {
+    *cli_source == crate::agent_sessions::CliSource::OpenCode
+        && matches!(event, "agent.session.end" | "agent.session.stopped")
+        && bound_pane.is_some_and(|pane| {
+            crate::agent_sessions::pane_key(pane) != crate::agent_sessions::pane_key(incoming_pane)
+        })
 }
 
 /// As [`route_agent_event_to_registry`], but reports every event it applied.
@@ -895,6 +990,15 @@ where
         }
     }
     let key_for_refresh = key.clone();
+    if opencode_end_from_another_pane(
+        &cli_source,
+        event,
+        reg.get(&key).and_then(|row| row.pane_session_id.as_deref()),
+        pane_session_id,
+    ) {
+        tracing::debug!(target: "agent_route", key, pane_session_id, "ignored stale OpenCode end from another pane");
+        return false;
+    }
     // Per-agent-event — debug, not info.
     tracing::debug!(
         target: "agent_route",
@@ -911,19 +1015,52 @@ where
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
+    let non_binding_opencode = cli_source == CliSource::OpenCode
+        && payload.get("pane_owner").and_then(|value| value.as_bool()) == Some(false);
+    let owner_pane = if non_binding_opencode {
+        if !matches!(
+            event,
+            "agent.prompt.submit"
+                | "agent.tool.starting"
+                | "agent.stop"
+                | "agent.notification"
+                | "agent.error"
+        ) {
+            return false;
+        }
+        let Some(pane) = reg
+            .get(&key)
+            .filter(|row| {
+                row.cli_source == cli_source
+                    && row.liveness() == crate::agent_sessions::LivenessState::Live
+            })
+            .and_then(|row| row.pane_session_id.clone())
+            .filter(|pane| !pane.is_empty())
+        else {
+            tracing::debug!(target: "agent_route", key, event, "ignored unbound OpenCode server activity");
+            return false;
+        };
+        pane
+    } else {
+        pane_session_id.to_string()
+    };
     let facts = AgentEventFacts {
         key: key.clone(),
         session_known: reg
             .get(&key)
             .is_some_and(|row| row.cli_source == cli_source),
-        pane_owned_by_other: reg.key_for_pane(pane_session_id).is_some_and(|owner| {
+        session_status: reg
+            .get(&key)
+            .filter(|row| row.cli_source == cli_source)
+            .map(|row| row.status.clone()),
+        pane_owned_by_other: reg.key_for_pane(&owner_pane).is_some_and(|owner| {
             reg.get(&owner).is_some_and(|row| {
                 row.liveness() == crate::agent_sessions::LivenessState::Live
                     && (owner != key || row.cli_source != cli_source)
             })
         }),
     };
-    let plan = plan_agent_event(event, &payload, pane_session_id, &cli_source, &facts);
+    let plan = plan_agent_event(event, &payload, &owner_pane, &cli_source, &facts);
 
     // A real `agent.session.started` supersedes any `pane:`-keyed placeholder
     // minted for this pane while the id was still unknown.
@@ -1325,6 +1462,7 @@ pub struct App {
     pub debug_messages: Vec<DebugMessage>,
     pub show_debug_panel: bool,
     pub debug_scroll: usize,
+    pub(crate) render_agent_markdown: bool,
     pub(crate) text_selection: crate::text_selection::TextSelection,
     pub(crate) completed_turn_hits: Vec<CompletedTurnHitRegion>,
     pub(crate) pressed_completed_turn: Option<PressedCompletedTurn>,
@@ -1678,6 +1816,7 @@ impl App {
             debug_messages: Vec::new(),
             show_debug_panel: false,
             debug_scroll: 0,
+            render_agent_markdown: true,
             text_selection: crate::text_selection::TextSelection::default(),
             completed_turn_hits: Vec::new(),
             pressed_completed_turn: None,
@@ -5263,6 +5402,37 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn begin_agent_markdown_frame(&mut self) {
+        self.sync_agent_markdown_selection();
+        let current = self.active_tab_key().to_owned();
+        let selecting = self.text_selection.has_selection_or_gesture();
+        for (key, tab) in &mut self.tab_sessions {
+            tab.begin_agent_markdown_frame(
+                self.render_agent_markdown,
+                !selecting || key != &current,
+            );
+        }
+    }
+
+    pub(crate) fn sync_agent_markdown_selection(&mut self) {
+        let current = self.active_tab_key().to_owned();
+        let selecting = self.mode == AppMode::Chat
+            && self
+                .tab_sessions
+                .get(&current)
+                .is_some_and(|tab| tab.current_view == View::Chat)
+            && self.text_selection.has_selection_or_gesture();
+        for (key, tab) in &mut self.tab_sessions {
+            tab.sync_markdown_selection(self.render_agent_markdown, selecting && key == &current);
+        }
+    }
+
+    pub(crate) fn end_agent_markdown_frame(&mut self) {
+        for tab in self.tab_sessions.values_mut() {
+            tab.end_agent_markdown_frame();
+        }
+    }
+
     fn draw_frame(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
         let total_started = std::time::Instant::now();
 
@@ -5786,7 +5956,14 @@ mod app_events;
 impl App {
     fn event_requires_redraw(&self, event: &AppEvent) -> bool {
         match event {
-            AppEvent::Tick => self.has_activity_indicator() || self.show_notification_banner,
+            AppEvent::Tick => {
+                self.has_activity_indicator()
+                    || self.show_notification_banner
+                    || self
+                        .tab_sessions
+                        .values()
+                        .any(|tab| tab.agent_markdown.borrow().has_pending())
+            }
             // The reveal animation only needs a frame while there is still
             // unrevealed pending text on the *visible* tab. When the reveal
             // has caught up (or nothing is streaming) this is a cheap no-op
@@ -7791,6 +7968,10 @@ mod autofix_tests;
 #[cfg(test)]
 #[path = "queue_lifecycle_tests.rs"]
 mod queue_lifecycle_tests;
+
+#[cfg(test)]
+#[path = "agent_markdown_tests.rs"]
+mod agent_markdown_tests;
 
 #[cfg(test)]
 #[path = "app_tests.rs"]
