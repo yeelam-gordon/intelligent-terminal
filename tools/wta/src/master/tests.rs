@@ -2111,9 +2111,9 @@ async fn native_receiver_restored_birth_rejects_malformed_provider_and_pane() {
     let pane = "00112233-4455-6677-8899-aabbccddeeff";
     for (provider, pane_id) in [
         ("custom:   ", pane),
-        ("custom:test\tbad", pane),
-        ("custom:test\nbad", pane),
-        ("custom:test\rbad", pane),
+        (concat!("custom:test", "\t", "bad"), pane),
+        (concat!("custom:test", "\n", "bad"), pane),
+        (concat!("custom:test", "\r", "bad"), pane),
         ("copilot", "not-a-guid"),
         ("copilot", "00000000-0000-0000-0000-000000000000"),
     ] {
