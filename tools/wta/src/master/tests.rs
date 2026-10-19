@@ -14109,26 +14109,28 @@ async fn sidebar_history_discovery_keeps_registered_gemini_sessions() {
 }
 
 #[test]
-fn sidebar_history_discovery_excludes_gemini_but_allows_explicit_chat() {
+fn sidebar_history_discovery_excludes_opt_in_agents_but_allows_explicit_chat() {
     let mut checked = Vec::new();
     let ids = host_history_agent_ids(None, |id| {
         checked.push(id.to_owned());
         true
     });
-    assert_eq!(
-        ids,
-        ["copilot", "claude", "codex", "opencode", "antigravity"]
-    );
+    assert_eq!(ids, ["copilot", "claude", "codex", "opencode"]);
     assert_eq!(checked, ids);
 
-    let allowed = allow_set(&["gemini"]);
-    assert!(host_history_agent_ids(Some(&allowed), |_| {
-        panic!("Gemini must not be probed for sidebar discovery");
-    })
-    .is_empty());
-    let (command, id) = resolve(Some(&allowed), Some("gemini"), None);
-    assert_eq!(command, "gemini --acp");
-    assert_eq!(id.as_deref(), Some("gemini"));
+    for (agent_id, expected_command) in [
+        ("gemini", "gemini --acp"),
+        ("antigravity", "agy_acp_server.exe"),
+    ] {
+        let allowed = allow_set(&[agent_id]);
+        assert!(host_history_agent_ids(Some(&allowed), |_| {
+            panic!("opt-in agents must not be probed for sidebar discovery");
+        })
+        .is_empty());
+        let (command, id) = resolve(Some(&allowed), Some(agent_id), None);
+        assert_eq!(command, expected_command);
+        assert_eq!(id.as_deref(), Some(agent_id));
+    }
 }
 
 #[tokio::test]

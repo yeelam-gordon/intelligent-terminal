@@ -61,7 +61,7 @@ WTA is normally launched **by Windows Terminal**, not by hand. WT spawns one
 `wta-helper` per agent pane (renders this TUI and speaks ACP to master over a
 named pipe). Helpers selecting the same agent identity, source, and command
 share one agent process. Master warms installed, policy-allowed native host agents
-other than Gemini in the background at startup; Gemini and other selections
+other than Gemini and Antigravity in the background at startup; explicit selections
 remain on-demand. Bare `wta` with
 no subcommand and neither `--master`
 nor `--connect-master` exits with an error — there is no standalone agent / TUI
@@ -215,18 +215,20 @@ as soon as its named pipe is ready, without waiting for the sidebar to open. It 
 the native agent CLI and required `npx` prerequisite before starting ACP, reuses
 matching connections in the agent pool, and merges each supported `session/list`
 response into the registry. No chat session or prompt is created by discovery.
-Gemini is excluded before availability checks and ACP startup, even when installed
-and policy-allowed. Explicit Gemini chat selections remain supported, and Gemini
-sessions already registered by other paths are not filtered out of the sidebar.
+Gemini and Antigravity are excluded before availability checks and ACP startup,
+even when installed and policy-allowed. Explicit chat selections remain supported,
+and sessions already registered by other paths are not filtered out of the sidebar.
 
 Discovery never automatically installs a native agent CLI. The pinned Claude and
 Codex ACP adapters are separate: their cache presence is not checked, and the
 existing `npx -y` launch behavior may download and bootstrap an uncached adapter
-during initial startup or a later refresh that starts a provider. Similarly,
-when Antigravity's ordinary `agy` CLI is detected, starting its ACP connection can
-prepare the pinned standalone ACP server and companion. Complete existing ACP
-installations are preserved. These dependency preparations may require network
-access; background startup is not an offline-only operation. See
+during initial startup or a later refresh that starts a provider. Antigravity's
+standalone ACP dependency is prepared only when requested through an agent-pane
+connection or Settings model discovery, not by background sidebar discovery.
+A detected npm CLI shim or a cached ACP installation does not opt Antigravity
+into background startup. Complete existing ACP installations are preserved.
+These dependency preparations may require network access; background startup is
+not an offline-only operation. See
 [Installing dependencies](../../doc/installing-dependencies.md) for the native CLI
 and ACP wrapper prerequisites.
 
