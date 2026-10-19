@@ -998,10 +998,14 @@ COM event subscription. Its `params` object contains:
 
 `pane_id` is the actual connection GUID. The Terminal producer admits only
 Terminal-known agent panes, not agents inferred from shell output.
-`pane_created_at_ms` is captured once at actual content creation, not at first
-OSC, discovery or receiver readiness. `pane_creation_sequence` is the existing
-process-wide content ID used to order same-millisecond creations. Both survive
-partial updates, admission resets and retained-content moves. Older producers
+`pane_created_at_ms` is captured before a connection lifetime starts, not at first
+OSC, discovery or receiver readiness. `pane_creation_sequence` is the producer's
+monotonic connection-creation order, including restarts that retain the content ID.
+Both survive partial updates, admission resets and retained-content moves.
+Restart Connection retires the old GUID and admits the replacement with fresh
+creation metadata and Idle activity. Emission-time GUID/epoch checks reject queued
+old signals; only a declared native agent's identical explicit-resume command
+preserves a confirmed conversation binding. Older producers
 without creation metadata remain supported but cannot participate in timed
 list inference. Known execution `location` may be supplied without a session ID;
 absence never implies Host.

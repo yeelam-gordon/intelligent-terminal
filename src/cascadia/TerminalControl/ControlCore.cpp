@@ -331,6 +331,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         {
             const auto lock = _terminal->LockForWriting();
             _terminal->ResetShellIntegrationState();
+            if (_terminal->GetTaskbarState() != 0)
+            {
+                _terminal->SetTaskbarProgress(::Microsoft::Console::VirtualTerminal::DispatchTypes::TaskbarState::Clear, 0);
+            }
         }
 
         _connection = newConnection;

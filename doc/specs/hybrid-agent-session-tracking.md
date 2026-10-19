@@ -141,17 +141,25 @@ content must not attribute one pane's signal to another.
 Actual content retirement publishes removal before its identity is discarded,
 including automatic `closeOnExit` retirement of a tab or split leaf. Detaching
 or transferring retained content is not retirement.
+Public Restart Connection replaces the connection GUID even when the control
+and content ID are retained. The old GUID is retired, and the replacement gets
+fresh creation metadata, admission epoch and Idle activity before it starts.
+Queued signals retain their emission-time GUID and cannot update the replacement.
+An explicit resume binding is retained only when a declared native agent is
+relaunched with the identical ConPTY command line; discovered or inferred
+identities are never carried across the replacement.
 While Sessions is ON, matching resume completion or supersession clears the
 temporary explicit provider along with its binding. That provider is never
 promoted into independent launch ownership, so switching OFF cannot turn the
 completed resume's ordinary shell into a native agent. Independent launch
 ownership remains intact.
 
-The shared content factory records each actual pane's immutable UTC creation
-time and the existing process-wide content sequence before observation admission.
+The shared content factory records each connection lifetime's immutable UTC
+creation time and producer-owned monotonic creation sequence before observation admission.
 The connection SessionId supplies pane identity; OSC does not discover it.
 Delayed WTA readiness, OSC/BEL updates, mode resets and retained-content moves
-do not retime creation. Managed native shortcut profiles supply their known
+do not retime creation; replacing the connection GUID begins a new lifetime.
+Managed native shortcut profiles supply their known
 Host source; delegate creation supplies its explicitly selected execution source.
 An unknown source is not assumed to be Host.
 

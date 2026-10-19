@@ -46,7 +46,7 @@ namespace winrt::TerminalApp::implementation
 
         {
             std::lock_guard lock{ _mutex };
-            _content.emplace(content.Id(), TerminalContent{ content, providerId, createdAtMs, nativeAgentLaunchLocation });
+            _content.emplace(content.Id(), TerminalContent{ content, providerId, createdAtMs, ++_nativeAgentPaneCreationSequence, nativeAgentLaunchLocation });
         }
 
         return content;
@@ -149,9 +149,7 @@ namespace winrt::TerminalApp::implementation
                     (observationLocation.empty() || identity.qualifiedLocation == observationLocation);
                 auto qualifiedSessionId = retainQualified ? identity.qualifiedSessionId : std::string{};
                 auto qualifiedLocation = retainQualified ? identity.qualifiedLocation : std::string{};
-                identity = { provider, ++_nativeAgentObservationGeneration, windowId, tabId, agentSessionId, observationLocation,
-                    !it->second.observationAdmitted, receiverGeneration, std::move(qualifiedSessionId), std::move(qualifiedLocation),
-                    it->second.paneCreatedAtMs, contentId };
+                identity = { provider, ++_nativeAgentObservationGeneration, windowId, tabId, agentSessionId, observationLocation, !it->second.observationAdmitted, receiverGeneration, std::move(qualifiedSessionId), std::move(qualifiedLocation), it->second.paneCreatedAtMs, it->second.paneCreationSequence };
                 it->second.observationAdmitted = true;
             }
             return identity;
@@ -178,6 +176,26 @@ namespace winrt::TerminalApp::implementation
         if (const auto it = _content.find(contentId); it != _content.end())
         {
             it->second.observation = {};
+        }
+    }
+
+    void ContentManager::RestartNativeAgentConnectionTracking(const uint64_t contentId)
+    {
+        _CheckThread();
+        std::lock_guard lock{ _mutex };
+        if (const auto it = _content.find(contentId); it != _content.end() && !it->second.agentHelper)
+        {
+            it->second.paneCreatedAtMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                                   std::chrono::system_clock::now().time_since_epoch())
+                                                                   .count());
+            it->second.paneCreationSequence = ++_nativeAgentPaneCreationSequence;
+            it->second.observation = {};
+            it->second.observationAdmitted = false;
+            if (!_nativeAgentSessionEventsEnabled)
+            {
+                it->second.explicitNativeAgentProviderId = winrt::hstring{};
+                _agentBindings.erase(contentId);
+            }
         }
     }
 

@@ -3775,14 +3775,19 @@ namespace winrt::TerminalApp::implementation
             // keeps for panes that merely outlived their CLI.
             if (const auto paneSessionId = _TryParsePaneSessionId(paneIdStr))
             {
-                _paneAgentSessions.erase(*paneSessionId);
-                _explicitNativeAgentSessions.erase(*paneSessionId);
-                _pendingRestoredSessionBindings.erase(*paneSessionId);
-                _activeCliAgentPanes.erase(*paneSessionId);
-                _interactiveResumeSessions.erase(*paneSessionId);
-                _richTabEndedSessionByPaneId.erase(*paneSessionId);
+                _ForgetPaneAgentIdentity(*paneSessionId);
             }
         });
+    }
+
+    void TerminalPage::_ForgetPaneAgentIdentity(const winrt::guid& paneId)
+    {
+        _paneAgentSessions.erase(paneId);
+        _explicitNativeAgentSessions.erase(paneId);
+        _pendingRestoredSessionBindings.erase(paneId);
+        _activeCliAgentPanes.erase(paneId);
+        _interactiveResumeSessions.erase(paneId);
+        _richTabEndedSessionByPaneId.erase(paneId);
     }
 
     // Tells wta that the focused tab changed so it can re-project per-tab
@@ -13060,9 +13065,8 @@ namespace winrt::TerminalApp::implementation
         // Forward VT sequences and connection state changes to protocol clients.
         // This is unconditional — if no pipe client is listening, the event raise is a noop.
         //
-        // Capture the connection SessionId now. It is stable for the control's
-        // lifetime and lets the background VT callback avoid carrying a
-        // TermControl weak reference across threads.
+        // Capture each signal's connection identity before dispatch. Restart
+        // replaces the connection while retaining this control.
         //
         // VtSequenceReceived fires on the connection reader thread (background).
         // The dispatched continuation calls `_FindTabIdForSessionId`, which walks
@@ -13072,15 +13076,19 @@ namespace winrt::TerminalApp::implementation
         // event raise remain on the UI thread.
         {
             winrt::weak_ref<TermControl> weakTerm{ term };
-            const auto paneIdStr = _FindSessionIdForControl(term);
             const auto contentId = term.ContentId();
 
-            const auto observe = [weakThis = get_weak(), weakTerm, paneIdStr, contentId, publication, manager = _manager](const bool attention, const uint64_t progressState = 0) {
+            const auto observe = [weakThis = get_weak(), weakTerm, contentId, publication, manager = _manager](const bool attention, const uint64_t progressState = 0) {
                 if (const auto page = weakThis.get())
                 {
                     const auto identity = winrt::get_self<ContentManager>(manager)->NativeAgentObservationForContent(contentId);
                     const auto control = weakTerm.get();
                     if (!identity || !control)
+                    {
+                        return;
+                    }
+                    const auto paneIdStr = page->_FindSessionIdForControl(control);
+                    if (paneIdStr.empty())
                     {
                         return;
                     }
@@ -13136,13 +13144,17 @@ namespace winrt::TerminalApp::implementation
             });
 
             term.VtSequenceReceived(
-                [weakThis = get_weak(), weakTerm, paneIdStr, publication](auto&&, const winrt::hstring& seq) {
+                [weakThis = get_weak(), weakTerm, publication](auto&&, const winrt::hstring& seq) {
                     if (publication && !publication->load(std::memory_order_acquire))
                     {
                         return;
                     }
                     auto strongThis = weakThis.get();
-                    if (!strongThis || paneIdStr.empty())
+                    const auto control = weakTerm.get();
+                    if (!strongThis || !control)
+                        return;
+                    const auto paneIdStr = strongThis->_FindSessionIdForControl(control);
+                    if (paneIdStr.empty())
                         return;
 
                     // Dispatch to UI thread for the `_FindTabIdForSessionId` walk
@@ -13158,6 +13170,11 @@ namespace winrt::TerminalApp::implementation
                             auto page = weakThis.get();
                             if (!page)
                                 return;
+                            const auto control = weakTerm.get();
+                            if (!control || page->_FindSessionIdForControl(control) != paneIdStr)
+                            {
+                                return;
+                            }
 
                             // GPO-blocked gate: when administrator policy
                             // explicitly disables auto-fix, the feature
@@ -16571,15 +16588,90 @@ namespace winrt::TerminalApp::implementation
         // for nulls
         if (const auto& connection{ _duplicateConnectionForRestart(paneContent) })
         {
-            // Reset the terminal's VT state before attaching the new connection.
-            // The previous client may have left dirty modes (e.g., bracketed
-            // paste, mouse tracking, alternate buffer, kitty keyboard) that
-            // would corrupt input/output for the new shell process.
-            const auto& termControl = paneContent.GetTermControl();
-            termControl.HardResetWithoutErase();
-            termControl.Connection(connection);
-            connection.Start();
+            _RestartPaneWithConnection(paneContent, connection);
         }
+    }
+
+    void TerminalPage::_RestartPaneWithConnection(
+        const TerminalApp::TerminalPaneContent& paneContent,
+        const TerminalConnection::ITerminalConnection& connection)
+    {
+        const auto& termControl = paneContent.GetTermControl();
+        _SyncNativeAgentStatusMode();
+        const auto manager = winrt::get_self<ContentManager>(_manager);
+        const auto nativeFallback = !_settings.GlobalSettings().EffectiveAgentSessionManagementEnabled() &&
+                                    !manager->NativeAgentProviderId(termControl.ContentId()).empty();
+        std::optional<_PaneAgentSession> resumeBinding;
+        std::string resumeLocation;
+        const auto oldPaneId = _FindSessionIdForControl(termControl);
+        if (nativeFallback)
+        {
+            const auto oldConnection = termControl.Connection().try_as<TerminalConnection::ConptyConnection>();
+            const auto newConnection = connection.try_as<TerminalConnection::ConptyConnection>();
+            if (const auto paneId = _TryParsePaneSessionId(oldPaneId))
+            {
+                if (oldConnection && newConnection && oldConnection.Commandline() == newConnection.Commandline())
+                {
+                    _PreserveNativeAgentIdentity(termControl);
+                    const auto identity = manager->NativeAgentObservationForContent(termControl.ContentId());
+                    if (const auto binding = _paneAgentSessions.find(*paneId);
+                        binding != _paneAgentSessions.end() && _explicitNativeAgentSessions.contains(*paneId))
+                    {
+                        resumeBinding = binding->second;
+                    }
+                    else if (identity && !identity->qualifiedSessionId.empty() && !identity->qualifiedLocation.empty())
+                    {
+                        auto backend = ::Microsoft::Terminal::Settings::Model::AgentPaneBackend::Host(
+                            std::wstring_view{ identity->providerId });
+                        if (identity->qualifiedLocation.starts_with("wsl:"))
+                        {
+                            const auto distro = winrt::to_hstring(identity->qualifiedLocation.substr(4));
+                            backend = ::Microsoft::Terminal::Settings::Model::AgentPaneBackend::Wsl(
+                                std::wstring_view{ distro }, std::wstring_view{ identity->providerId });
+                        }
+                        resumeBinding = _PaneAgentSession{
+                            winrt::to_hstring(identity->qualifiedSessionId), identity->providerId, oldConnection.Commandline(), winrt::hstring{ backend }, termControl.WorkingDirectory()
+                        };
+                    }
+                    if (identity)
+                    {
+                        resumeLocation = identity->qualifiedLocation;
+                    }
+                }
+                _PublishNativeAgentObservation(termControl, "removed");
+                _TryRaiseTerminalEndStateEvent(oldPaneId, "closed", _FindTabIdForControl(termControl));
+                _ForgetPaneAgentIdentity(*paneId);
+            }
+            _DetachRichTabControl(termControl);
+        }
+        manager->RestartNativeAgentConnectionTracking(termControl.ContentId());
+        // Reset the terminal's VT state before attaching the new connection.
+        // The previous client may have left dirty modes (e.g., bracketed
+        // paste, mouse tracking, alternate buffer, kitty keyboard) that
+        // would corrupt input/output for the new shell process.
+        termControl.HardResetWithoutErase();
+        termControl.Connection(connection);
+        if (nativeFallback)
+        {
+            if (resumeBinding && !manager->NativeAgentProviderId(termControl.ContentId()).empty())
+            {
+                if (!resumeLocation.empty())
+                {
+                    manager->RefineNativeAgentLaunchLocation(termControl.ContentId(), resumeBinding->agent, resumeLocation);
+                }
+                if (const auto paneId = _TryParsePaneSessionId(_FindSessionIdForControl(termControl)))
+                {
+                    _paneAgentSessions.insert_or_assign(*paneId, *resumeBinding);
+                    _interactiveResumeSessions.insert_or_assign(*paneId, *resumeBinding);
+                    _explicitNativeAgentSessions.insert(*paneId);
+                    manager->SetExplicitNativeAgentProvider(termControl.ContentId(), resumeBinding->agent);
+                }
+            }
+            _PublishNativeAgentObservation(termControl, "reset", false, std::nullopt, true);
+            _AttachOrUpdateRichTabControl(termControl);
+            _ApplyTabListProjection();
+        }
+        connection.Start();
     }
 
     // Method Description:

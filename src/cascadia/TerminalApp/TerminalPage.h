@@ -942,6 +942,7 @@ namespace winrt::TerminalApp::implementation
         winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection _CreateConnectionFromSettings(Microsoft::Terminal::Settings::Model::Profile profile, Microsoft::Terminal::Control::IControlSettings settings, const bool inheritCursor);
         winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection _duplicateConnectionForRestart(const TerminalApp::TerminalPaneContent& paneContent);
         void _restartPaneConnection(const TerminalApp::TerminalPaneContent&, const winrt::Windows::Foundation::IInspectable&);
+        void _RestartPaneWithConnection(const TerminalApp::TerminalPaneContent& paneContent, const winrt::Microsoft::Terminal::TerminalConnection::ITerminalConnection& connection);
 
         void _OpenNewWindow(const Microsoft::Terminal::Settings::Model::INewContentArgs& contentArgs);
         void _OpenWorkspaceWindow(const winrt::hstring name);
@@ -1318,6 +1319,7 @@ namespace winrt::TerminalApp::implementation
 
         void _HandleClosePaneRequested(std::shared_ptr<Pane> pane);
         void _NotifyPanesClosing(const std::shared_ptr<Pane>& rootPane);
+        void _ForgetPaneAgentIdentity(const winrt::guid& paneId);
         bool _ShouldWarnOnClose() const;
         bool _ShouldWarnOnCloseTab(const winrt::com_ptr<Tab>& tab) const;
         safe_void_coroutine _SetFocusedTab(const winrt::TerminalApp::Tab tab);

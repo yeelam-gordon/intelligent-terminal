@@ -516,6 +516,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(NativeAgentSessionsOffSplitKeepsConnectionIdentity);
         TEST_METHOD(NativeAgentSessionsOffTransferRetainsExplicitOwnership);
         TEST_METHOD(NativeAgentSessionsOffRetainsStatusUntilPaneRemoval);
+        TEST_METHOD(NativeAgentRestartRetiresOldIdentityAndObservesNewConnection);
         TEST_METHOD(NativeAgentAutomaticRetirementPublishesRemoval);
         TEST_METHOD(NativeAgentInteractiveResumeOrdersQualifiedBirth);
         TEST_METHOD(NativeAgentSessionsOffDiscardsSignalsQueuedBeforeToggle);
@@ -18764,6 +18765,102 @@ namespace TerminalAppLocalTests
         });
     }
 
+    void TabTests::NativeAgentRestartRetiresOldIdentityAndObservesNewConnection()
+    {
+        using Manager = winrt::TerminalApp::implementation::ContentManager;
+        using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
+        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto oldConnection = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{91411111-2222-3333-4444-555555555555}" }, State::Connected);
+        const auto newConnection = winrt::make_self<TestConnection>(
+            winrt::guid{ L"{91422222-2222-3333-4444-555555555555}" }, State::Connected);
+        winrt::Microsoft::Terminal::Control::TermControl control{ nullptr };
+        winrt::TerminalApp::TerminalPaneContent content{ nullptr };
+        std::vector<Json::Value> observations;
+        winrt::event_token token{};
+        Manager::NativeAgentObservationIdentity oldIdentity;
+        const auto initialized = std::make_shared<::details::Event>();
+        VERIFY_IS_TRUE(initialized->IsValid());
+        const auto cleanup = wil::scope_exit([&]() {
+            RunOnUIThread([&]() {
+                page->ProtocolVtSequenceReceived(token);
+                content = nullptr;
+                control = nullptr;
+                page = nullptr;
+            });
+        });
+        TestOnUIThread([&]() {
+            page->_settings.GlobalSettings().AgentSessionManagementEnabled(false);
+            page->_SyncNativeAgentStatusMode();
+            token = page->ProtocolVtSequenceReceived([&](auto&&, const winrt::hstring& json) {
+                Json::Value event;
+                Json::CharReaderBuilder builder;
+                std::istringstream stream{ winrt::to_string(json) };
+                std::string errors;
+                if (Json::parseFromStream(builder, stream, &event, &errors) &&
+                    event["method"] == "native_agent_observation")
+                {
+                    observations.push_back(event["params"]);
+                }
+            });
+            NewTerminalArgs args;
+            args.NativeAgentProviderId(L"copilot");
+            const auto pane = page->_MakePane(args, nullptr, *oldConnection);
+            control = pane->GetTerminalControl();
+            content = pane->GetContent().as<winrt::TerminalApp::TerminalPaneContent>();
+            control.Initialized([initialized](auto&&, auto&&) { initialized->Set(); });
+            VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(pane));
+            page->UpdateLayout();
+            oldIdentity = winrt::get_self<Manager>(page->_manager)->NativeAgentObservationForContent(control.ContentId()).value();
+        });
+        VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(initialized->m_handle, 10000));
+        TestOnUIThread([&]() {
+            const auto manager = winrt::get_self<Manager>(page->_manager);
+            manager->RetainQualifiedNativeAgentIdentity(control.ContentId(), oldIdentity.modeEpoch, "old-session", "Host");
+            constexpr std::u16string_view progress{ u"\x1b]9;4;1;50\x1b\\" };
+            oldConnection->TerminalOutput.raise(winrt::array_view<const char16_t>{ progress.data(), progress.data() + progress.size() });
+            page->_RestartPaneWithConnection(content, *newConnection);
+            VERIFY_ARE_EQUAL(uint64_t{ 0 }, control.TaskbarState());
+        });
+        TestOnUIThread([&]() {
+            VERIFY_IS_TRUE(std::ranges::any_of(observations, [&](const auto& observation) {
+                return observation["kind"] == "removed" &&
+                       observation["pane_id"].asString() == _formatPaneId(oldConnection->SessionId());
+            }));
+            const auto manager = winrt::get_self<Manager>(page->_manager);
+            const auto identity = manager->NativeAgentObservationForContent(control.ContentId()).value();
+            VERIFY_IS_TRUE(identity.modeEpoch > oldIdentity.modeEpoch);
+            VERIFY_IS_TRUE(identity.paneCreationSequence > oldIdentity.paneCreationSequence);
+            VERIFY_IS_TRUE(identity.paneCreatedAtMs >= oldIdentity.paneCreatedAtMs);
+            VERIFY_IS_TRUE(identity.agentSessionId.empty());
+            VERIFY_IS_TRUE(identity.qualifiedSessionId.empty());
+            VERIFY_IS_FALSE(std::ranges::any_of(observations, [&](const auto& observation) {
+                return observation["kind"] == "progress" &&
+                       observation["pane_id"].asString() == _formatPaneId(newConnection->SessionId());
+            }));
+        });
+        const auto emit = [&](const std::u16string_view sequence) {
+            TestOnUIThread([&]() {
+                newConnection->TerminalOutput.raise(winrt::array_view<const char16_t>{ sequence.data(), sequence.data() + sequence.size() });
+            });
+        };
+        emit(u"\x1b]9;4;1;20\x1b\\");
+        _waitForContentTransferReviewUI([&]() {
+            return std::ranges::any_of(observations, [&](const auto& observation) {
+                return observation["kind"] == "progress" &&
+                       observation["pane_id"].asString() == _formatPaneId(newConnection->SessionId()) &&
+                       observation["progress_state"].asUInt64() == 1;
+            });
+        });
+        emit(u"\a");
+        _waitForContentTransferReviewUI([&]() {
+            return std::ranges::any_of(observations, [&](const auto& observation) {
+                return observation["kind"] == "bell" &&
+                       observation["pane_id"].asString() == _formatPaneId(newConnection->SessionId());
+            });
+        });
+    }
+
     void TabTests::NativeAgentSessionsOffObservesParsedSignals()
     {
         using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
@@ -18824,7 +18921,7 @@ namespace TerminalAppLocalTests
             paneCreationSequence = observations.back()["pane_creation_sequence"].asUInt64();
             VERIFY_IS_TRUE(paneCreatedAtMs > 0);
             VERIFY_IS_TRUE(paneCreatedAtMs <= createdBeforeAdmissionMs);
-            VERIFY_ARE_EQUAL(control.ContentId(), paneCreationSequence);
+            VERIFY_IS_TRUE(paneCreationSequence > 0);
             observedCount = observations.size();
         });
         VERIFY_ARE_EQUAL(static_cast<DWORD>(WAIT_OBJECT_0), WaitForSingleObject(initialized->m_handle, 10000));
@@ -19780,7 +19877,7 @@ namespace TerminalAppLocalTests
             const auto contentId = control.ContentId();
             const auto first = manager->AdmitNativeAgentObservation(contentId, 1, "tab", {}, {}, false, 1);
             VERIFY_IS_TRUE(first.paneCreatedAtMs > 0);
-            VERIFY_ARE_EQUAL(contentId, first.paneCreationSequence);
+            VERIFY_IS_TRUE(first.paneCreationSequence > 0);
             VERIFY_ARE_EQUAL(std::string{ "Host" }, first.location);
             VERIFY_IS_TRUE(first.agentSessionId.empty());
             const auto verify = [&](const Manager::NativeAgentObservationIdentity& identity) {

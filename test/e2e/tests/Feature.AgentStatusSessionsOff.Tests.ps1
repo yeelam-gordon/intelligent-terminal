@@ -176,6 +176,7 @@ exit 124
             agentSessionManagementEnabled = $false; autoErrorDetectionEnabled = $false; autoFixEnabled = $false
             acpAgent = 'custom:sessions-off-fixture'
             acpCustomCommand = 'pwsh -NoProfile -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
+            actions = @(@{ command = 'restartConnection'; keys = 'ctrl+alt+shift+r' })
             'warning.confirmOnClose' = 'never'; defaultProfile = $profile
             profiles = @{ list = @(@{
                 guid = $profile; name = 'Sessions-off control'; commandline = "`"$pwsh`" -NoLogo -NoProfile -NoExit"
@@ -324,6 +325,49 @@ catch {
             }
             $script:fixtures += $fixture
             $fixture
+        }
+        function Restart-StatusFixture {
+            param($Fixture)
+            $oldPane = [string]$Fixture.Pane.session_id
+            $before = @(Get-StatusRegistrySnapshot | ForEach-Object native_pane_observations |
+                Where-Object { ([string]$_.pane_id).Trim('{}') -eq $oldPane.Trim('{}') })
+            $before | Should -HaveCount 1
+            $originalPanes = @(Get-WtPanes -App $script:app -WindowId $script:window -TabId $Fixture.Pane.tab_id)
+            $originalIds = @($originalPanes | ForEach-Object session_id)
+            Invoke-WtCli -App $script:app -Arguments @('focus-pane', '-t', $oldPane) | Out-Null
+            $createdAfterMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            Send-WtWindowKey -App $script:app -Vk 0x52 -Ctrl -Alt -Shift -RequireForeground | Out-Null
+            $pane = Wait-Until -TimeoutSec 10 -Because 'public Restart Connection replaces only the owning connection GUID' -Condition {
+                $panes = @(Get-WtPanes -App $script:app -WindowId $script:window -TabId $Fixture.Pane.tab_id)
+                $created = @($panes | Where-Object session_id -NotIn $originalIds)
+                if ($panes.Count -eq $originalPanes.Count -and $oldPane -notin $panes.session_id -and $created.Count -eq 1) {
+                    $created[0]
+                }
+            }
+            $Fixture.Pane = $pane
+            $Fixture | Add-Member -NotePropertyName CreatedAfterMs -NotePropertyValue $createdAfterMs -Force
+            $Fixture | Add-Member -NotePropertyName CreatedBeforeMs -NotePropertyValue ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) -Force
+            $after = Wait-Until -TimeoutSec 10 -Because 'restart retires the old observation and admits a fresh idle pane identity' -Condition {
+                $snapshot = Get-StatusRegistrySnapshot
+                $old = @($snapshot.native_pane_observations | Where-Object {
+                    ([string]$_.pane_id).Trim('{}') -eq $oldPane.Trim('{}')
+                })
+                $current = @($snapshot.native_pane_observations | Where-Object {
+                    ([string]$_.pane_id).Trim('{}') -eq ([string]$pane.session_id).Trim('{}')
+                })
+                if ($old.Count -eq 0 -and $current.Count -eq 1 -and $current[0].status -eq 'Idle') { $current[0] }
+            }
+            $after.provider_id | Should -BeExactly $before[0].provider_id
+            $after.pane_created_at_ms | Should -BeGreaterOrEqual $before[0].pane_created_at_ms
+            $after.pane_creation_sequence | Should -BeGreaterThan $before[0].pane_creation_sequence
+            $after.mode_epoch | Should -BeGreaterThan $before[0].mode_epoch
+            $Fixture | Add-Member -NotePropertyName Creation -NotePropertyValue @{
+                Time = $after.pane_created_at_ms; Sequence = $after.pane_creation_sequence
+            } -Force
+            $fileTitle = $Fixture.Title -replace '[<>:"/\\|?*]', '_'
+            @{ Before = $before[0]; After = $after } | ConvertTo-Json -Depth 12 |
+                Set-Content (Join-Path $script:evidence ("restart-" + $fileTitle + '.json'))
+            $after
         }
         function Get-StatusRowParts {
             param($Element)
@@ -651,6 +695,16 @@ catch {
         Send-StatusSignal $script:native -State 0
         Assert-Status $script:native Idle
         Send-StatusSignal $script:otherNative -State 0
+        Assert-Status $script:otherNative Idle
+        $restarted = New-StatusFixture native
+        Send-StatusSignal $restarted -State 1
+        Assert-Status $restarted Active
+        $afterRestart = Restart-StatusFixture $restarted
+        $afterRestart.agent_session_id | Should -BeNullOrEmpty
+        Assert-Status $restarted Idle
+        Send-StatusSignal $restarted -State 1
+        Assert-Status $restarted Active
+        Assert-BellRequestsInput $restarted
         Assert-Status $script:otherNative Idle
     }
     It 'Sessions off new native panes retain creation metadata and infer list identity without control ownership' {
@@ -1124,6 +1178,25 @@ class CopilotFixture {
         $final = Get-StatusRegistrySnapshot
         @($final.sessions | Where-Object { $_.session_id -eq $sid -and $_.status -eq 'Attention' -and $_.provider_id -eq 'copilot' -and $_.location -eq 'Host' }) |
             Should -HaveCount 1
+        $afterRestart = Restart-StatusFixture $native
+        $afterRestart.agent_session_id | Should -BeExactly $sid
+        foreach ($step in @(@{ State = 1; Status = 'Working'; Text = 'Active' },
+            @{ State = -1; Status = 'Attention'; Text = 'Waiting for input' })) {
+            if ($step.State -eq -1) { Send-StatusSignal $native -Kind bell } else { Send-StatusSignal $native -State $step.State }
+            Wait-Until -TimeoutSec 10 -Because 'the restarted exact resume keeps its canonical identity and truthful status' -Condition {
+                $snapshot = Get-StatusRegistrySnapshot
+                $rows = @($snapshot.sessions | Where-Object {
+                    $_.session_id -eq $sid -and $_.status -eq $step.Status -and
+                    ([string]$_.pane_session_id).Trim('{}') -eq ([string]$native.Pane.session_id).Trim('{}')
+                })
+                if ($rows.Count -eq 1 -and (Get-StatusText $native) -match [regex]::Escape($step.Text)) { $rows[0] }
+            } | Out-Null
+        }
+        $restartedSnapshot = Get-StatusRegistrySnapshot
+        @($restartedSnapshot.sessions | Where-Object {
+            $_.session_id -eq $sid -and
+            ([string]$_.pane_session_id).Trim('{}') -eq ([string]$native.Pane.session_id).Trim('{}')
+        }) | Should -HaveCount 1
     }
 
     It 'Full trust Settings remains usable during native agent metadata refresh' {
