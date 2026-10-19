@@ -11052,6 +11052,33 @@ namespace TerminalAppLocalTests
             impl->CommitHistorySnapshot({ host, otherSession });
             VERIFY_ARE_EQUAL(1u, strip.HistoryItems().Size());
             VERIFY_IS_TRUE(strip.HistoryItems().GetAt(0) == otherSession);
+
+            const auto otherAgent = makeItem(L"host", L"", L"", host.PaneSessionId().c_str());
+            otherAgent.AgentId(L"claude");
+            const auto otherSource = makeItem(L"wsl", L"", L"", host.PaneSessionId().c_str());
+            impl->SetRepresentedHistorySessions({});
+            impl->CommitHistorySnapshot({ host, otherSession, otherAgent, otherSource, ubuntu, debian, universe });
+            std::vector<CollectionChange> changes;
+            const auto changed = strip.HistoryItems().VectorChanged(winrt::auto_revoke, [&](auto&&, const auto& args) {
+                changes.emplace_back(args.CollectionChange());
+            });
+            // Each key field distinguishes a surviving row from a removed row.
+            impl->CommitHistorySnapshot({ otherSession, otherAgent, otherSource, ubuntu, universe });
+            VERIFY_ARE_EQUAL(size_t{ 2 }, changes.size());
+            VERIFY_ARE_EQUAL(CollectionChange::ItemRemoved, changes[0]);
+            VERIFY_ARE_EQUAL(CollectionChange::ItemRemoved, changes[1]);
+            VERIFY_ARE_EQUAL(5u, strip.HistoryItems().Size());
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(0) == otherSession);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(1) == otherAgent);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(2) == otherSource);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(3) == ubuntu);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(4) == universe);
+            impl->CommitHistorySnapshot({ universe, ubuntu, otherSource, otherAgent, otherSession });
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(0) == universe);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(1) == ubuntu);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(2) == otherSource);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(3) == otherAgent);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(4) == otherSession);
         });
     }
 
@@ -14019,6 +14046,40 @@ namespace TerminalAppLocalTests
                 VERIFY_ARE_EQUAL(CollectionChange::ItemRemoved, changes[2]);
                 verifyProjection();
             }
+
+            const auto retained = winrt::make<winrt::TerminalApp::implementation::TabStripHistoryItem>();
+            retained.SessionId(L"retained-session");
+            retained.AgentId(L"copilot");
+            retained.Title(L"Retained session");
+            retained.Status(L"Idle");
+            retained.IsLive(true);
+            impl->CommitHistorySnapshot({ history, retained });
+            strip.HistoryActive(true);
+            const auto replacement = winrt::make<winrt::TerminalApp::implementation::TabStripHistoryItem>();
+            replacement.SessionId(history.SessionId());
+            replacement.AgentId(history.AgentId());
+            replacement.Title(L"Updated recent session");
+            replacement.Status(L"Idle");
+            replacement.IsLive(true);
+            std::vector<std::pair<CollectionChange, uint32_t>> viewportChanges;
+            const auto viewportChanged = impl->_viewportItems.VectorChanged(winrt::auto_revoke, [&](auto&&, const auto& args) {
+                viewportChanges.emplace_back(args.CollectionChange(), args.Index());
+            });
+            // A replacement has the same history key, but only its new identity belongs in the viewport.
+            impl->CommitHistorySnapshot({ replacement, retained });
+            VERIFY_ARE_EQUAL(4u, list.Items().Size());
+            VERIFY_IS_TRUE(list.Items().GetAt(1) == impl->_historySectionItem);
+            VERIFY_IS_TRUE(list.Items().GetAt(2) == replacement);
+            VERIFY_IS_TRUE(list.Items().GetAt(3) == retained);
+            VERIFY_IS_TRUE(strip.SelectedItem() == current);
+            VERIFY_ARE_EQUAL(size_t{ 2 }, viewportChanges.size());
+            VERIFY_ARE_EQUAL(CollectionChange::ItemRemoved, viewportChanges[0].first);
+            VERIFY_ARE_EQUAL(2u, viewportChanges[0].second);
+            VERIFY_ARE_EQUAL(CollectionChange::ItemInserted, viewportChanges[1].first);
+            VERIFY_ARE_EQUAL(2u, viewportChanges[1].second);
+            viewportChanges.clear();
+            impl->CommitHistorySnapshot({ replacement, retained });
+            VERIFY_IS_TRUE(viewportChanges.empty());
         });
     }
 

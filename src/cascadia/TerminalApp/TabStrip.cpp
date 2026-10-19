@@ -12,6 +12,10 @@
 #include "TabHeaderControl.h"
 #include "Utils.h"
 
+#include <array>
+#include <set>
+#include <unordered_set>
+
 #include "TabStrip.g.cpp"
 #include "SidebarFiltersViewModel.g.cpp"
 #include "TabStripSelectionChangedEventArgs.g.cpp"
@@ -2821,12 +2825,24 @@ namespace winrt::TerminalApp::implementation
         }
         if (preserveScroll)
         {
+            const auto historyKey = [](const auto& item) {
+                return std::array{
+                    item.SessionId(),
+                    item.AgentId(),
+                    item.AgentSource(),
+                    item.WslDistro(),
+                    item.SessionUniverse()
+                };
+            };
+            std::set<std::array<winrt::hstring, 5>> visibleKeys;
+            for (const auto& item : visibleItems)
+            {
+                visibleKeys.emplace(historyKey(item));
+            }
             // Preserve surviving rows when membership changes, and update status in place.
             for (uint32_t index = _historyItems.Size(); index > 0; --index)
             {
-                if (!std::ranges::any_of(visibleItems, [&](const auto& item) {
-                        return sameHistoryKey(_historyItems.GetAt(index - 1), item);
-                    }))
+                if (!visibleKeys.contains(historyKey(_historyItems.GetAt(index - 1))))
                 {
                     _historyItems.RemoveAt(index - 1);
                 }
@@ -3029,11 +3045,17 @@ namespace winrt::TerminalApp::implementation
                 }
             }
             const auto historyCount = (_historyExpanded || _sidebarFilters.HasSearchQuery()) ? _historyItems.Size() : 0;
+            // Query canonical IUnknown identity, not the projected interface pointer.
+            std::unordered_set<::IUnknown*> retainedHistoryItems;
+            retainedHistoryItems.reserve(historyCount);
+            for (uint32_t index = 0; index < historyCount; ++index)
+            {
+                retainedHistoryItems.emplace(_historyItems.GetAt(index).as<::IUnknown>().get());
+            }
             for (uint32_t index = _viewportItems.Size(); index > headerIndex + 1; --index)
             {
                 const auto item = _viewportItems.GetAt(index - 1).try_as<TerminalApp::TabStripHistoryItem>();
-                uint32_t historyIndex{};
-                if (!historyCount || !item || !_historyItems.IndexOf(item, historyIndex))
+                if (!historyCount || !item || !retainedHistoryItems.contains(item.as<::IUnknown>().get()))
                 {
                     _viewportItems.RemoveAt(index - 1);
                 }

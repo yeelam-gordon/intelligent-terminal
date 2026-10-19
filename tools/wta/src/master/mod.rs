@@ -8740,6 +8740,21 @@ async fn handle_session_hook(
     event: crate::agent_sessions::SessionEvent,
     is_born_bound: bool,
 ) -> acp::Result<acp::schema::v1::ExtResponse> {
+    handle_session_event(
+        state,
+        event,
+        is_born_bound,
+        crate::agent_sessions::SessionLocation::Host,
+    )
+    .await
+}
+
+async fn handle_session_event(
+    state: &Arc<MasterStateInner>,
+    event: crate::agent_sessions::SessionEvent,
+    is_born_bound: bool,
+    birth_location: crate::agent_sessions::SessionLocation,
+) -> acp::Result<acp::schema::v1::ExtResponse> {
     // Split by event kind so field diagnosis of session-state bugs survives at
     // the default release level: terminal/lifecycle transitions (session
     // start/stop, pane closed, connection failed) stay at info; the
@@ -8768,7 +8783,8 @@ async fn handle_session_hook(
 
     let activity_only = session_event_is_activity_only(&event);
     let status_key = session_event_status_key(state, &event).await;
-    let (applied, refresh_key) = apply_master_session_event(state, event, is_born_bound).await;
+    let (applied, refresh_key) =
+        apply_master_session_event(state, event, is_born_bound, birth_location).await;
     if applied {
         broadcast_session_status_change(
             state,
@@ -8796,6 +8812,7 @@ async fn apply_master_session_event(
     state: &MasterStateInner,
     event: crate::agent_sessions::SessionEvent,
     is_born_bound: bool,
+    birth_location: crate::agent_sessions::SessionLocation,
 ) -> (bool, Option<String>) {
     if matches!(
         &event,
@@ -8858,6 +8875,7 @@ async fn apply_master_session_event(
             // A delayed restore birth may arrive after the CLI's real hook.
             // Do not demote that live generation to watcher-owned or replace
             // its title/cwd with the persisted layout's older metadata.
+            let mut preserve_live_binding = false;
             if is_born_bound {
                 if let crate::agent_sessions::SessionEvent::SessionStarted {
                     pane_session_id, ..
@@ -8877,7 +8895,7 @@ async fn apply_master_session_event(
                         ) && (state.hook_owned.lock().await.contains(&sid)
                             || state.born_bound.lock().await.contains(&sid))
                         {
-                            return (false, None);
+                            preserve_live_binding = true;
                         }
                     }
                 }
@@ -8893,14 +8911,32 @@ async fn apply_master_session_event(
                     &event,
                     crate::agent_sessions::SessionEvent::ResumeDispatched { .. }
                 );
-            let applied = state.registry.apply_event(event).await;
-            if applied || starts_new_generation {
+            let (applied, native_pane_owned) = if is_born_bound {
+                let result = state
+                    .registry
+                    .apply_born_bound_event(event, birth_location, preserve_live_binding)
+                    .await;
+                (result.applied, result.native_pane_owned)
+            } else {
+                (state.registry.apply_event(event).await, false)
+            };
+            if preserve_live_binding {
+                return (applied, None);
+            }
+            if applied || (starts_new_generation && !native_pane_owned) {
                 // A real binding transition starts a hook-free generation: the
                 // watcher may supply activity but may not re-bind the pane.
                 state.hook_owned.lock().await.remove(&sid);
                 state.born_bound.lock().await.insert(sid.clone());
             }
-            return (applied, refresh_key);
+            return (
+                applied,
+                if native_pane_owned && !applied {
+                    None
+                } else {
+                    refresh_key
+                },
+            );
         } else {
             // Real hooks are authoritative for binding and activity. Claim
             // ownership before the reducer so a concurrent watcher cannot slip
@@ -8971,24 +9007,15 @@ async fn handle_session_born_bound(
     event: crate::agent_sessions::SessionEvent,
     wsl_distro: Option<String>,
 ) -> acp::Result<acp::schema::v1::ExtResponse> {
-    // Capture the key before `event` is moved into the reducer.
-    let key = session_event_key(&event).map(str::to_owned);
-    let response = handle_session_hook(state, event, true).await?;
-    if let (Some(distro), Some(key)) = (wsl_distro, key) {
-        let sid = acp::schema::v1::SessionId::new(key);
-        let changed = state
-            .registry
-            .set_location(&sid, crate::agent_sessions::SessionLocation::Wsl { distro })
-            .await;
-        if changed {
-            broadcast_ext_to_helpers(
-                state,
-                crate::session_registry::build_sessions_changed_notification(),
-            )
-            .await;
-        }
-    }
-    Ok(response)
+    let location =
+        wsl_distro
+            .as_ref()
+            .map_or(crate::agent_sessions::SessionLocation::Host, |distro| {
+                crate::agent_sessions::SessionLocation::Wsl {
+                    distro: distro.clone(),
+                }
+            });
+    handle_session_event(state, event, true, location).await
 }
 
 /// Apply one watcher-emitted session event to master's registry and, if it
@@ -10839,7 +10866,13 @@ async fn handle_master_agent_event(state: &Arc<MasterStateInner>, params: &serde
             event = ?ev,
             "received COM agent hook"
         );
-        let (applied, refresh_key) = apply_master_session_event(state, ev, false).await;
+        let (applied, refresh_key) = apply_master_session_event(
+            state,
+            ev,
+            false,
+            crate::agent_sessions::SessionLocation::Host,
+        )
+        .await;
         changed |= applied;
         if let Some(key) = refresh_key {
             refresh_keys.insert(key);

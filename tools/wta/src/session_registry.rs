@@ -550,6 +550,11 @@ pub struct NativePaneBindingPredecessor {
     pub mode_epoch: u64,
 }
 
+pub struct BornBoundEventResult {
+    pub applied: bool,
+    pub native_pane_owned: bool,
+}
+
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoryLoadStatus {
@@ -1818,6 +1823,12 @@ pub trait SessionRegistry: Send + Sync {
 
     /// Apply a helper-observed session event to the master-side reducer state.
     async fn apply_event(&self, ev: SessionEvent) -> bool;
+    async fn apply_born_bound_event(
+        &self,
+        ev: SessionEvent,
+        location: SessionLocation,
+        preserve_live_binding: bool,
+    ) -> BornBoundEventResult;
 
     /// Update origin metadata on an existing row.
     async fn set_origin(&self, sid: &acp::schema::v1::SessionId, origin: SessionOrigin) -> bool;
@@ -2257,104 +2268,15 @@ impl SessionRegistry for InMemoryRegistry {
         mode_epoch: Option<u64>,
         predecessor: Option<&NativePaneBindingPredecessor>,
     ) -> bool {
-        let Some(key) = identity.history_key.as_ref() else {
-            return false;
-        };
-        if key.session_id != identity.session_id.to_string()
-            || !key.location.is_actionable()
-            || pane.is_empty()
-        {
-            return false;
-        }
         let mut state = self.inner.lock().await;
-        let pane = pane_key(pane);
-        if let Some(row) = state.sessions.get(identity) {
-            if row.origin == Some(SessionOrigin::AgentPane)
-                || (row
-                    .pane_session_id
-                    .as_deref()
-                    .is_some_and(|owner| pane_key(owner) != pane)
-                    && !matches!(
-                        row.status,
-                        Some(AgentStatus::Ended | AgentStatus::Historical)
-                    ))
-            {
-                return false;
-            }
-        }
-        let previous = state
-            .active_by_pane
-            .get(&pane)
-            .filter(|owner| *owner != identity)
-            .cloned();
-        if let Some(previous) = previous.as_ref() {
-            let authorized = state.native_panes.get(&pane).is_some_and(|native| {
-                native.bound_identity.as_ref() == Some(previous)
-                    && native_bound_identity(&state, &native.observation).as_ref() == Some(previous)
-                    && predecessor.is_some_and(|expected| {
-                        expected.agent_session_id == previous.session_id.to_string()
-                            && expected.mode_epoch == native.observation.mode_epoch
-                    })
-                    && mode_epoch.is_some_and(|epoch| epoch > native.observation.mode_epoch)
-            });
-            if !authorized {
-                return false;
-            }
-            // Explicit foreground replacement is not evidence of process exit.
-            // Detach before assignment, whose normal resume path ends competitors.
-            state.active_by_pane.remove(&pane);
-            if let Some(row) = state.sessions.get_mut(previous) {
-                row.pane_session_id = None;
-                row.status = Some(AgentStatus::Historical);
-                row.born_bound_pane = false;
-            }
-        }
-        let created = !state.sessions.contains_key(identity);
-        if created {
-            let mut row = SessionInfo::new(identity.session_id.clone(), cwd.to_path_buf());
-            row.provider_id = Some(key.provider_id.clone());
-            row.cli_source = Some(SessionHookCliSource::Known(key.provider_id.clone()).into());
-            row.location = key.location.clone();
-            row.session_universe = key.session_universe.clone();
-            row.status = Some(AgentStatus::Idle);
-            row.last_activity_at_ms = Some(now_ms());
-            upsert_locked(&mut state, row);
-        }
-        let revived = mark_resume_dispatched_identity_locked(&mut state, identity)
-            .is_some_and(|(changed, _)| changed);
-        if previous.is_some() {
-            let row = state.sessions.get(identity).cloned();
-            if let (Some(native), Some(row)) = (state.native_panes.get_mut(&pane), row) {
-                // Keep the old epoch until the ordered Reset admits the new one,
-                // but never attribute the old owner's activity to its successor.
-                native.bound_identity = Some(identity.clone());
-                native.observation.agent_session_id = Some(identity.session_id.to_string());
-                native.observation.inferred_agent_session_id = None;
-                native.observation.inferred_history_key = None;
-                native.observation.provider_id = key.provider_id.clone();
-                native.observation.location = Some(key.location.clone());
-                native.observation.status = row.status.unwrap_or(AgentStatus::Idle);
-                native.observation.last_activity_at_ms =
-                    row.last_activity_at_ms.unwrap_or_else(now_ms);
-            }
-        }
-        let assigned =
-            assign_resume_pane_identity_locked(&mut state, identity, pane.clone(), now_ms());
-        let confirmed = state.sessions.get_mut(identity).is_some_and(|row| {
-            let changed = !row.born_bound_pane;
-            row.born_bound_pane = true;
-            changed
-        });
-        let bind_native = state.native_panes.get(&pane).is_some_and(|native| {
-            native.bound_identity.is_none()
-                && native_bound_identity(&state, &native.observation).as_ref() == Some(identity)
-        });
-        if let Some(native) = state.native_panes.get_mut(&pane).filter(|_| bind_native) {
-            native.bound_identity = Some(identity.clone());
-            native.observation.inferred_agent_session_id = None;
-            native.observation.inferred_history_key = None;
-        }
-        created || revived || assigned || confirmed || bind_native
+        register_native_born_binding_locked(
+            &mut state,
+            identity,
+            pane,
+            cwd,
+            mode_epoch,
+            predecessor,
+        )
     }
 
     async fn apply_native_watcher_activity(
@@ -2595,6 +2517,64 @@ impl SessionRegistry for InMemoryRegistry {
         apply_event_locked(&mut guard, ev, None)
     }
 
+    async fn apply_born_bound_event(
+        &self,
+        ev: SessionEvent,
+        location: SessionLocation,
+        preserve_live_binding: bool,
+    ) -> BornBoundEventResult {
+        let mut state = self.inner.lock().await;
+        // Reset and registration choose their ordering under the same lock.
+        if let SessionEvent::SessionStarted {
+            key,
+            cli_source,
+            pane_session_id,
+            cwd,
+            ..
+        } = &ev
+        {
+            if state.native_panes.contains_key(&pane_key(pane_session_id)) {
+                let applied = if let Some(provider) = cli_source.canonical_provider_id() {
+                    let identity = SessionIdentity {
+                        session_id: acp::schema::v1::SessionId::new(key.clone()),
+                        history_key: HistoryRowKey::new(&provider, location, key, None),
+                    };
+                    register_native_born_binding_locked(
+                        &mut state,
+                        &identity,
+                        pane_session_id,
+                        cwd,
+                        None,
+                        None,
+                    )
+                } else {
+                    tracing::warn!(target: "session_registry", "native birth has no qualified provider");
+                    false
+                };
+                return BornBoundEventResult {
+                    applied,
+                    native_pane_owned: true,
+                };
+            }
+        }
+        let sid = match &ev {
+            SessionEvent::SessionStarted { key, .. } => {
+                Some(acp::schema::v1::SessionId::new(key.clone()))
+            }
+            _ => None,
+        };
+        let mut applied = !preserve_live_binding && apply_event_locked(&mut state, ev, None);
+        if matches!(location, SessionLocation::Wsl { .. }) {
+            if let Some(sid) = sid {
+                applied |= set_location_locked(&mut state, &sid, location);
+            }
+        }
+        BornBoundEventResult {
+            applied,
+            native_pane_owned: false,
+        }
+    }
+
     async fn set_origin(&self, sid: &acp::schema::v1::SessionId, origin: SessionOrigin) -> bool {
         let mut guard = self.inner.lock().await;
         let Some(identity) = unique_identity_for_raw(&guard, sid) else {
@@ -2616,19 +2596,7 @@ impl SessionRegistry for InMemoryRegistry {
         location: crate::agent_sessions::SessionLocation,
     ) -> bool {
         let mut guard = self.inner.lock().await;
-        let Some(identity) = unique_identity_for_raw(&guard, sid) else {
-            return false;
-        };
-        let Some(mut entry) = remove_identity_locked(&mut guard, &identity) else {
-            return false;
-        };
-        if entry.location == location {
-            upsert_locked(&mut guard, entry);
-            return false;
-        }
-        entry.location = location;
-        upsert_locked(&mut guard, entry);
-        true
+        set_location_locked(&mut guard, sid, location)
     }
 
     async fn mark_resume_dispatched(
@@ -2866,6 +2834,146 @@ fn native_pane_observations_locked(state: &RegistryState) -> Vec<NativePaneObser
             observation
         })
         .collect()
+}
+
+fn register_native_born_binding_locked(
+    state: &mut RegistryState,
+    identity: &SessionIdentity,
+    pane: &str,
+    cwd: &std::path::Path,
+    mode_epoch: Option<u64>,
+    predecessor: Option<&NativePaneBindingPredecessor>,
+) -> bool {
+    let Some(key) = identity.history_key.as_ref() else {
+        return false;
+    };
+    if key.session_id != identity.session_id.to_string()
+        || !key.location.is_actionable()
+        || pane.is_empty()
+    {
+        return false;
+    }
+    let pane = pane_key(pane);
+    if let Some(row) = state.sessions.get(identity) {
+        if row.origin == Some(SessionOrigin::AgentPane)
+            || (row
+                .pane_session_id
+                .as_deref()
+                .is_some_and(|owner| pane_key(owner) != pane)
+                && !matches!(
+                    row.status,
+                    Some(AgentStatus::Ended | AgentStatus::Historical)
+                ))
+        {
+            return false;
+        }
+    }
+    let previous = state
+        .active_by_pane
+        .get(&pane)
+        .filter(|owner| *owner != identity)
+        .cloned();
+    if previous.is_none()
+        && state.native_panes.get(&pane).is_some_and(|native| {
+            native.observation.provider_id != key.provider_id
+                || native
+                    .observation
+                    .location
+                    .as_ref()
+                    .is_some_and(|location| location != &key.location)
+                || native
+                    .observation
+                    .agent_session_id
+                    .as_ref()
+                    .is_some_and(|id| id != key.session_id.as_str())
+        })
+    {
+        tracing::debug!(target: "session_registry", "native birth conflicts with admitted pane identity");
+        return false;
+    }
+    if let Some(previous) = previous.as_ref() {
+        let authorized = state.native_panes.get(&pane).is_some_and(|native| {
+            native.bound_identity.as_ref() == Some(previous)
+                && native_bound_identity(state, &native.observation).as_ref() == Some(previous)
+                && predecessor.is_some_and(|expected| {
+                    expected.agent_session_id == previous.session_id.to_string()
+                        && expected.mode_epoch == native.observation.mode_epoch
+                })
+                && mode_epoch.is_some_and(|epoch| epoch > native.observation.mode_epoch)
+        });
+        if !authorized {
+            return false;
+        }
+        // Explicit foreground replacement is not evidence of process exit.
+        // Detach before assignment, whose normal resume path ends competitors.
+        state.active_by_pane.remove(&pane);
+        if let Some(row) = state.sessions.get_mut(previous) {
+            row.pane_session_id = None;
+            row.status = Some(AgentStatus::Historical);
+            row.born_bound_pane = false;
+        }
+    }
+    let created = !state.sessions.contains_key(identity);
+    if created {
+        let mut row = SessionInfo::new(identity.session_id.clone(), cwd.to_path_buf());
+        row.provider_id = Some(key.provider_id.clone());
+        row.cli_source = Some(SessionHookCliSource::Known(key.provider_id.clone()).into());
+        row.location = key.location.clone();
+        row.session_universe = key.session_universe.clone();
+        row.status = Some(AgentStatus::Idle);
+        row.last_activity_at_ms = Some(now_ms());
+        upsert_locked(state, row);
+    }
+    let revived =
+        mark_resume_dispatched_identity_locked(state, identity).is_some_and(|(changed, _)| changed);
+    if previous.is_some() {
+        let row = state.sessions.get(identity).cloned();
+        if let (Some(native), Some(row)) = (state.native_panes.get_mut(&pane), row) {
+            // Keep the old epoch until the ordered Reset admits the new one,
+            // but never attribute the old owner's activity to its successor.
+            native.bound_identity = Some(identity.clone());
+            native.observation.agent_session_id = Some(identity.session_id.to_string());
+            native.observation.inferred_agent_session_id = None;
+            native.observation.inferred_history_key = None;
+            native.observation.provider_id = key.provider_id.clone();
+            native.observation.location = Some(key.location.clone());
+            native.observation.status = row.status.unwrap_or(AgentStatus::Idle);
+            native.observation.last_activity_at_ms = row.last_activity_at_ms.unwrap_or_else(now_ms);
+        }
+    }
+    let assigned = assign_resume_pane_identity_locked(state, identity, pane.clone(), now_ms());
+    let confirmed = state.sessions.get_mut(identity).is_some_and(|row| {
+        let changed = !row.born_bound_pane;
+        row.born_bound_pane = true;
+        changed
+    });
+    let bind_native = state.native_panes.get(&pane).is_some_and(|native| {
+        native.bound_identity.is_none()
+            && native_bound_identity(state, &native.observation).as_ref() == Some(identity)
+    });
+    if let Some(native) = state.native_panes.get_mut(&pane).filter(|_| bind_native) {
+        native.bound_identity = Some(identity.clone());
+        native.observation.inferred_agent_session_id = None;
+        native.observation.inferred_history_key = None;
+    }
+    created || revived || assigned || confirmed || bind_native
+}
+
+fn set_location_locked(
+    state: &mut RegistryState,
+    sid: &acp::schema::v1::SessionId,
+    location: SessionLocation,
+) -> bool {
+    let Some(identity) = unique_identity_for_raw(state, sid) else {
+        return false;
+    };
+    let Some(mut entry) = remove_identity_locked(state, &identity) else {
+        return false;
+    };
+    let changed = entry.location != location;
+    entry.location = location;
+    upsert_locked(state, entry);
+    changed
 }
 
 fn native_bound_identity(

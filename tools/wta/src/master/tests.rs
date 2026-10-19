@@ -2142,6 +2142,254 @@ async fn native_receiver_restored_birth_rejects_malformed_provider_and_pane() {
 }
 
 #[tokio::test]
+async fn native_pinned_launch_registration_after_reset_preserves_identity_and_activity() {
+    use crate::agent_sessions::{AgentStatus, CliSource, SessionEvent, SessionLocation};
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let pane = "00112233-4455-6677-8899-aabbccddeeff";
+    for cli in [CliSource::Copilot, CliSource::Claude, CliSource::Gemini] {
+        for distro in [None, Some("Ubuntu".to_string())] {
+            let state = make_state();
+            let provider = cli.canonical_provider_id().unwrap();
+            let location =
+                distro
+                    .as_ref()
+                    .map_or(SessionLocation::Host, |distro| SessionLocation::Wsl {
+                        distro: distro.clone(),
+                    });
+            handle_master_wt_event(
+                &state,
+                serde_json::json!({"method":"native_agent_observation","params":{
+                    "pane_id":pane, "provider_id":provider, "location":location,
+                    "window_id":0, "tab_id":"tab", "mode_epoch":1,
+                    "kind":"reset", "tracking_enabled":false
+                }}),
+            )
+            .await;
+            handle_master_wt_event(
+                &state,
+                serde_json::json!({"method":"native_agent_observation","params":{
+                    "pane_id":pane, "provider_id":provider, "window_id":0,
+                    "tab_id":"tab", "mode_epoch":1, "kind":"progress", "progress_state":1
+                }}),
+            )
+            .await;
+            let birth = SessionEvent::SessionStarted {
+                key: "pinned-launch".into(),
+                cli_source: cli.clone(),
+                pane_session_id: pane.into(),
+                cwd: "C:\\repo".into(),
+                title: String::new(),
+            };
+            handle_session_born_bound(&state, birth.clone(), distro.clone())
+                .await
+                .unwrap();
+            let sid = acp::schema::v1::SessionId::new("pinned-launch");
+            let row = state
+                .registry
+                .lookup(&sid)
+                .await
+                .expect("creator-known binding retained");
+            assert_eq!(row.pane_session_id.as_deref(), Some(pane));
+            assert_eq!(row.location, location);
+            assert!(row.born_bound_pane);
+            assert_eq!(row.status, Some(AgentStatus::Working));
+            let native = state.registry.native_pane_observations().await.remove(0);
+            assert_eq!(native.agent_session_id.as_deref(), Some("pinned-launch"));
+            assert!(native.inferred_history_key.is_none());
+            assert!(state.born_bound.lock().await.contains(&sid));
+            assert!(!state.hook_owned.lock().await.contains(&sid));
+
+            let unrelated = SessionEvent::SessionStarted {
+                key: "unrelated-hook".into(),
+                cli_source: cli.clone(),
+                pane_session_id: pane.into(),
+                cwd: "C:\\wrong".into(),
+                title: String::new(),
+            };
+            handle_session_hook(&state, unrelated.clone(), false)
+                .await
+                .unwrap();
+            handle_session_born_bound(&state, unrelated, distro.clone())
+                .await
+                .unwrap();
+            assert!(state
+                .registry
+                .lookup(&acp::schema::v1::SessionId::new("unrelated-hook"))
+                .await
+                .is_none());
+            handle_session_born_bound(&state, birth, distro)
+                .await
+                .unwrap();
+            assert_eq!(
+                state.registry.lookup(&sid).await.unwrap().status,
+                Some(AgentStatus::Working)
+            );
+            assert_eq!(state.registry.snapshot().await.len(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_pinned_launch_registration_selects_route_after_waiting_for_lifecycle_gate() {
+    use crate::agent_sessions::{AgentStatus, CliSource, SessionEvent};
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let state = make_state();
+    let sid = acp::schema::v1::SessionId::new("pinned-launch");
+    let pane = "00112233-4455-6677-8899-aabbccddeeff";
+    let gate = session_lifecycle_gate(&state, &sid).await;
+    let guard = gate.lock().await;
+    let mut registration = Box::pin(handle_session_born_bound(
+        &state,
+        SessionEvent::SessionStarted {
+            key: sid.to_string(),
+            cli_source: CliSource::Copilot,
+            pane_session_id: pane.into(),
+            cwd: "C:\\repo".into(),
+            title: String::new(),
+        },
+        None,
+    ));
+    assert!(futures::poll!(&mut registration).is_pending());
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"native_agent_observation","params":{
+            "pane_id":pane, "provider_id":"copilot", "window_id":0, "tab_id":"tab",
+            "mode_epoch":1, "kind":"reset", "tracking_enabled":false
+        }}),
+    )
+    .await;
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"native_agent_observation","params":{
+            "pane_id":pane, "provider_id":"copilot", "window_id":0, "tab_id":"tab",
+            "mode_epoch":1, "kind":"progress", "progress_state":1
+        }}),
+    )
+    .await;
+    drop(guard);
+    registration.await.unwrap();
+    let row = state.registry.lookup(&sid).await.unwrap();
+    assert_eq!(row.pane_session_id.as_deref(), Some(pane));
+    assert_eq!(row.status, Some(AgentStatus::Working));
+    assert!(row.born_bound_pane);
+    assert!(state.born_bound.lock().await.contains(&sid));
+    assert_eq!(
+        state.registry.native_pane_observations().await[0]
+            .agent_session_id
+            .as_deref(),
+        Some("pinned-launch")
+    );
+}
+
+#[tokio::test]
+async fn native_pinned_launch_registration_rejects_conflicting_provider_or_location() {
+    use crate::agent_sessions::{AgentStatus, CliSource, SessionEvent, SessionLocation};
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let pane = "00112233-4455-6677-8899-aabbccddeeff";
+    for (cli, distro, bound) in [
+        (CliSource::Claude, None, false),
+        (CliSource::Copilot, Some("Ubuntu".to_string()), false),
+        (CliSource::Copilot, Some("Ubuntu".to_string()), true),
+    ] {
+        let state = make_state();
+        let sid = acp::schema::v1::SessionId::new("wrong-launch");
+        let mut existing =
+            crate::session_registry::SessionInfo::new(sid.clone(), "C:\\original".into());
+        existing.provider_id = Some("copilot".into());
+        existing.cli_source = Some(CliSource::Copilot);
+        existing.location = SessionLocation::Host;
+        existing.title = Some("Existing Host conversation".into());
+        existing.status = Some(if bound {
+            AgentStatus::Idle
+        } else {
+            AgentStatus::Historical
+        });
+        if bound {
+            existing.pane_session_id = Some(pane.into());
+            existing.born_bound_pane = true;
+            state.born_bound.lock().await.insert(sid.clone());
+        }
+        state.registry.upsert(existing).await;
+        handle_master_wt_event(
+            &state,
+            serde_json::json!({"method":"native_agent_observation","params":{
+                "pane_id":pane, "provider_id":"copilot", "location":SessionLocation::Host,
+                "window_id":0, "tab_id":"tab", "mode_epoch":1,
+                "kind":"reset", "tracking_enabled":false
+            }}),
+        )
+        .await;
+        let before = serde_json::to_value(state.registry.lookup(&sid).await.unwrap()).unwrap();
+        handle_session_born_bound(
+            &state,
+            SessionEvent::SessionStarted {
+                key: "wrong-launch".into(),
+                cli_source: cli,
+                pane_session_id: pane.into(),
+                cwd: "C:\\repo".into(),
+                title: String::new(),
+            },
+            distro,
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.registry.snapshot().await.len(), 1);
+        assert_eq!(
+            serde_json::to_value(state.registry.lookup(&sid).await.unwrap()).unwrap(),
+            before
+        );
+        assert_eq!(state.born_bound.lock().await.contains(&sid), bound);
+        assert_eq!(
+            state.registry.native_pane_observations().await[0]
+                .agent_session_id
+                .as_deref(),
+            bound.then_some("wrong-launch")
+        );
+    }
+}
+
+#[tokio::test]
+async fn born_bound_wsl_replay_preserves_live_hook_and_stamps_legacy_location() {
+    use crate::agent_sessions::{AgentStatus, CliSource, SessionEvent, SessionLocation};
+    let state = make_state();
+    let sid = acp::schema::v1::SessionId::new("legacy-wsl-replay");
+    let birth = SessionEvent::SessionStarted {
+        key: sid.to_string(),
+        cli_source: CliSource::Copilot,
+        pane_session_id: "legacy-pane".into(),
+        cwd: "/home/owner".into(),
+        title: "Live title".into(),
+    };
+    handle_session_hook(&state, birth.clone(), false)
+        .await
+        .unwrap();
+    handle_session_hook(
+        &state,
+        SessionEvent::ToolStarting {
+            key: sid.to_string(),
+            tool_name: "prompt".into(),
+        },
+        false,
+    )
+    .await
+    .unwrap();
+    handle_session_born_bound(&state, birth, Some("Ubuntu".into()))
+        .await
+        .unwrap();
+    let row = state.registry.lookup(&sid).await.unwrap();
+    assert_eq!(
+        row.location,
+        SessionLocation::Wsl {
+            distro: "Ubuntu".into()
+        }
+    );
+    assert_eq!(row.status, Some(AgentStatus::Working));
+    assert_eq!(row.title.as_deref(), Some("Live title"));
+    assert!(state.hook_owned.lock().await.contains(&sid));
+    assert!(!state.born_bound.lock().await.contains(&sid));
+}
+
+#[tokio::test]
 async fn native_receiver_ordered_birth_reset_preserves_late_rpc_activity() {
     use crate::agent_sessions::{AgentStatus, CliSource, SessionEvent};
     let _capture = crate::wt_protocol_events::capture_test_published_events();
