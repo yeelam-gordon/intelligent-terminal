@@ -2097,6 +2097,51 @@ async fn native_receiver_ready_generation_fences_all_observations() {
 }
 
 #[tokio::test]
+async fn native_receiver_restored_birth_rejects_malformed_provider_and_pane() {
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    let mut state = make_state();
+    Arc::get_mut(&mut state)
+        .unwrap()
+        .native_observation_receiver_generation = Some(7);
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"wt_listener_ready","params":{}}),
+    )
+    .await;
+    let pane = "00112233-4455-6677-8899-aabbccddeeff";
+    for (provider, pane_id) in [
+        ("custom:   ", pane),
+        ("custom:test\tbad", pane),
+        ("custom:test\nbad", pane),
+        ("custom:test\rbad", pane),
+        ("copilot", "not-a-guid"),
+        ("copilot", "00000000-0000-0000-0000-000000000000"),
+    ] {
+        handle_master_wt_event(
+            &state,
+            serde_json::json!({"method":"session_born_bound","params":{
+                "pane_id":pane_id, "agent_session_id":"restored-real",
+                "agent":provider, "cwd":"C:\\repo", "receiver_generation":7
+            }}),
+        )
+        .await;
+        assert!(
+            state.registry.snapshot().await.is_empty(),
+            "invalid restored identity accepted: {provider:?}, {pane_id:?}"
+        );
+    }
+    handle_master_wt_event(
+        &state,
+        serde_json::json!({"method":"session_born_bound","params":{
+            "pane_id":pane, "agent_session_id":"restored-real",
+            "agent":"custom:test", "cwd":"C:\\repo", "receiver_generation":7
+        }}),
+    )
+    .await;
+    assert_eq!(state.registry.snapshot().await.len(), 1);
+}
+
+#[tokio::test]
 async fn native_receiver_ordered_birth_reset_preserves_late_rpc_activity() {
     use crate::agent_sessions::{AgentStatus, CliSource, SessionEvent};
     let _capture = crate::wt_protocol_events::capture_test_published_events();

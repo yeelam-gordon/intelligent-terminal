@@ -11044,12 +11044,12 @@ async fn handle_master_wt_event(state: &Arc<MasterStateInner>, event_json: serde
         let agent = field("agent");
         if key.is_empty()
             || key.starts_with("pane:")
-            || pane.is_empty()
+            || !uuid::Uuid::parse_str(pane).is_ok_and(|pane| !pane.is_nil())
             || agent.is_empty()
             || !(crate::agent_registry::is_known_id(agent)
-                || agent
-                    .strip_prefix("custom:")
-                    .is_some_and(|name| !name.is_empty()))
+                || agent.strip_prefix("custom:").is_some_and(|name| {
+                    !name.trim().is_empty() && !agent.contains(['\r', '\n', '\t'])
+                }))
         {
             tracing::warn!(target: "master_wt_event", "ignoring incomplete restored born-bound identity");
             return;
