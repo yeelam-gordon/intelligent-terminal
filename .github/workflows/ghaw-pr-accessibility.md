@@ -3,7 +3,7 @@ name: Native WinUI Accessibility Review
 description: 'Reviews native UI accessibility with Windows Axe smoke checks and proposes narrowly scoped HIGH fixes without requiring post-fix builds or tests.'
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
     paths:
       - 'src/cascadia/TerminalApp/**'
@@ -34,6 +34,8 @@ on:
       - '**/.copilot/**'
       - '**/.agents/**'
       - '**/.gemini/**'
+
+if: github.event.pull_request.head.repo.id == github.repository_id
 
 permissions:
   contents: read
@@ -79,7 +81,7 @@ jobs:
   native-runtime:
     name: Native Axe.Windows smoke
     needs: [agent]
-    if: ${{ !cancelled() && needs.agent.result != 'skipped' }}
+    if: ${{ !cancelled() && needs.agent.result != 'skipped' && github.event.pull_request.head.repo.id == github.repository_id }}
     uses: ./.github/workflows/native-accessibility.yml
     permissions:
       contents: read
@@ -230,8 +232,8 @@ existing trusted `AXSTATIC001-remove-raw-view` recipe: remove exactly the
 matching prepared interactive control's raw-view property, with an existing
 content/resource name source. Preserve encoding, BOM and line endings. Do not
 change resources, add literal customer-facing names, fix MEDIUM/LOW findings,
-or include unrelated files/hunks. Other repairs remain `remaining` or `blocked`;
-fork PRs are read-only.
+or include unrelated files/hunks. Other repairs remain `remaining` or `blocked`.
+This workflow does not process external-fork PRs.
 
 **Do not build or test before committing or pushing an eligible fix.** Do not
 launch post-fix native jobs or provision a fix-validation environment. The original PR
