@@ -75,6 +75,12 @@ exact repair recipe and captured commit series. Repaired files retain regular
 file type, mode, encoding and line endings. Untracked, extra and stale changes
 are rejected. These are permission/patch checks, not product tests.
 
+Before the agent starts, the workflow records configuration changes made by
+framework restoration in the read-only runtime mount. Before candidate
+validation, it reverses that exact setup patch. Modified setup hunks or
+committed configuration fail closed; new out-of-scope files and actual repairs
+still pass through the unchanged validator.
+
 A repair run requests one branch push for the complete series. A report-only
 run requests `noop`. There is no second PR-comment/review output: comments and
 code publication are not atomic in gh-aw. Non-fast-forward publication fails;

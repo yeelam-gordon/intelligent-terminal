@@ -123,6 +123,24 @@ steps:
       git check-ref-format --branch "$HEAD_REF"
       git checkout -B "$HEAD_REF" "$HEAD_SHA"
 
+pre-agent-steps:
+  - name: Record framework configuration changes
+    shell: bash
+    env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    run: |
+      set -euo pipefail
+      if [ "$(git rev-parse HEAD)" != "$EXPECTED_HEAD_SHA" ]; then
+        echo "::error::Candidate checkout no longer matches the reviewed PR head."
+        exit 1
+      fi
+      TRUSTED_ACCESSIBILITY="$RUNNER_TEMP/gh-aw/accessibility-trusted"
+      setup_paths=(.agents .github AGENTS.md .mcp.json)
+      git ls-files --others --exclude-standard -z -- "${setup_paths[@]}" |
+        xargs -0 -r git add --intent-to-add --
+      git diff --binary --no-ext-diff --no-textconv "$EXPECTED_HEAD_SHA" -- "${setup_paths[@]}" \
+        > "$TRUSTED_ACCESSIBILITY/framework-configuration.patch"
+
 safe-outputs:
   github-token: ${{ secrets.GITHUB_TOKEN }}
   threat-detection:
@@ -155,6 +173,28 @@ safe-outputs:
     fallback-as-pull-request: false
 
 post-steps:
+  - name: Remove verified framework configuration changes
+    shell: bash
+    env:
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    run: |
+      set -euo pipefail
+      TRUSTED_ACCESSIBILITY="$RUNNER_TEMP/gh-aw/accessibility-trusted"
+      setup_paths=(.agents .github AGENTS.md .mcp.json)
+      if [ ! -f "$TRUSTED_ACCESSIBILITY/framework-configuration.patch" ]; then
+        echo "::error::Framework configuration evidence is missing."
+        exit 1
+      fi
+      if ! git diff --quiet "$EXPECTED_HEAD_SHA" HEAD -- "${setup_paths[@]}"; then
+        echo "::error::Agent commits must not include framework configuration."
+        exit 1
+      fi
+      if [ -s "$TRUSTED_ACCESSIBILITY/framework-configuration.patch" ]; then
+        git apply --reverse --check "$TRUSTED_ACCESSIBILITY/framework-configuration.patch"
+        git apply --reverse "$TRUSTED_ACCESSIBILITY/framework-configuration.patch"
+        git reset --quiet "$EXPECTED_HEAD_SHA" -- "${setup_paths[@]}"
+      fi
+
   - name: Check findings and repair publication policy
     shell: bash
     env:
@@ -226,6 +266,10 @@ omit or downgrade a prepared HIGH. Record unavailable native scenarios honestly;
 source review and patch checks do not prove runtime accessibility.
 
 ## Repairs
+
+Framework-restored configuration is setup, not a repair. Do not stage or commit
+it or include it in `patch_files`. The post-step removes only the recorded
+setup patch; changed setup content or committed configuration fails validation.
 
 Only same-repository, high-confidence HIGH findings are eligible. Keep the
 existing trusted `AXSTATIC001-remove-raw-view` recipe: remove exactly the
