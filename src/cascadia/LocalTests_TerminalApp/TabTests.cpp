@@ -11079,6 +11079,16 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(strip.HistoryItems().GetAt(2) == otherSource);
             VERIFY_IS_TRUE(strip.HistoryItems().GetAt(3) == otherAgent);
             VERIFY_IS_TRUE(strip.HistoryItems().GetAt(4) == otherSession);
+            impl->CommitHistorySnapshot({ otherSession });
+            changes.clear();
+            impl->CommitHistorySnapshot({ universe, ubuntu, otherSource, otherAgent, otherSession });
+            VERIFY_ARE_EQUAL(size_t{ 4 }, changes.size());
+            VERIFY_IS_TRUE(std::ranges::all_of(changes, [](const auto change) { return change == CollectionChange::ItemInserted; }));
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(0) == universe);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(1) == ubuntu);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(2) == otherSource);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(3) == otherAgent);
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(4) == otherSession);
         });
     }
 
@@ -14080,6 +14090,17 @@ namespace TerminalAppLocalTests
             viewportChanges.clear();
             impl->CommitHistorySnapshot({ replacement, retained });
             VERIFY_IS_TRUE(viewportChanges.empty());
+            impl->CommitHistorySnapshot({ retained });
+            viewportChanges.clear();
+            impl->CommitHistorySnapshot({ replacement, retained });
+            VERIFY_ARE_EQUAL(size_t{ 1 }, viewportChanges.size());
+            VERIFY_ARE_EQUAL(CollectionChange::ItemInserted, viewportChanges[0].first);
+            VERIFY_ARE_EQUAL(2u, viewportChanges[0].second);
+            VERIFY_IS_TRUE(list.Items().GetAt(2) == replacement);
+            VERIFY_IS_TRUE(list.Items().GetAt(3) == retained);
+            impl->CommitHistorySnapshot({ retained, replacement });
+            VERIFY_IS_TRUE(list.Items().GetAt(2) == retained);
+            VERIFY_IS_TRUE(list.Items().GetAt(3) == replacement);
         });
     }
 

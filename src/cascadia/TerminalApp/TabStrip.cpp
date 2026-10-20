@@ -2840,21 +2840,31 @@ namespace winrt::TerminalApp::implementation
                 visibleKeys.emplace(historyKey(item));
             }
             // Preserve surviving rows when membership changes, and update status in place.
+            std::set<std::array<winrt::hstring, 5>> retainedKeys;
             for (uint32_t index = _historyItems.Size(); index > 0; --index)
             {
-                if (!visibleKeys.contains(historyKey(_historyItems.GetAt(index - 1))))
+                const auto key = historyKey(_historyItems.GetAt(index - 1));
+                if (!visibleKeys.contains(key))
                 {
                     _historyItems.RemoveAt(index - 1);
+                }
+                else
+                {
+                    retainedKeys.emplace(key);
                 }
             }
             for (uint32_t index = 0; index < visibleItems.size(); ++index)
             {
                 if (index < _historyItems.Size() && !sameHistoryKey(_historyItems.GetAt(index), visibleItems[index]))
                 {
-                    auto existing = index + 1;
-                    while (existing < _historyItems.Size() && !sameHistoryKey(_historyItems.GetAt(existing), visibleItems[index]))
+                    auto existing = _historyItems.Size();
+                    if (retainedKeys.contains(historyKey(visibleItems[index])))
                     {
-                        ++existing;
+                        existing = index + 1;
+                        while (existing < _historyItems.Size() && !sameHistoryKey(_historyItems.GetAt(existing), visibleItems[index]))
+                        {
+                            ++existing;
+                        }
                     }
                     if (existing < _historyItems.Size())
                     {
@@ -3052,12 +3062,19 @@ namespace winrt::TerminalApp::implementation
             {
                 retainedHistoryItems.emplace(_historyItems.GetAt(index).as<::IUnknown>().get());
             }
+            std::unordered_set<::IUnknown*> viewportHistoryItems;
+            viewportHistoryItems.reserve(historyCount);
             for (uint32_t index = _viewportItems.Size(); index > headerIndex + 1; --index)
             {
                 const auto item = _viewportItems.GetAt(index - 1).try_as<TerminalApp::TabStripHistoryItem>();
-                if (!historyCount || !item || !retainedHistoryItems.contains(item.as<::IUnknown>().get()))
+                const auto identity = item ? item.as<::IUnknown>().get() : nullptr;
+                if (!historyCount || !item || !retainedHistoryItems.contains(identity))
                 {
                     _viewportItems.RemoveAt(index - 1);
+                }
+                else
+                {
+                    viewportHistoryItems.emplace(identity);
                 }
             }
             for (uint32_t index = 0; index < historyCount; ++index)
@@ -3071,12 +3088,13 @@ namespace winrt::TerminalApp::implementation
                 else if (_viewportItems.GetAt(slot) != item)
                 {
                     uint32_t existing{};
-                    if (_viewportItems.IndexOf(item, existing))
+                    if (viewportHistoryItems.contains(item.as<::IUnknown>().get()) && _viewportItems.IndexOf(item, existing))
                     {
                         _viewportItems.RemoveAt(existing);
                     }
                     _viewportItems.InsertAt(slot, item);
                 }
+                viewportHistoryItems.emplace(item.as<::IUnknown>().get());
             }
             while (_viewportItems.Size() > headerIndex + 1 + historyCount)
             {

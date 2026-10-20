@@ -820,6 +820,42 @@ catch {
                 })
             if (@($historyRows | Where-Object { $_.Current.Name.Contains('controlled inferred ') }).Count -eq 2) { $true }
         } | Should -BeTrue
+        $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+        $searchButton = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+            [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'SearchTabsButton'))
+        $toggle = $searchButton.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+        $openedSearch = $toggle.Current.ToggleState -eq [Windows.Automation.ToggleState]::Off
+        if ($openedSearch) { Invoke-UiClick -App $script:app -Selector SearchTabsButton | Out-Null }
+        $originalQuery = Get-UiValue -App $script:app -Selector SearchTextBox -ValuePattern
+        try {
+            foreach ($query in @($unrelated.title, 'controlled', $unrelated.title, 'controlled')) {
+                Set-UiValue -App $script:app -Selector SearchTextBox -Value $query | Out-Null
+                $expectedTitles = if ($query -ceq $unrelated.title) { @($unrelated.title) } else { @($unrelated.title) + @($rows.title) }
+                Wait-Until -TimeoutSec 15 -Because "Recent search '$query' restores exactly its matching rows" -Condition {
+                    $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+                    $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'ItemsList'))
+                    $historyRows = @($list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) |
+                        Where-Object {
+                            -not $_.Current.IsOffscreen -and
+                            @((Get-StatusRowParts $_) | Where-Object { $_.Current.AutomationId -eq 'HistoryProviderIcon' }).Count -gt 0
+                        })
+                    $names = @($historyRows | ForEach-Object { $_.Current.Name })
+                    @{ query = $query; actual_query = (Get-UiValue -App $script:app -Selector SearchTextBox -ValuePattern)
+                        names = $names; expected = $expectedTitles } | ConvertTo-Json -Depth 4 -Compress |
+                        Add-Content -LiteralPath (Join-Path $script:evidence 'recent-search-expansion.jsonl')
+                    if ($names.Count -ne $expectedTitles.Count) { return $false }
+                    foreach ($title in $expectedTitles) {
+                        if (@($names | Where-Object { $_ -ceq $title -or $_.StartsWith($title + ' ', [StringComparison]::Ordinal) }).Count -ne 1) { return $false }
+                    }
+                    $true
+                } | Should -BeTrue
+            }
+        }
+        finally {
+            Set-UiValue -App $script:app -Selector SearchTextBox -Value $originalQuery | Out-Null
+            if ($openedSearch) { Invoke-UiClick -App $script:app -Selector SearchTabsButton | Out-Null }
+        }
     }
     It 'Sessions on without hooks suppresses native OSC and BEL fallback' {
         if (-not $script:hookIsolationVerified) {
