@@ -1036,11 +1036,7 @@ mod tests {
                 WAIT_OBJECT_0
             );
         });
-        fs::write(
-            &executable,
-            "@echo off\r\npowershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 10\"\r\n",
-        )
-        .unwrap();
+        fs::write(&executable, "@echo off\r\npowershell.exe -NoProfile -NonInteractive -Command \"Start-Sleep -Seconds 10\"\r\n").unwrap();
         let start = Instant::now();
         assert!(probe_version(executable.to_str().unwrap())
             .unwrap_err()
