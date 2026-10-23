@@ -937,8 +937,7 @@ mod tests {
 
         struct FixtureProcess(OwnedHandle);
         impl FixtureProcess {
-            fn open(pid: u32) -> Self {
-                // SAFETY: the fixture keeps these processes alive until the test releases the shim.
+            fn open_child(parent_pid: u32, pid: u32) -> Self {
                 let handle =
                     unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid) };
                 assert!(
@@ -946,7 +945,14 @@ mod tests {
                     "open fixture process {pid}: {}",
                     std::io::Error::last_os_error()
                 );
-                Self(unsafe { OwnedHandle::from_raw_handle(handle) })
+                // Pin the opened identity before rechecking ancestry; the earlier snapshot can race exit.
+                let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+                assert_eq!(
+                    cmd_child_pid(parent_pid),
+                    Some(pid),
+                    "process {pid} is no longer the probe's cmd child"
+                );
+                Self(handle)
             }
         }
         impl Drop for FixtureProcess {
@@ -1030,9 +1036,18 @@ mod tests {
                     }
                 }
             };
-            let descendant = FixtureProcess::open(pid);
+            let descendant = FixtureProcess::open_child(parent_pid, pid);
             assert_eq!(
                 unsafe { WaitForSingleObject(descendant.0.as_raw_handle(), 0) },
+                WAIT_TIMEOUT
+            );
+            assert!(
+                std::panic::catch_unwind(|| FixtureProcess::open_child(parent_pid, parent_pid))
+                    .is_err(),
+                "the probe parent must not be accepted as its own child"
+            );
+            assert_eq!(
+                unsafe { WaitForSingleObject(parent.0.as_raw_handle(), 0) },
                 WAIT_TIMEOUT
             );
             fs::write(&release, "").unwrap();
