@@ -441,7 +441,11 @@ def _validate_finding_locations(root: Path, prepared: dict[str, Any], findings: 
                 type(line) is not int or line < 1 or not sha):
             errors.append("finding requires a relative file, head/base revision and positive line")
             continue
-        blob = _source_blob(root, sha, path)
+        try:
+            blob = _source_blob(root, sha, path)
+        except (RuntimeError, ValueError) as error:
+            errors.append(f"{item.get('stable_id')}: cannot read immutable {revision} source {path}: {error}")
+            continue
         if not blob or line > len(blob["text"].splitlines()):
             errors.append(f"{item.get('stable_id')}: finding location is absent from immutable {revision} source")
         if item.get("disposition") == "fixed" and revision != "head":

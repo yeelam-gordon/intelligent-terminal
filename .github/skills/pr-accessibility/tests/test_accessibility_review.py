@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -1491,6 +1492,16 @@ class ValidationTests(unittest.TestCase):
     def test_compact_no_findings_needs_no_dimension_or_file_forms(self):
         report = self.compact_report()
         MODULE.validate(self.root, self.head, self.head, True, self.prepared, report)
+
+    def test_compact_location_read_failures_retain_structured_diagnostic_context(self):
+        prepared = json.loads(self.prepared.read_text())
+        finding = self.finding(disposition="remaining")
+        for error in (RuntimeError("git failed"), ValueError("unexpected tree entry")):
+            with self.subTest(error=error), mock.patch.object(MODULE, "_source_blob", side_effect=error):
+                errors = MODULE._validate_finding_locations(self.root, prepared, [finding])
+                self.assertEqual(1, len(errors))
+                for detail in (finding["stable_id"], "immutable head source", finding["file"], str(error)):
+                    self.assertIn(detail, errors[0])
 
     def test_compact_incomplete_or_missing_status_is_not_a_clean_review(self):
         for status in ("incomplete", None, "PASS"):
