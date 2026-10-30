@@ -16695,8 +16695,9 @@ async fn pooled_opencode_v2_preserves_unlisted_cwd_without_fetching_later_pages(
                 .agent_info = Some(acp::schema::v1::Implementation::new("OpenCode", "2.0.24"));
             assert_eq!(refresh_agent_history(&state, &agent).await, Some(1));
             assert_eq!(cursors.try_recv().unwrap(), None);
-            assert!(
-                cursors.try_recv().is_err(),
+            assert_eq!(
+                cursors.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty),
                 "a missing bound session must not trigger CWD-only pagination"
             );
             assert_eq!(
@@ -16715,7 +16716,7 @@ async fn pooled_opencode_v2_preserves_unlisted_cwd_without_fetching_later_pages(
                 tokio::time::advance(HISTORY_REFRESH_INTERVAL).await;
                 assert_eq!(refresh_agent_history(&state, &agent).await, Some(1));
                 assert_eq!(cursors.try_recv().unwrap(), None);
-                assert!(cursors.try_recv().is_err());
+                assert_eq!(cursors.try_recv(), Err(mpsc::error::TryRecvError::Empty));
                 assert!(agent
                     .history_refresh
                     .gate
@@ -16785,7 +16786,7 @@ async fn unlisted_cwd_keeps_newer_hook_with_or_without_cursor() {
 
                 assert_eq!(refresh_agent_history(&state, &agent).await, Some(1));
                 assert_eq!(cursors.try_recv().unwrap(), None);
-                assert!(cursors.try_recv().is_err());
+                assert_eq!(cursors.try_recv(), Err(mpsc::error::TryRecvError::Empty));
                 assert!(agent
                     .history_refresh
                     .gate
@@ -16834,7 +16835,7 @@ async fn claude_cwd_refresh_does_not_fetch_unreturned_history() {
             );
             assert_eq!(refresh_agent_history(&state, &agent).await, Some(1));
             assert_eq!(cursors.try_recv().unwrap(), None);
-            assert!(cursors.try_recv().is_err());
+            assert_eq!(cursors.try_recv(), Err(mpsc::error::TryRecvError::Empty));
             assert_eq!(
                 state.registry.lookup(&sid).await.unwrap().cwd,
                 PathBuf::from("C:\\old")
@@ -16852,8 +16853,9 @@ async fn claude_cwd_refresh_does_not_fetch_unreturned_history() {
             tokio::time::advance(HISTORY_REFRESH_INTERVAL).await;
             assert_eq!(refresh_agent_history(&state, &agent).await, Some(1));
             assert_eq!(cursors.try_recv().unwrap(), None);
-            assert!(
-                cursors.try_recv().is_err(),
+            assert_eq!(
+                cursors.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty),
                 "manual refresh keeps its first-page latency budget"
             );
         })
