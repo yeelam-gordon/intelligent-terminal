@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -1479,23 +1480,135 @@ class ValidationTests(unittest.TestCase):
             MODULE.validate(self.root, self.head, self.head, True, self.prepared, report)
 
 
+    def compact_report(self, *args, **kwargs):
+        report = self.report(*args, **kwargs)
+        data = json.loads(report.read_text())
+        data.update(version=2, review_status="complete")
+        data["runtime_checks"] = json.loads(self.prepared.read_text())["runtime_checks"]
+        del data["review_checks"]
+        report.write_text(json.dumps(data))
+        return report
+
+    def test_compact_no_findings_needs_no_dimension_or_file_forms(self):
+        report = self.compact_report()
+        MODULE.validate(self.root, self.head, self.head, True, self.prepared, report)
+
+    def test_compact_location_read_failures_retain_structured_diagnostic_context(self):
+        prepared = json.loads(self.prepared.read_text())
+        finding = self.finding(disposition="remaining")
+        for error in (RuntimeError("git failed"), ValueError("unexpected tree entry")):
+            with self.subTest(error=error), mock.patch.object(MODULE, "_source_blob", side_effect=error):
+                errors = MODULE._validate_finding_locations(self.root, prepared, [finding])
+                self.assertEqual(1, len(errors))
+                for detail in (finding["stable_id"], "immutable head source", finding["file"], str(error)):
+                    self.assertIn(detail, errors[0])
+
+    def test_compact_incomplete_or_missing_status_is_not_a_clean_review(self):
+        for status in ("incomplete", None, "PASS"):
+            with self.subTest(status=status):
+                report = self.compact_report()
+                data = json.loads(report.read_text())
+                data["review_status"] = status
+                report.write_text(json.dumps(data))
+                with self.assertRaisesRegex(ValueError, "source review is incomplete"):
+                    MODULE.validate(self.root, self.head, self.head, True, self.prepared, report)
+
+    def test_compact_contract_keeps_unaccounted_signal_rejection(self):
+        with self.assertRaisesRegex(ValueError, "prepared signal must be reported"):
+            MODULE.validate(self.root, self.head, self.head, True, self.prepared,
+                            self.compact_report(dismissed_signals=[]))
+
+    def test_compact_contract_authenticates_actual_location_without_exact_text_form(self):
+        finding = self.finding(disposition="remaining")
+        for updates in ({"line": 999999}, {"line": True}, {"revision": "unknown"},
+                        {"file": "../escape.xaml"}, {"file": "src/cascadia/TerminalApp/Absent.xaml"}):
+            with self.subTest(updates=updates):
+                invalid = {**finding, **updates}
+                with self.assertRaises(ValueError):
+                    MODULE.validate(self.root, self.head, self.head, True, self.prepared,
+                                    self.compact_report([invalid]))
+        MODULE.validate(self.root, self.head, self.head, True, self.prepared,
+                        self.compact_report([finding]))
+
+    def test_compact_audit_fre_medium_remaining_does_not_fail_enum_or_coverage_forms(self):
+        # Contract regression for #1267's rejected genuine lead, not a runtime
+        # reproduction or a test of a model's ability to discover the defect.
+        relative = "src/cascadia/TerminalApp/FreOverlay.cpp"
+        (self.root / relative).write_text(
+            "scroll.VerticalScrollBarVisibility(isSmall ? ScrollBarVisibility::Auto : ScrollBarVisibility::Disabled);\n")
+        MODULE._git(self.root, "add", relative)
+        MODULE._git(self.root, "commit", "-qm", "Synthetic FRE source receipt")
+        self.head = MODULE._git(self.root, "rev-parse", "HEAD").strip()
+        base = MODULE._git(self.root, "rev-parse", f"{self.head}^").strip()
+        MODULE.prepare(self.root, base, self.head, self.prepared)
+        finding = self.finding(
+            stable_id="AXMANUAL-FRE-OVERFLOW", severity="MEDIUM", confidence="medium",
+            disposition="remaining", file=relative,
+            observed="Large wrapped content can overflow while scrolling is Disabled.",
+            expected="Overflowing welcome content has a scroll route.",
+            evidence="The viewport threshold disables scrolling regardless of measured content overflow.",
+            impact="Enlarged text can make lower welcome content unreachable.",
+            proposed_fix="Use Auto when content overflows.")
+        MODULE.validate(self.root, self.head, self.head, True, self.prepared,
+                        self.compact_report([finding]))
+
+    def test_compact_deleted_source_requires_base_revision_and_cannot_be_fixed(self):
+        relative = "src/cascadia/TerminalApp/Test.xaml"
+        base = self.head
+        MODULE._git(self.root, "rm", relative)
+        MODULE._git(self.root, "commit", "-qm", "Remove UI source")
+        self.head = MODULE._git(self.root, "rev-parse", "HEAD").strip()
+        MODULE.prepare(self.root, base, self.head, self.prepared)
+        finding = self.finding(disposition="remaining", revision="base")
+        MODULE.validate(self.root, self.head, self.head, True, self.prepared,
+                        self.compact_report([finding]))
+        finding["revision"] = "head"
+        with self.assertRaisesRegex(ValueError, "absent from immutable head"):
+            MODULE.validate(self.root, self.head, self.head, True, self.prepared,
+                            self.compact_report([finding]))
+
+    def test_compact_report_keeps_authenticated_repair_and_malformed_repair_rejection(self):
+        queue, transport = self.publication()
+        report = self.compact_report([self.finding()], ["src/cascadia/TerminalApp/Test.xaml"])
+        MODULE.validate(self.root, self.head, self.head, True, self.prepared, report, queue, transport)
+        self.assertIn("commit_sha", json.loads(report.read_text())["findings"][0])
+        for change in ({"severity": "MEDIUM"}, {"confidence": "medium"}, {"revision": "base"},
+                       {"repair_recipe": "unsupported"}, {"validation": ["PASS"]}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                MODULE.validate(self.root, self.head, self.head, True, self.prepared,
+                                self.compact_report([{**self.finding(), **change}],
+                                                    ["src/cascadia/TerminalApp/Test.xaml"]), queue, transport)
+
+    def test_compact_malformed_reports_and_duplicate_runtime_records_fail_closed(self):
+        for bad in ([], {"version": True}, {"version": 2, "source_sha": 7}):
+            report = self.workspace / "malformed.json"
+            report.write_text(json.dumps(bad))
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                MODULE.validate(self.root, self.head, self.head, True, self.prepared, report)
+        report = self.compact_report()
+        data = json.loads(report.read_text())
+        data["runtime_checks"] *= 2
+        report.write_text(json.dumps(data))
+        with self.assertRaisesRegex(ValueError, "preserve every prepared runtime"):
+            MODULE.validate(self.root, self.head, self.head, True, self.prepared, report)
+
+
 @unittest.skipUnless(shutil.which("node"), "Node required for trusted report scenarios")
 class WorkflowContractTests(unittest.TestCase):
     def test_agent_summary_is_written_from_template_and_displayed_unchanged(self):
         root = Path(__file__).parents[4]
         workflow = (root / ".github/workflows/ghaw-pr-accessibility.md").read_text(encoding="utf-8")
-        self.assertIn("--summary /tmp/gh-aw/accessibility/summary.md", workflow)
-        self.assertIn("        /tmp/gh-aw/accessibility/summary.md", workflow)
+        self.assertIn('--summary "Generated Files/$ACCESSIBILITY_RUN/deep-summary.md"', workflow)
         self.assertIn("## Human action and limits", workflow)
         self.assertIn("| Proposed fix commit |", workflow)
         self.assertIn("[commit SHA](COMMIT_URL)", workflow)
         self.assertIn("`${{ github.server_url }}`", workflow)
         self.assertIn("prepared `publication.repository`", workflow)
-        self.assertIn('cat /tmp/gh-aw/accessibility/summary.md >> "$GITHUB_STEP_SUMMARY"', workflow)
+        self.assertIn('cat "$summary" >> "$GITHUB_STEP_SUMMARY"', workflow)
         self.assertIn("original PR", workflow)
         self.assertIn("may revert any fix commit", workflow)
         self.assertIn("only once below the table", workflow)
-        self.assertIn("set `review_checks`, `findings`, `dismissed_signals` and `patch_files`", workflow)
+        self.assertIn("set `findings`, `dismissed_signals` and `patch_files`", workflow)
         self.assertIn("preserve every prepared runtime", workflow)
         self.assertIn("Include this paragraph only if repair commits exist; otherwise remove it.", workflow)
         self.assertNotIn("script: |", workflow)
@@ -1510,7 +1623,7 @@ class WorkflowContractTests(unittest.TestCase):
         compiled = (root / ".github/workflows/ghaw-pr-accessibility.lock.yml").read_text(encoding="utf-8")
         self.assertNotIn("\n  accessibility-report:", compiled)
         self.assertIn("\n  native-runtime:", compiled)
-        self.assertIn('cat /tmp/gh-aw/accessibility/summary.md', compiled)
+        self.assertIn('cat "$summary" >> "$GITHUB_STEP_SUMMARY"', compiled.replace('\\"', '"'))
 
     def test_support_paths_trigger_trusted_base_validation(self):
         root = Path(__file__).parents[4]
@@ -1527,8 +1640,12 @@ class WorkflowContractTests(unittest.TestCase):
         workflow = (root / ".github/workflows/ghaw-pr-accessibility.md").read_text(encoding="utf-8")
         self.assertIn("  model: auto", workflow)
         self.assertIn("max-daily-ai-credits: 100000", workflow)
-        self.assertEqual(1, workflow.count("max-ai-credits: 500"))
-        self.assertEqual(1, workflow.count("max-ai-credits: 30"))
+        workflows = [workflow] + [
+            (root / f".github/workflows/ghaw-accessibility-{stage}.md").read_text(encoding="utf-8")
+            for stage in ("triage", "summary")]
+        caps = [list(map(int, re.findall(r"max-ai-credits: (\d+)", text))) for text in workflows]
+        self.assertEqual(500, sum(values[0] for values in caps))
+        self.assertEqual(30, sum(values[1] for values in caps))
         self.assertIn("timeout-minutes: 15", workflow)
         self.assertIn("retries: 0", workflow)
 
@@ -1546,14 +1663,14 @@ class WorkflowContractTests(unittest.TestCase):
         condition = publication.split("\n    if:", 1)[1].split("\n    runs-on:", 1)[0]
         self.assertIn("needs.agent.result == 'success'", condition)
 
-    def test_validated_report_is_uploaded_after_validation(self):
+    def test_raw_report_is_uploaded_after_validation_even_on_failure(self):
         root = Path(__file__).parents[4]
         workflow = (root / ".github/workflows/ghaw-pr-accessibility.md").read_text(encoding="utf-8")
         self.assertLess(workflow.index("name: Check findings and repair publication policy"),
-                        workflow.index("name: Upload source review and agent-written summary"))
-        upload = workflow.split("name: Upload source review and agent-written summary", 1)[1].split("\n---", 1)[0]
-        self.assertIn("/tmp/gh-aw/accessibility/final.json", upload)
-        self.assertIn("/tmp/gh-aw/accessibility/summary.md", upload)
+                        workflow.index("name: Upload raw source review even when incomplete"))
+        upload = workflow.split("name: Upload raw source review even when incomplete", 1)[1].split("\n---", 1)[0]
+        self.assertIn("if: always()", upload)
+        self.assertIn("Generated Files/accessibility-${{ github.run_id }}-${{ github.run_attempt }}/", upload)
 
     def test_skill_is_staged_from_workflow_revision_before_head_checkout(self):
         root = Path(__file__).parents[4]
@@ -1590,7 +1707,10 @@ class WorkflowContractTests(unittest.TestCase):
         root = Path(__file__).parents[4]
         compiled = (root / ".github/workflows/ghaw-pr-accessibility.lock.yml").read_text(encoding="utf-8")
         agent = re.split(r"\n  [a-zA-Z][\w-]*:\n", compiled.split("\n  agent:\n", 1)[1], maxsplit=1)[0]
-        self.assertRegex(agent, r"(?m)^    needs: activation$")
+        dependencies = agent.split("    needs:\n", 1)[1].split("\n    if:", 1)[0]
+        self.assertIn("- activation", dependencies)
+        self.assertIn("- triage-route", dependencies)
+        self.assertNotIn("native", dependencies)
         self.assertIn("\n  native-runtime:\n", compiled)
         self.assertIn("uses: ./.github/workflows/native-accessibility.yml", compiled)
         publisher = re.split(r"\n  [a-zA-Z][\w-]*:\n", compiled.split("\n  safe_outputs:\n", 1)[1], maxsplit=1)[0]
@@ -1625,7 +1745,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("name: Checkout trusted native harness", workflow)
         self.assertIn("trusted-accessibility\\test\\accessibility\\Invoke-AxeWindowsTestHost.ps1", workflow)
         self.assertIn("hierarchy lacks its visible state marker", workflow)
-        self.assertIn("Native accessibility scan failed or was blocked", workflow)
+        self.assertIn('Native $surface scan failed or was blocked', workflow)
 
     def test_native_runtime_harness_targets_only_test_host_package(self):
         root = Path(__file__).parents[4]
