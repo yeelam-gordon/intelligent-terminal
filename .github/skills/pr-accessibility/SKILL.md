@@ -43,6 +43,15 @@ The source rules are intentionally conservative:
 2. Inspect companion XAML, C++ implementation/header, styles/templates,
    `x:Uid` source resources, custom AutomationPeers, and focused UIA tests needed
    to understand the changed operation.
+   Trace the actual end-user action, expected result and observed failing path,
+   including equivalent existing behavior before reporting absence. Follow a
+   bound value to its producer (for example an existing tooltip title fallback).
+   Check framework templates/defaults: TeachingTip's alternate close X is not
+   its optional bottom CloseButtonContent. A polite live region or nested
+   focusable child can supply behavior absent from a local property. If evidence
+   is insufficient, retain the precise uncertainty as a limit, not a defect.
+   Distinguish known/repeated evidence when supplied context supports it; never
+   infer novelty, inflate severity or aim for a finding count.
 3. Determine accessible name, role/control type, value/state, label,
    description/help text, and required UIA patterns. Do not report a missing
    literal `AutomationProperties.Name` by itself:
@@ -112,7 +121,8 @@ skill.
 
 ## Required review record
 
-For a PR review, account for every `required_review_checks` ID from the prepared
+For callers using the legacy version-1 contract, account for every
+`required_review_checks` ID from the prepared
 evidence in `review_checks`, including dimensions with no static signal.
 Each record names the classified changed files it covers, explains the actual
 repository mechanism in `assessment`, and cites immutable source as
@@ -128,11 +138,13 @@ confirmation; specify the exact scenario and expected observation.
 These statuses are not native PASS attestations. Do not turn a missing test
 into `not-applicable` or claim an Axe scan proves focus, announcements or layout.
 
-Report review checks even when there are no findings. A static-signal-only
+For version 1, report review checks even when there are no findings. A static-signal-only
 report, generic "followed the skill" statement, or empty findings array does
 not satisfy this procedure. The trusted gate checks coverage and source
 citations, not the semantic truth of the model's assessment. Domain judgment
 must still be supported by the actual source and any available runtime evidence.
+Version-2 callers require the same domain analysis, not these serialized forms;
+follow their compact findings/report contract instead.
 
 ## Axe.Windows and runtime checks
 
@@ -187,6 +199,11 @@ ID, severity, confidence, source/head SHA, file/line, observed behavior,
 expected behavior, user impact, evidence, proposed fix, validation, and
 disposition. Preserve prepared deterministic IDs when they apply. Derive new IDs
 from rule, normalized path, line, and normalized evidence.
+Consider all domain dimensions, but do not manufacture dimension/per-file
+bookkeeping when the caller uses the compact version-2 report. A complete
+no-finding report needs no review-check forms; actual findings still need
+repository-specific evidence. Use existing file edit/create tools to write the
+small report directly, not a generator requiring interpreter execution.
 
 Emit only actual findings. Do not serialize false positives as findings and do
 not invent severities or dispositions outside the caller's enum.
