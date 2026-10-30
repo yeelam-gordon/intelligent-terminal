@@ -43,7 +43,7 @@ jobs:
           if ($selected.Count -eq 0 -or
               @($selected | Select-Object -Unique).Count -ne $selected.Count -or
               @($selected | Where-Object { $_ -notin @('fre', 'agents', 'fre-settings') }).Count -gt 0) {
-            throw 'Select only unique supported native states.'
+            throw "Invalid native selection '$env:SELECTED_SURFACES'. Select unique states from: fre, agents, fre-settings."
           }
           "surfaces=$($selected -join ',')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       - name: Checkout immutable pull request head

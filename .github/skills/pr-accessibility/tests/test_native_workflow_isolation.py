@@ -34,6 +34,9 @@ class SelectedNativeStatesTests(unittest.TestCase):
                     text=True, timeout=30, env={**os.environ, "SELECTED_SURFACES": selected,
                                                "GITHUB_OUTPUT": str(root / "output.txt")})
                 self.assertEqual(valid, result.returncode == 0, result.stderr)
+                if not valid:
+                    self.assertIn(f"Invalid native selection '{selected}'", result.stderr)
+                    self.assertIn("fre, agents, fre-settings", result.stderr)
 
     def test_selected_only_enforcement_passes_without_unselected_artifacts(self):
         script = self.script("Enforce native scan results")
