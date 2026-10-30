@@ -414,15 +414,38 @@ def _validate_finding(item: Any) -> list[str]:
         errors.append("finding disposition is invalid")
     if item.get("severity") == "HIGH" and item.get("disposition") not in {"fixed", "remaining", "blocked"}:
         errors.append("HIGH findings must be fixed, remaining, or blocked")
-    if item.get("severity") in {"MEDIUM", "LOW"} and item.get("disposition") not in {"advice", "skipped"}:
-        errors.append("MEDIUM/LOW findings must be advice or skipped")
-    if not isinstance(item.get("line"), int) or item.get("line", 0) < 1:
+    if item.get("severity") in {"MEDIUM", "LOW"} and item.get("disposition") == "fixed":
+        errors.append("MEDIUM/LOW findings cannot be fixed")
+    if type(item.get("line")) is not int or item.get("line", 0) < 1:
         errors.append("finding line must be a positive integer")
     for field in ("stable_id", "file", "observed", "expected", "impact", "evidence"):
         if not isinstance(item.get(field), str) or not item.get(field, "").strip():
             errors.append(f"finding {field} must be a non-empty string")
     if not isinstance(item.get("validation"), list):
         errors.append("finding validation must be an array")
+    return errors
+
+
+def _validate_finding_locations(root: Path, prepared: dict[str, Any], findings: list[Any]) -> list[str]:
+    """Authenticate locations, without asking the model to retype exact source lines."""
+    errors = []
+    for item in findings:
+        if not isinstance(item, dict):
+            continue
+        path, line = item.get("file"), item.get("line")
+        revision = item.get("revision", "head")
+        sha = prepared.get("source_sha") if revision == "head" else (
+            prepared.get("comparison_base_sha") if revision == "base" else None)
+        if (not isinstance(path, str) or path != _normalize(path) or not path or
+                path.startswith("/") or ":" in path or ".." in path.split("/") or
+                type(line) is not int or line < 1 or not sha):
+            errors.append("finding requires a relative file, head/base revision and positive line")
+            continue
+        blob = _source_blob(root, sha, path)
+        if not blob or line > len(blob["text"].splitlines()):
+            errors.append(f"{item.get('stable_id')}: finding location is absent from immutable {revision} source")
+        if item.get("disposition") == "fixed" and revision != "head":
+            errors.append(f"{item.get('stable_id')}: repairs must refer to head source")
     return errors
 
 
@@ -760,6 +783,8 @@ def validate(
 ) -> None:
     prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not isinstance(prepared, dict) or not isinstance(report, dict):
+        raise ValueError("prepared evidence and report must be objects")
     errors: list[str] = []
     commit_ids: dict[str, str] = {}
     if summary_path is not None:
@@ -774,9 +799,11 @@ def validate(
             errors.append(f"agent summary verification failed: {error}")
     if str(prepared.get("source_sha", "")).lower() != expected_head.lower():
         errors.append("prepared evidence does not match the immutable reviewed head")
-    if report.get("version") != 1:
-        errors.append("report version must be 1")
-    if report.get("source_sha", "").lower() != expected_head.lower():
+    if type(report.get("version")) is not int or report.get("version") not in {1, 2}:
+        errors.append("report version must be 1 or 2")
+    if report.get("version") == 2 and report.get("review_status") != "complete":
+        errors.append("source review is incomplete; review_status must be complete")
+    if not isinstance(report.get("source_sha"), str) or report["source_sha"].lower() != expected_head.lower():
         errors.append("report source_sha does not match the immutable reviewed head")
     if current_head.lower() != expected_head.lower():
         errors.append("live pull request head no longer matches the immutable reviewed head")
@@ -785,7 +812,11 @@ def validate(
         errors.append("report findings must be an array")
         findings = []
     errors.extend(_validate_signal_coverage(prepared, report, findings))
-    errors.extend(_validate_review_checks(root, prepared, report))
+    if report.get("version") == 1:
+        # Retain compatibility for existing local callers; hosted review uses v2.
+        errors.extend(_validate_review_checks(root, prepared, report))
+    else:
+        errors.extend(_validate_finding_locations(root, prepared, findings))
     runtime_checks = report.get("runtime_checks")
     expected_runtime = prepared.get("runtime_checks", [])
     if not isinstance(runtime_checks, list):
@@ -793,7 +824,7 @@ def validate(
         runtime_checks = []
     expected_runtime_ids = {item.get("id") for item in expected_runtime if isinstance(item, dict)}
     actual_runtime_ids = {item.get("id") for item in runtime_checks if isinstance(item, dict)}
-    if actual_runtime_ids != expected_runtime_ids:
+    if actual_runtime_ids != expected_runtime_ids or len(runtime_checks) != len(expected_runtime):
         errors.append("report runtime_checks must preserve every prepared runtime check")
     for check in runtime_checks:
         if not isinstance(check, dict) or check.get("status") not in {"SKIPPED", "BLOCKED"} or not check.get("reason"):
@@ -882,7 +913,7 @@ def validate(
     remaining = [item for item in findings if item.get("disposition") in {"remaining", "blocked"}]
     if remaining:
         print("")
-        print("### Must fix / blocked")
+        print("### Unresolved findings")
         for item in remaining:
             print(f"- `{item['stable_id']}` `{item['file']}:{item['line']}` — {item['impact']}")
     advisory = [item for item in findings if item.get("disposition") in {"advice", "skipped"}]
