@@ -51,6 +51,19 @@ namespace AgentPolicy = ::Microsoft::Terminal::Settings::Model::AgentPolicy;
 
 namespace SettingsModelUnitTests
 {
+    static std::vector<std::wstring> ParseFullCommandLine(const std::wstring& command)
+    {
+        int argc = 0;
+        wil::unique_hlocal_ptr<PWSTR[]> argv{ ::CommandLineToArgvW(command.c_str(), &argc) };
+        THROW_LAST_ERROR_IF_NULL(argv.get());
+        std::vector<std::wstring> arguments;
+        for (int i = 0; i < argc; ++i)
+        {
+            arguments.emplace_back(argv[i]);
+        }
+        return arguments;
+    }
+
     class CustomAgentAndPolicyTests : public JsonTestClass
     {
         TEST_CLASS(CustomAgentAndPolicyTests);
@@ -479,7 +492,7 @@ namespace SettingsModelUnitTests
         {
             const auto executable = L"C:\\Native Tools\\" + std::wstring{ agent.cliExecutable } + L".exe";
             VERIFY_ARE_EQUAL(L"\"" + executable + L"\"", Agents::BuildCommand(executable, agent.id, {}, {}, {}));
-            const auto args = Agents::ParseArguments(Agents::BuildCommand(executable, agent.id, L"provider/model", {}, L"--version"));
+            const auto args = ParseFullCommandLine(Agents::BuildCommand(executable, agent.id, L"provider/model", {}, L"--version"));
             VERIFY_ARE_EQUAL(size_t{ 4 }, args.size());
             VERIFY_ARE_EQUAL(executable, args[0]);
             VERIFY_ARE_EQUAL(std::wstring{ L"--model" }, args[1]);
@@ -495,7 +508,7 @@ namespace SettingsModelUnitTests
                  std::tuple{ L"antigravity", L"accept-edits", L"--mode" },
                  std::tuple{ L"antigravity", L"plan", L"--mode" } })
         {
-            const auto args = Agents::ParseArguments(Agents::BuildCommand(L"C:\\agent.exe", id, {}, mode, {}));
+            const auto args = ParseFullCommandLine(Agents::BuildCommand(L"C:\\agent.exe", id, {}, mode, {}));
             VERIFY_ARE_EQUAL(std::wstring{ flag }, args[1]);
         }
     }
@@ -512,7 +525,7 @@ namespace SettingsModelUnitTests
         VERIFY_THROWS(Agents::BuildCommand(L"C:\\claude.cmd", L"claude", L"%PATH%", {}, {}), wil::ResultException);
         VERIFY_THROWS(Agents::BuildCommand(L"C:\\claude.cmd", L"claude", L"embedded\"quote", {}, {}), wil::ResultException);
         VERIFY_THROWS(Agents::BuildCommand(L"C:\\agent.exe", L"custom:claude", {}, {}, {}), wil::ResultException);
-        const auto antigravity = Agents::ParseArguments(Agents::BuildCommand(
+        const auto antigravity = ParseFullCommandLine(Agents::BuildCommand(
             L"C:\\agy.exe", L"antigravity", L"chosen-model", L"plan",
             LR"(--conversation "session id" --add-dir "C:\source tree" --prompt-interactive "Explain this project" --continue)"));
         VERIFY_ARE_EQUAL(size_t{ 12 }, antigravity.size());
@@ -538,9 +551,10 @@ namespace SettingsModelUnitTests
             const auto executable = L"C:\\Native Tools\\" + std::wstring{ agent.cliExecutable } + L".exe";
             // Legacy structured fields remain first; duplicate/unknown CLI options are
             // forwarded in order, not interpreted using agent-pane approval rules.
-            const auto prefix = Agents::ParseArguments(Agents::BuildCommand(executable, agent.id, L"chosen-model", L"future-mode", {}));
-            const auto args = Agents::ParseArguments(Agents::BuildCommand(executable, agent.id, L"chosen-model", L"future-mode", arguments));
+            const auto prefix = ParseFullCommandLine(Agents::BuildCommand(executable, agent.id, L"chosen-model", L"future-mode", {}));
+            const auto args = ParseFullCommandLine(Agents::BuildCommand(executable, agent.id, L"chosen-model", L"future-mode", arguments));
             VERIFY_ARE_EQUAL(prefix.size() + expected.size(), args.size());
+            VERIFY_ARE_EQUAL(executable, args[0]);
             VERIFY_ARE_EQUAL(std::wstring{ L"--model" }, args[1]);
             VERIFY_ARE_EQUAL(std::wstring{ L"chosen-model" }, args[2]);
             for (size_t i = 0; i < prefix.size(); ++i)
