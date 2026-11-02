@@ -8463,7 +8463,7 @@ namespace TerminalAppLocalTests
             const CascadiaSettings settings{
                 LR"({"defaultProfile":"{00000000-0000-0000-0000-000000000001}",
                      "profiles":[{"guid":"{00000000-0000-0000-0000-000000000001}","name":"Copilot",
-                                  "source":"IntelligentTerminal.AgentProfiles","agentProfile.arguments":"--yolo",
+                                  "source":"IntelligentTerminal.AgentProfiles","agentProfile.arguments":"--unsupported-native-argument",
                                   "closeOnExit":"always"}]})",
                 LR"({"profiles":[{"guid":"{00000000-0000-0000-0000-000000000001}","name":"Copilot",
                                   "source":"IntelligentTerminal.AgentProfiles","agentProfile.id":"copilot"}]})"
@@ -8487,7 +8487,7 @@ namespace TerminalAppLocalTests
             VERIFY_IS_FALSE(connection.as<Conpty>().ProcessStarted());
             VERIFY_IS_TRUE(output.find(L"0x80070057") != std::wstring::npos);
             VERIFY_IS_TRUE(output.find(L"Unsupported or conflicting native agent argument") != std::wstring::npos);
-            VERIFY_IS_TRUE(output.find(L"--yolo") != std::wstring::npos);
+            VERIFY_IS_TRUE(output.find(L"--unsupported-native-argument") != std::wstring::npos);
 
             tabsBefore = page->_tabs.Size();
             page->_OpenNewTerminalViaDropdown(NewTerminalArgs{}, false, false, false, false);
@@ -8513,7 +8513,7 @@ namespace TerminalAppLocalTests
             using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
             VERIFY_ARE_EQUAL(State::Failed, tab->GetActiveTerminalControl().Connection().State());
             const auto profile = page->_settings.ActiveProfiles().GetAt(0);
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"--yolo" }, profile.AgentProfileArguments());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"--unsupported-native-argument" }, profile.AgentProfileArguments());
 
             profile.AgentProfileArguments(L"--version");
             const auto validSettings = winrt::Microsoft::Terminal::Settings::TerminalSettings::CreateWithProfile(page->_settings, profile);

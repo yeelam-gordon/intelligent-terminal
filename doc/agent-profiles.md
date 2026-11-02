@@ -59,8 +59,9 @@ Agent identity does not depend on the profile's display name. User overrides
 are layered on the generated settings and are retained if a CLI disappears.
 Copy a profile to create multiple project configurations for the same agent.
 
-An empty model or permission mode means no launcher override: the CLI keeps
-its own configured default. Permission choices use provider-specific native
+An empty model or permission mode adds no corresponding managed option. The CLI
+keeps its configured default unless an explicitly allowed additional argument
+changes it. Permission choices use provider-specific native
 modes, not a cross-provider promise of read-only access. Approval policies and
 agent sandbox options do not grant or revoke Windows filesystem permissions.
 Unsupported modes and conflicting arguments produce startup errors.
@@ -86,8 +87,13 @@ Additional arguments use Windows command-line quoting, for example an argument
 containing a space must be quoted. They are arguments, not PowerShell or command
 prompt script text. Supported extras are conservatively allowlisted per provider;
 see the [native argument contract](../tools/wta/README.md) for the supported arguments.
-Terminal applies the same provider-specific flags and argument allowlist before
-starting a managed profile.
+Terminal validates provider-specific arguments before starting a managed profile.
+Native Copilot profiles additionally accept standalone `--yolo` when
+`agentProfile.permissionMode` is empty. This explicitly enables Copilot's automatic
+tool, path, and URL permissions; it is not a read-only or sandbox mode. Combining
+it with any nonempty managed permission mode is rejected so additional arguments
+cannot override that setting. This exception is specific to Terminal's native
+profiles; it does not change `wta launch-agent` or the ACP agent pane.
 Managed commands reject `%` environment references to preserve the validated
 arguments. Batch shims additionally reject embedded quotes, `!`, `^`, and line
 breaks; use a custom command line when shell expansion is required.
