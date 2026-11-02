@@ -67,7 +67,7 @@ namespace SettingsModelUnitTests
             "defaultProfile":"{00000000-0000-0000-0000-000000000001}",
             "profiles":[{"guid":"{00000000-0000-0000-0000-000000000001}","name":"My native agent",
                          "startingDirectory":"C:\\Project with spaces",
-                         "agentProfile.id":"claude","agentProfile.model":"chosen",
+                         "agentProfile.id":"antigravity","agentProfile.model":"chosen",
                          "agentProfile.arguments":"--new-option \"two words\" --model \"user model\""}]})" });
         const auto profile = settings.ActiveProfiles().GetAt(0);
         const auto direct = TerminalSettings::CreateWithProfile(settings, profile).DefaultSettings();
@@ -75,11 +75,12 @@ namespace SettingsModelUnitTests
         VERIFY_IS_TRUE(std::wstring_view{ direct->Commandline() }.find(L"wta.exe") == std::wstring_view::npos);
         VERIFY_IS_TRUE(std::wstring_view{ direct->Commandline() }.find(L"launch-agent") == std::wstring_view::npos);
         VERIFY_IS_TRUE(std::wstring_view{ direct->Commandline() }.find(L"--model") != std::wstring_view::npos);
-        const auto command = ::Microsoft::Terminal::AgentProfiles::Command(profile, false, L"");
+        const auto command = direct->Commandline();
         int argc{};
         wil::unique_hlocal_ptr<PWSTR[]> argv{ ::CommandLineToArgvW(command.c_str(), &argc) };
         VERIFY_IS_NOT_NULL(argv);
         VERIFY_ARE_EQUAL(7, argc);
+        VERIFY_ARE_EQUAL(std::wstring{ L"agy.exe" }, std::filesystem::path{ argv[0] }.filename().native());
         VERIFY_ARE_EQUAL(std::wstring{ L"--model" }, std::wstring{ argv[1] });
         VERIFY_ARE_EQUAL(std::wstring{ L"chosen" }, std::wstring{ argv[2] });
         VERIFY_ARE_EQUAL(std::wstring{ L"--new-option" }, std::wstring{ argv[3] });
@@ -110,10 +111,19 @@ namespace SettingsModelUnitTests
         profile.AgentProfileId(L"antigravity");
         VERIFY_IS_TRUE(TerminalSettings::CreateForPreview(settings, profile)->UsesManagedAgentCommand());
         profile.AgentProfilePermissionMode(L"plan");
-        const auto antigravityArgs = ::Microsoft::Terminal::AgentProfiles::ParseArguments(
-            TerminalSettings::CreateForPreview(settings, profile)->Commandline());
-        VERIFY_ARE_EQUAL(std::wstring{ L"--mode" }, antigravityArgs[3]);
-        VERIFY_ARE_EQUAL(std::wstring{ L"plan" }, antigravityArgs[4]);
+        const auto previewCommand = TerminalSettings::CreateForPreview(settings, profile)->Commandline();
+        int previewArgc{};
+        wil::unique_hlocal_ptr<PWSTR[]> previewArgv{ ::CommandLineToArgvW(previewCommand.c_str(), &previewArgc) };
+        VERIFY_IS_NOT_NULL(previewArgv);
+        VERIFY_ARE_EQUAL(9, previewArgc);
+        VERIFY_ARE_EQUAL(std::wstring{ L"agy.exe" }, std::filesystem::path{ previewArgv[0] }.filename().native());
+        const std::vector<std::wstring> expectedPreview{
+            L"--model", L"chosen", L"--mode", L"plan", L"--new-option", L"two words", L"--model", L"user model"
+        };
+        for (size_t i = 0; i < expectedPreview.size(); ++i)
+        {
+            VERIFY_ARE_EQUAL(expectedPreview[i], std::wstring{ previewArgv[i + 1] });
+        }
     }
 
     void TerminalSettingsTests::AgentProfileCommandlineOverrides()
