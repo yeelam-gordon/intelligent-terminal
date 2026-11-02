@@ -75,15 +75,17 @@ namespace SettingsModelUnitTests
         VERIFY_IS_TRUE(std::wstring_view{ direct->Commandline() }.find(L"wta.exe") == std::wstring_view::npos);
         VERIFY_IS_TRUE(std::wstring_view{ direct->Commandline() }.find(L"launch-agent") == std::wstring_view::npos);
         VERIFY_IS_TRUE(std::wstring_view{ direct->Commandline() }.find(L"--model") != std::wstring_view::npos);
-        const auto argv = ::Microsoft::Terminal::AgentProfiles::ParseArguments(
-            ::Microsoft::Terminal::AgentProfiles::Command(profile, false, L""));
-        VERIFY_ARE_EQUAL(size_t{ 7 }, argv.size());
-        VERIFY_ARE_EQUAL(std::wstring{ L"--model" }, argv[1]);
-        VERIFY_ARE_EQUAL(std::wstring{ L"chosen" }, argv[2]);
-        VERIFY_ARE_EQUAL(std::wstring{ L"--new-option" }, argv[3]);
-        VERIFY_ARE_EQUAL(std::wstring{ L"two words" }, argv[4]);
-        VERIFY_ARE_EQUAL(std::wstring{ L"--model" }, argv[5]);
-        VERIFY_ARE_EQUAL(std::wstring{ L"user model" }, argv[6]);
+        const auto command = ::Microsoft::Terminal::AgentProfiles::Command(profile, false, L"");
+        int argc{};
+        wil::unique_hlocal_ptr<PWSTR[]> argv{ ::CommandLineToArgvW(command.c_str(), &argc) };
+        VERIFY_IS_NOT_NULL(argv);
+        VERIFY_ARE_EQUAL(7, argc);
+        VERIFY_ARE_EQUAL(std::wstring{ L"--model" }, std::wstring{ argv[1] });
+        VERIFY_ARE_EQUAL(std::wstring{ L"chosen" }, std::wstring{ argv[2] });
+        VERIFY_ARE_EQUAL(std::wstring{ L"--new-option" }, std::wstring{ argv[3] });
+        VERIFY_ARE_EQUAL(std::wstring{ L"two words" }, std::wstring{ argv[4] });
+        VERIFY_ARE_EQUAL(std::wstring{ L"--model" }, std::wstring{ argv[5] });
+        VERIFY_ARE_EQUAL(std::wstring{ L"user model" }, std::wstring{ argv[6] });
         VERIFY_ARE_EQUAL(winrt::hstring{ L"C:\\Project with spaces" }, direct->StartingDirectory());
         VERIFY_ARE_EQUAL(profile.Name(), direct->StartingTitle());
         direct->UsesManagedAgentCommand(false);
