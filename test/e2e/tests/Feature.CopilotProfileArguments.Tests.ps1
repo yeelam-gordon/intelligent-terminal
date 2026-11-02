@@ -27,14 +27,6 @@ Describe 'Feature: Copilot profile arguments' -Tag @('Feature', 'CopilotProfileA
         $script:runId = [guid]::NewGuid().ToString('N')
         $script:cwd = Join-Path $env:ITE2E_ARTIFACT_ROOT "auto-profile-args-$script:runId"
         New-Item -ItemType Directory -Force -Path $script:cwd | Out-Null
-        $copilot = (Get-Command copilot.exe -ErrorAction Stop).Source
-        $version = Invoke-Native -FilePath $copilot -Arguments @('--version') -TimeoutSec 30 `
-            -WorkingDirectory $script:cwd -Environment @{ COPILOT_HOME = $script:automationHome }
-        if ($version.ExitCode -ne 0 -or -not $version.StdOut.Trim()) {
-            throw 'Installed native Copilot must support --version.'
-        }
-        $script:version = ($version.StdOut.Trim() -split '\r?\n')[0]
-
         function Start-CopilotArgumentProfile {
             param([string]$Arguments, [string]$PermissionMode = '')
             $profileId = '{b22d61a8-5509-4694-82fc-263214f54fb3}'
@@ -73,13 +65,16 @@ Describe 'Feature: Copilot profile arguments' -Tag @('Feature', 'CopilotProfileA
     It 'Copilot profile yolo arguments launch the native CLI' {
         $pane = Start-CopilotArgumentProfile -Arguments '--yolo --version'
         Wait-Until -TimeoutSec 30 -Because 'the real Copilot version reaches the managed profile buffer' -Condition {
-            (Get-WtCapture -App $script:app -SessionId $pane.session_id).Contains($script:version)
+            (Get-WtCapture -App $script:app -SessionId $pane.session_id) -match '(?m)^GitHub Copilot CLI \S+'
         } | Out-Null
         $text = Get-WtCapture -App $script:app -SessionId $pane.session_id
         $text | Should -Not -Match '0x80070057|Unsupported or conflicting native agent argument'
         Wait-WtPaneExit -App $script:app -SessionId $pane.session_id
-        $status = Get-WtPaneStatus -App $script:app -SessionId $pane.session_id
-        $status.exit_code | Should -Be 0
+        # NativePath regenerates PATH; the app can resolve a different installed CLI
+        # than the runner. Assert its output and ConPTY's exit footer, not runner version.
+        (Get-WtPaneStatus -App $script:app -SessionId $pane.session_id).state | Should -Be 'exited'
+        (Get-WtCapture -App $script:app -SessionId $pane.session_id) |
+            Should -Match '\[process exited with code 0 \(0x00000000\)\]'
     }
 
     It 'Copilot profile unsupported and conflicting arguments fail before launch' {
@@ -92,6 +87,7 @@ Describe 'Feature: Copilot profile arguments' -Tag @('Feature', 'CopilotProfileA
                 (Get-WtCapture -App $script:app -SessionId $pane.session_id).Contains('Unsupported or conflicting native agent argument')
             } | Out-Null
             (Get-WtCapture -App $script:app -SessionId $pane.session_id) | Should -Match '0x80070057'
+            (Get-WtPaneStatus -App $script:app -SessionId $pane.session_id).pid | Should -Be 0
             Stop-Terminal -App $script:app
             $script:app = $null
         }
