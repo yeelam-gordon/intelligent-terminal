@@ -91,12 +91,16 @@ options precede additional arguments; the CLI decides whether duplicate options
 override earlier values or report an error. Terminal does not impose the ACP
 agent pane's approval configuration on native profiles.
 
-Native executable arguments preserve Windows quoting, empty values, and literal
-`%NAME%` text without environment expansion. Embedded NUL characters cannot be
-transported by Windows process command lines. Batch shims still reject `%`, `!`,
+For Terminal-constructed managed native agent commands, executable arguments
+preserve Windows quoting, empty values, and literal `%NAME%` text without
+Terminal-side environment expansion. Ordinary shell profiles and explicit/custom
+command lines retain Terminal-side `%NAME%` environment expansion. Embedded NUL
+characters cannot be transported by Windows process command lines.
+Batch shims still reject `%`, `!`,
 `^`, embedded quotes, and line breaks because they pass through `cmd.exe`;
 these are shell-transport constraints, not restrictions on the agent's flags.
-Use an explicit command line when shell expansion is intended.
+Use an explicit command line when Terminal-side environment expansion is intended;
+shell expansion additionally requires invoking a shell.
 Do not put credentials in command-line arguments.
 
 The product's `AllowedAgents` provider policy is checked again when launching.
