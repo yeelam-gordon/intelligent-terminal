@@ -6,6 +6,7 @@ Describe 'Feature: Copilot profile arguments' -Tag @('Feature', 'CopilotProfileA
     BeforeAll {
         Import-Module (Join-Path $PSScriptRoot '..\ItE2E\ItE2E.psd1') -Force
         $script:app = $null
+        $script:copilotHomeOwned = $false
         if ($env:ITE2E_PACKAGE -notlike 'IntelligentTerminal.Worktree.*_rd9vj3e6a2mbr') {
             throw 'Select an explicit inactive private Dev worktree package.'
         }
@@ -24,6 +25,11 @@ Describe 'Feature: Copilot profile arguments' -Tag @('Feature', 'CopilotProfileA
             }
         }
         $script:automationHome = Join-Path $env:LOCALAPPDATA 'CopilotAutomation'
+        # The host's prewarmed WTA helpers also need the automation home, not just
+        # the native profile process. This changes only this test runner's environment.
+        $script:previousCopilotHome = $env:COPILOT_HOME
+        $env:COPILOT_HOME = $script:automationHome
+        $script:copilotHomeOwned = $true
         $script:runId = [guid]::NewGuid().ToString('N')
         $script:cwd = Join-Path $env:ITE2E_ARTIFACT_ROOT "auto-profile-args-$script:runId"
         New-Item -ItemType Directory -Force -Path $script:cwd | Out-Null
@@ -59,6 +65,12 @@ Describe 'Feature: Copilot profile arguments' -Tag @('Feature', 'CopilotProfileA
         if ($script:app) {
             Stop-Terminal -App $script:app
             $script:app = $null
+        }
+    }
+
+    AfterAll {
+        if ($script:copilotHomeOwned) {
+            $env:COPILOT_HOME = $script:previousCopilotHome
         }
     }
 
