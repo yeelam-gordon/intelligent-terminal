@@ -32,6 +32,7 @@
 #include "../WinRTUtils/inc/Utils.h"
 #include "../inc/AgentPaneRestore.h"
 #include "../inc/AgentProfileUtils.h"
+#include "../inc/ConptyConnectionSettings.h"
 #include "../inc/AgentPaneBackend.h"
 #include "../inc/WindowPersistence.h"
 #include "../inc/WtaProcess.h"
@@ -8434,7 +8435,7 @@ namespace TerminalAppLocalTests
         ordinary.Initialize(settings);
         VERIFY_ARE_EQUAL(winrt::hstring{ wil::ExpandEnvironmentStringsW<std::wstring>(literal.c_str()) }, ordinary.Commandline());
 
-        settings.Insert(L"expandCommandline", winrt::Windows::Foundation::PropertyValue::CreateBoolean(false));
+        settings.Insert(::Microsoft::Terminal::TerminalConnection::SettingsKeys::ExpandCommandline, winrt::Windows::Foundation::PropertyValue::CreateBoolean(false));
         const Conpty native;
         native.Initialize(settings);
         VERIFY_ARE_EQUAL(literal, native.Commandline());

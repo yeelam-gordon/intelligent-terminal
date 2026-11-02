@@ -29,6 +29,7 @@
 #include "../inc/AgentRegistry.h"
 #include "../inc/AgentIconUtils.h"
 #include "../inc/AgentProfileUtils.h"
+#include "../inc/ConptyConnectionSettings.h"
 #include "../inc/NewTabMenuUtils.h"
 #include "../inc/AgentPolicy.h"
 #include "../inc/AgentPaneBackend.h"
@@ -9544,7 +9545,7 @@ namespace winrt::TerminalApp::implementation
             if (settingsInternal->UsesManagedAgentCommand())
             {
                 // Native profile argv is user-owned, not shell text or pane configuration.
-                valueSet.Insert(L"expandCommandline", Windows::Foundation::PropertyValue::CreateBoolean(false));
+                valueSet.Insert(::Microsoft::Terminal::TerminalConnection::SettingsKeys::ExpandCommandline, Windows::Foundation::PropertyValue::CreateBoolean(false));
             }
 
             if (FAILED(startupError))
