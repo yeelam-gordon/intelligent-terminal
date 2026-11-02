@@ -62,6 +62,7 @@ namespace SettingsModelUnitTests
         TEST_METHOD(AgentProfileCommandQuoting);
         TEST_METHOD(AgentProfileNativeCommands);
         TEST_METHOD(AgentProfileArgumentValidation);
+        TEST_METHOD(AgentProfileCopilotYoloArguments);
         TEST_METHOD(AgentProfileDiscoveryLifecycle);
         TEST_METHOD(AgentProfileDiscoveryExecutionAliases);
         TEST_METHOD(AgentProfileDiscoveryCacheLifecycle);
@@ -531,6 +532,42 @@ namespace SettingsModelUnitTests
             VERIFY_THROWS(Agents::BuildCommand(L"C:\\agy.exe", L"antigravity", {}, {}, arguments), wil::ResultException);
         }
         VERIFY_THROWS(Agents::BuildCommand(L"C:\\agy.exe", L"antigravity", {}, L"yolo", {}), wil::ResultException);
+    }
+
+    void CustomAgentAndPolicyTests::AgentProfileCopilotYoloArguments()
+    {
+        namespace Agents = ::Microsoft::Terminal::AgentProfiles;
+        const auto args = Agents::ParseArguments(Agents::BuildCommand(
+            L"C:\\Native Tools\\copilot.exe", L"copilot", L"chosen-model", {}, LR"(--yolo --add-dir "C:\source tree" --continue)"));
+        VERIFY_ARE_EQUAL(size_t{ 7 }, args.size());
+        VERIFY_ARE_EQUAL(std::wstring{ L"C:\\Native Tools\\copilot.exe" }, args[0]);
+        VERIFY_ARE_EQUAL(std::wstring{ L"--model" }, args[1]);
+        VERIFY_ARE_EQUAL(std::wstring{ L"chosen-model" }, args[2]);
+        VERIFY_ARE_EQUAL(std::wstring{ L"--yolo" }, args[3]);
+        VERIFY_ARE_EQUAL(std::wstring{ L"--add-dir" }, args[4]);
+        VERIFY_ARE_EQUAL(std::wstring{ L"C:\\source tree" }, args[5]);
+        VERIFY_ARE_EQUAL(std::wstring{ L"--continue" }, args[6]);
+        for (const auto mode : { L"allow-all-tools", L"allow-all", L"invalid-mode" })
+        {
+            VERIFY_THROWS(Agents::BuildCommand(L"C:\\copilot.exe", L"copilot", {}, mode, L"--yolo"), wil::ResultException);
+        }
+        for (const auto id : { L"claude", L"codex", L"gemini", L"opencode", L"antigravity" })
+        {
+            VERIFY_THROWS(Agents::BuildCommand(L"C:\\agent.exe", id, {}, {}, L"--yolo"), wil::ResultException);
+        }
+        for (const auto arguments : { L"--yolo=true", L"--yolo false", L"--yolo --model other", L"--yolo --acp",
+                                     L"--yolo --allow-all", L"--yolo --add-dir %USERPROFILE%" })
+        {
+            VERIFY_THROWS(Agents::BuildCommand(L"C:\\copilot.exe", L"copilot", {}, {}, arguments), wil::ResultException);
+        }
+        AgentPolicy::PolicySnapshot policy;
+        Agents::CheckLaunchPolicy(L"copilot", policy);
+        policy.yoloMode = AgentPolicy::PolicyState::Blocked;
+        VERIFY_THROWS(Agents::CheckLaunchPolicy(L"copilot", policy), wil::ResultException);
+        policy.yoloMode = AgentPolicy::PolicyState::NotConfigured;
+        policy.allowedAgents.emplace();
+        policy.allowedAgents->insert(L"claude");
+        VERIFY_THROWS(Agents::CheckLaunchPolicy(L"copilot", policy), wil::ResultException);
     }
 
     void CustomAgentAndPolicyTests::AgentProfileDiscoveryLifecycle()

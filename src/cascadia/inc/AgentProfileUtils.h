@@ -111,7 +111,7 @@ namespace Microsoft::Terminal::AgentProfiles
         return values;
     }
 
-    inline void ValidateArguments(const std::wstring_view id, const std::vector<std::wstring>& arguments)
+    inline void ValidateArguments(const std::wstring_view id, const std::vector<std::wstring>& arguments, const std::wstring_view permissionMode)
     {
         for (size_t i = 0; i < arguments.size(); ++i)
         {
@@ -126,6 +126,8 @@ namespace Microsoft::Terminal::AgentProfiles
                 (id == L"antigravity" && (flag == L"--conversation" || flag == L"--prompt-interactive"));
             const auto standalone = flag == L"--help" || flag == L"--version" ||
                                     (id == L"copilot" && flag == L"--resume") ||
+                                    // A user-supplied permission flag must not override a managed permission mode.
+                                    (id == L"copilot" && flag == L"--yolo" && permissionMode.empty()) ||
                                     ((id == L"copilot" || id == L"claude" || id == L"opencode" || id == L"antigravity") && flag == L"--continue") ||
                                     (id == L"codex" && flag == L"--no-alt-screen");
             THROW_HR_IF_MSG(E_INVALIDARG, !(takesValue || standalone), "Unsupported or conflicting native agent argument");
@@ -161,7 +163,7 @@ namespace Microsoft::Terminal::AgentProfiles
         auto values = ParseArguments(arguments);
         if (validate)
         {
-            ValidateArguments(id, values);
+            ValidateArguments(id, values, permissionMode);
         }
         if (!permissionMode.empty())
         {
