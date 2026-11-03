@@ -92,7 +92,8 @@ override earlier values or report an error. Terminal does not impose the ACP
 agent pane's approval configuration on native profiles.
 
 Terminal applies its usual `%NAME%` environment expansion to the assembled
-command line, including native agent profiles. Embedded NUL characters cannot
+command line, including native agent profiles. The command preview precedes this
+expansion at launch, just as for ordinary profiles. Embedded NUL characters cannot
 be transported by Windows process command lines.
 Batch shims still reject `%`, `!`,
 `^`, embedded quotes, and line breaks because they pass through `cmd.exe`;

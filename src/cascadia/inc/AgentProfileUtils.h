@@ -140,7 +140,7 @@ namespace Microsoft::Terminal::AgentProfiles
         }
         THROW_HR_IF(E_INVALIDARG, executable.empty() || executable.find(L'\0') != std::wstring_view::npos);
         THROW_HR_IF_MSG(E_INVALIDARG, validate && std::ranges::any_of(values, [](const auto& value) { return value.find(L'\0') != std::wstring::npos; }),
-                       "Native agent arguments contain an embedded NUL");
+                       "Native agent command contains an embedded NUL.");
         const auto batch = til::equals_insensitive_ascii(std::filesystem::path{ executable }.extension().native(), L".cmd");
         if (batch && validate)
         {
