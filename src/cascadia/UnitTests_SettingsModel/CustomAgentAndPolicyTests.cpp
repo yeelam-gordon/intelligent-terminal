@@ -82,7 +82,7 @@ namespace SettingsModelUnitTests
         TEST_METHOD(AgentProfileDiscoveryCacheFirstFailure);
         TEST_METHOD(AgentProfileNativeAllowlist);
         TEST_METHOD(AgentProfileUninstallPreservesOverrides);
-        TEST_METHOD(AgentProfileLaunchPolicy);
+        TEST_METHOD(AgentProfileGenerationPolicy);
         TEST_METHOD(AgentProfileBatchCommand);
         TEST_METHOD(AgentProfileSplitTargets);
         TEST_METHOD(CustomDelegateAgentRoundtrips);
@@ -731,15 +731,12 @@ namespace SettingsModelUnitTests
         VERIFY_THROWS(::Microsoft::Terminal::AgentProfiles::Command(*profile, true, L""), wil::ResultException);
         AgentPolicy::PolicySnapshot policy;
         VERIFY_IS_TRUE(Registry::IsNativeAgentProviderAllowed(L"antigravity", policy));
-        ::Microsoft::Terminal::AgentProfiles::CheckLaunchPolicy(L"antigravity", policy);
         policy.allowedAgents.emplace();
         VERIFY_IS_FALSE(Registry::IsNativeAgentProviderAllowed(L"antigravity", policy));
-        VERIFY_THROWS(::Microsoft::Terminal::AgentProfiles::CheckLaunchPolicy(L"antigravity", policy), wil::ResultException);
         policy.allowedAgents->insert(L"antigravity");
         VERIFY_IS_TRUE(Registry::IsNativeAgentProviderAllowed(L"ANTIGRAVITY", policy));
-        ::Microsoft::Terminal::AgentProfiles::CheckLaunchPolicy(L"antigravity", policy);
         policy.yoloMode = AgentPolicy::PolicyState::Blocked;
-        ::Microsoft::Terminal::AgentProfiles::CheckLaunchPolicy(L"antigravity", policy);
+        VERIFY_ARE_EQUAL(std::wstring{ L"\"agy.exe\"" }, ::Microsoft::Terminal::AgentProfiles::Command(*profile, false, L""));
     }
 
     void CustomAgentAndPolicyTests::AgentProfileUninstallPreservesOverrides()
@@ -775,28 +772,50 @@ namespace SettingsModelUnitTests
         VERIFY_ARE_EQUAL(winrt::hstring{ L"My Claude" }, profile.Name());
     }
 
-    void CustomAgentAndPolicyTests::AgentProfileLaunchPolicy()
+    void CustomAgentAndPolicyTests::AgentProfileGenerationPolicy()
     {
         namespace Agents = ::Microsoft::Terminal::AgentProfiles;
-        AgentPolicy::PolicySnapshot policy;
-        Agents::CheckLaunchPolicy(L"claude", policy);
-        policy.allowedAgents.emplace();
-        VERIFY_THROWS(Agents::CheckLaunchPolicy(L"claude", policy), wil::ResultException);
-        policy.allowedAgents->insert(L"claude");
-        Agents::CheckLaunchPolicy(L"claude", policy);
-        policy.yoloMode = AgentPolicy::PolicyState::Blocked;
-        Agents::CheckLaunchPolicy(L"claude", policy);
-        // The same snapshot must still clamp pane approval, while native profiles
-        // independently retain the product's provider-eligibility policy.
         const auto pane = MakeSettings(R"("acpAgent":"copilot","agentPane.yoloMode":true)");
-        SetPolicy(MakePolicy(std::nullopt, AgentPolicy::PolicyState::NotConfigured, AgentPolicy::PolicyState::Blocked));
+        SetPolicy(MakePolicy());
+        AgentProfileGenerator generator;
+        std::vector<winrt::com_ptr<implementation::Profile>> offered;
+        generator.GenerateProfiles(offered);
+        WEX::Logging::Log::Comment((L"Installed native profiles checked: " + std::to_wstring(offered.size())).c_str());
+        SetPolicy(MakePolicy(std::set<std::wstring, AgentPolicy::CaseInsensitiveLess>{},
+                             AgentPolicy::PolicyState::NotConfigured, AgentPolicy::PolicyState::Blocked));
+        std::vector<winrt::com_ptr<implementation::Profile>> blocked;
+        generator.GenerateProfiles(blocked);
+        VERIFY_IS_TRUE(blocked.empty());
         VERIFY_IS_TRUE(pane->GlobalSettings().AgentPaneYoloMode());
         VERIFY_IS_FALSE(pane->GlobalSettings().EffectiveAgentPaneYoloMode());
-        AgentPolicy::PolicySnapshot nativePolicy;
-        nativePolicy.yoloMode = AgentPolicy::PolicyState::Blocked;
+        GUID guid;
+        THROW_IF_FAILED(CoCreateGuid(&guid));
+        const auto root = std::filesystem::temp_directory_path() / (L"Native Generation Policy " + Utils::GuidToString(guid));
+        std::filesystem::create_directory(root);
+        const auto cleanup = wil::scope_exit([&]() { std::filesystem::remove_all(root); });
         for (const auto& agent : ::Microsoft::Terminal::Settings::Model::AgentRegistry::BuiltinNativeProfileAgents)
         {
-            Agents::CheckLaunchPolicy(agent.id, nativePolicy);
+            std::ofstream{ root / (std::wstring{ agent.cliExecutable } + L".exe") }.put('\n');
+            auto profile = winrt::make_self<implementation::Profile>();
+            profile->AgentProfileId(winrt::hstring{ agent.id });
+            profile->AgentProfileModel(L"chosen");
+            profile->AgentProfileArguments(L"--user-option");
+            VERIFY_IS_TRUE(Agents::IsManaged(*profile));
+            const auto command = Agents::Command(*profile, true, root.native());
+            VERIFY_IS_TRUE(command.find(L"--user-option") != std::wstring::npos);
+            VERIFY_IS_TRUE(command.find(L"chosen") != std::wstring::npos);
+            profile->AgentProfileModel(winrt::hstring{ std::wstring{ L"bad\0model", 9 } });
+            VERIFY_THROWS(Agents::Command(*profile, true, root.native()), wil::ResultException);
+        }
+        // Discovery is environment-dependent; every installed profile must still
+        // be offered only when its provider is in the generation allowlist.
+        for (const auto& profile : offered)
+        {
+            SetPolicy(MakePolicy(std::set<std::wstring, AgentPolicy::CaseInsensitiveLess>{ std::wstring{ profile->AgentProfileId() } }));
+            std::vector<winrt::com_ptr<implementation::Profile>> allowed;
+            generator.GenerateProfiles(allowed);
+            VERIFY_ARE_EQUAL(size_t{ 1 }, allowed.size());
+            VERIFY_ARE_EQUAL(profile->AgentProfileId(), allowed.front()->AgentProfileId());
         }
     }
 

@@ -110,8 +110,8 @@ Describe 'Feature: Native agent profile arguments' -Tag @('Feature', 'NativeAgen
     }
 
     It 'Native agent CLI owns invalid argument errors' {
-        $unknown = "--it-native-$script:runId-%USERPROFILE%-quoted value"
-        # One quoted argv value also exercises literal percent through ConPTY.
+        $unknown = "--it-native-$script:runId-quoted value"
+        # The complete error token must retain the space within one argv value.
         # Do not append --version: Claude Code exits successfully for version
         # before reporting unknown options, unlike Copilot.
         $pane = Start-NativeArgumentProfile -Arguments ('"{0}"' -f $unknown)

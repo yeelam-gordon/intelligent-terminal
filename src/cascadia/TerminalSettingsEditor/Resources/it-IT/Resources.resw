@@ -3022,10 +3022,6 @@ Alt+Shift+/ inserisci un prompt; Alt+Shift+B avvia senza un prompt iniziale.</va
     <value>Usa la preferenza di divisione del profilo</value>
     <comment>Split action mode that uses the current profile's configured split target, or duplicates the profile when no target is configured.</comment>
   </data>
-  <data name="Profile_AgentPolicyBlocked.Text" xml:space="preserve">
-    <value>La tua organizzazione non consente questo agente.</value>
-    <comment>Warning when the AllowedAgents organization policy blocks this agent provider. Applies to native agent profiles, not the agent-pane automatic approval policy.</comment>
-  </data>
   <data name="Globals_TabLayout.HelpText" xml:space="preserve">
     <value>Passa dalla nuova barra laterale alla visualizzazione classica delle schede orizzontali e viceversa</value>
     <comment>A description for what the &quot;tab layout&quot; setting does. Presented near &quot;Globals_TabLayout.Header&quot;.</comment>

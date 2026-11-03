@@ -195,13 +195,6 @@ namespace SettingsModelUnitTests
         const auto recovered = settings.GetProfileForArgs(saved);
         VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, recovered.AgentProfileId());
         VERIFY_IS_TRUE(TerminalSettings::CreateWithProfile(settings, recovered).DefaultSettings()->UsesManagedAgentCommand());
-        ::Microsoft::Terminal::Settings::Model::AgentPolicy::PolicySnapshot policy;
-        policy.allowedAgents.emplace();
-        VERIFY_THROWS(::Microsoft::Terminal::AgentProfiles::CheckLaunchPolicy(recovered.AgentProfileId(), policy), wil::ResultException);
-        policy.allowedAgents->insert(L"claude");
-        ::Microsoft::Terminal::AgentProfiles::CheckLaunchPolicy(recovered.AgentProfileId(), policy);
-        policy.yoloMode = ::Microsoft::Terminal::Settings::Model::AgentPolicy::PolicyState::Blocked;
-        ::Microsoft::Terminal::AgentProfiles::CheckLaunchPolicy(recovered.AgentProfileId(), policy);
         saved.NativeAgentProviderId(L"copilot");
         VERIFY_THROWS(winrt::get_self<implementation::CascadiaSettings>(settings)->GetProfileForArgs(saved), wil::ResultException);
         saved.NativeAgentProviderId(L"CLAUDE");

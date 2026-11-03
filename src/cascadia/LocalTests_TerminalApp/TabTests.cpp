@@ -32,7 +32,6 @@
 #include "../WinRTUtils/inc/Utils.h"
 #include "../inc/AgentPaneRestore.h"
 #include "../inc/AgentProfileUtils.h"
-#include "../inc/ConptyConnectionSettings.h"
 #include "../inc/AgentPaneBackend.h"
 #include "../inc/WindowPersistence.h"
 #include "../inc/WtaProcess.h"
@@ -823,7 +822,6 @@ namespace TerminalAppLocalTests
         TEST_METHOD(NaturalClosedEventThenNotifyPanesClosingEmitsOnce);
         TEST_METHOD(NaturalFailedEventThenNotifyPanesClosingEmitsOnce);
         TEST_METHOD(ConptyLaunchEvidenceSurvivesProcessExitAndNewConnection);
-        TEST_METHOD(ConptyLaunchCommandExpansionIsExplicit);
         TEST_METHOD(ConnectionFailureEventPreservesOptionalLaunchEvidence);
         TEST_METHOD(NativeOffTeardownBeforeQueuedFailurePublishesFailureBeforeRemoval);
         TEST_METHOD(ReusedSessionIdAcrossControlLifetimesEmitsEndStatePerLifetime);
@@ -8424,21 +8422,6 @@ namespace TerminalAppLocalTests
                 pane->Close();
             }
         });
-    }
-
-    void TabTests::ConptyLaunchCommandExpansionIsExplicit()
-    {
-        using Conpty = winrt::Microsoft::Terminal::TerminalConnection::ConptyConnection;
-        const winrt::hstring literal{ L"agent.exe \"%USERPROFILE%\" \"two words\"" };
-        auto settings = Conpty::CreateSettings(literal, L".", L"", false, L"", nullptr, 24, 80, {}, {});
-        const Conpty ordinary;
-        ordinary.Initialize(settings);
-        VERIFY_ARE_EQUAL(winrt::hstring{ wil::ExpandEnvironmentStringsW<std::wstring>(literal.c_str()) }, ordinary.Commandline());
-
-        settings.Insert(::Microsoft::Terminal::TerminalConnection::SettingsKeys::ExpandCommandline, winrt::Windows::Foundation::PropertyValue::CreateBoolean(false));
-        const Conpty native;
-        native.Initialize(settings);
-        VERIFY_ARE_EQUAL(literal, native.Commandline());
     }
 
     void TabTests::AgentProfileInvalidArgumentsDisplayStartupFailure()

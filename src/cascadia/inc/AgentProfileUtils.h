@@ -170,13 +170,6 @@ namespace Microsoft::Terminal::AgentProfiles
         return command;
     }
 
-    inline void CheckLaunchPolicy(const std::wstring_view id, const Settings::Model::AgentPolicy::PolicySnapshot& policy)
-    {
-        THROW_HR_IF_MSG(E_ACCESSDENIED, !Settings::Model::AgentRegistry::SupportsNativeProfile(id) ||
-                                        !Settings::Model::AgentRegistry::IsNativeAgentProviderAllowed(id, policy),
-                     "Managed native agent launch blocked by policy");
-    }
-
     template<typename Profile>
     bool IsManaged(Profile&& profile)
     {

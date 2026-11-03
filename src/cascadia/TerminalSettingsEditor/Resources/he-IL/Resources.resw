@@ -3085,10 +3085,6 @@ Alt+Shift+/ הזן הנחיה; Alt+Shift+B הפעל ללא הנחיה התחלת
     <value>השתמש בהעדפת הפיצול של הפרופיל</value>
     <comment>Split action mode that uses the current profile's configured split target, or duplicates the profile when no target is configured.</comment>
   </data>
-  <data name="Profile_AgentPolicyBlocked.Text" xml:space="preserve">
-    <value>הארגון שלך אינו מתיר שימוש בסוכן זה.</value>
-    <comment>Warning when the AllowedAgents organization policy blocks this agent provider. Applies to native agent profiles, not the agent-pane automatic approval policy.</comment>
-  </data>
   <data name="AIAgents_RenderAgentMarkdown.Header" xml:space="preserve">
     <value>עיצוב Markdown</value>
     <comment>{Locked="Markdown"} Title of the AI agent reply-formatting toggle, shared by Settings and first-run setup. Markdown is a markup format name.</comment>

@@ -3085,10 +3085,6 @@ Alt+Shift+/ إدخال طلب؛ Alt+Shift+B التشغيل دون طلب أول�
     <value>استخدام تفضيل التقسيم لملف التعريف</value>
     <comment>Split action mode that uses the current profile's configured split target, or duplicates the profile when no target is configured.</comment>
   </data>
-  <data name="Profile_AgentPolicyBlocked.Text" xml:space="preserve">
-    <value>لا تسمح مؤسستك بهذا الوكيل.</value>
-    <comment>Warning when the AllowedAgents organization policy blocks this agent provider. Applies to native agent profiles, not the agent-pane automatic approval policy.</comment>
-  </data>
   <data name="AIAgents_RenderAgentMarkdown.Header" xml:space="preserve">
     <value>تنسيق Markdown</value>
     <comment>{Locked="Markdown"} Title of the AI agent reply-formatting toggle, shared by Settings and first-run setup. Markdown is a markup format name.</comment>

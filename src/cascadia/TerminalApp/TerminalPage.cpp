@@ -29,7 +29,6 @@
 #include "../inc/AgentRegistry.h"
 #include "../inc/AgentIconUtils.h"
 #include "../inc/AgentProfileUtils.h"
-#include "../inc/ConptyConnectionSettings.h"
 #include "../inc/NewTabMenuUtils.h"
 #include "../inc/AgentPolicy.h"
 #include "../inc/AgentPaneBackend.h"
@@ -9483,9 +9482,6 @@ namespace winrt::TerminalApp::implementation
             {
                 try
                 {
-                    ::Microsoft::Terminal::Settings::Model::AgentPolicy::Reload();
-                    ::Microsoft::Terminal::AgentProfiles::CheckLaunchPolicy(
-                        profile.AgentProfileId(), *::Microsoft::Terminal::Settings::Model::AgentPolicy::GetSnapshot());
                     settingsInternal->Commandline(winrt::hstring{ ::Microsoft::Terminal::AgentProfiles::Command(profile, true) });
                 }
                 catch (const wil::ResultException& e)
@@ -9541,12 +9537,6 @@ namespace winrt::TerminalApp::implementation
                                                                             settings.InitialCols(),
                                                                             winrt::guid(),
                                                                             profile.Guid());
-
-            if (settingsInternal->UsesManagedAgentCommand())
-            {
-                // Native profile argv is user-owned, not shell text or pane configuration.
-                valueSet.Insert(::Microsoft::Terminal::TerminalConnection::SettingsKeys::ExpandCommandline, Windows::Foundation::PropertyValue::CreateBoolean(false));
-            }
 
             if (FAILED(startupError))
             {
@@ -18867,11 +18857,12 @@ namespace winrt::TerminalApp::implementation
             const auto provider = newTerminalArgs.NativeAgentProviderId();
             const auto id = Registry::CanonicalNativeAgentProviderId(std::wstring_view{ provider });
             THROW_HR_IF(E_INVALIDARG, id.empty());
-            Policy::Reload();
-            THROW_HR_IF(E_ACCESSDENIED, !Registry::IsNativeAgentProviderAllowed(id, *Policy::_GetSnapshot()));
-            if (controlSettings.DefaultSettings()->UsesManagedAgentCommand())
+            // Native profile availability is filtered during generation. Keep the
+            // existing provider check for other native-session restore paths.
+            if (!Registry::SupportsNativeProfile(std::wstring_view{ profile.AgentProfileId() }))
             {
-                ::Microsoft::Terminal::AgentProfiles::CheckLaunchPolicy(id, *Policy::_GetSnapshot());
+                Policy::Reload();
+                THROW_HR_IF(E_ACCESSDENIED, !Registry::IsNativeAgentProviderAllowed(id, *Policy::_GetSnapshot()));
             }
             newTerminalArgs.NativeAgentProviderId(winrt::hstring{ id });
         }
