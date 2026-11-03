@@ -139,7 +139,7 @@ namespace winrt::Microsoft::Terminal::Settings
                 {
                     const auto command = defaultSettings->Commandline() + L" " + newTerminalArgs.Commandline();
                     THROW_HR_IF_MSG(E_INVALIDARG, defaultSettings->UsesManagedAgentCommand() && std::wstring_view{ command }.find(L'\0') != std::wstring_view::npos,
-                                    "Native agent arguments contain an embedded NUL");
+                                    "Native agent command contains an embedded NUL.");
                     defaultSettings->_Commandline = command;
                 }
                 defaultSettings->_UsesManagedAgentCommand = false;

@@ -98,7 +98,7 @@ namespace Microsoft::Terminal::AgentProfiles
         std::vector<std::wstring> values;
         if (!arguments.empty())
         {
-            THROW_HR_IF_MSG(E_INVALIDARG, arguments.find(L'\0') != std::wstring_view::npos, "Native agent arguments contain an embedded NUL");
+            THROW_HR_IF_MSG(E_INVALIDARG, arguments.find(L'\0') != std::wstring_view::npos, "Native agent command contains an embedded NUL.");
             const auto command = L"agent " + std::wstring{ arguments };
             int argc = 0;
             wil::unique_hlocal_ptr<PWSTR[]> argv{ CommandLineToArgvW(command.c_str(), &argc) };
