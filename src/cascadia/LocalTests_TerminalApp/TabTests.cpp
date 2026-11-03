@@ -8487,7 +8487,7 @@ namespace TerminalAppLocalTests
             VERIFY_ARE_EQUAL(State::Failed, connection.State());
             VERIFY_IS_FALSE(connection.as<Conpty>().ProcessStarted());
             VERIFY_IS_TRUE(output.find(L"0x80070057") != std::wstring::npos);
-            VERIFY_IS_TRUE(output.find(L"Native agent arguments contain an embedded NUL") != std::wstring::npos);
+            VERIFY_IS_TRUE(output.find(L"Native agent command contains an embedded NUL.") != std::wstring::npos);
             VERIFY_IS_TRUE(output.find(L"--model") != std::wstring::npos);
 
             tabsBefore = page->_tabs.Size();
