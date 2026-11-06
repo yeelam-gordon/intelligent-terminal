@@ -104,7 +104,8 @@ Do not put credentials in command-line arguments.
 `AllowedAgents` controls which native profiles are generated and offered.
 The native CLI validates configured options and manages its approval settings.
 
-The command-line field is directly editable, just like a shell profile. Saving
+For built-in agents, the command-line field is directly editable, just like a
+shell profile. Saving
 an explicit `commandline` runs that command unchanged by the agent command
 builder; structured model, permission, and additional-argument settings no
 longer apply and are hidden in Settings. Reset the command-line setting to
@@ -118,6 +119,8 @@ metadata. An explicit command supplied in a new-tab
 action also overrides the managed launch, following ordinary Terminal action
 precedence. An edited command is not a managed launcher or an operating-system
 security boundary.
+Custom profiles use their explicitly configured native command as the base;
+their structured model and additional startup arguments remain active.
 
 ## Resuming sessions
 
@@ -131,7 +134,9 @@ launch settings, then appends its resume arguments and the session ID. Normal
 new tabs and splits do not receive that suffix. Generated profiles provide
 provider-specific defaults; changing the setting changes resume behavior rather
 than being overridden by another runtime provider-to-flag table. Reset restores
-the inherited value; an explicit empty value disables profile resume.
+the inherited value. An explicit empty value appends the session ID positionally,
+without a resume flag or verb, for built-in and custom profiles alike; it does not
+disable resume.
 
 Native launch customization stays separate from ACP agent-pane loading.
 An explicit profile command line retains the override behavior described above.

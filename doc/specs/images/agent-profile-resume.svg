@@ -53,8 +53,8 @@
   <text x="780" y="442" class="small accent">Reset to default</text>
   <rect x="272" y="454" width="672" height="37" rx="4" class="field"/>
   <text x="285" y="479" class="code">--resume</text>
-  <text x="272" y="515" class="small">Only used when resuming. Terminal adds the session ID automatically</text>
-  <text x="272" y="537" class="small">after these arguments. Leave empty to disable native session resume.</text>
+  <text x="272" y="515" class="small">Added after normal startup arguments only when resuming a session.</text>
+  <text x="272" y="537" class="small">The session ID is appended automatically, even if this field is empty.</text>
   <text x="272" y="580" class="small">Your launch command and additional startup arguments are kept.</text>
   <text x="272" y="603" class="small">Resume arguments and the session ID are added only when you resume.</text>
   <text x="272" y="652" class="small">Starting directory / appearance / hide / copy: unchanged</text>

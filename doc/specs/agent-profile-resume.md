@@ -14,7 +14,7 @@ added in AI Agents settings did not receive corresponding profiles.
 | Annotation | Change |
 | --- | --- |
 | 1 | Show an explicit **Agent profile** badge and provider name. Use existing `agentProfile.id` identity, not the editable display name. The separate managed-original protection message explains why Delete is unavailable; a user-created agent-profile copy still has the badge but remains deletable. |
-| 2 | Add **Resume arguments** below additional startup arguments. Enter only the argument or verb, such as `--resume` or `resume`. Hint: **Only used when resuming. Terminal adds the session ID automatically after these arguments.** No placeholder input and no command preview. Built-ins inherit profile defaults with reset/inheritance affordances; an empty override disables native resume. |
+| 2 | Add **Resume arguments** below additional startup arguments. Enter only the argument or verb, such as `--resume` or `resume`. Hint: **Added after the normal startup arguments only when resuming a session. The session ID is appended automatically.** No placeholder input and no command preview. Built-ins inherit profile defaults with reset/inheritance affordances; an empty override adds the ID positionally with no resume prefix. |
 | 3 | The help text explains composition: **Your launch command and additional startup arguments are kept. Resume arguments and the session ID are added only when you resume a session.** This is explanatory text, not another control. |
 | 4 | Replace Delete with **This profile is managed by AI Agents. You can hide it instead.** Keep appearance, hide, and copy controls. Protect the managed original, not user-created copies. |
 | 5 | Each custom agent saved in AI Agents gets one corresponding managed profile. Configure its native CLI using that profile's existing **Command line** setting and its **Resume arguments**. No second custom-agent editor or duplicate native-command setting is needed; an ACP command is not assumed to be an interactive CLI command. |
@@ -40,9 +40,10 @@ executable, shell script, or conversation ID:
 }
 ```
 
-An omitted value inherits the profile default. An explicit empty string means
-native resume is unavailable. The UI shows the automatic-ID hint beside the
-field; users never type `{sessionId}`. Parse resume arguments using the same
+An omitted value inherits the profile default. An explicit empty string adds
+the session ID positionally, without a resume flag/verb, for both built-in and
+custom profiles. It does not disable resume. The UI shows the automatic-ID hint
+beside the field; users never type `{sessionId}`. Parse resume arguments using the same
 argument rules as additional startup arguments, then append the validated,
 opaque session ID as one argument. Use the existing executable/batch/WSL quoting
 helpers; never evaluate arguments as script text. Malformed or unsafe arguments
@@ -96,20 +97,22 @@ change is at restore: read the effective profile value instead of selecting
 resume syntax again from the provider ID.
 
 Host-native profile resume in Sessions, sidebar activation and saved-layout
-restoration reads the effective profile. Missing/empty settings report
-unavailable; do not silently select a different flag from the provider ID.
+restoration reads the effective profile. A missing profile or native command
+reports unavailable; do not silently select a different flag from the provider ID.
 ACP `session/load` stays a separate capability. Legacy WSL launches remain on
 their existing source-qualified route because automatic native profile
 generation currently covers the Windows host, not WSL installations. This
 feature must not change that route or claim WSL profile generation.
 
-An explicit profile `commandline` remains an override: use that base command
-unchanged as normal launch already does, and do not resurrect hidden structured
+For built-ins, an explicit profile `commandline` remains an override: use that
+base command unchanged as normal launch already does, and do not resurrect hidden structured
 model/permission/extra arguments. Resume adds the effective profile resume
 arguments and automatic ID to that same base. The profile owner must configure
 arguments appropriate to an edited command; no runtime provider-based
 replacement occurs. Existing explicit new-tab/action overrides keep their
-precedence. This proposal does not change ordinary command-override behavior.
+precedence. This does not change existing built-in command-override behavior.
+Custom profiles instead use the explicitly configured native command as their
+base and keep their structured model and additional startup arguments active.
 
 For custom agents, generate a stable profile for each canonical `custom:<id>`
 across the saved ACP/delegation entries, deduplicating only identical IDs.
@@ -132,8 +135,8 @@ display name or command-string heuristics. User-created project-profile copies
 must remain distinguishable.
 
 For imported host history with no profile GUID, resolve the corresponding
-generated profile by provider identity. If the matching profile or its resume
-configuration is unavailable, report an actionable error; never launch a default
+generated profile by provider identity. If the matching profile or its native
+command is unavailable, report an actionable error; never launch a default
 shell or silently resume through a different profile. Legacy WSL history keeps
 its exact distro and Linux cwd on the existing WSL route; never substitute a host
 executable path or Windows environment.
