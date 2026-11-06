@@ -11719,6 +11719,7 @@ namespace winrt::TerminalApp::implementation
             namespace Registry = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
             namespace Policy = ::Microsoft::Terminal::Settings::Model::AgentPolicy;
             Policy::Reload();
+            // IsNativeAgentProviderAllowed canonicalizes and validates the incoming ID internally.
             if (!Registry::IsNativeAgentProviderAllowed(winrt::to_hstring(agentIdStr), *Policy::_GetSnapshot()))
             {
                 return;
