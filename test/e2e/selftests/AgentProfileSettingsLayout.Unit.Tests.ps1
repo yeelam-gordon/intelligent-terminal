@@ -19,12 +19,27 @@ Describe 'Native agent profile settings layout' -Tag 'Unit' {
             ForEach-Object { $_.Groups[1].Value } | Sort-Object)
         $ids.Count | Should -BeGreaterThan 0
         $schema = Get-Content -LiteralPath (Join-Path $repoRoot 'doc\cascadia\profiles.schema.json') -Raw | ConvertFrom-Json
-        $pattern = $schema.'$defs'.Profile.properties.'agentProfile.id'.pattern
+        $identity = $schema.'$defs'.Profile.properties.'agentProfile.id'
+        @($identity.type) | Should -HaveCount 2
+        $identity.type | Should -Contain 'string'
+        $identity.type | Should -Contain 'null'
+        $builtinBranches = @($identity.anyOf | Where-Object { $_.PSObject.Properties.Name -contains 'enum' })
+        $builtinBranches | Should -HaveCount 1
+        $enum = @($builtinBranches[0].enum)
+        $enum | Should -Contain ''
+        $enum | Should -Not -Contain $null
+        ($enum | Where-Object { $_ -ne '' } | Sort-Object) -join ',' |
+            Should -BeExactly ($ids -join ',')
+        $customBranches = @($identity.anyOf | Where-Object { $_.PSObject.Properties.Name -contains 'pattern' })
+        $customBranches | Should -HaveCount 1
+        $customBranches[0].type | Should -BeExactly 'string'
+        @($identity.anyOf | Where-Object { $_.type -eq 'null' }) | Should -HaveCount 1
+        $pattern = $customBranches[0].pattern
         $pattern | Should -Not -BeNullOrEmpty
-        foreach ($id in @('') + $ids + @('custom:x', 'custom:my agent', 'custom:my "agent"', 'custom:my\agent')) {
+        foreach ($id in @('custom:x', 'custom:my agent', 'custom:my "agent"', 'custom:my\agent')) {
             $id | Should -MatchExactly $pattern
         }
-        foreach ($id in @('unknown', 'Copilot', 'custom:', 'custom: ', 'custom: x', 'custom:x ', 'custom: my agent', 'custom:my agent ', "custom:my`ragent", "custom:my`nagent", "custom:my`tagent")) {
+        foreach ($id in @('', 'unknown', 'Copilot', 'custom:', 'custom: ', 'custom: x', 'custom:x ', 'custom: my agent', 'custom:my agent ', "custom:my`ragent", "custom:my`nagent", "custom:my`tagent") + $ids) {
             $id | Should -Not -MatchExactly $pattern
         }
         foreach ($id in $ids) {

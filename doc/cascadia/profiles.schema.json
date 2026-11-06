@@ -3234,7 +3234,18 @@
         "agentProfile.id": {
           "description": "Native interactive agent identity, including custom:<name>. Empty disables managed agent launching.",
           "type": ["string", "null"],
-          "pattern": "^(|copilot|claude|codex|gemini|opencode|antigravity|custom:[^ \\r\\n\\t](?:[^\\r\\n\\t]*[^ \\r\\n\\t])?)$"
+          "anyOf": [
+            {
+              "enum": ["", "copilot", "claude", "codex", "gemini", "opencode", "antigravity"]
+            },
+            {
+              "type": "string",
+              "pattern": "^custom:[^ \\r\\n\\t](?:[^\\r\\n\\t]*[^ \\r\\n\\t])?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "agentProfile.model": {
           "description": "Native CLI model identifier. Empty leaves the agent's own configuration unchanged. For built-ins, applies when commandline has no explicit override. Custom profiles append it to their separately configured native command.",
