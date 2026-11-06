@@ -11666,7 +11666,6 @@ namespace winrt::TerminalApp::implementation
                 return;
             }
         }
-        // Ignore unowned tab/window requests before creating receipts to avoid competing correlated failures.
         if (params.isMember("tab_id") && !params["tab_id"].asString().empty() &&
             !_FindTabByStableId(winrt::to_hstring(params["tab_id"].asString())))
         {
@@ -11679,6 +11678,7 @@ namespace winrt::TerminalApp::implementation
         const std::string agentModelStr = params.get("agent_model", "").asString();
         const std::string agentSourceStr = params.get("agent_source", "").asString();
         const std::string agentWslDistroStr = params.get("wsl_distro", "").asString();
+        // A foreign window must not answer this request, even when tab_id is omitted.
         if (windowIdStr != std::to_string(_WindowProperties.WindowId()))
         {
             _agentPaneLog("OnResumeInNewAgentTabRequested: window mismatch");
