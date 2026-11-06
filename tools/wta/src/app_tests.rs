@@ -8929,6 +8929,36 @@ fn esc_reuses_latest_snapshot_after_fold_from_session_view() {
 }
 
 #[test]
+fn custom_native_history_resume_does_not_select_an_acp_or_hardcoded_cli_command() {
+    use crate::agent_sessions::{CliSource, SessionEvent};
+    let mut app = test_app();
+    app.window_id = Some("42".into());
+    app.agent_sessions.apply(SessionEvent::SessionStarted {
+        key: "custom-session".into(),
+        cli_source: CliSource::parse(Some("custom:example")),
+        pane_session_id: "old-pane".into(),
+        cwd: std::env::temp_dir(),
+        title: "Native custom".into(),
+    });
+    app.agent_sessions.apply(SessionEvent::SessionStopped {
+        key: "custom-session".into(),
+        reason: "exit".into(),
+    });
+    let row = app
+        .agent_sessions
+        .get(&"custom-session".into())
+        .unwrap()
+        .clone();
+    app.activate_agent_session_routed(&row);
+    let command = app.last_dispatched_command_for_test().unwrap();
+    assert_eq!(command.kind, DispatchedCommandKind::NewTabResume);
+    let request: serde_json::Value = serde_json::from_str(&command.argv[1]).unwrap();
+    assert_eq!(request["agent_id"], "custom:example");
+    assert_eq!(request["resume_target"], "native");
+    assert!(request.get("commandline").is_none());
+}
+
+#[test]
 fn enter_on_history_row_dispatches_new_tab_with_resume() {
     use crate::agent_sessions::{CliSource, SessionEvent};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -8960,61 +8990,17 @@ fn enter_on_history_row_dispatches_new_tab_with_resume() {
         .last_dispatched_command_for_test()
         .expect("a command was dispatched");
     assert_eq!(cmd.kind, DispatchedCommandKind::NewTabResume);
-    let argv = cmd.argv.join(" ");
-    // The dispatch must use `wtcli new-tab` (not `split-pane`) so the
-    // resumed CLI lands in its own WT tab instead of carving up the
-    // originating tab.
-    assert!(argv.contains("new-tab"), "argv: {}", argv);
+    assert_eq!(cmd.argv[0], "resume_in_new_agent_tab");
+    let request: serde_json::Value = serde_json::from_str(&cmd.argv[1]).unwrap();
+    assert_eq!(request["window_id"], "42");
+    assert_eq!(request["resume_target"], "native");
+    assert_eq!(request["agent_id"], "claude");
+    assert_eq!(request["session_id"], "abc-123");
+    assert_eq!(request["title"], "Fix the build");
+    assert_eq!(request["cwd"], real_cwd_str);
     assert!(
-        argv.contains("--window-id 42"),
-        "resume must target the owning window: {argv}"
-    );
-    assert!(
-        !argv.contains("split-pane"),
-        "argv must NOT use split-pane: {}",
-        argv
-    );
-    assert!(
-        cmd.argv
-            .windows(2)
-            .any(|args| args == ["--title", "Fix the build"]),
-        "resume tab must use the session title: {:?}",
-        cmd.argv
-    );
-    // The CLI invocation is still wrapped in `cmd /c` so .cmd shims
-    // resolve via PATHEXT, but the legacy `cd /d` prefix is gone —
-    // cwd is threaded through wtcli's `-d` flag now. Issue #135:
-    // a muted "Resuming … session …" banner is prepended so the
-    // user sees immediate feedback while the CLI cold-starts; the
-    // CLI's alt-screen TUI overwrites it on success. (Previously
-    // SGR 1;36;5 — bold + cyan + slow-blink — was used, but the
-    // blink + bold were too noisy. Now SGR 2;37 = dim + white, a
-    // low-contrast tone similar to the cwd line in a typical
-    // Copilot-CLI shell prompt.)
-    assert!(
-        argv.contains("cmd /c echo \x1b[2;37mResuming claude session abc-123...\x1b[0m"),
-        "expected dim-white Resuming banner echo; argv: {:?}",
-        argv
-    );
-    assert!(
-        argv.contains("&& claude --resume abc-123"),
-        "expected resume command chained after banner; argv: {}",
-        argv
-    );
-    assert!(
-        !argv.contains("cd /d"),
-        "argv must NOT contain cd /d (cwd is now passed via -d): {}",
-        argv
-    );
-    // Resume is keyed off the session's project cwd — the new tab's
-    // primary pane must start in that directory so the CLI's session
-    // store lookup (`~/.claude/projects/<encoded-cwd>/...`) succeeds.
-    let expected = format!("-d {}", real_cwd_str);
-    assert!(
-        argv.contains(&expected),
-        "expected `{}` in argv: {}",
-        expected,
-        argv
+        request.get("commandline").is_none(),
+        "Terminal must read effective profile options"
     );
 }
 
@@ -9167,19 +9153,9 @@ fn enter_on_history_row_with_missing_cwd_omits_d_flag() {
         .last_dispatched_command_for_test()
         .expect("a command was dispatched");
     assert_eq!(cmd.kind, DispatchedCommandKind::NewTabResume);
-    let argv = cmd.argv.join(" ");
-    assert!(argv.contains("new-tab"), "argv: {}", argv);
-    // The stale cwd must NOT have leaked through as `-d`.
-    assert!(
-        !argv.contains("-d "),
-        "argv must omit -d when cwd is missing: {}",
-        argv
-    );
-    assert!(
-        !argv.contains(&missing.to_string_lossy().to_string()),
-        "argv must not embed the stale cwd: {}",
-        argv
-    );
+    assert_eq!(cmd.argv[0], "resume_in_new_agent_tab");
+    let request: serde_json::Value = serde_json::from_str(&cmd.argv[1]).unwrap();
+    assert_eq!(request["cwd"], "");
 }
 
 #[test]
@@ -9256,10 +9232,10 @@ fn external_in_use_row_dispatches_cli_resume_instead_of_focus() {
 
     let command = app.last_dispatched_command_for_test().unwrap();
     assert_eq!(command.kind, DispatchedCommandKind::NewTabResume);
-    assert!(command
-        .argv
-        .join(" ")
-        .contains("copilot --resume external-in-use"));
+    let request: serde_json::Value = serde_json::from_str(&command.argv[1]).unwrap();
+    assert_eq!(request["agent_id"], "copilot");
+    assert_eq!(request["session_id"], "external-in-use");
+    assert!(request.get("commandline").is_none());
     assert!(!command
         .argv
         .iter()
@@ -10802,10 +10778,9 @@ fn hookless_session_snapshot_renders_and_dispatches_resume() {
         .last_dispatched_command_for_test()
         .expect("resume dispatched");
     assert_eq!(command.kind, DispatchedCommandKind::NewTabResume);
-    assert!(command
-        .argv
-        .join(" ")
-        .contains("claude --resume history-without-hooks"));
+    let request: serde_json::Value = serde_json::from_str(&command.argv[1]).unwrap();
+    assert_eq!(request["agent_id"], "claude");
+    assert_eq!(request["session_id"], "history-without-hooks");
 }
 
 #[tokio::test]

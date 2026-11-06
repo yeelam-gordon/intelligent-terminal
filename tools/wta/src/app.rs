@@ -3306,7 +3306,14 @@ impl App {
         // profile rather than a hard-coded flag.
         let profile = known_cli_id(&s.cli_source).map(crate::agent_registry::lookup_profile_by_id);
         let cli_supports_resume_flag =
-            profile.is_some_and(|profile| !profile.resume_flag.is_empty());
+            if matches!(s.location, crate::agent_sessions::SessionLocation::Host) {
+                profile.is_some()
+                    || s.cli_source
+                        .canonical_provider_id()
+                        .is_some_and(|id| id.starts_with("custom:"))
+            } else {
+                profile.is_some_and(|profile| !profile.resume_flag.is_empty())
+            };
         let selected_agent_id = known_cli_id(&s.cli_source);
         let targets_current_agent = selected_agent_id
             .is_some_and(|id| id.eq_ignore_ascii_case(&self.current_agent_id))
@@ -3454,6 +3461,56 @@ impl App {
     ///      Host resumes also publish the known agent/session/pane identity to
     ///      Terminal's persistence map, independently of CLI hooks or banners.
     fn dispatch_resume(&mut self, s: &crate::agent_sessions::AgentSession) {
+        if matches!(s.location, crate::agent_sessions::SessionLocation::Host) {
+            let Some(window_id) = self
+                .window_id
+                .as_deref()
+                .and_then(|id| id.parse::<u64>().ok())
+                .filter(|id| *id != 0)
+            else {
+                return;
+            };
+            let Some(provider) = s.cli_source.canonical_provider_id() else {
+                return;
+            };
+            if known_cli_id(&s.cli_source).is_none() && !provider.starts_with("custom:") {
+                return;
+            }
+            if !crate::agent_sessions::is_safe_cli_resume_id(&s.key) {
+                return;
+            }
+            let resume_event =
+                crate::agent_sessions::SessionEvent::ResumeDispatched { key: s.key.clone() };
+            self.agent_sessions.apply(resume_event.clone());
+            self.publish_session_hook(resume_event);
+            let event = serde_json::json!({
+                "type": "event",
+                "method": "resume_in_new_agent_tab",
+                "params": {
+                    "window_id": window_id.to_string(),
+                    "tab_id": self.owner_tab_id.as_deref().unwrap_or_default(),
+                    "session_id": s.key,
+                    "agent_id": provider,
+                    "agent_source": "host",
+                    "resume_target": "native",
+                    "cwd": crate::cwd_util::validate_starting_directory(&s.cwd).unwrap_or_default(),
+                    "title": s.title,
+                }
+            });
+            send_wt_protocol_event(event.to_string());
+            #[cfg(test)]
+            {
+                self.last_dispatched_command = Some(DispatchedCommand {
+                    kind: DispatchedCommandKind::NewTabResume,
+                    session_id: Some(s.key.clone()),
+                    argv: vec![
+                        "resume_in_new_agent_tab".to_string(),
+                        event["params"].to_string(),
+                    ],
+                });
+            }
+            return;
+        }
         let Some(window_id) = self
             .window_id
             .as_deref()

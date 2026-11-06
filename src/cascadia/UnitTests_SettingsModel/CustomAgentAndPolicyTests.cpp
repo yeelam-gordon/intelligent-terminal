@@ -74,6 +74,8 @@ namespace SettingsModelUnitTests
         TEST_METHOD(AgentProfileAntigravitySettingsRoundtrip);
         TEST_METHOD(AgentProfileCommandQuoting);
         TEST_METHOD(AgentProfileNativeCommands);
+        TEST_METHOD(AgentProfileResumeArguments);
+        TEST_METHOD(CustomAgentNativeProfileGeneration);
         TEST_METHOD(AgentProfileArgumentValidation);
         TEST_METHOD(AgentProfileUserArguments);
         TEST_METHOD(AgentProfileDiscoveryLifecycle);
@@ -486,6 +488,84 @@ namespace SettingsModelUnitTests
         VERIFY_ARE_EQUAL(winrt::hstring{ L"chosen-model" }, profile->AgentProfileModel());
     }
 
+    void CustomAgentAndPolicyTests::AgentProfileResumeArguments()
+    {
+        namespace Agents = ::Microsoft::Terminal::AgentProfiles;
+        auto profile = winrt::make_self<implementation::Profile>();
+        profile->AgentProfileId(L"claude");
+        profile->AgentProfileModel(L"chosen");
+        profile->AgentProfileArguments(L"--add-dir \"C:\\source tree\"");
+        profile->AgentProfileResumeArguments(L"--load-conversation");
+        const auto ordinary = Agents::Command(*profile);
+        VERIFY_IS_TRUE(ordinary.find(L"--load-conversation") == std::wstring::npos);
+        const auto resumed = Agents::ResumeCommand(*profile, L"known-session");
+        VERIFY_ARE_EQUAL(ordinary + L" \"--load-conversation\" \"known-session\"", resumed);
+        VERIFY_THROWS(Agents::ResumeCommand(*profile, L"unsafe&session"), wil::ResultException);
+        const auto restored = implementation::Profile::FromJson(profile->ToJson());
+        VERIFY_ARE_EQUAL(profile->AgentProfileResumeArguments(), restored->AgentProfileResumeArguments());
+        profile->Commandline(L"\"C:\\my-launcher.exe\" --startup");
+        VERIFY_IS_FALSE(Agents::IsManaged(*profile));
+        VERIFY_ARE_EQUAL(std::wstring{ L"\"C:\\my-launcher.exe\" --startup \"--load-conversation\" \"known\"" },
+                         Agents::ResumeCommand(*profile, L"known"));
+        profile->AgentProfileResumeArguments(L"");
+        VERIFY_ARE_EQUAL(std::wstring{ L"\"C:\\my-launcher.exe\" --startup \"known\"" }, Agents::ResumeCommand(*profile, L"known"));
+        profile->Source(winrt::hstring{ Agents::Source });
+        VERIFY_IS_TRUE(Agents::IsProtected(*profile));
+        profile->Orphaned(true);
+        VERIFY_IS_TRUE(Agents::IsProtected(*profile));
+        profile->AgentProfileId(L"retired-provider");
+        VERIFY_IS_FALSE(Agents::IsProtected(*profile));
+        profile->Source(L"");
+        VERIFY_IS_FALSE(Agents::IsProtected(*profile));
+        profile->Guid(winrt::guid{ L"{fd19208a-412b-4857-8a2d-9ca592b4b16e}" });
+        VERIFY_IS_TRUE(Agents::IsProtected(*profile));
+        auto args = winrt::make_self<implementation::NewTerminalArgs>();
+        args->Profile(L"{00000000-0000-0000-0000-000000000001}");
+        args->NativeAgentProviderId(L"claude");
+        args->NativeAgentSessionId(L"known-session");
+        const auto copiedArgs = args->Copy();
+        const auto restoredArgs = implementation::NewTerminalArgs::FromJson(implementation::NewTerminalArgs::ToJson(copiedArgs));
+        VERIFY_ARE_EQUAL(copiedArgs.Profile(), restoredArgs.Profile());
+        VERIFY_ARE_EQUAL(copiedArgs.NativeAgentSessionId(), restoredArgs.NativeAgentSessionId());
+        VERIFY_IS_TRUE(args->Equals(restoredArgs));
+        const auto missingProfileSettings = MakeSettings(R"("acpAgent":"")");
+        VERIFY_THROWS(missingProfileSettings->GetProfileForArgs(restoredArgs), wil::ResultException);
+    }
+
+    void CustomAgentAndPolicyTests::CustomAgentNativeProfileGeneration()
+    {
+        SetPolicy(MakePolicy());
+        auto globals = winrt::make_self<implementation::GlobalAppSettings>();
+        globals->AcpCustomCommands(winrt::single_threaded_vector<winrt::hstring>({ L"\"C:\\Tools\\native.exe\" --acp --stdio" }));
+        globals->DelegateCustomCommand(L"\"C:\\Tools\\native.exe\" --delegate");
+        AgentProfileGenerator generator{ globals.get() };
+        std::vector<winrt::com_ptr<implementation::Profile>> profiles;
+        generator.GenerateProfiles(profiles);
+        size_t customCount = 0;
+        for (const auto& profile : profiles)
+        {
+            if (profile->AgentProfileId() == L"custom:native")
+            {
+                ++customCount;
+                VERIFY_IS_TRUE(profile->Commandline().empty());
+                VERIFY_IS_TRUE(profile->AgentProfileResumeArguments().empty());
+                profile->Commandline(L"\"C:\\Tools\\launcher.exe\" native");
+                profile->AgentProfileModel(L"chosen");
+                profile->AgentProfileArguments(L"--startup");
+                const auto command = ParseFullCommandLine(::Microsoft::Terminal::AgentProfiles::Command(*profile));
+                VERIFY_ARE_EQUAL(std::wstring{ L"native" }, command[1]);
+                VERIFY_ARE_EQUAL(std::wstring{ L"--model" }, command[2]);
+                VERIFY_ARE_EQUAL(std::wstring{ L"chosen" }, command[3]);
+                VERIFY_ARE_EQUAL(std::wstring{ L"--startup" }, command[4]);
+            }
+            else
+            {
+                VERIFY_IS_FALSE(profile->AgentProfileResumeArguments().empty());
+            }
+        }
+        VERIFY_ARE_EQUAL(size_t{ 1 }, customCount);
+    }
+
     void CustomAgentAndPolicyTests::AgentProfileNativeCommands()
     {
         namespace Agents = ::Microsoft::Terminal::AgentProfiles;
@@ -532,7 +612,7 @@ namespace SettingsModelUnitTests
         VERIFY_THROWS(Agents::BuildCommand({}, L"claude", {}, {}, {}), wil::ResultException);
         VERIFY_THROWS(Agents::BuildCommand(L"C:\\claude.cmd", L"claude", L"%PATH%", {}, {}), wil::ResultException);
         VERIFY_THROWS(Agents::BuildCommand(L"C:\\claude.cmd", L"claude", L"embedded\"quote", {}, {}), wil::ResultException);
-        VERIFY_THROWS(Agents::BuildCommand(L"C:\\agent.exe", L"custom:claude", {}, {}, {}), wil::ResultException);
+        VERIFY_IS_FALSE(Agents::BuildCommand(L"C:\\agent.exe", L"custom:claude", {}, {}, {}).empty());
         const auto antigravity = ParseFullCommandLine(Agents::BuildCommand(
             L"C:\\agy.exe", L"antigravity", L"chosen-model", L"plan",
             LR"(--conversation "session id" --add-dir "C:\source tree" --prompt-interactive "Explain this project" --continue)"));

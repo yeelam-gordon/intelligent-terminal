@@ -103,6 +103,7 @@ namespace Microsoft.Terminal.Settings.Model
         INHERITABLE_PROFILE_SETTING(String, AgentProfileModel);
         INHERITABLE_PROFILE_SETTING(String, AgentProfilePermissionMode);
         INHERITABLE_PROFILE_SETTING(String, AgentProfileArguments);
+        INHERITABLE_PROFILE_SETTING(String, AgentProfileResumeArguments);
         INHERITABLE_PROFILE_SETTING(String, DefaultSplitProfile);
     }
 }
