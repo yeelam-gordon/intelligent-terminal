@@ -269,8 +269,12 @@ public static class NativeProfileResumeMasterGate {
 
             # Controlled legacy-hook transport, never an installed hook mutation.
             # Repeat the same update to protect owner binding/deduplication.
-            $hook = @{ agent = 'custom:profile-resume-fixture'; agent_session_id = $knownId
-                cwd = $script:proofRoot; payload = @{ message = 'controlled metadata update' } } | ConvertTo-Json -Depth 5 -Compress
+            $hook = @{
+                agent = 'custom:profile-resume-fixture'; cli_source = 'custom:profile-resume-fixture'
+                agent_session_id = $knownId; event = 'agent.prompt.submit'; pane_id = $resumed.session_id
+                payload = @{ cwd = $script:proofRoot; message = 'controlled metadata update' }
+            } | ConvertTo-Json -Depth 5 -Compress
+            [IO.File]::WriteAllText((Join-Path $script:proofRoot "$resumeTitle-hook-input.json"), $hook)
             foreach ($repeat in 1..2) {
                 Invoke-WtCli -App $script:app -Arguments @('send-event', '-p', $resumed.session_id,
                     '-e', 'agent.prompt.submit', $hook) | Out-Null
@@ -278,18 +282,24 @@ public static class NativeProfileResumeMasterGate {
             $expected = if ($tracking) { 'Working' } else { 'Idle' }
             $updated = Wait-Until -TimeoutSec 10 -Because 'controlled hook enriches the same owner only when Sessions is enabled' -Condition {
                 $name = Get-NativeMetadataRow $resumeTitle
-                if ($name -match "\b$expected\b") { $name }
+                if ($name -cmatch "(?:^|,\s*)Agent status:\s*$expected(?:,|$)") { $name }
             }
-            (Get-NativeMetadataRow $ordinaryTitle) | Should -Match '\bIdle\b'
+            (Get-NativeMetadataRow $ordinaryTitle) | Should -Match 'Agent status: Idle(?:,|$)'
             @(Get-WtPanes -App $script:app).Count | Should -Be $count
             if ($tracking) {
                 $bound = Wait-Until -TimeoutSec 10 -Because 'duplicate hooks retain one conversation bound to the resumed pane' -Condition {
                     $rows = @(Get-NativeMasterSessions | Where-Object session_id -EQ $knownId)
-                    if ($rows.Count -eq 1 -and
+                    if ($rows.Count -eq 1 -and $rows[0].status -eq 'Working' -and
                         ([string]$rows[0].pane_session_id).Trim('{}') -eq $resumed.session_id.Trim('{}')) { $rows[0] }
                 }
                 ([string]$bound.pane_session_id).Trim('{}') | Should -Be $resumed.session_id.Trim('{}')
                 $bound.provider_id | Should -Be 'custom:profile-resume-fixture'
+                $bound.status | Should -BeExactly 'Working'
+                [IO.File]::WriteAllText((Join-Path $script:proofRoot "$resumeTitle-authoritative-hook.json"),
+                    ($bound | ConvertTo-Json -Depth 12))
+                @(Get-NativeMasterSessions | Where-Object {
+                    ([string]$_.pane_session_id).Trim('{}') -eq $ordinary.session_id.Trim('{}')
+                }).Count | Should -Be 0 -Because 'the ordinary sibling has no hook or fabricated conversation ID'
             }
             [IO.File]::WriteAllText((Join-Path $script:proofRoot "$resumeTitle-after-hook.json"),
                 (@{ row = $updated; pane = $resumed.session_id; tracking = $tracking } | ConvertTo-Json))
