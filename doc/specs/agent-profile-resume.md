@@ -1,11 +1,11 @@
 # Resume sessions with their agent profile
 
-**Design proposal only.** No application behavior changes in this PR.
-Review the annotated mockup and the layer table; implementation follows separately.
+Feature contract and annotated mockup for the implementation in this PR.
+Validation results and any remaining blockers are recorded in the PR body.
 
-Today, editing an agent profile does not reliably affect how a historical session
-reopens. Generated agent profiles can also be deleted, and agents added in
-AI Agents settings do not receive corresponding profiles.
+Previously, editing an agent profile did not reliably affect how a historical
+session reopened. Generated agent profiles could also be deleted, and agents
+added in AI Agents settings did not receive corresponding profiles.
 
 ![Proposed agent profile editor, custom-agent setup, and agent-pane profile with numbered annotations](images/agent-profile-resume.svg)
 
@@ -13,11 +13,11 @@ AI Agents settings do not receive corresponding profiles.
 
 | Annotation | Change |
 | --- | --- |
-| 1 | Show the provider and a **Managed profile** badge. Keep identity independent of the editable display name. |
+| 1 | Show an explicit **Agent profile** badge and provider name. Use existing `agentProfile.id` identity, not the editable display name. The separate managed-original protection message explains why Delete is unavailable; a user-created agent-profile copy still has the badge but remains deletable. |
 | 2 | Add **Resume arguments** below additional startup arguments. Enter only the argument or verb, such as `--resume` or `resume`. Hint: **Only used when resuming. Terminal adds the session ID automatically after these arguments.** No placeholder input and no command preview. Built-ins inherit profile defaults with reset/inheritance affordances; an empty override disables native resume. |
 | 3 | The help text explains composition: **Your launch command and additional startup arguments are kept. Resume arguments and the session ID are added only when you resume a session.** This is explanatory text, not another control. |
 | 4 | Replace Delete with **This profile is managed by AI Agents. You can hide it instead.** Keep appearance, hide, and copy controls. Protect the managed original, not user-created copies. |
-| 5 | Each custom agent saved in AI Agents gets one corresponding managed profile. Link to it from the custom-agent editor. Native launch and resume commands must be explicitly configured; an ACP command is not assumed to be an interactive CLI command. |
+| 5 | Each custom agent saved in AI Agents gets one corresponding managed profile. Configure its native CLI using that profile's existing **Command line** setting and its **Resume arguments**. No second custom-agent editor or duplicate native-command setting is needed; an ACP command is not assumed to be an interactive CLI command. |
 | 6 | Protect the existing **Agent Pane** profile too. Show **Session restore: Managed by the agent pane (ACP)** instead of native resume arguments. Do not expose helper pipes, window IDs, or native startup flags here. |
 
 These are additions to the current profile page, not a replacement settings UI.
@@ -86,24 +86,22 @@ mode, extra arguments, environment, appearance, and close-on-exit behavior.
 Resume selection belongs in the resume field, not additional startup arguments;
 do not add a per-provider flag parser to guess user intent.
 
-### Profile data is the only native resume syntax source
+### Generation provides defaults; restore reads the effective profile
 
-Put the six defaults above in generated-profile entries in
-`src/cascadia/TerminalSettingsModel/defaults.json`, keyed by their stable
-generated GUID/source and provider identity. Layer user overrides through the
-normal profile settings mechanism. Do not introduce a second provider-to-flag
-map in C++ or Rust. Provider discovery/allowlists remain code; how to resume is
-profile data.
+The six defaults above may stay hardcoded in profile generation, alongside
+existing provider defaults. Set `AgentProfileResumeArguments` when generating
+each profile and layer user overrides through the normal settings mechanism.
+No new configuration file or parallel identity system is needed. The important
+change is at restore: read the effective profile value instead of selecting
+resume syntax again from the provider ID.
 
-Remove `ResumeInvocations`/`BuildResumeCommandline` native syntax selection from
-`src/cascadia/inc/AgentPaneRestore.h`, and `resume_flag` from WTA's
-`tools/wta/src/agent_registry.rs`. Replace native command synthesis in Sessions,
-sidebar activation, coordinator, and saved-layout restoration with profile
-resolution plus this composition. Missing/empty resume settings report
-unavailable; there is no hardcoded flag fallback, even for legacy history or WSL.
-WTA routing consumes effective resume availability from Terminal instead of
-inferring it from a built-in ID. ACP `session/load` stays a protocol capability,
-not CLI syntax.
+Host-native profile resume in Sessions, sidebar activation and saved-layout
+restoration reads the effective profile. Missing/empty settings report
+unavailable; do not silently select a different flag from the provider ID.
+ACP `session/load` stays a separate capability. Legacy WSL launches remain on
+their existing source-qualified route because automatic native profile
+generation currently covers the Windows host, not WSL installations. This
+feature must not change that route or claim WSL profile generation.
 
 An explicit profile `commandline` remains an override: use that base command
 unchanged as normal launch already does, and do not resurrect hidden structured
@@ -115,32 +113,30 @@ precedence. This proposal does not change ordinary command-override behavior.
 
 For custom agents, generate a stable profile for each canonical `custom:<id>`
 across the saved ACP/delegation entries, deduplicating only identical IDs.
-Add a distinct **Interactive command** field to their AI Agents editor, mapped
-to the generated profile's command line; leave it unconfigured initially.
-The generated profile remains editable but is not offered as launchable until
-that command is set. Explain this state and link to its configuration.
+Use the generated profile's existing **Command line** field for the native
+interactive command; leave it unconfigured initially. Do not introduce a second
+command field or redesign AI Agents settings. An unconfigured native launch
+must report the missing command explicitly.
 Do not run an ACP server or a prompt-bearing delegation command as a native TUI.
 Changing/removing a custom command must reconcile its existing command-derived
 identity explicitly; do not silently attach an old profile to a different agent.
 
 ## Matching sessions and profile lifetime
 
-Record the originating profile GUID alongside the qualified session identity
-(provider, host/WSL distro, and existing session-universe identity). Resuming a
-known session uses that GUID after validating provider and execution location,
-not the profile name, a command-string heuristic, or the global default profile.
-This keeps user-created project-profile copies distinguishable.
+Reuse the originating profile GUID already known by the Terminal pane/connection
+alongside the existing qualified session identity (provider, host/WSL distro,
+and session universe). Forward it through the existing resume request where
+available. Do not redesign the session registry or persistence format just to
+select a profile. Validate provider and execution location; never match by
+display name or command-string heuristics. User-created project-profile copies
+must remain distinguishable.
 
-For imported history with no profile GUID, resolve the canonical generated
-profile's settings using qualified provider/location identity. Host sessions
-launch the matching host profile. Legacy WSL history retains its exact distro
-and Linux cwd: bind the provider profile's resume settings to that WSL execution
-context, resolving the executable inside the distro, never reusing a host
-executable path or Windows environment. An existing source-qualified WSL profile
-takes precedence. This preserves WSL history without adding automatic WSL profile
-discovery or retaining hardcoded resume flags. If settings or a compatible
-launcher are unavailable, show a matching-profile chooser/configuration action;
-never open a default shell or use another location.
+For imported host history with no profile GUID, resolve the corresponding
+generated profile by provider identity. If the matching profile or its resume
+configuration is unavailable, report an actionable error; never launch a default
+shell or silently resume through a different profile. Legacy WSL history keeps
+its exact distro and Linux cwd on the existing WSL route; never substitute a host
+executable path or Windows environment.
 Unavailable stored directories retain the existing reported fallback to the
 selected profile's directory.
 
@@ -159,27 +155,77 @@ protected independently. Enforce this in the delete handler as well as the UI,
 and reconcile old generated-profile deletion tombstones so supported originals
 return with their overrides intact. User-created copies remain deletable.
 
+## Keep the existing launch protocol
+
+`CreateTab` and `CreateAgentCliTab` already accept profile and command line;
+`wtcli new-tab -p` forwards the profile selection. Reusing these does not require
+a new COM method, versioned interface, transport, or launch-result protocol.
+Passing a profile GUID alone selects settings, but does not tell Terminal which
+conversation to resume. Carry the known session ID with the existing internal
+resume request, resolve/build the effective profile launch in Terminal, and use
+the current creation path and result/error handling. Keep ACP loading separate.
+
+Evidence: `src/tools/wtcli/main.cpp:842-862`,
+`src/cascadia/WindowsTerminal/TerminalProtocolComServer.cpp:994-1055`, and
+`src/cascadia/TerminalApp/TerminalPage.Protocol.cpp:768-833`.
+The existing internal resume event already dispatches to the target window's
+`OnResumeInNewAgentTabRequested`; extending internal handling is not a public
+launch protocol redesign.
+
+## Metadata must initialize immediately, with or without hooks
+
+This is an acceptance requirement, not a request to rebuild the metadata system.
+Keep the current order: profile/provider identity is available at control/core
+creation, launch-derived metadata is published immediately, then hook/registry
+updates enrich it. Do not wait for hook registration, the first hook, history
+scan, ACP readiness, or a master snapshot before showing the initial provider,
+Idle state, and resolved launch directory where the current pipeline supplies
+them. Do not fabricate conversation IDs for ordinary new sessions.
+
+The current source explicitly protects this:
+`src/cascadia/TerminalApp/TerminalPage.cpp:17753-17761` seeds identity before
+control setup; `:13423-13450` supplies launch metadata without hooks.
+That fast fallback currently checks `UsesManagedAgentCommand()`. A naive resume
+command override can lose that flag, so profile-owned resume must preserve a
+trusted profile-launch receipt without labeling arbitrary shell commands as
+managed. Keep the existing connection/content identity and ownership guards.
+
+| Scenario | Required behavior |
+| --- | --- |
+| Hooks installed, before the first event | Same immediate launch metadata as today; no hook wait added. |
+| Hooks absent, delayed, broken, or listener unavailable | Same initial values and normal chat/list/resume behavior; only hook-dependent live enrichment may be unavailable, as today. |
+| Hooks arrive after initial metadata | Update the same pane/session through existing ownership rules; do not create duplicates or rebind another conversation. |
+| Sessions ON/OFF, master/receiver reconnect | Preserve existing status reduction and receiver fences; do not infer conversation IDs from command strings. |
+| Resume, restart, split, move between windows | Preserve launch metadata initialization and correct tab/window/content routing; do not replay stale status into a new lifetime. |
+
+Extend the existing
+`TabTests::ManagedProfileLaunchMetadataDoesNotWaitForHooks`,
+`ManagedProfileLaunchMetadataSurvivesTrackingModeChanges`, and
+`ManagedProfileLaunchMetadataReceiptSurvivesWindowTransfer` cases for profile-owned
+resume. UI tests must inspect initial values before any hook/snapshot, then the
+downstream tab values after enrichment. No new polling loop or fixed delay.
+
 ## Required implementation files
 
 Every path below is relative to the repository root. This is the future runtime
-implementation map; this PR itself changes only this document and its SVG mockup.
+implementation map. The annotated SVG is a mockup, not runtime evidence.
 
 | Layer | Exact files | What changes / why |
 | --- | --- | --- |
-| Default profile data | `src/cascadia/TerminalSettingsModel/defaults.json` | Add `agentProfile.resumeArguments` to the six stable generated-profile entries. Provider-specific resume syntax lives here, not in runtime maps. Keep the internal Agent Pane profile separate. |
-| Profile setting / schema | `src/cascadia/TerminalSettingsModel/MTSMSettings.h`; `doc/cascadia/profiles.schema.json` | Add the inheritable string, automatic-ID help, and empty/reset semantics. Existing profile macros project/serialize it. |
+| Generated defaults | `src/cascadia/TerminalSettingsModel/AgentProfileGenerator.cpp` | Set built-in resume defaults during generation; restore reads the effective profile instead of choosing a flag again. No separate defaults file required. |
+| Profile setting / schema | `src/cascadia/TerminalSettingsModel/MTSMSettings.h`; `src/cascadia/TerminalSettingsModel/Profile.idl`; `doc/cascadia/profiles.schema.json` | Add the inheritable string, automatic-ID help, and empty/reset semantics. Existing profile macros project/serialize it. |
 | Generic launch assembly | `src/cascadia/inc/AgentProfileUtils.h` | Reuse normal launch assembly; append parsed effective resume arguments and the quoted ID only for resume intent. No provider-to-resume-flag branch. |
 | Generated/custom profile lifecycle | `src/cascadia/TerminalSettingsModel/AgentProfileGenerator.cpp`; `src/cascadia/TerminalSettingsModel/AgentProfileGenerator.h`; `src/cascadia/TerminalSettingsModel/CascadiaSettingsSerialization.cpp`; `src/cascadia/TerminalSettingsModel/CascadiaSettings.cpp` | Reconcile custom entries after settings load, preserve GUIDs/overrides, restore previously suppressed supported originals, and expose shared managed-original eligibility. |
 | Profile editor / delete handler | `src/cascadia/TerminalSettingsEditor/Profiles_Base.xaml`; `src/cascadia/TerminalSettingsEditor/ProfileViewModel.cpp`; `src/cascadia/TerminalSettingsEditor/ProfileViewModel.h`; `src/cascadia/TerminalSettingsEditor/ProfileViewModel.idl`; `src/cascadia/TerminalSettingsEditor/MainPage.cpp` | Bind resume arguments and hints/reset, omit preview, show protection, and enforce it in deletion. Copies stay deletable. |
-| Custom-agent editor | `src/cascadia/TerminalSettingsEditor/AIAgents.xaml`; `src/cascadia/TerminalSettingsEditor/AIAgents.cpp`; `src/cascadia/TerminalSettingsEditor/AIAgentsViewModel.cpp`; `src/cascadia/TerminalSettingsEditor/AIAgentsViewModel.h`; `src/cascadia/TerminalSettingsEditor/AIAgentsViewModel.idl` | Add the native Interactive command and linked-profile action; keep ACP/delegation commands separate. |
-| UI resource source | `src/cascadia/TerminalSettingsEditor/Resources/en-US/Resources.resw` | Add accessible resume-field hints, validation, custom-command, and protection text; propagate translations through the existing localization workflow. |
-| Remove duplicate native syntax | `src/cascadia/inc/AgentPaneRestore.h`; `tools/wta/src/agent_registry.rs`; `tools/wta/src/coordinator.rs` | Remove the native resume invocation table, registry `resume_flag`, and provider-based resume synthesis. Keep ACP capabilities and unrelated delegation behavior. |
-| Both history activation callers | `tools/wta/src/app.rs`; `tools/wta/src/master/mod.rs`; `tools/wta/src/session_mgmt.rs` | Sessions and sidebar pass typed profile/session intent; reducers consume effective resume availability instead of built-in flags. Never fall back to hardcoded native syntax. |
-| Session identity/storage | `tools/wta/src/agent_sessions.rs`; `tools/wta/src/session_registry.rs`; `src/cascadia/TerminalApp/TerminalPage.cpp`; `src/cascadia/TerminalApp/TerminalPage.h` | Carry optional originating profile GUID beside qualified identity; validate provider/source, preserve copies and old records, and resolve legacy WSL bindings without host-path reuse. |
-| Terminal launch boundary | `src/cascadia/TerminalProtocol/TerminalProtocol.idl`; `src/cascadia/WindowsTerminal/TerminalProtocolComServer.cpp`; `src/cascadia/TerminalApp/TerminalPage.Protocol.cpp`; `src/tools/wtcli/main.cpp`; `tools/wta/src/shell/wt_channel/cli_channel.rs` | Carry typed resume intent to Terminal profile resolution and return actual launch errors/receipts. If a new COM operation is needed, version the interface without changing existing slots. |
-| Saved-layout restoration | `src/cascadia/TerminalApp/TabManagement.cpp`; `src/cascadia/TerminalApp/TerminalPage.cpp`; `src/cascadia/inc/AgentPaneRestore.h` | Save profile/session intent rather than synthesizing provider commands; restore with effective profile data. Preserve ACP `session/load` and legacy layout compatibility. |
+| Custom native command (reuse) | `src/cascadia/TerminalSettingsModel/AgentProfileGenerator.cpp`; `src/cascadia/TerminalSettingsEditor/Profiles_Base.xaml` | Generate the custom profile and use its existing Command line control. No duplicate command field in AI Agents settings. |
+| UI resource source | `src/cascadia/TerminalSettingsEditor/Resources/en-US/Resources.resw` | Add accessible agent-profile label and automatic-ID hint; propagate translations through the existing localization workflow. |
+| Both host history activation callers | `tools/wta/src/app.rs`; `tools/wta/src/master/mod.rs`; `tools/wta/src/session_mgmt.rs`; `tools/wta/src/shell/wt_channel/cli_channel.rs` | Sessions/sidebar send the existing internal resume request with profile/session identity. Terminal resolves effective settings instead of callers assembling host resume commands. Keep separate ACP/legacy WSL behavior. |
+| Existing profile/session binding | `src/cascadia/TerminalApp/TerminalPage.cpp`; `src/cascadia/TerminalApp/TerminalPage.h` | Reuse the pane's known profile GUID and qualified session identity in existing resume handling. Avoid a registry/persistence redesign solely for profile selection. |
+| Existing launch boundary (reuse, not redesign) | `src/cascadia/TerminalApp/TerminalPage.Protocol.cpp`; `src/cascadia/TerminalApp/TerminalPage.cpp` | Resolve profile-owned resume before the existing profile-aware creation call. Existing `CreateTab`/`CreateAgentCliTab`, COM interface and `wtcli -p` stay unchanged. |
+| Fast initial metadata (preserve) | `src/cascadia/TerminalApp/TerminalPage.cpp`; `src/cascadia/TerminalApp/ContentManager.cpp`; `src/cascadia/TerminalSettingsAppAdapterLib/TerminalSettings.cpp`; `src/cascadia/LocalTests_TerminalApp/TabTests.cpp` | Preserve trusted managed-profile launch information on resume and identity-before-control-setup order; test initial values without hooks and later enrichment. No pipeline rewrite. |
+| Saved-layout restoration | `src/cascadia/TerminalSettingsModel/ActionArgs.h`; `src/cascadia/TerminalSettingsModel/ActionArgs.idl`; `src/cascadia/TerminalApp/TabManagement.cpp`; `src/cascadia/TerminalApp/TerminalPage.cpp` | Add one optional saved-action `nativeAgentSessionId` field so profile-owned restore can re-resolve settings. No session-store redesign or public COM change; keep legacy layouts readable. |
 | Regression coverage | `src/cascadia/UnitTests_SettingsModel/CustomAgentAndPolicyTests.cpp`; `src/cascadia/UnitTests_SettingsModel/TerminalSettingsTests.cpp`; `src/cascadia/LocalTests_TerminalApp/TabTests.cpp`; `tools/wta/src/app_tests.rs`; `tools/wta/src/master/tests.rs`; `tools/wta/src/coordinator.rs` | Assert normal versus resume argv, data-default overrides, custom lifecycle/protection, both activation routes, and restart/WSL identity. |
-| Live coverage / user docs | `test/e2e/tests/Feature.CustomAgent.Tests.ps1`; `test/e2e/tests/Feature.CombinedAgentsSidebar.Tests.ps1`; `test/e2e/tests/Feature.WslAgentBackend.Tests.ps1`; `doc/agent-profiles.md` | Verify custom/profile routing and launch composition end-to-end; document profile-owned restore behavior and automatic session ID. |
+| Live coverage / user docs | `test/e2e/tests/Feature.AgentProfileResume.Tests.ps1`; `test/e2e/fixtures/Mock-NativeProfileResume.cmd`; `test/e2e/fixtures/Mock-NativeProfileResume.ps1`; `doc/release-check-list.md`; `test/e2e/README.md`; `doc/agent-profiles.md` | Verify profile routing, captured launch arguments and the Settings UI; map C501-C503 to the release checklist and document automatic session ID. |
 
 ## Implementation acceptance
 
@@ -187,8 +233,8 @@ Use executable fixtures to capture argv, environment, profile GUID, and cwd for
 all six built-ins plus one custom agent. Assert additional startup arguments
 appear once in both normal and resume launches, with resume arguments and the
 automatic ID present only in resume. Change a profile's resume arguments to a
-fixture-specific value and prove all native restore routes use it without a
-provider fallback. Cover spaces, malformed arguments, batch shims, Codex ordering,
+fixture-specific value and prove host-native profile restore routes use it without
+a provider fallback. Cover spaces, malformed arguments, batch shims, Codex ordering,
 missing executables, policy blocks, and explicit
 command overrides. Test two copies of one provider profile and older history
 without a GUID. Exercise Sessions, sidebar, and saved-layout restoration.

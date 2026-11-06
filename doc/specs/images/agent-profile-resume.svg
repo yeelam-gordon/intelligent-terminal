@@ -19,7 +19,7 @@
   </defs>
   <rect width="1440" height="1180" rx="14" fill="#141414"/>
   <text x="32" y="43" class="heading">Agent profiles / Resume a session with its profile</text>
-  <text x="32" y="72" class="small">DESIGN PROPOSAL - annotated mockup, not implemented UI. Unchanged settings are abbreviated.</text>
+  <text x="32" y="72" class="small">ANNOTATED MOCKUP - not a product screenshot. Unchanged settings are abbreviated.</text>
 
   <rect x="28" y="96" width="946" height="651" rx="10" class="panel"/>
   <rect x="28" y="96" width="218" height="651" rx="10" fill="#202020"/>
@@ -38,7 +38,7 @@
   <text x="48" y="553" class="small">Agent Pane</text>
   <text x="272" y="137" class="heading">Claude</text>
   <rect x="394" y="113" width="158" height="31" rx="12" class="badge"/>
-  <text x="410" y="134" class="small accent">Managed profile</text>
+  <text x="410" y="134" class="small accent">Agent profile</text>
   <text x="272" y="164" class="small">Provider: Claude | Native CLI | Windows host</text>
   <text x="272" y="202" class="label">Command line</text>
   <rect x="272" y="215" width="672" height="37" rx="4" class="field"/>
@@ -64,9 +64,9 @@
 
   <path d="M 560 128 H 995" class="line"/>
   <circle cx="566" cy="128" r="13" fill="#78ccff"/><text x="566" y="134" class="number">1</text>
-  <text x="1016" y="125" class="label accent">Identity, not display name</text>
-  <text x="1016" y="151" class="small">Managed original stays linked</text>
-  <text x="1016" y="174" class="small">to its provider and source.</text>
+  <text x="1016" y="125" class="label accent">Explicit Agent profile label</text>
+  <text x="1016" y="151" class="small">Uses existing agentProfile.id.</text>
+  <text x="1016" y="174" class="small">Copies keep their agent identity.</text>
   <path d="M 948 472 H 995 V 268" class="line"/>
   <circle cx="953" cy="472" r="13" fill="#78ccff"/><text x="953" y="478" class="number">2</text>
   <text x="1016" y="253" class="label accent">Editable resume arguments</text>
@@ -89,15 +89,15 @@
 
   <rect x="28" y="770" width="680" height="300" rx="10" class="panel"/>
   <circle cx="54" cy="800" r="13" fill="#78ccff"/><text x="54" y="806" class="number">5</text>
-  <text x="80" y="808" class="heading">AI Agents / My custom agent</text>
-  <text x="50" y="845" class="small">Existing ACP / delegation commands: separate, unchanged</text>
-  <text x="50" y="881" class="label">Interactive command</text>
+  <text x="80" y="808" class="heading">Profiles / My custom agent</text>
+  <text x="50" y="845" class="small">Generated from the custom entry in AI Agents settings</text>
+  <text x="50" y="881" class="label">Command line (native CLI)</text>
   <rect x="50" y="893" width="635" height="37" rx="4" class="field"/>
   <text x="63" y="918" class="small">Not configured - enter this agent's native CLI command</text>
-  <text x="50" y="958" class="accent">Generated profile: My custom agent             [Open profile]</text>
-  <text x="50" y="993" class="small">Configure native resume arguments in the linked profile.</text>
-  <text x="50" y="1018" class="small">No guessed resume flag. No automatic ACP-command reuse.</text>
-  <text x="50" y="1043" class="small">Native launch stays unavailable until Interactive command is set.</text>
+  <text x="50" y="958" class="accent">Agent profile | custom:&lt;id&gt;</text>
+  <text x="50" y="993" class="small">Configure the native command and resume arguments in this profile.</text>
+  <text x="50" y="1018" class="small">ACP / delegation commands stay separate and unchanged.</text>
+  <text x="50" y="1043" class="small">No guessed resume flag. No automatic ACP-command reuse.</text>
 
   <rect x="730" y="770" width="682" height="300" rx="10" class="panel"/>
   <circle cx="756" cy="800" r="13" fill="#78ccff"/><text x="756" y="806" class="number">6</text>
