@@ -267,6 +267,23 @@ public static class NativeProfileResumeMasterGate {
             $rejected.params.success | Should -BeFalse
             @(Get-WtPanes -App $script:app).Count | Should -Be $count
 
+            $missingProfileRequestId = [guid]::NewGuid().ToString()
+            $missingProfile = @{
+                window_id = "$($script:app.WindowId)"; agent_id = 'custom:profile-resume-fixture'
+                agent_source = 'host'; resume_target = 'native'
+                profile_id = '{' + [guid]::NewGuid().ToString() + '}'
+                session_id = $knownId; request_id = $missingProfileRequestId
+            } | ConvertTo-Json -Compress
+            $event = @{ type = 'event'; method = 'resume_in_new_agent_tab'; params = ($missingProfile | ConvertFrom-Json) } | ConvertTo-Json -Compress
+            Invoke-WtCli -App $script:app -Arguments @('publish', '--existing-only', $event) | Out-Null
+            $missingProfileResult = Wait-WtEvent -Listener $script:listener -TimeoutSec 20 -Predicate {
+                $_.method -eq 'native_profile_resume_result' -and $_.params.request_id -eq $missingProfileRequestId
+            }
+            $missingProfileResult.params.request_id | Should -BeExactly $missingProfileRequestId
+            $missingProfileResult.params.success | Should -BeFalse
+            $missingProfileResult.params.error | Should -BeExactly 'No corresponding native agent profile was found. Check the selected profile and its agentProfile.id.'
+            @(Get-WtPanes -App $script:app).Count | Should -Be $count
+
             # Controlled legacy-hook transport, never an installed hook mutation.
             # Repeat the same update to protect owner binding/deduplication.
             $hook = @{

@@ -11773,6 +11773,7 @@ namespace winrt::TerminalApp::implementation
             if (!selected)
             {
                 _agentPaneLog("Native profile resume: no corresponding profile");
+                receipt["error"] = "No corresponding native agent profile was found. Check the selected profile and its agentProfile.id.";
                 return;
             }
             Settings::Model::NewTerminalArgs args;
