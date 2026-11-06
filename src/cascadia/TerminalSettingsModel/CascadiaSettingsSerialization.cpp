@@ -231,7 +231,7 @@ void SettingsLoader::GenerateProfiles()
     generateProfiles(WslDistroGenerator{});
     generateProfiles(AzureCloudShellGenerator{});
     generateProfiles(VisualStudioGenerator{});
-    generateProfiles(AgentProfileGenerator{});
+    generateProfiles(AgentProfileGenerator{ userSettings.globals.get() });
     if constexpr (Feature_DynamicSSHProfiles::IsEnabled())
     {
         sshProfilesGenerated = generateProfiles(SshHostGenerator{});
@@ -274,7 +274,7 @@ void SettingsLoader::GenerateExtensionPackagesFromProfileGenerators()
     generateExtensionPackages(WslDistroGenerator{});
     generateExtensionPackages(AzureCloudShellGenerator{});
     generateExtensionPackages(VisualStudioGenerator{});
-    generateExtensionPackages(AgentProfileGenerator{});
+    generateExtensionPackages(AgentProfileGenerator{ userSettings.globals.get() });
     if constexpr (Feature_DynamicSSHProfiles::IsEnabled())
     {
         generateExtensionPackages(SshHostGenerator{});

@@ -9925,7 +9925,10 @@ namespace winrt::TerminalApp::implementation
             {
                 try
                 {
-                    settingsInternal->Commandline(winrt::hstring{ ::Microsoft::Terminal::AgentProfiles::Command(profile, true) });
+                    settingsInternal->Commandline(winrt::hstring{
+                        settingsInternal->NativeAgentSessionId().empty() ?
+                            ::Microsoft::Terminal::AgentProfiles::Command(profile, true) :
+                            ::Microsoft::Terminal::AgentProfiles::ResumeCommand(profile, settingsInternal->NativeAgentSessionId(), true) });
                 }
                 catch (const wil::ResultException& e)
                 {
@@ -10069,6 +10072,12 @@ namespace winrt::TerminalApp::implementation
             // TODO GH#5047 If we cache the NewTerminalArgs, we no longer need to do this.
             profile = GetClosestProfileForDuplicationOfProfile(profile);
             controlSettings = Settings::TerminalSettings::CreateWithProfile(_settings, profile);
+            if (::Microsoft::Terminal::Settings::Model::AgentRegistry::AgentIdEquals(
+                    winrt::get_self<ContentManager>(_manager)->NativeAgentProviderId(control.ContentId()), profile.AgentProfileId()))
+            {
+                controlSettings.DefaultSettings()->NativeAgentSessionId(
+                    winrt::get_self<TerminalPaneContent>(paneContent)->NativeAgentSessionId());
+            }
             controlSettings.DefaultSettings()->UsesManagedAgentCommand(
                 controlSettings.DefaultSettings()->UsesManagedAgentCommand() &&
                 winrt::get_self<Settings::TerminalSettings>(control.Settings())->UsesManagedAgentCommand());
@@ -11649,7 +11658,7 @@ namespace winrt::TerminalApp::implementation
             return;
         }
         const auto& params = evt["params"];
-        for (const auto* key : { "session_id", "cwd", "agent_id", "agent_model", "agent_source", "wsl_distro", "tab_id", "window_id" })
+        for (const auto* key : { "session_id", "cwd", "agent_id", "agent_model", "agent_source", "wsl_distro", "tab_id", "window_id", "profile_id", "resume_target", "title", "request_id" })
         {
             if (params.isMember(key) && !params[key].isString())
             {
@@ -11657,7 +11666,7 @@ namespace winrt::TerminalApp::implementation
                 return;
             }
         }
-        if (params.isMember("tab_id") &&
+        if (params.isMember("tab_id") && !params["tab_id"].asString().empty() &&
             !_FindTabByStableId(winrt::to_hstring(params["tab_id"].asString())))
         {
             return;
@@ -11669,6 +11678,7 @@ namespace winrt::TerminalApp::implementation
         const std::string agentModelStr = params.get("agent_model", "").asString();
         const std::string agentSourceStr = params.get("agent_source", "").asString();
         const std::string agentWslDistroStr = params.get("wsl_distro", "").asString();
+        // A foreign window must not answer this request, even when tab_id is omitted.
         if (windowIdStr != std::to_string(_WindowProperties.WindowId()))
         {
             _agentPaneLog("OnResumeInNewAgentTabRequested: window mismatch");
@@ -11687,6 +11697,132 @@ namespace winrt::TerminalApp::implementation
         if (agentSourceStr == "wsl" && agentWslDistroStr.empty())
         {
             _agentPaneLog("OnResumeInNewAgentTabRequested: WSL source missing distro");
+            return;
+        }
+
+        if (params.get("resume_target", "").asString() == "native" && agentSourceStr == "host")
+        {
+            Json::Value receipt;
+            receipt["request_id"] = params.get("request_id", "");
+            receipt["success"] = false;
+            receipt["error"] = "Could not launch the selected native agent profile.";
+            const auto reply = wil::scope_exit([&]() noexcept {
+                try
+                {
+                    if (!receipt["request_id"].asString().empty())
+                    {
+                        _RaiseProtocolEvent("native_profile_resume_result", receipt);
+                    }
+                }
+                CATCH_LOG()
+            });
+            namespace Profiles = ::Microsoft::Terminal::AgentProfiles;
+            namespace Registry = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
+            namespace Policy = ::Microsoft::Terminal::Settings::Model::AgentPolicy;
+            Policy::Reload();
+            // IsNativeAgentProviderAllowed canonicalizes and validates the incoming ID internally.
+            if (!Registry::IsNativeAgentProviderAllowed(winrt::to_hstring(agentIdStr), *Policy::_GetSnapshot()))
+            {
+                receipt["error"] = "The native agent provider is invalid or blocked by policy.";
+                return;
+            }
+            Profile selected{ nullptr };
+            const auto requested = winrt::to_hstring(params.get("profile_id", "").asString());
+            const auto requestedGuid = requested.empty() ? std::optional<winrt::guid>{} : _TryParsePaneSessionId(winrt::to_string(requested));
+            if (!requested.empty() && !requestedGuid)
+            {
+                receipt["error"] = "The requested native agent profile_id is not a valid GUID.";
+                return;
+            }
+            if (requested.empty())
+            {
+                // A still-known native pane already owns a profile GUID.
+                // Prefer that profile (including copies) without another identity store.
+                for (const auto& [paneId, binding] : _paneAgentSessions)
+                {
+                    if (binding.sessionId != winrt::to_hstring(sessionIdStr) ||
+                        !Registry::AgentIdEquals(binding.agent, winrt::to_hstring(agentIdStr)))
+                    {
+                        continue;
+                    }
+                    for (const auto& tab : _RuntimeTabs())
+                    {
+                        const auto tabImpl = _GetTabImpl(tab);
+                        const auto root = tabImpl ? tabImpl->GetRootPane() : nullptr;
+                        if (const auto pane = root ? root->FindPaneBySessionId(paneId) : nullptr)
+                        {
+                            const auto candidate = pane->GetProfile();
+                            if (candidate && Registry::AgentIdEquals(candidate.AgentProfileId(), winrt::to_hstring(agentIdStr)))
+                            {
+                                selected = _settings.FindProfile(candidate.Guid());
+                                break;
+                            }
+                        }
+                    }
+                    if (selected)
+                    {
+                        break;
+                    }
+                }
+            }
+            std::optional<winrt::guid> generatedGuid;
+            if (!selected && requested.empty())
+            {
+                // Same stable namespace and UTF-16 identity as DynamicProfileUtils/AgentProfileGenerator.
+                constexpr GUID TERMINAL_PROFILE_NAMESPACE_GUID{ 0x2bde4a90, 0xd05f, 0x401c, { 0x94, 0x92, 0xe4, 0x8, 0x84, 0xea, 0xd1, 0xd8 } };
+                const auto providerId = winrt::to_hstring(agentIdStr);
+                const auto identity = std::wstring{ Profiles::Source } + L":" +
+                                      std::wstring{ Registry::CanonicalNativeAgentProviderId(std::wstring_view{ providerId }) };
+                generatedGuid = winrt::guid{ Utils::CreateV5Uuid(TERMINAL_PROFILE_NAMESPACE_GUID, std::as_bytes(std::span{ identity })) };
+            }
+            for (const auto& candidate : _settings.AllProfiles())
+            {
+                if (!selected && Registry::AgentIdEquals(candidate.AgentProfileId(), winrt::to_hstring(agentIdStr)) &&
+                    (requested.empty() ? candidate.Source() == Profiles::Source && candidate.Guid() == *generatedGuid : candidate.Guid() == *requestedGuid))
+                {
+                    selected = candidate;
+                    break;
+                }
+            }
+            if (!selected)
+            {
+                _agentPaneLog("Native profile resume: no corresponding profile");
+                receipt["error"] = "No corresponding native agent profile was found. Check the selected profile and its agentProfile.id.";
+                return;
+            }
+            const auto selectedProvider = selected.AgentProfileId();
+            if (Registry::CanonicalNativeAgentProviderId(std::wstring_view{ selectedProvider }).starts_with(L"custom:") &&
+                selected.Commandline().empty())
+            {
+                receipt["error"] = "Configure the native interactive command for this custom agent profile.";
+                return;
+            }
+            Settings::Model::NewTerminalArgs args;
+            args.Profile(Utils::GuidToString(selected.Guid()));
+            args.NativeAgentSessionId(winrt::to_hstring(sessionIdStr));
+            args.TabTitle(winrt::to_hstring(params.get("title", "").asString()));
+            if (!cwdStr.empty() && Utils::IsValidDirectory(winrt::to_hstring(cwdStr).c_str()))
+            {
+                args.StartingDirectory(winrt::to_hstring(cwdStr));
+            }
+            const auto previousTab = _GetFocusedTabImpl();
+            const auto hr = _OpenNewTab(args, false);
+            if (FAILED(hr))
+            {
+                LOG_HR(hr);
+                receipt["error"] = winrt::to_string(winrt::hresult_error{ hr }.message());
+                return;
+            }
+            if (const auto tab = _GetFocusedTabImpl(); tab && tab != previousTab)
+            {
+                const auto paneId = _FindSessionIdForControl(tab->GetActiveTerminalControl());
+                if (!paneId.empty())
+                {
+                    receipt["success"] = true;
+                    receipt["result"]["session_id"] = paneId;
+                    receipt["result"]["tab_id"] = winrt::to_string(tab->StableId());
+                }
+            }
             return;
         }
 
@@ -18060,7 +18196,9 @@ namespace winrt::TerminalApp::implementation
             controlSettings = Settings::TerminalSettings::CreateWithNewTerminalArgs(_settings, newTerminalArgs);
         }
 
-        const auto restoredAgent = newTerminalArgs ?
+        const auto restoredAgent = !controlSettings.DefaultSettings()->NativeAgentSessionId().empty() ?
+                                       ::Microsoft::Terminal::AgentPaneRestore::ResumeTarget{ std::wstring{ profile.AgentProfileId() }, std::wstring{ controlSettings.DefaultSettings()->NativeAgentSessionId() } } :
+                                   newTerminalArgs ?
                                        ::Microsoft::Terminal::AgentPaneRestore::ParseResumeCommandline(newTerminalArgs.Commandline()) :
                                        ::Microsoft::Terminal::AgentPaneRestore::ResumeTarget{};
         if (newTerminalArgs && newTerminalArgs.NativeAgentProviderId().empty() && !restoredAgent.agent.empty())
@@ -18124,6 +18262,7 @@ namespace winrt::TerminalApp::implementation
         const auto replaysItsOwnHistory =
             newTerminalArgs &&
             (::Microsoft::Terminal::AgentPaneRestore::IsPaneType(newTerminalArgs.Type()) ||
+             !controlSettings.DefaultSettings()->NativeAgentSessionId().empty() ||
              ::Microsoft::Terminal::AgentPaneRestore::IsResumeCommandline(newTerminalArgs.Commandline()));
 
         if (hasSessionId && !replaysItsOwnHistory)
@@ -18162,7 +18301,7 @@ namespace winrt::TerminalApp::implementation
 
         // The master may not be listening yet. Retain the binding for independent
         // master registration and the owning helper's later subscription replay.
-        if (newTerminalArgs && (hasSessionId || !_settings.GlobalSettings().EffectiveAgentSessionManagementEnabled()))
+        if (newTerminalArgs && (hasSessionId || !controlSettings.DefaultSettings()->NativeAgentSessionId().empty() || !_settings.GlobalSettings().EffectiveAgentSessionManagementEnabled()))
         {
             const auto& target = restoredAgent;
             if (!target.agent.empty())
@@ -18173,7 +18312,7 @@ namespace winrt::TerminalApp::implementation
                     _PaneAgentSession{
                         winrt::hstring{ target.sessionId },
                         winrt::hstring{ target.agent },
-                        newTerminalArgs.Commandline(),
+                        controlSettings.DefaultSettings()->Commandline(),
                         winrt::hstring{ target.backend },
                         winrt::hstring{ target.cwd } });
                 _pendingRestoredSessionBindings.insert_or_assign(
@@ -18181,7 +18320,7 @@ namespace winrt::TerminalApp::implementation
                     _PendingRestoredSessionBinding{
                         winrt::hstring{ target.sessionId },
                         winrt::hstring{ target.agent },
-                        target.cwd.empty() ? newTerminalArgs.StartingDirectory() : winrt::hstring{ target.cwd },
+                        target.cwd.empty() ? controlSettings.DefaultSettings()->StartingDirectory() : winrt::hstring{ target.cwd },
                         winrt::hstring{ target.backend } });
             }
         }
@@ -18312,7 +18451,8 @@ namespace winrt::TerminalApp::implementation
         std::string resumeLocation;
         const auto oldPaneId = _FindSessionIdForControl(termControl);
         const auto managedAgentLaunch = winrt::get_self<Settings::TerminalSettings>(termControl.Settings())->UsesManagedAgentCommand();
-        auto freshManagedLaunch = managedAgentLaunch;
+        auto freshManagedLaunch = managedAgentLaunch &&
+                                  winrt::get_self<TerminalPaneContent>(paneContent)->NativeAgentSessionId().empty();
         if (const auto profile = paneContent.GetProfile(); freshManagedLaunch && profile)
         {
             try
@@ -19533,12 +19673,8 @@ namespace winrt::TerminalApp::implementation
             const auto provider = newTerminalArgs.NativeAgentProviderId();
             const auto id = Registry::CanonicalNativeAgentProviderId(std::wstring_view{ provider });
             THROW_HR_IF(E_INVALIDARG, id.empty());
-            // Non-profile native sessions require a provider policy check.
-            if (!Registry::SupportsNativeProfile(std::wstring_view{ profile.AgentProfileId() }))
-            {
-                Policy::Reload();
-                THROW_HR_IF(E_ACCESSDENIED, !Registry::IsNativeAgentProviderAllowed(id, *Policy::_GetSnapshot()));
-            }
+            Policy::Reload();
+            THROW_HR_IF(E_ACCESSDENIED, !Registry::IsNativeAgentProviderAllowed(id, *Policy::_GetSnapshot()));
             newTerminalArgs.NativeAgentProviderId(winrt::hstring{ id });
         }
 
@@ -19557,6 +19693,11 @@ namespace winrt::TerminalApp::implementation
         // whatever the default profile's GUID is.
         newTerminalArgs.Profile(::Microsoft::Console::Utils::GuidToString(profile.Guid()));
         newTerminalArgs.StartingDirectory(_evaluatePathForCwd(defaultSettings->StartingDirectory()));
+        if (!newTerminalArgs.NativeAgentSessionId().empty())
+        {
+            newTerminalArgs.Commandline(winrt::hstring{ ::Microsoft::Terminal::AgentProfiles::ResumeCommand(profile, newTerminalArgs.NativeAgentSessionId(), true) });
+            newTerminalArgs.NativeAgentSessionId(L"");
+        }
         _OpenElevatedWT(newTerminalArgs);
         return true;
     }

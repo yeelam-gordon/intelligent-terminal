@@ -1240,6 +1240,17 @@ impl AgentSessionRegistry {
         self.sessions.get(key)
     }
 
+    /// Master snapshot rows are not otherwise mirrored into the helper registry.
+    /// Retain the selected candidate before applying its local pending transition.
+    pub(crate) fn retain_resume_candidate(&mut self, candidate: &AgentSession) {
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            self.sessions.entry(candidate.key.clone())
+        {
+            entry.insert(candidate.clone());
+            self.dirty = true;
+        }
+    }
+
     /// Update the `origin` field on an existing session entry. No-op if
     /// `key` is not in the registry. Used by the routing layer to stamp
     /// `AgentPane` on live rows once the agent-pane origin index has
