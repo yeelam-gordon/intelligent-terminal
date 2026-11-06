@@ -11790,6 +11790,13 @@ namespace winrt::TerminalApp::implementation
                 receipt["error"] = "No corresponding native agent profile was found. Check the selected profile and its agentProfile.id.";
                 return;
             }
+            const auto selectedProvider = selected.AgentProfileId();
+            if (Registry::CanonicalNativeAgentProviderId(std::wstring_view{ selectedProvider }).starts_with(L"custom:") &&
+                selected.Commandline().empty())
+            {
+                receipt["error"] = "Configure the native interactive command for this custom agent profile.";
+                return;
+            }
             Settings::Model::NewTerminalArgs args;
             args.Profile(Utils::GuidToString(selected.Guid()));
             args.NativeAgentSessionId(winrt::to_hstring(sessionIdStr));

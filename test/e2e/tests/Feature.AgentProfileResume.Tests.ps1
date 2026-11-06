@@ -34,6 +34,7 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
         $receipt.AppSha256 | Should -Be $env:ITE2E_EXPECTED_APP_SHA256
         $receipt.WtaSha256 | Should -Be $env:ITE2E_EXPECTED_WTA_SHA256
         $script:profile = '{' + [guid]::NewGuid().ToString() + '}'
+        $script:unconfiguredProfile = '{' + [guid]::NewGuid().ToString() + '}'
         $shellProfile = '{' + [guid]::NewGuid().ToString() + '}'
         $script:fixture = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-NativeProfileResume.cmd')).Path
         $script:proofRoot = Join-Path $env:ITE2E_ARTIFACT_ROOT ('native-profile-' + [guid]::NewGuid().ToString('N'))
@@ -65,6 +66,10 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
                 'agentProfile.arguments' = '--startup-option'
                 'agentProfile.resumeArguments' = '--load-conversation'
                 startingDirectory = $script:proofRoot; suppressApplicationTitle = $true
+                closeOnExit = 'never'
+            }, @{
+                guid = $script:unconfiguredProfile; name = 'Profile resume unconfigured custom fixture'
+                'agentProfile.id' = 'custom:profile-resume-fixture'; commandline = ''
                 closeOnExit = 'never'
             }, @{
                 guid = $shellProfile; name = 'Profile resume shell'
@@ -305,6 +310,21 @@ public static class NativeProfileResumeMasterGate {
                 $invalidResult.params.error | Should -BeExactly $invalid.error
                 @(Get-WtPanes -App $script:app).Count | Should -Be $count
             }
+
+            $unconfiguredRequestId = [guid]::NewGuid().ToString()
+            $event = @{ type = 'event'; method = 'resume_in_new_agent_tab'; params = @{
+                window_id = "$($script:app.WindowId)"; agent_id = 'custom:profile-resume-fixture'
+                agent_source = 'host'; resume_target = 'native'; profile_id = $script:unconfiguredProfile
+                session_id = 'unconfigured-' + [guid]::NewGuid().ToString('N'); request_id = $unconfiguredRequestId
+            } } | ConvertTo-Json -Compress -Depth 6
+            Invoke-WtCli -App $script:app -Arguments @('publish', '--existing-only', $event) | Out-Null
+            $unconfiguredResult = Wait-WtEvent -Listener $script:listener -TimeoutSec 20 -Predicate {
+                $_.method -eq 'native_profile_resume_result' -and $_.params.request_id -eq $unconfiguredRequestId
+            }
+            $unconfiguredResult.params.request_id | Should -BeExactly $unconfiguredRequestId
+            $unconfiguredResult.params.success | Should -BeFalse
+            $unconfiguredResult.params.error | Should -BeExactly 'Configure the native interactive command for this custom agent profile.'
+            @(Get-WtPanes -App $script:app).Count | Should -Be $count
 
             # Controlled legacy-hook transport, never an installed hook mutation.
             # Repeat the same update to protect owner binding/deduplication.
