@@ -62,6 +62,25 @@ unique protocol CLSID validation. Ordinary Dev descriptor defaults and automatic
 cleanup permission remain unchanged: private packages must already be inactive,
 and unknown processes are refused, never adopted or automatically closed.
 
+**Package identity does not isolate global integration files.** Before the first
+launch, add temporary private-build guards that refuse both WTA agent-hook
+mutation and native C++ shell-integration reconciliation. Reuse the production
+installation; do not install, update, or uninstall either integration.
+The native entrypoints are `ShellIntegrationSweep::RunInstall`,
+`ShellIntegrationSweep::RunUninstall`, and `QueueNewTabWslInstallWork` in
+`src\cascadia\TerminalApp\ShellIntegrationSweep.h`.
+
+In particular, setting `autoErrorDetectionEnabled` to `false` is not an isolation
+mechanism: native first-load/settings reconciliation can call
+`PowerShellShellIntegration::RunUninstall` and remove managed blocks from the
+shared Windows PowerShell and PowerShell profiles. The sweep can also target
+profile-selected Git Bash and WSL integrations. Guard install, uninstall, and
+lazy WSL paths without disabling local detection or status processing.
+Record the guards with the identity overrides. Verify hashes and last-write
+times of the shared profiles and scripts before and after cold starts, setting
+changes, reloads, and tests; stop on a change and preserve recovery evidence.
+These guards, like the identity substitutions, must not enter ordinary builds.
+
 ## 3. Build and install
 
 Build Debug with Dev branding from this worktree using the
@@ -133,7 +152,8 @@ selected pane. Give evidence a fresh run ID; do not accept stale result files.
 
 Restore your local substitutions before committing. Refresh the last-write
 timestamps of **all restored build inputs**: `Package-Dev.appxmanifest`,
-`WindowEmperor.cpp`, and `TerminalProtocolComServer.h`. Copying old backups can
+`WindowEmperor.cpp`, `TerminalProtocolComServer.h`, and the guarded native
+integration source files. Copying old backups can
 otherwise leave the sandbox manifest or compiled window name/CLSID cached.
 Run the normal full incremental build with project dependencies enabled, then
 verify the generated ordinary Dev identity and the host's injected Dev CLSID.

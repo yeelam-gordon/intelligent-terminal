@@ -48,7 +48,7 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
         } -Settings @{
             language = 'en-US'; tabLayout = 'vertical'; startupActions = ''; defaultProfile = $shellProfile
             firstWindowPreference = 'defaultProfile'; windowingBehavior = 'useNew'
-            autoErrorDetectionEnabled = $false; agentSessionManagementEnabled = $false
+            autoFixEnabled = $false; agentSessionManagementEnabled = $false
             acpAgent = 'custom:pwsh'; acpCustomCommand = $mockCommand
             delegateAgent = 'custom:pwsh'; delegateCustomCommand = $mockCommand
             'warning.confirmOnClose' = 'never'
