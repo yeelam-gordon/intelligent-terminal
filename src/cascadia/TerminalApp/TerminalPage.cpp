@@ -11765,10 +11765,20 @@ namespace winrt::TerminalApp::implementation
                     }
                 }
             }
+            std::optional<winrt::guid> generatedGuid;
+            if (!selected && requested.empty())
+            {
+                // Same stable namespace and UTF-16 identity as DynamicProfileUtils/AgentProfileGenerator.
+                constexpr GUID TERMINAL_PROFILE_NAMESPACE_GUID{ 0x2bde4a90, 0xd05f, 0x401c, { 0x94, 0x92, 0xe4, 0x8, 0x84, 0xea, 0xd1, 0xd8 } };
+                const auto providerId = winrt::to_hstring(agentIdStr);
+                const auto identity = std::wstring{ Profiles::Source } + L":" +
+                                      std::wstring{ Registry::CanonicalNativeAgentProviderId(std::wstring_view{ providerId }) };
+                generatedGuid = winrt::guid{ Utils::CreateV5Uuid(TERMINAL_PROFILE_NAMESPACE_GUID, std::as_bytes(std::span{ identity })) };
+            }
             for (const auto& candidate : _settings.AllProfiles())
             {
                 if (!selected && Registry::AgentIdEquals(candidate.AgentProfileId(), winrt::to_hstring(agentIdStr)) &&
-                    (requested.empty() ? candidate.Source() == Profiles::Source : candidate.Guid() == *requestedGuid))
+                    (requested.empty() ? candidate.Source() == Profiles::Source && candidate.Guid() == *generatedGuid : candidate.Guid() == *requestedGuid))
                 {
                     selected = candidate;
                     break;

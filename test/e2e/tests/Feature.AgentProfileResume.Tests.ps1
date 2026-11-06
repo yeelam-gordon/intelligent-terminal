@@ -411,6 +411,114 @@ public static class NativeProfileResumeMasterGate {
         $replay = Invoke-Wta -App $script:app -Arguments $arguments
         $replay | ConvertTo-Json -Depth 8 -Compress | Should -Be ($receipt | ConvertTo-Json -Depth 8 -Compress)
         (Get-ActivePane -App $script:app).session_id | Should -Be $pane.session_id
+
+        # The original GUID came from custom-agent generation, not a manual orphan.
+        # A retained-source JSON copy is deliberately first in AllProfiles.
+        $retainedCopy = @{
+            guid = '{' + [guid]::NewGuid().ToString() + '}'
+            source = 'IntelligentTerminal.AgentProfiles'; name = 'fixture-adapter retained-source copy'
+            'agentProfile.id' = $provider; commandline = "`"$script:fixture`""
+            'agentProfile.model' = 'retained-copy-model'; 'agentProfile.arguments' = '--retained-copy-startup'
+            'agentProfile.resumeArguments' = '--load-retained-copy'
+            startingDirectory = $script:proofRoot; closeOnExit = 'never'
+        }
+        $plainCopy = @{
+            guid = '{' + [guid]::NewGuid().ToString() + '}'; name = 'fixture-adapter plain copy'
+            'agentProfile.id' = $provider; commandline = "`"$script:fixture`""
+            'agentProfile.model' = 'plain-copy-model'; 'agentProfile.arguments' = '--plain-copy-startup'
+            'agentProfile.resumeArguments' = '--load-plain-copy'
+            startingDirectory = $script:proofRoot; closeOnExit = 'never'
+        }
+        $savedProfiles = $settings.profiles
+        $savedCommands = @($settings.acpCustomCommands)
+        $fixtureProfiles = $savedProfiles | ConvertTo-Json -Depth 64 | ConvertFrom-Json
+        $fixtureProfiles.list = @($retainedCopy, $plainCopy, $profile) + $others
+        function Invoke-SelectionFixture([hashtable]$Expected, [bool]$ExplicitGuid) {
+            # A fresh conversation has no known-pane binding. Do not let a
+            # profile lookup fill profile_id on the no-GUID request.
+            $conversation = 'selection-' + [guid]::NewGuid().ToString('N')
+            $selectionRequest = [guid]::NewGuid().ToString()
+            $parameters = @{
+                window_id = "$($script:app.WindowId)"; agent_id = $provider; agent_source = 'host'
+                resume_target = 'native'; session_id = $conversation; request_id = $selectionRequest
+            }
+            if ($ExplicitGuid) { $parameters.profile_id = $Expected.guid }
+            else { $parameters.ContainsKey('profile_id') | Should -BeFalse }
+            $event = @{ type = 'event'; method = 'resume_in_new_agent_tab'; params = $parameters } |
+                ConvertTo-Json -Compress -Depth 6
+            Invoke-WtCli -App $script:app -Arguments @('publish', '--existing-only', $event) | Out-Null
+            $result = Wait-WtEvent -Listener $script:listener -TimeoutSec 20 -Predicate {
+                $_.method -eq 'native_profile_resume_result' -and $_.params.request_id -eq $selectionRequest
+            }
+            $result.params.request_id | Should -BeExactly $selectionRequest
+            if (-not $Expected) {
+                $result.params.success | Should -BeFalse
+                $result.params.error | Should -BeExactly 'No corresponding native agent profile was found. Check the selected profile and its agentProfile.id.'
+                return
+            }
+            $result.params.success | Should -BeTrue
+            $selectedPane = $result.params.result.session_id
+            Assert-NativeFixtureTarget $selectedPane
+            $context = (Invoke-WtCli -App $script:app -Arguments @('get-pane-context', '--target', $selectedPane)).pane
+            $context.profile | Should -BeExactly $Expected.name
+            $context.native_agent_provider_id | Should -BeExactly $provider
+            # The CLI exposes the pane's profile name; resolve that unique name
+            # back to its GUID, never feed the resolved GUID into the request.
+            $configured = @(Get-WtSettingsObject -App $script:app |
+                ForEach-Object { $_.profiles.list } | Where-Object name -EQ $context.profile)
+            $configured.Count | Should -Be 1
+            ([string]$configured[0].guid).Trim('{}') | Should -Be ([string]$Expected.guid).Trim('{}')
+            $capture = Wait-Until -TimeoutSec 20 -Because 'selection uses this profile command and its independent argv' -Condition {
+                $text = Get-WtCapture -App $script:app -SessionId $selectedPane
+                if ($text -match [regex]::Escape($conversation)) { $text }
+            }
+            $argv = '--model.*' + [regex]::Escape($Expected['agentProfile.model']) + '.*' +
+                [regex]::Escape($Expected['agentProfile.arguments']) + '.*' +
+                [regex]::Escape($Expected['agentProfile.resumeArguments']) + '.*' + [regex]::Escape($conversation)
+            $capture | Should -Match $argv
+            [IO.File]::WriteAllText((Join-Path $script:proofRoot "$selectionRequest-selection.json"),
+                (@{ request = $parameters; receipt = $result.params; pane = $context
+                    profileGuid = $configured[0].guid; capture = $capture } | ConvertTo-Json -Depth 12))
+            Close-WtPane -App $script:app -SessionId $selectedPane
+        }
+        try {
+            Set-WtSetting -App $script:app -Key profiles -Value $fixtureProfiles | Out-Null
+            Wait-Until -TimeoutSec 15 -Because 'original and plain copy are active after the retained-source orphan is ordered first' -Condition {
+                $rows = @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles |
+                    Where-Object agent_id -EQ $provider)
+                $rows.Count -eq 2 -and @($rows | Where-Object name -EQ $profile.name).Count -eq 1 -and
+                    @($rows | Where-Object name -EQ $plainCopy.name).Count -eq 1
+            } | Out-Null
+            Invoke-SelectionFixture $profile $false
+            Invoke-SelectionFixture $retainedCopy $true
+            Invoke-SelectionFixture $plainCopy $true
+
+            # Remove both the generator input and original override. Copies keep
+            # explicit commands, so an accidental fallback would launch them.
+            Set-WtSetting -App $script:app -Key acpCustomCommands -Value @(
+                $savedCommands | Where-Object { $_ -ne 'fixture-adapter.exe --acp --stdio' }
+            ) | Out-Null
+            $fixtureProfiles.list = @($retainedCopy, $plainCopy) + $others
+            Set-WtSetting -App $script:app -Key profiles -Value $fixtureProfiles | Out-Null
+            Wait-Until -TimeoutSec 15 -Because 'the generated original is unavailable while the plain copy remains active' -Condition {
+                $rows = @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles |
+                    Where-Object agent_id -EQ $provider)
+                $rows.Count -eq 1 -and $rows[0].name -eq $plainCopy.name
+            } | Out-Null
+            $before = (Get-ActivePane -App $script:app).session_id
+            Invoke-SelectionFixture $null $false
+            (Get-ActivePane -App $script:app).session_id | Should -Be $before
+            Invoke-SelectionFixture $retainedCopy $true
+            Invoke-SelectionFixture $plainCopy $true
+        }
+        finally {
+            Set-WtSetting -App $script:app -Key acpCustomCommands -Value $savedCommands | Out-Null
+            Set-WtSetting -App $script:app -Key profiles -Value $savedProfiles | Out-Null
+            Wait-Until -TimeoutSec 15 -Because 'the original fixture is restored for the settings UI case' -Condition {
+                @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles |
+                    Where-Object { $_.id -eq $guid -and $_.name -eq $profile.name }).Count -eq 1
+            } | Out-Null
+        }
     }
 
     It 'Agent profile settings expose an indicator and automatic session ID guidance' {
