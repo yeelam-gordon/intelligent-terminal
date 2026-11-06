@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1180" viewBox="0 0 1440 1180" role="img" aria-labelledby="title description">
   <title id="title">Agent profiles: proposed resume settings</title>
-  <desc id="description">Annotated design, not a product screenshot. The Claude profile adds resume arguments and a composed preview. Managed originals cannot be deleted. A custom agent gets a linked profile with a separate interactive command. Agent Pane uses ACP session loading instead of native resume flags.</desc>
+  <desc id="description">Annotated design, not a product screenshot. The Claude profile adds resume arguments without a command preview or placeholder input. Terminal appends the session ID automatically after the launch command, startup arguments, and resume arguments, only when resuming. Managed originals cannot be deleted. Custom agents get linked profiles. Agent Pane uses ACP session loading.</desc>
   <defs>
     <style>
       text { font-family: 'Segoe UI', sans-serif; fill: #eeeeee; font-size: 16px; }
@@ -52,12 +52,11 @@
   <text x="272" y="442" class="label">Resume arguments</text>
   <text x="780" y="442" class="small accent">Reset to default</text>
   <rect x="272" y="454" width="672" height="37" rx="4" class="field"/>
-  <text x="285" y="479" class="code">--resume {sessionId}</text>
-  <text x="272" y="515" class="small">Inherited from Claude. Leave empty to disable native session resume.</text>
-  <text x="272" y="552" class="label">Resume command preview</text>
-  <rect x="272" y="565" width="672" height="64" rx="4" fill="#1c1c1c"/>
-  <text x="285" y="590" class="code">C:\Tools\claude.exe --add-dir "C:\shared project"</text>
-  <text x="285" y="615" class="code">  --resume example-session-id</text>
+  <text x="285" y="479" class="code">--resume</text>
+  <text x="272" y="515" class="small">Only used when resuming. Terminal adds the session ID automatically</text>
+  <text x="272" y="537" class="small">after these arguments. Leave empty to disable native session resume.</text>
+  <text x="272" y="580" class="small">Your launch command and additional startup arguments are kept.</text>
+  <text x="272" y="603" class="small">Resume arguments and the session ID are added only when you resume.</text>
   <text x="272" y="652" class="small">Starting directory / appearance / hide / copy: unchanged</text>
   <rect x="272" y="675" width="672" height="48" rx="4" class="note"/>
   <text x="286" y="695" class="small">This profile is managed by AI Agents.</text>
@@ -72,14 +71,14 @@
   <circle cx="953" cy="472" r="13" fill="#78ccff"/><text x="953" y="478" class="number">2</text>
   <text x="1016" y="253" class="label accent">Editable resume arguments</text>
   <text x="1016" y="279" class="small">Built-in default + reset.</text>
-  <text x="1016" y="302" class="small">One session-ID placeholder.</text>
-  <text x="1016" y="325" class="small">No saved conversation ID here.</text>
+  <text x="1016" y="302" class="small">Type --resume, not a placeholder.</text>
+  <text x="1016" y="325" class="small">The session ID is automatic.</text>
   <path d="M 948 594 H 1002 V 410" class="line"/>
   <circle cx="953" cy="594" r="13" fill="#78ccff"/><text x="953" y="600" class="number">3</text>
-  <text x="1016" y="400" class="label accent">Preview the actual launcher</text>
-  <text x="1016" y="426" class="small">Same executable, model, options,</text>
-  <text x="1016" y="449" class="small">and quoting as real resume.</text>
-  <text x="1016" y="472" class="small">Invalid template: inline error.</text>
+  <text x="1016" y="400" class="label accent">Keep normal launch intact</text>
+  <text x="1016" y="426" class="small">Launch + startup arguments,</text>
+  <text x="1016" y="449" class="small">then resume arguments + ID.</text>
+  <text x="1016" y="472" class="small">No resume suffix on a new session.</text>
   <path d="M 948 699 H 1002 V 568" class="line"/>
   <circle cx="953" cy="699" r="13" fill="#78ccff"/><text x="953" y="705" class="number">4</text>
   <text x="1016" y="556" class="label accent">No Delete for managed originals</text>
@@ -113,5 +112,5 @@
 
   <rect x="28" y="1092" width="1384" height="61" rx="8" class="note"/>
   <text x="48" y="1118" class="label">Sessions / Resume</text>
-  <text x="48" y="1141" class="small">Recorded profile GUID + provider/source match -> profile launch. Old history -> matching generated profile. Live session -> focus existing pane.</text>
+  <text x="48" y="1141" class="small">Profile settings own native resume syntax. No provider flag fallback. Recorded profile + source -> resume. Live session -> focus existing pane.</text>
 </svg>
