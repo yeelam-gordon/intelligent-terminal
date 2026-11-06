@@ -807,9 +807,15 @@ namespace winrt::TerminalApp::implementation
                 continue;
             }
 
-            const auto profile = _settings.GetProfileForArgs(terminalArgs);
-            const auto profileResume = profile && !profile.AgentProfileId().empty() &&
-                                       ::Microsoft::Terminal::Settings::Model::AgentRegistry::AgentIdEquals(profile.AgentProfileId(), binding->second.agent) &&
+            // These args were emitted by the running pane with its profile GUID.
+            // Inspect without launch-time validation: a deleted profile is still
+            // saveable, but must fail explicitly if the saved action is restored.
+            const auto profile = terminalArgs.Profile().empty() ? Profile{ nullptr } :
+                                                                  _settings.FindProfile(Utils::GuidFromString(terminalArgs.Profile().c_str()));
+            const auto provider = profile ? profile.AgentProfileId() :
+                                            (terminalArgs.Commandline().empty() ? terminalArgs.NativeAgentProviderId() : winrt::hstring{});
+            const auto profileResume = !provider.empty() &&
+                                       ::Microsoft::Terminal::Settings::Model::AgentRegistry::AgentIdEquals(provider, binding->second.agent) &&
                                        (binding->second.backend.empty() || std::wstring_view{ binding->second.backend }.starts_with(L"host:"));
             if (profileResume)
             {

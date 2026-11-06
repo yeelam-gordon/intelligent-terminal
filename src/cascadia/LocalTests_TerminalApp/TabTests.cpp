@@ -518,6 +518,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(ManagedProfileLaunchMetadataDoesNotWaitForHooks);
         TEST_METHOD(ManagedProfileLaunchMetadataSurvivesTrackingModeChanges);
         TEST_METHOD(ManagedProfileLaunchMetadataReceiptSurvivesWindowTransfer);
+        TEST_METHOD(DeletedManagedProfileCopyRetainsSavedResumeIdentity);
         TEST_METHOD(ManagedProfileRestartRetiresOldPaneAfterFailure);
         TEST_METHOD(ManagedProfileFreshRestartDoesNotReuseIdentity);
         TEST_METHOD(VerticalTabStripBindsBackground);
@@ -8367,6 +8368,81 @@ namespace TerminalAppLocalTests
                 }
             });
         }
+    }
+
+    void TabTests::DeletedManagedProfileCopyRetainsSavedResumeIdentity()
+    {
+        using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
+        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        const auto cleanup = wil::scope_exit([&]() { RunOnUIThread([&]() { page = nullptr; }); });
+        TestOnUIThread([&]() {
+            const auto original = page->_settings.ActiveProfiles().GetAt(0);
+            original.AgentProfileId(L"copilot");
+            original.AgentProfileResumeArguments(L"--resume");
+            const auto copy = page->_settings.DuplicateProfile(original);
+            const auto profileId = copy.Guid();
+            page->_terminalSettingsCache->Reset(page->_settings);
+            const winrt::guid paneId{ Utils::CreateGuid() };
+            const auto connection = winrt::make_self<TestConnection>(paneId, State::Connected);
+            NewTerminalArgs launch;
+            launch.Profile(Utils::GuidToString(profileId));
+            const auto pane = page->_MakePane(launch, nullptr, *connection);
+            const auto tab = page->_GetTabImpl(page->_CreateNewTabFromPane(pane));
+            VERIFY_IS_NOT_NULL(tab);
+            tab->SuppressAgentPrewarm();
+            const auto content = winrt::get_self<winrt::TerminalApp::implementation::TerminalPaneContent>(
+                pane->GetContent().as<winrt::TerminalApp::TerminalPaneContent>());
+            VERIFY_IS_TRUE(winrt::get_self<winrt::Microsoft::Terminal::Settings::TerminalSettings>(
+                               pane->GetTerminalControl().Settings())
+                               ->UsesManagedAgentCommand());
+
+            Json::Value binding;
+            binding["type"] = "event";
+            binding["method"] = "pane_agent_session_changed";
+            binding["params"]["pane_id"] = _formatPaneId(paneId);
+            binding["params"]["agent"] = "copilot";
+            binding["params"]["agent_session_id"] = "deleted-copy-session";
+            page->OnPaneAgentSessionChanged(winrt::to_hstring(Json::writeString(Json::StreamWriterBuilder{}, binding)));
+            VERIFY_IS_TRUE(page->_paneAgentSessions.contains(paneId));
+
+            // Model a settings reload after deleting only the user-created copy.
+            const auto reloaded = page->_settings.Copy();
+            const auto removed = reloaded.FindProfile(profileId);
+            for (const auto& profiles : { reloaded.AllProfiles(), reloaded.ActiveProfiles() })
+            {
+                uint32_t index{};
+                if (profiles.IndexOf(removed, index))
+                {
+                    profiles.RemoveAt(index);
+                }
+            }
+            VERIFY_IS_NULL(reloaded.FindProfile(profileId));
+            page->_settings = reloaded;
+            page->_terminalSettingsCache->Reset(reloaded);
+            content->UpdateSettings(reloaded);
+            VERIFY_ARE_EQUAL(profileId, content->GetProfile().Guid());
+
+            auto actions = page->_BuildPersistedTabActions(tab.get(), false);
+            VERIFY_IS_FALSE(actions.empty());
+            WindowLayout layout{};
+            layout.TabLayout(winrt::single_threaded_vector<ActionAndArgs>(std::move(actions)));
+            const auto saved = WindowLayout::FromJson(WindowLayout::ToJson(layout)).TabLayout();
+            const auto args = _getTerminalArgs(saved.GetAt(0));
+            VERIFY_ARE_EQUAL(Utils::GuidToString(profileId), args.Profile());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, args.NativeAgentProviderId());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"deleted-copy-session" }, args.NativeAgentSessionId());
+            VERIFY_IS_TRUE(args.Commandline().empty());
+            HRESULT restoreError = S_OK;
+            try
+            {
+                reloaded.GetProfileForArgs(args);
+            }
+            catch (const winrt::hresult_error& error)
+            {
+                restoreError = error.code();
+            }
+            VERIFY_ARE_EQUAL(HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), restoreError);
+        });
     }
 
     void TabTests::ManagedProfileLaunchMetadataDoesNotWaitForHooks()

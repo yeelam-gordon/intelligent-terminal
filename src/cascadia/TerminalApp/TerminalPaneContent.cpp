@@ -341,7 +341,16 @@ namespace winrt::TerminalApp::implementation
     {
         // Reload our profile from the settings model to propagate bell mode, icon, and close on exit mode (anything that uses _profile).
         const auto profile{ settings.FindProfile(_profile.Guid()) };
-        _profile = profile ? profile : settings.ProfileDefaults();
+        if (profile)
+        {
+            _profile = profile;
+        }
+        else if (!_usesManagedAgentCommand)
+        {
+            _profile = settings.ProfileDefaults();
+        }
+        // A running managed launch retains its original profile identity if the
+        // user deletes that profile. Saving must not relabel it as Defaults.
 
         if (const auto settings{ _cache->TryLookup(_profile) })
         {
