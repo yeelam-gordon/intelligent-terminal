@@ -265,6 +265,7 @@ public static class NativeProfileResumeMasterGate {
                 $_.method -eq 'native_profile_resume_result' -and $_.params.request_id -eq $rejectedId
             }
             $rejected.params.success | Should -BeFalse
+            $rejected.params.error | Should -BeExactly 'No corresponding native agent profile was found. Check the selected profile and its agentProfile.id.'
             @(Get-WtPanes -App $script:app).Count | Should -Be $count
 
             $missingProfileRequestId = [guid]::NewGuid().ToString()
@@ -283,6 +284,27 @@ public static class NativeProfileResumeMasterGate {
             $missingProfileResult.params.success | Should -BeFalse
             $missingProfileResult.params.error | Should -BeExactly 'No corresponding native agent profile was found. Check the selected profile and its agentProfile.id.'
             @(Get-WtPanes -App $script:app).Count | Should -Be $count
+
+            foreach ($invalid in @(
+                @{ agent = 'custom: invalid'; profile = $script:profile; error = 'The native agent provider is invalid or blocked by policy.' }
+                @{ agent = 'custom:profile-resume-fixture'; profile = 'not-a-guid'; error = 'The requested native agent profile_id is not a valid GUID.' }
+            )) {
+                $invalidRequestId = [guid]::NewGuid().ToString()
+                $invalidRequest = @{
+                    window_id = "$($script:app.WindowId)"; agent_id = $invalid.agent
+                    agent_source = 'host'; resume_target = 'native'; profile_id = $invalid.profile
+                    session_id = $knownId; request_id = $invalidRequestId
+                } | ConvertTo-Json -Compress
+                $event = @{ type = 'event'; method = 'resume_in_new_agent_tab'; params = ($invalidRequest | ConvertFrom-Json) } | ConvertTo-Json -Compress
+                Invoke-WtCli -App $script:app -Arguments @('publish', '--existing-only', $event) | Out-Null
+                $invalidResult = Wait-WtEvent -Listener $script:listener -TimeoutSec 20 -Predicate {
+                    $_.method -eq 'native_profile_resume_result' -and $_.params.request_id -eq $invalidRequestId
+                }
+                $invalidResult.params.request_id | Should -BeExactly $invalidRequestId
+                $invalidResult.params.success | Should -BeFalse
+                $invalidResult.params.error | Should -BeExactly $invalid.error
+                @(Get-WtPanes -App $script:app).Count | Should -Be $count
+            }
 
             # Controlled legacy-hook transport, never an installed hook mutation.
             # Repeat the same update to protect owner binding/deduplication.

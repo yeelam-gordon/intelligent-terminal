@@ -11666,6 +11666,7 @@ namespace winrt::TerminalApp::implementation
                 return;
             }
         }
+        // Ignore unowned tab/window requests before creating receipts to avoid competing correlated failures.
         if (params.isMember("tab_id") && !params["tab_id"].asString().empty() &&
             !_FindTabByStableId(winrt::to_hstring(params["tab_id"].asString())))
         {
@@ -11722,6 +11723,7 @@ namespace winrt::TerminalApp::implementation
             // IsNativeAgentProviderAllowed canonicalizes and validates the incoming ID internally.
             if (!Registry::IsNativeAgentProviderAllowed(winrt::to_hstring(agentIdStr), *Policy::_GetSnapshot()))
             {
+                receipt["error"] = "The native agent provider is invalid or blocked by policy.";
                 return;
             }
             Profile selected{ nullptr };
@@ -11729,6 +11731,7 @@ namespace winrt::TerminalApp::implementation
             const auto requestedGuid = requested.empty() ? std::optional<winrt::guid>{} : _TryParsePaneSessionId(winrt::to_string(requested));
             if (!requested.empty() && !requestedGuid)
             {
+                receipt["error"] = "The requested native agent profile_id is not a valid GUID.";
                 return;
             }
             if (requested.empty())
