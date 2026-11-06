@@ -42,8 +42,11 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
         $mock = (Resolve-Path (Join-Path $PSScriptRoot '..\fixtures\Mock-AcpInteractionAgent.ps1')).Path
         $mockCode = "& '$($mock.Replace("'", "''"))' -LogPath '$($script:proofRoot.Replace("'", "''"))\acp.log'"
         $mockCommand = "`"$pwsh`" -NoProfile -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($mockCode))
-        $script:app = Start-Terminal -Package $script:package -PassFre $true -State @{ sidebarIntroductionShown = $true } -Settings @{
-            language = 'en-US'; startupActions = ''; defaultProfile = $shellProfile
+        $script:app = Start-Terminal -Package $script:package -PassFre $true -State @{
+            sidebarIntroductionShown = $true; sidebarRolloutVersion = 1; sidebarRolloutAssignment = 'Sidebar'
+            sidebarLayoutMigrationCompleted = $true
+        } -Settings @{
+            language = 'en-US'; tabLayout = 'vertical'; startupActions = ''; defaultProfile = $shellProfile
             firstWindowPreference = 'defaultProfile'; windowingBehavior = 'useNew'
             autoErrorDetectionEnabled = $false; agentSessionManagementEnabled = $false
             acpAgent = 'custom:pwsh'; acpCustomCommand = $mockCommand
@@ -61,7 +64,7 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
                 'agentProfile.model' = 'chosen-model'
                 'agentProfile.arguments' = '--startup-option'
                 'agentProfile.resumeArguments' = '--load-conversation'
-                startingDirectory = $env:SystemRoot
+                startingDirectory = $script:proofRoot; suppressApplicationTitle = $true
                 closeOnExit = 'never'
             }, @{
                 guid = $shellProfile; name = 'Profile resume shell'
@@ -111,6 +114,77 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
             [IO.File]::WriteAllText((Join-Path $script:proofRoot 'master-snapshot.json'), ($snapshot | ConvertTo-Json -Depth 20))
             $snapshot.sessions
         }
+        function Get-NativeMetadataRow([string]$Title) {
+            Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+            $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+            $root.Current.ProcessId | Should -Be $script:app.Pid
+            $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty, 'ItemsList'))
+            if (-not $list) { return }
+            $rows = @($list.FindAll([Windows.Automation.TreeScope]::Children,
+                [Windows.Automation.Condition]::TrueCondition) | Where-Object {
+                -not $_.Current.IsOffscreen -and $_.Current.Name.Contains($Title)
+            })
+            if ($rows.Count -eq 1) { $rows[0].Current.Name }
+        }
+        function Invoke-NativeLaunchBeforeMasterSnapshot([string]$Title, [scriptblock]$Launch) {
+            # Pause only this test-owned master, not the host/COM event receiver.
+            # A newly allocated pane cannot have a master snapshot while it is
+            # paused. The fixture emits no hooks. Always resume in finally.
+            if (-not ('NativeProfileResumeMasterGate' -as [type])) {
+                Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class NativeProfileResumeMasterGate {
+    [DllImport("ntdll.dll")] public static extern int NtSuspendProcess(IntPtr process);
+    [DllImport("ntdll.dll")] public static extern int NtResumeProcess(IntPtr process);
+}
+'@
+            }
+            $pipe = Get-WtaMasterPipe -App $script:app
+            $masters = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($script:app.Pid) AND Name='wta.exe'" |
+                Where-Object { $_.ExecutablePath -ieq $script:app.WtaPath -and
+                    $_.CommandLine -match '^\s*(?:"[^"]+"|\S+)\s+--master\s+' -and $_.CommandLine.Contains($pipe) })
+            $masters.Count | Should -Be 1
+            $master = Get-Process -Id $masters[0].ProcessId -ErrorAction Stop
+            $master.Path | Should -Be $script:app.WtaPath
+            $paused = $false
+            try {
+                $status = [NativeProfileResumeMasterGate]::NtSuspendProcess($master.Handle)
+                if ($status -ne 0) { throw "Cannot pause owned master: NTSTATUS=$status" }
+                $paused = $true
+                $clock = [Diagnostics.Stopwatch]::StartNew()
+                $created = & $Launch
+                [IO.File]::WriteAllText((Join-Path $script:proofRoot "$Title-creation.json"),
+                    ($created | ConvertTo-Json -Depth 8))
+                # list-panes is active-tab scoped; use the creation receipt's
+                # exact target rather than racing focus while master is paused.
+                $pane = @((Invoke-WtCli -App $script:app -Arguments @(
+                    'get-pane-context', '--target', $created.session_id)).pane)
+                $pane.Count | Should -Be 1
+                ([string]$pane[0].session_id).Trim('{}') | Should -Be ([string]$created.session_id).Trim('{}')
+                $pane[0].native_agent_provider_id | Should -Be 'custom:profile-resume-fixture'
+                $pane[0].cwd | Should -Be $script:proofRoot
+                "$($pane[0].window_id)" | Should -Be "$($script:app.WindowId)"
+                $row = Wait-Until -TimeoutSec 5 -Because 'creation metadata is visible before any hook or new-pane master snapshot' -Condition {
+                    $name = Get-NativeMetadataRow $Title
+                    if ($name -match '\bIdle\b' -and $name.Contains($script:proofRoot)) { $name }
+                }
+                $clock.Elapsed.TotalSeconds | Should -BeLessThan 5
+                [IO.File]::WriteAllText((Join-Path $script:proofRoot "$Title-initial-metadata.json"), (@{
+                    pane = $pane[0]; row = $row; elapsedMs = $clock.ElapsedMilliseconds
+                    masterPid = $master.Id; masterPaused = $true; hookEmitted = $false
+                } | ConvertTo-Json -Depth 8))
+                $created
+            }
+            finally {
+                if ($paused) {
+                    $status = [NativeProfileResumeMasterGate]::NtResumeProcess($master.Handle)
+                    if ($status -ne 0) { throw "Cannot resume owned master: NTSTATUS=$status" }
+                }
+                $master.Dispose()
+            }
+        }
     }
 
     AfterAll {
@@ -118,15 +192,27 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
             [IO.File]::WriteAllText((Join-Path $script:proofRoot 'events.json'), (@(Get-WtEvents -Listener $script:listener) | ConvertTo-Json -Depth 20))
         }
         if ($script:listener) { Stop-WtEventListener -Listener $script:listener }
-        if ($script:app) { Stop-Terminal -App $script:app }
+        if ($script:app) {
+            Stop-Terminal -App $script:app -RestoreSettings $false
+            Wait-Until -TimeoutSec 10 -Because 'owned package clients finish teardown before restoring private configuration' -Condition {
+                @(Get-WtProcessesForApp -App $script:app -IncludePackageExecutables).Count -eq 0
+            } | Out-Null
+            if ($script:app.ConfigBackupOwned) { Restore-WtConfig -App $script:app }
+        }
     }
 
     It 'Native profile resume uses effective launch and resume arguments only when requested' {
         foreach ($tracking in @($false, $true)) {
             Set-WtSetting -App $script:app -Key agentSessionManagementEnabled -Value $tracking | Out-Null
-            $ordinary = Invoke-WtCli -App $script:app -Arguments @(
-                'new-tab', '-p', $script:profile, '--window-id', "$($script:app.WindowId)"
-            )
+            Wait-Until -TimeoutSec 10 -Because 'the host has reloaded the requested Sessions mode' -Condition {
+                (Invoke-WtCli -App $script:app -Arguments @('get-settings')).agentSessionManagementEnabled -eq $tracking
+            } | Out-Null
+            $ordinaryTitle = 'metadata-normal-' + $tracking + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+            $ordinary = Invoke-NativeLaunchBeforeMasterSnapshot $ordinaryTitle {
+                Invoke-WtCli -App $script:app -Arguments @(
+                    'new-tab', '-p', $script:profile, '-n', $ordinaryTitle, '--window-id', "$($script:app.WindowId)"
+                )
+            }
             $text = Wait-Until -TimeoutSec 20 -Because 'ordinary profile fixture starts' -Condition {
                 $capture = Get-WtCapture -App $script:app -SessionId $ordinary.session_id
                 if ($capture -match 'PROFILE-RESUME-ARGS') { $capture }
@@ -136,19 +222,24 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
             Assert-NativeFixtureTarget $ordinary.session_id
             $knownId = 'fixture-' + [guid]::NewGuid().ToString('N')
             $requestId = [guid]::NewGuid().ToString()
+            $resumeTitle = 'metadata-resume-' + $tracking + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
             $request = @{
                 window_id = "$($script:app.WindowId)"; agent_id = 'custom:profile-resume-fixture'
                 agent_source = 'host'; resume_target = 'native'
                 profile_id = $script:profile; session_id = $knownId
-                request_id = $requestId
+                request_id = $requestId; title = $resumeTitle
             } | ConvertTo-Json -Compress
             $event = @{ type = 'event'; method = 'resume_in_new_agent_tab'; params = ($request | ConvertFrom-Json) } | ConvertTo-Json -Compress
-            Invoke-WtCli -App $script:app -Arguments @('publish', '--existing-only', $event) | Out-Null
-            $receipt = Wait-WtEvent -Listener $script:listener -TimeoutSec 20 -Predicate {
-                $_.method -eq 'native_profile_resume_result' -and $_.params.request_id -eq $requestId
+            $resumed = Invoke-NativeLaunchBeforeMasterSnapshot $resumeTitle {
+                Invoke-WtCli -App $script:app -Arguments @('publish', '--existing-only', $event) | Out-Null
+                $script:metadataReceipt = Wait-WtEvent -Listener $script:listener -TimeoutSec 5 -Predicate {
+                    $_.method -eq 'native_profile_resume_result' -and $_.params.request_id -eq $requestId
+                }
+                $script:metadataReceipt.params.success | Should -BeTrue
+                [pscustomobject]@{ session_id = $script:metadataReceipt.params.result.session_id }
             }
+            $receipt = $script:metadataReceipt
             $receipt.params.success | Should -BeTrue
-            $resumed = [pscustomobject]@{ session_id = $receipt.params.result.session_id }
             $resumed.session_id | Should -Not -BeNullOrEmpty
             $text = Wait-Until -TimeoutSec 20 -Because 'resumed fixture receives the effective arguments and automatic ID' -Condition {
                 $capture = Get-WtCapture -App $script:app -SessionId $resumed.session_id
@@ -175,6 +266,33 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
             }
             $rejected.params.success | Should -BeFalse
             @(Get-WtPanes -App $script:app).Count | Should -Be $count
+
+            # Controlled legacy-hook transport, never an installed hook mutation.
+            # Repeat the same update to protect owner binding/deduplication.
+            $hook = @{ agent = 'custom:profile-resume-fixture'; agent_session_id = $knownId
+                cwd = $script:proofRoot; payload = @{ message = 'controlled metadata update' } } | ConvertTo-Json -Depth 5 -Compress
+            foreach ($repeat in 1..2) {
+                Invoke-WtCli -App $script:app -Arguments @('send-event', '-p', $resumed.session_id,
+                    '-e', 'agent.prompt.submit', $hook) | Out-Null
+            }
+            $expected = if ($tracking) { 'Working' } else { 'Idle' }
+            $updated = Wait-Until -TimeoutSec 10 -Because 'controlled hook enriches the same owner only when Sessions is enabled' -Condition {
+                $name = Get-NativeMetadataRow $resumeTitle
+                if ($name -match "\b$expected\b") { $name }
+            }
+            (Get-NativeMetadataRow $ordinaryTitle) | Should -Match '\bIdle\b'
+            @(Get-WtPanes -App $script:app).Count | Should -Be $count
+            if ($tracking) {
+                $bound = Wait-Until -TimeoutSec 10 -Because 'duplicate hooks retain one conversation bound to the resumed pane' -Condition {
+                    $rows = @(Get-NativeMasterSessions | Where-Object session_id -EQ $knownId)
+                    if ($rows.Count -eq 1 -and
+                        ([string]$rows[0].pane_session_id).Trim('{}') -eq $resumed.session_id.Trim('{}')) { $rows[0] }
+                }
+                ([string]$bound.pane_session_id).Trim('{}') | Should -Be $resumed.session_id.Trim('{}')
+                $bound.provider_id | Should -Be 'custom:profile-resume-fixture'
+            }
+            [IO.File]::WriteAllText((Join-Path $script:proofRoot "$resumeTitle-after-hook.json"),
+                (@{ row = $updated; pane = $resumed.session_id; tracking = $tracking } | ConvertTo-Json))
         }
     }
 
