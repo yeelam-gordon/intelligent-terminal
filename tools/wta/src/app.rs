@@ -3466,6 +3466,7 @@ impl App {
             }) {
                 return;
             }
+            self.agent_sessions.retain_resume_candidate(s);
             let resume_event =
                 crate::agent_sessions::SessionEvent::ResumeDispatched { key: s.key.clone() };
             self.agent_sessions.apply(resume_event.clone());

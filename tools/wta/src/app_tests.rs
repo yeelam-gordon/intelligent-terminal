@@ -8967,8 +8967,9 @@ fn helper_native_resume_fixture() -> (
     mpsc::UnboundedReceiver<HelperNativeResumeRequest>,
     mpsc::UnboundedReceiver<AppEvent>,
     mpsc::UnboundedReceiver<QueuedSessionHook>,
+    crate::agent_sessions::AgentSession,
 ) {
-    use crate::agent_sessions::{CliSource, SessionEvent};
+    use crate::agent_sessions::{AgentStatus, CliSource};
     let mut app = test_app();
     let (requests, requests_rx) = mpsc::unbounded_channel();
     app.shell_mgr = Arc::new(
@@ -8977,30 +8978,40 @@ fn helper_native_resume_fixture() -> (
     );
     app.window_id = Some("42".into());
     app.owner_tab_id = Some("origin-tab".into());
-    app.agent_sessions.apply(SessionEvent::SessionStarted {
-        key: "helper-resume".into(),
-        cli_source: CliSource::Copilot,
-        pane_session_id: "old-pane".into(),
-        cwd: std::env::temp_dir(),
-        title: "Native resume".into(),
-    });
-    app.agent_sessions.apply(SessionEvent::SessionStopped {
-        key: "helper-resume".into(),
-        reason: "exit".into(),
-    });
+    let mut snapshot = session_info_for_test("helper-resume");
+    snapshot.status = Some(AgentStatus::Historical);
+    snapshot.cli_source = Some(CliSource::Copilot);
+    snapshot.provider_id = Some("copilot".into());
+    snapshot.cwd = std::env::temp_dir();
+    app.current_tab_mut().agents_view.snapshot = Some(Vec::new());
+    app.current_tab_mut().agents_view.latest_request_id = Some(7);
+    app.handle_agents_snapshot_loaded(7, vec![snapshot]);
+    let row = app
+        .agents_rows_for_tab(DEFAULT_TAB_ID)
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(
+        app.agent_sessions.get(&row.key).is_none(),
+        "the production master-snapshot path must not seed the local registry"
+    );
     let (events, events_rx) = mpsc::unbounded_channel();
     app.set_agent_event_tx(events);
     let (published, published_rx) = mpsc::unbounded_channel();
     app.set_session_hook_tx(published);
-    (app, requests_rx, events_rx, published_rx)
+    (app, requests_rx, events_rx, published_rx, row)
 }
 
 #[tokio::test]
-async fn helper_native_resume_rejection_is_published_and_retryable() {
+async fn helper_native_resume_snapshot_only_rejection_is_published_and_retryable() {
     use crate::agent_sessions::{AgentStatus, SessionEvent};
-    let (mut app, mut requests, mut events, mut published) = helper_native_resume_fixture();
+    use crate::session_registry::{InMemoryRegistry, SessionRegistry};
+    let (mut app, mut requests, mut events, mut published, row) = helper_native_resume_fixture();
+    let master = InMemoryRegistry::new();
+    master
+        .upsert(app.current_tab().agents_view.snapshot.as_ref().unwrap()[0].clone())
+        .await;
     let key = "helper-resume".to_string();
-    let row = app.agent_sessions.get(&key).unwrap().clone();
     app.activate_agent_session_routed(&row);
     assert_eq!(
         app.agent_sessions.get(&key).unwrap().status,
@@ -9027,14 +9038,22 @@ async fn helper_native_resume_rejection_is_published_and_retryable() {
         .as_deref()
         .unwrap()
         .contains("No corresponding agent profile"));
-    assert!(matches!(
-        published.try_recv().unwrap(),
-        SessionEvent::ResumeDispatched { .. }
-    ));
-    assert!(matches!(
-        published.try_recv().unwrap(),
-        SessionEvent::ResumeFailed { .. }
-    ));
+    let pending = published.try_recv().unwrap();
+    assert!(matches!(&pending, SessionEvent::ResumeDispatched { .. }));
+    assert!(master.apply_event(pending).await);
+    let failure = published.try_recv().unwrap();
+    assert!(
+        matches!(&failure, SessionEvent::ResumeFailed { key: failed_key, .. } if failed_key == &key)
+    );
+    assert!(master.apply_event(failure).await);
+    let master_row = master
+        .lookup(&agent_client_protocol::schema::v1::SessionId::new(
+            key.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(master_row.status, Some(AgentStatus::Historical));
+    assert!(master_row.pane_session_id.is_none());
 
     let retry = app.agent_sessions.get(&key).unwrap().clone();
     app.activate_agent_session_routed(&retry);
@@ -9062,13 +9081,8 @@ async fn helper_native_resume_rejection_is_published_and_retryable() {
 }
 
 #[tokio::test]
-async fn helper_native_resume_pending_double_enter_uses_one_request() {
-    let (mut app, mut requests, mut events, _published) = helper_native_resume_fixture();
-    let row = app
-        .agent_sessions
-        .get(&"helper-resume".into())
-        .unwrap()
-        .clone();
+async fn helper_native_resume_snapshot_only_pending_double_enter_uses_one_request() {
+    let (mut app, mut requests, mut events, _published, row) = helper_native_resume_fixture();
     app.activate_agent_session_routed(&row);
     let (_, reply) = requests.recv().await.unwrap();
     // Even a stale pre-dispatch view snapshot must not submit again.
@@ -9080,11 +9094,10 @@ async fn helper_native_resume_pending_double_enter_uses_one_request() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn helper_native_resume_timeout_applies_and_publishes_failure() {
+async fn helper_native_resume_snapshot_only_timeout_applies_and_publishes_failure() {
     use crate::agent_sessions::{AgentStatus, SessionEvent};
-    let (mut app, mut requests, mut events, mut published) = helper_native_resume_fixture();
+    let (mut app, mut requests, mut events, mut published, row) = helper_native_resume_fixture();
     let key = "helper-resume".to_string();
-    let row = app.agent_sessions.get(&key).unwrap().clone();
     app.activate_agent_session_routed(&row);
     let (_, reply) = requests.recv().await.unwrap();
     tokio::time::advance(std::time::Duration::from_secs(30)).await;
@@ -9105,11 +9118,10 @@ async fn helper_native_resume_timeout_applies_and_publishes_failure() {
 }
 
 #[tokio::test]
-async fn helper_native_resume_late_failure_cannot_demote_or_publish_after_binding() {
+async fn helper_native_resume_snapshot_only_late_failure_cannot_demote_or_publish_after_binding() {
     use crate::agent_sessions::{AgentStatus, SessionEvent};
-    let (mut app, mut requests, mut events, mut published) = helper_native_resume_fixture();
+    let (mut app, mut requests, mut events, mut published, row) = helper_native_resume_fixture();
     let key = "helper-resume".to_string();
-    let row = app.agent_sessions.get(&key).unwrap().clone();
     app.activate_agent_session_routed(&row);
     let (_, reply) = requests.recv().await.unwrap();
     app.handle_event(AppEvent::AgentSessionEvent(
