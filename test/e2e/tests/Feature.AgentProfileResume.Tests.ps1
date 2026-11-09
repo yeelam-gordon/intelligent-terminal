@@ -651,8 +651,11 @@ public static class NativeProfileResumeMasterGate {
             $builtin = @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles |
                 Where-Object agent_id -EQ 'copilot') | Select-Object -First 1
             $builtin | Should -Not -BeNullOrEmpty
+            $custom = @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles |
+                Where-Object agent_id -EQ 'custom:fixture-adapter') | Select-Object -First 1
+            $custom | Should -Not -BeNullOrEmpty
             foreach ($target in @(
-                @{ id = $script:profile; provider = 'custom:profile-resume-fixture' },
+                @{ id = $custom.id; provider = 'custom:fixture-adapter' },
                 @{ id = $builtin.id; provider = 'copilot' }
             )) {
                 $marker = 'profile-icon-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -675,20 +678,43 @@ public static class NativeProfileResumeMasterGate {
                     $entry.name = "$marker-$($phase.name)"
                     Set-WtSetting -App $script:app -Key profiles -Value $profiles | Out-Null
                     if ($phase.name -eq 'before') {
-                        $created = Invoke-WtCli -App $script:app -Arguments @('new-tab', '-w', "$($script:app.WindowId)", '-p', $target.id, '-n', $marker)
-                        $panes += $created.session_id
-                        Assert-NativeFixtureTarget $created.session_id
+                        $requestId = [guid]::NewGuid().ToString()
+                        $event = @{ type = 'event'; method = 'resume_in_new_agent_tab'; params = @{
+                            window_id = "$($script:app.WindowId)"; agent_id = $target.provider; agent_source = 'host'
+                            resume_target = 'native'; profile_id = $target.id; session_id = $conversation
+                            request_id = $requestId; title = $marker
+                        } } | ConvertTo-Json -Compress -Depth 6
+                        Invoke-WtCli -App $script:app -Arguments @('publish', '--existing-only', $event) | Out-Null
+                        $receipt = Wait-WtEvent -Listener $script:listener -TimeoutSec 20 -Predicate {
+                            $_.method -eq 'native_profile_resume_result' -and $_.params.request_id -eq $requestId
+                        }
+                        $receipt.params.success | Should -BeTrue
+                        $seed = $receipt.params.result.session_id
+                        $panes += $seed
+                        Assert-NativeFixtureTarget $seed
                         $hook = @{
                             cli_source = $target.provider; agent_session_id = $conversation
-                            event = 'agent.session.start'; pane_id = $created.session_id
+                            event = 'agent.session.start'; pane_id = $seed
                             payload = @{ cwd = $script:proofRoot; title = $marker }
                         } | ConvertTo-Json -Depth 5 -Compress
-                        Invoke-WtCli -App $script:app -Arguments @('send-event', '-p', $created.session_id, '-e', 'agent.session.start', $hook) | Out-Null
+                        Invoke-WtCli -App $script:app -Arguments @('send-event', '-p', $seed, '-e', 'agent.session.start', $hook) | Out-Null
                         Wait-Until -TimeoutSec 15 -Because 'the owned conversation reaches the recent-session model' -Condition {
                             @(Get-NativeMasterSessions | Where-Object {
                                 $_.session_id -eq $conversation -and $_.provider_id -eq $target.provider -and $_.title -eq $marker
                             }).Count -eq 1
                         } | Out-Null
+                        Close-WtPane -App $script:app -SessionId $seed
+                        $panes = @($panes | Where-Object { $_ -ne $seed })
+                        Wait-Until -TimeoutSec 20 -Because 'the distinct historical row is no longer represented by a live pane' -Condition {
+                            $row = @(Get-NativeMasterSessions | Where-Object session_id -EQ $conversation) | Select-Object -First 1
+                            $row -and -not $row.pane_session_id
+                        } | Out-Null
+                        $created = Invoke-WtCli -App $script:app -Arguments @('new-tab', '-w', "$($script:app.WindowId)", '-p', $target.id, '-n', $marker)
+                        $panes += $created.session_id
+                        Assert-NativeFixtureTarget $created.session_id
+                        @(Get-NativeMasterSessions | Where-Object {
+                            ([string]$_.pane_session_id).Trim('{}') -eq $created.session_id.Trim('{}')
+                        }).Count | Should -Be 0 -Because 'the fresh live pane must not claim the historical conversation'
                     }
                     Assert-ProfileIconColor $marker $phase.color "$marker-$($phase.name)"
                     @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles | Where-Object {
