@@ -608,6 +608,17 @@ public static class NativeProfileResumeMasterGate {
             }
         }
         function Assert-ProfileIconColor([string]$Marker, [Drawing.Color]$Color, [string]$Phase) {
+            $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+            $root.Current.ProcessId | Should -Be $script:app.Pid
+            $searchToggle = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.PropertyCondition]::new(
+                    [Windows.Automation.AutomationElement]::AutomationIdProperty, 'SearchTabsButton'))
+            $searchToggle | Should -Not -BeNullOrEmpty
+            $toggle = [Windows.Automation.TogglePattern]$searchToggle.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+            if ($toggle.Current.ToggleState -ne [Windows.Automation.ToggleState]::On) {
+                Invoke-UiElement -App $script:app -Selector SearchTabsButton | Out-Null
+            }
+            Wait-UiElement -App $script:app -Selector SearchTextBox -TimeoutSec 15 | Out-Null
             Set-UiValue -App $script:app -Selector SearchTextBox -Value $Marker | Out-Null
             $imagePath = Join-Path $script:proofRoot "$Phase-icons.png"
             Wait-Until -TimeoutSec 15 -Because 'both live and recent icons render the configured profile artwork' -Condition {
@@ -675,7 +686,7 @@ public static class NativeProfileResumeMasterGate {
                     $entry = @($profiles.list | Where-Object guid -EQ $target.id)[0]
                     $entry | Add-Member -NotePropertyName icon -NotePropertyValue $iconPath -Force
                     $entry | Add-Member -NotePropertyName commandline -NotePropertyValue "`"$script:fixture`"" -Force
-                    $entry.name = "$marker-$($phase.name)"
+                    $entry.name = "Renamed $($target.provider) $($phase.name)"
                     Set-WtSetting -App $script:app -Key profiles -Value $profiles | Out-Null
                     if ($phase.name -eq 'before') {
                         $requestId = [guid]::NewGuid().ToString()
@@ -725,11 +736,14 @@ public static class NativeProfileResumeMasterGate {
                 $panes = @($panes | Where-Object { $_ -ne $created.session_id })
             }
         } finally {
-            Set-UiValue -App $script:app -Selector SearchTextBox -Value '' | Out-Null
             foreach ($pane in $panes) {
                 Invoke-WtCli -App $script:app -Arguments @('kill-pane', '-t', $pane) | Out-Null
             }
             Set-WtSetting -App $script:app -Key profiles -Value $savedProfiles | Out-Null
+            if (Test-UiElementExists -App $script:app -Selector SearchTextBox -TimeoutSec 1) {
+                Set-UiValue -App $script:app -Selector SearchTextBox -Value '' | Out-Null
+                Invoke-UiElement -App $script:app -Selector SearchTabsButton | Out-Null
+            }
         }
     }
 
