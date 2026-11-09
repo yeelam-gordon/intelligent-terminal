@@ -620,12 +620,31 @@ public static class NativeProfileResumeMasterGate {
             $imagePath = Join-Path $script:proofRoot "$Phase-icons.png"
             Wait-Until -TimeoutSec 15 -Because 'both live and recent icons render the configured profile artwork' -Condition {
                 $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
-                $parts = @(Get-ProfileIconParts $root | Where-Object {
-                    $_.Current.AutomationId -in @('TabIconPresenter', 'HistoryProviderIcon') -and
+                $list = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                    [Windows.Automation.PropertyCondition]::new(
+                        [Windows.Automation.AutomationElement]::AutomationIdProperty, 'ItemsList'))
+                $parts = @()
+                $liveCount = 0
+                $historyCount = 0
+                foreach ($row in $list.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)) {
+                    if ($row.Current.IsOffscreen -or -not $row.Current.Name.StartsWith($Marker, [StringComparison]::Ordinal)) { continue }
+                    $rowParts = @(Get-ProfileIconParts $row | Where-Object {
                         -not $_.Current.IsOffscreen -and $_.Current.BoundingRectangle.Width -gt 0
-                })
-                if (@($parts | Where-Object { $_.Current.AutomationId -eq 'TabIconPresenter' }).Count -ne 1 -or
-                    @($parts | Where-Object { $_.Current.AutomationId -eq 'HistoryProviderIcon' }).Count -ne 1) { return $false }
+                    })
+                    $history = @($rowParts | Where-Object { $_.Current.AutomationId -eq 'HistoryProviderIcon' })
+                    if ($history.Count -eq 1) {
+                        $parts += $history[0]
+                        $historyCount++
+                    } else {
+                        # The decorative live ContentPresenter exposes its Image child, not its XAML name.
+                        $images = @($rowParts | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Image })
+                        if ($images.Count -eq 1) {
+                            $parts += $images[0]
+                            $liveCount++
+                        }
+                    }
+                }
+                if ($liveCount -ne 1 -or $historyCount -ne 1) { return $false }
                 Save-UiScreenshot -App $script:app -Path $imagePath | Out-Null
                 $bitmap = [Drawing.Bitmap]::new($imagePath)
                 try {
