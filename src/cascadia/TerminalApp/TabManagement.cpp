@@ -62,7 +62,9 @@ namespace winrt
 
 namespace winrt::TerminalApp::implementation
 {
-    winrt::hstring TerminalPage::_AgentIconForControl(const TermControl& control, const winrt::hstring& profileIcon)
+    winrt::hstring TerminalPage::_AgentIconForControl(const TermControl& control,
+                                                      const winrt::hstring& profileIcon,
+                                                      const winrt::Microsoft::Terminal::Settings::Model::Profile& profile)
     {
         if (control)
         {
@@ -76,22 +78,13 @@ namespace winrt::TerminalApp::implementation
             }
             if (!providerId.empty())
             {
-                for (const auto& tab : _RuntimeTabs())
-                {
-                    const auto tabImpl = _GetTabImpl(tab);
-                    const auto root = tabImpl ? tabImpl->GetRootPane() : nullptr;
-                    if (const auto pane = root ? root->FindPaneByContentId(gsl::narrow<uint32_t>(control.ContentId())) : nullptr)
-                    {
-                        const auto profile = pane->GetProfile();
-                        if (profile && ::Microsoft::Terminal::Settings::Model::AgentRegistry::AgentIdEquals(profile.AgentProfileId(), providerId))
-                        {
-                            return profile.Icon().Resolved();
-                        }
-                    }
-                }
-                if (const auto profile = _FindNativeAgentProfile(providerId, {}))
+                if (profile && ::Microsoft::Terminal::Settings::Model::AgentRegistry::AgentIdEquals(profile.AgentProfileId(), providerId))
                 {
                     return profile.Icon().Resolved();
+                }
+                if (const auto generatedProfile = _FindNativeAgentProfile(providerId, {}))
+                {
+                    return generatedProfile.Icon().Resolved();
                 }
                 return L"ms-appx:///AgentIcons/generic.svg";
             }
@@ -556,7 +549,7 @@ namespace winrt::TerminalApp::implementation
         }
         if (const auto content{ sourcePane->GetContent() })
         {
-            const auto icon = _AgentIconForControl(sourcePane->GetTerminalControl(), content.Icon());
+            const auto icon = _AgentIconForControl(sourcePane->GetTerminalControl(), content.Icon(), sourcePane->GetProfile());
             const auto theme = _settings.GlobalSettings().CurrentTheme();
             const auto iconStyle = (theme && theme.Tab()) ? theme.Tab().IconStyle() : IconStyle::Default;
 

@@ -14713,6 +14713,13 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(strip.HistoryItems().GetAt(0) == displayed);
             VERIFY_ARE_EQUAL(3u, iconChanges);
             VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE756" }, displayed.CreateIcon(displayed.IconSource()).as<FontIcon>().Glyph());
+            stripImpl->RefreshHistoryIcons([](const auto&) { return winrt::hstring{ L"\xE8A5" }; });
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(0) == displayed);
+            VERIFY_ARE_EQUAL(4u, iconChanges);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE8A5" }, displayed.CreateIcon(displayed.IconSource()).as<FontIcon>().Glyph());
+            stripImpl->CommitHistorySnapshot({ refreshed });
+            const auto cached = strip.HistoryItems().GetAt(0);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE8A5" }, cached.CreateIcon(cached.IconSource()).as<FontIcon>().Glyph());
         });
     }
 
@@ -14738,6 +14745,13 @@ namespace TerminalAppLocalTests
                 args.Profile(Utils::GuidToString(profile.Guid()));
                 const auto connection = winrt::make_self<TestConnection>(Utils::CreateGuid(), State::Connected);
                 const auto pane = page->_MakePane(args, nullptr, *connection);
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE713" }, page->_AgentIconForControl(pane->GetTerminalControl(), {}, profile));
+                NewTerminalArgs copyArgs;
+                copyArgs.Profile(Utils::GuidToString(copy.Guid()));
+                const auto copyConnection = winrt::make_self<TestConnection>(Utils::CreateGuid(), State::Connected);
+                const auto copyPane = page->_MakePane(copyArgs, nullptr, *copyConnection);
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE756" }, page->_AgentIconForControl(copyPane->GetTerminalControl(), {}, copy));
+                copyPane->Shutdown();
                 VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(pane));
                 const auto tab = page->_GetFocusedTabImpl();
                 tab->SuppressAgentPrewarm();
@@ -14760,6 +14774,11 @@ namespace TerminalAppLocalTests
                 page->_CompleteSidebarHistoryRefresh(42, std::move(snapshot));
                 VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE8A5" }, item.CreateIcon(item.IconSource()).as<FontIcon>().Glyph());
                 VERIFY_ARE_EQUAL(profile.Guid(), page->_FindNativeAgentProfile(provider, {}).Guid());
+                const auto displayed = page->_tabStrip.HistoryItems().GetAt(0);
+                profile.Icon(MediaResourceHelper::FromString(L"\xE713"));
+                page->_RefreshUIForSettingsReload();
+                VERIFY_IS_TRUE(page->_tabStrip.HistoryItems().GetAt(0) == displayed);
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE713" }, displayed.CreateIcon(displayed.IconSource()).as<FontIcon>().Glyph());
             });
         }
     }

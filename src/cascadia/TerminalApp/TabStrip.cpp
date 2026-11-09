@@ -2505,6 +2505,15 @@ namespace winrt::TerminalApp::implementation
         TryCompleteAgentFilterTelemetry();
     }
 
+    void TabStrip::RefreshHistoryIcons(const std::function<hstring(const TerminalApp::TabStripHistoryItem&)>& resolveIconPath)
+    {
+        for (const auto& item : _historySnapshot)
+        {
+            winrt::get_self<TabStripHistoryItem>(item)->SyncIcon(resolveIconPath(item));
+        }
+        _applyHistoryProjection(true);
+    }
+
     void TabStrip::TryCompleteAgentFilterTelemetry()
     {
         if (_historySnapshotReady && !_historyLoadPending &&

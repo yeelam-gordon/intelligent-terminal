@@ -8043,6 +8043,15 @@ namespace winrt::TerminalApp::implementation
                    nullptr;
     }
 
+    winrt::hstring TerminalPage::_ResolveSidebarHistoryIconPath(const TerminalApp::TabStripHistoryItem& item)
+    {
+        if (const auto profile = _FindNativeAgentProfile(item.AgentId(), item.AgentSource() == L"host" ? item.SessionId() : winrt::hstring{}))
+        {
+            return profile.Icon().Resolved();
+        }
+        return L"ms-appx:///AgentIcons/generic.svg";
+    }
+
     void TerminalPage::_CompleteSidebarHistoryRefresh(const uint64_t generation, _SidebarHistorySnapshot snapshot)
     {
         _historyRefreshInFlight = false;
@@ -8114,10 +8123,7 @@ namespace winrt::TerminalApp::implementation
         {
             for (const auto& item : snapshot.items)
             {
-                if (const auto profile = _FindNativeAgentProfile(item.AgentId(), item.AgentSource() == L"host" ? item.SessionId() : winrt::hstring{}))
-                {
-                    winrt::get_self<TabStripHistoryItem>(item)->SyncIcon(profile.Icon().Resolved());
-                }
+                winrt::get_self<TabStripHistoryItem>(item)->SyncIcon(_ResolveSidebarHistoryIconPath(item));
             }
             strip->CommitHistorySnapshot(std::move(snapshot.items), snapshot.state == State::Ready);
         }
@@ -16296,7 +16302,7 @@ namespace winrt::TerminalApp::implementation
             }
             const auto sourcePane = tab->GetRootPane()->FindPaneByContentId(pane.ContentId);
             const auto sourceControl = sourcePane ? sourcePane->GetTerminalControl() : nullptr;
-            const auto icon = _AgentIconForControl(sourceControl, pane.Icon);
+            const auto icon = _AgentIconForControl(sourceControl, pane.Icon, sourcePane ? sourcePane->GetProfile() : nullptr);
             auto item = winrt::make<TabStripPaneItem>(
                 tab->TabViewItem(),
                 pane.ContentId,
@@ -18671,6 +18677,10 @@ namespace winrt::TerminalApp::implementation
         }
 
         _ApplyTabListProjection(nullptr, false);
+
+        winrt::get_self<TabStrip>(_tabStrip)->RefreshHistoryIcons([this](const auto& item) {
+            return _ResolveSidebarHistoryIconPath(item);
+        });
 
         if (const auto focusedTab{ _GetFocusedTabImpl() })
         {

@@ -535,6 +535,14 @@ public static class NativeProfileResumeMasterGate {
         }
         finally {
             Set-WtSetting -App $script:app -Key acpCustomCommands -Value $savedCommands | Out-Null
+            $expectedCommands = ConvertTo-Json -InputObject $savedCommands -Depth 20 -Compress
+            Wait-Until -TimeoutSec 15 -Because 'the application finishes regenerating the original before restoring profile overrides' -Condition {
+                $runtime = Invoke-WtCli -App $script:app -Arguments @('get-settings')
+                $commands = ConvertTo-Json -InputObject @($runtime.acpCustomCommands) -Depth 20 -Compress
+                $commands -eq $expectedCommands -and
+                    @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles |
+                        Where-Object id -EQ $guid).Count -eq 1
+            } | Out-Null
             Set-WtSetting -App $script:app -Key profiles -Value $savedProfiles | Out-Null
             Wait-Until -TimeoutSec 15 -Because 'the original fixture is restored for the settings UI case' -Condition {
                 @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles |
@@ -633,30 +641,34 @@ public static class NativeProfileResumeMasterGate {
                     })
                     $history = @($rowParts | Where-Object { $_.Current.AutomationId -eq 'HistoryProviderIcon' })
                     if ($history.Count -eq 1) {
-                        $parts += $history[0]
+                        $parts += @{ row = $row; icon = $history[0]; kind = 'recent' }
                         $historyCount++
                     } else {
                         # The decorative live ContentPresenter exposes its Image child, not its XAML name.
                         $images = @($rowParts | Where-Object { $_.Current.ControlType -eq [Windows.Automation.ControlType]::Image })
                         if ($images.Count -eq 1) {
-                            $parts += $images[0]
+                            $parts += @{ row = $row; icon = $images[0]; kind = 'live' }
                             $liveCount++
                         }
                     }
                 }
                 if ($liveCount -ne 1 -or $historyCount -ne 1) { return $false }
                 Save-UiScreenshot -App $script:app -Path $imagePath | Out-Null
-                $bitmap = [Drawing.Bitmap]::new($imagePath)
-                try {
-                    $window = $root.Current.BoundingRectangle
-                    $sx = $bitmap.Width / $window.Width
-                    $sy = $bitmap.Height / $window.Height
-                    foreach ($part in $parts) {
-                        $rect = $part.Current.BoundingRectangle
-                        $left = [Math]::Max(0, [int][Math]::Floor(($rect.Left - $window.Left) * $sx))
-                        $top = [Math]::Max(0, [int][Math]::Floor(($rect.Top - $window.Top) * $sy))
-                        $right = [Math]::Min($bitmap.Width, [int][Math]::Ceiling(($rect.Right - $window.Left) * $sx))
-                        $bottom = [Math]::Min($bitmap.Height, [int][Math]::Ceiling(($rect.Bottom - $window.Top) * $sy))
+                foreach ($part in $parts) {
+                    $rowImagePath = Join-Path $script:proofRoot "$Phase-$($part.kind)-row.png"
+                    $capture = Invoke-WinAppUi -App $script:app -UiArgs @(
+                        'screenshot', $part.row.Current.Name, '--output', $rowImagePath, '--json')
+                    if ($capture.ExitCode -ne 0) { throw "Owned row capture failed: $($capture.StdErr)" }
+                    $bitmap = [Drawing.Bitmap]::new($rowImagePath)
+                    try {
+                        $rowBounds = $part.row.Current.BoundingRectangle
+                        $sx = $bitmap.Width / $rowBounds.Width
+                        $sy = $bitmap.Height / $rowBounds.Height
+                        $rect = $part.icon.Current.BoundingRectangle
+                        $left = [Math]::Max(0, [int][Math]::Floor(($rect.Left - $rowBounds.Left) * $sx))
+                        $top = [Math]::Max(0, [int][Math]::Floor(($rect.Top - $rowBounds.Top) * $sy))
+                        $right = [Math]::Min($bitmap.Width, [int][Math]::Ceiling(($rect.Right - $rowBounds.Left) * $sx))
+                        $bottom = [Math]::Min($bitmap.Height, [int][Math]::Ceiling(($rect.Bottom - $rowBounds.Top) * $sy))
                         $matches = 0
                         for ($y = $top; $y -lt $bottom; $y++) {
                             for ($x = $left; $x -lt $right; $x++) {
@@ -667,9 +679,9 @@ public static class NativeProfileResumeMasterGate {
                             }
                         }
                         if ($matches -lt 4) { return $false }
-                    }
-                    return $true
-                } finally { $bitmap.Dispose() }
+                    } finally { $bitmap.Dispose() }
+                }
+                return $true
             } | Out-Null
         }
         try {

@@ -396,6 +396,7 @@ namespace winrt::TerminalApp::implementation
         winrt::Windows::Foundation::Collections::IObservableVector<TerminalApp::TabStripHistoryItem> HistoryItems() const { return _historyItems; }
         void SetHistoryExpanded(bool expanded);
         void CommitHistorySnapshot(std::vector<TerminalApp::TabStripHistoryItem> items, bool ready = false);
+        void RefreshHistoryIcons(const std::function<winrt::hstring(const TerminalApp::TabStripHistoryItem&)>& resolveIconPath);
         void SetAgentCompletionResolver(std::function<bool(const TerminalApp::TabStripHistoryItem&)> resolver);
         void RefreshHistoryAgentCompletions();
         void InvalidateHistorySnapshotReadiness() noexcept { _historySnapshotReady = false; }
