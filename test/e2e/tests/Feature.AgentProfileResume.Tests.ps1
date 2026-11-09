@@ -44,6 +44,7 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
         $mockCode = "& '$($mock.Replace("'", "''"))' -LogPath '$($script:proofRoot.Replace("'", "''"))\acp.log'"
         $mockCommand = "`"$pwsh`" -NoProfile -EncodedCommand " + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($mockCode))
         $script:app = Start-Terminal -Package $script:package -PassFre $true -State @{
+            featureRolloutId = '{00000000-0000-0000-0000-000000000001}'
             sidebarIntroductionShown = $true; sidebarRolloutVersion = 1; sidebarRolloutAssignment = 'Sidebar'
             sidebarLayoutMigrationCompleted = $true
         } -Settings @{
@@ -70,6 +71,7 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
             }, @{
                 guid = $script:unconfiguredProfile; name = 'Profile resume unconfigured custom fixture'
                 'agentProfile.id' = 'custom:profile-resume-fixture'; commandline = ''
+                startingDirectory = ''
                 closeOnExit = 'never'
             }, @{
                 guid = $shellProfile; name = 'Profile resume shell'
@@ -561,28 +563,23 @@ public static class NativeProfileResumeMasterGate {
             (Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json).WorkingDirectory | Should -Be $env:USERPROFILE
 
             $settings = Get-WtSettingsObject -App $script:app
-            $entry = @($settings.profiles.list | Where-Object guid -EQ $generated.id)[0]
-            $entry | Add-Member -NotePropertyName startingDirectory -NotePropertyValue '' -Force
-            $settings | Add-Member -NotePropertyName 'internal.agentProfileStartingDirectoryMigrationCompleted' -NotePropertyValue $false -Force
-            [IO.File]::WriteAllText($script:app.SettingsPath, ($settings | ConvertTo-Json -Depth 64))
-            Wait-Until -TimeoutSec 15 -Because 'upgrade writes the home directory and completion marker together' -Condition {
-                $current = Get-WtSettingsObject -App $script:app
-                $profile = @($current.profiles.list | Where-Object guid -EQ $generated.id)[0]
-                $current.'internal.agentProfileStartingDirectoryMigrationCompleted' -and
-                    $profile.startingDirectory -eq '%USERPROFILE%'
-            } | Out-Null
-            $upgraded = Invoke-WtCli -App $script:app -Arguments @('new-tab', '-w', "$($script:app.WindowId)", '-p', $generated.id)
+            $settings.'internal.agentProfileStartingDirectoryMigrationCompleted' | Should -BeTrue
+            $entry = @($settings.profiles.list | Where-Object guid -EQ $script:unconfiguredProfile)[0]
+            $entry.startingDirectory | Should -BeExactly '%USERPROFILE%' -Because 'the explicit-empty legacy fixture was migrated during cold startup'
+            $entry | Add-Member -NotePropertyName commandline -NotePropertyValue "`"$script:fixture`"" -Force
+            Set-WtSetting -App $script:app -Key profiles -Value $settings.profiles | Out-Null
+            $upgraded = Invoke-WtCli -App $script:app -Arguments @('new-tab', '-w', "$($script:app.WindowId)", '-p', $script:unconfiguredProfile)
             $panes += $upgraded.session_id
             Assert-NativeFixtureTarget $upgraded.session_id
             $proofPath = Join-Path $script:proofRoot ($upgraded.session_id.Trim('{}') + '.json')
             (Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json).WorkingDirectory | Should -Be $env:USERPROFILE
 
             $profiles = Get-WtSetting -App $script:app -Key profiles
-            @($profiles.list | Where-Object guid -EQ $generated.id)[0].startingDirectory = ''
+            @($profiles.list | Where-Object guid -EQ $script:unconfiguredProfile)[0].startingDirectory = ''
             Set-WtSetting -App $script:app -Key profiles -Value $profiles | Out-Null
             Wait-Until -TimeoutSec 10 -Because 'a subsequent deliberate empty directory remains empty after reload' -Condition {
                 $current = Invoke-WtCli -App $script:app -Arguments @('get-settings')
-                $profile = @($current.profiles.list | Where-Object guid -EQ $generated.id)[0]
+                $profile = @($current.profiles.list | Where-Object guid -EQ $script:unconfiguredProfile)[0]
                 $current.'internal.agentProfileStartingDirectoryMigrationCompleted' -and
                     $profile.PSObject.Properties.Name -contains 'startingDirectory' -and $profile.startingDirectory -eq ''
             } | Out-Null
@@ -671,6 +668,8 @@ public static class NativeProfileResumeMasterGate {
             )) {
                 $marker = 'profile-icon-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
                 $conversation = [guid]::NewGuid().ToString()
+                $historyCwd = Join-Path $script:proofRoot $marker
+                New-Item -ItemType Directory -Path $historyCwd -Force | Out-Null
                 foreach ($phase in @(
                     @{ name = 'before'; color = [Drawing.Color]::FromArgb(245, 39, 131) },
                     @{ name = 'after'; color = [Drawing.Color]::FromArgb(23, 197, 173) }
@@ -693,7 +692,7 @@ public static class NativeProfileResumeMasterGate {
                         $event = @{ type = 'event'; method = 'resume_in_new_agent_tab'; params = @{
                             window_id = "$($script:app.WindowId)"; agent_id = $target.provider; agent_source = 'host'
                             resume_target = 'native'; profile_id = $target.id; session_id = $conversation
-                            request_id = $requestId; title = $marker
+                            request_id = $requestId; title = $marker; cwd = $historyCwd
                         } } | ConvertTo-Json -Compress -Depth 6
                         Invoke-WtCli -App $script:app -Arguments @('publish', '--existing-only', $event) | Out-Null
                         $receipt = Wait-WtEvent -Listener $script:listener -TimeoutSec 20 -Predicate {
@@ -706,12 +705,12 @@ public static class NativeProfileResumeMasterGate {
                         $hook = @{
                             cli_source = $target.provider; agent_session_id = $conversation
                             event = 'agent.session.start'; pane_id = $seed
-                            payload = @{ cwd = $script:proofRoot; title = $marker }
+                            payload = @{ cwd = $historyCwd }
                         } | ConvertTo-Json -Depth 5 -Compress
                         Invoke-WtCli -App $script:app -Arguments @('send-event', '-p', $seed, '-e', 'agent.session.start', $hook) | Out-Null
                         Wait-Until -TimeoutSec 15 -Because 'the owned conversation reaches the recent-session model' -Condition {
                             @(Get-NativeMasterSessions | Where-Object {
-                                $_.session_id -eq $conversation -and $_.provider_id -eq $target.provider -and $_.title -eq $marker
+                                $_.session_id -eq $conversation -and $_.provider_id -eq $target.provider -and $_.cwd -eq $historyCwd
                             }).Count -eq 1
                         } | Out-Null
                         Close-WtPane -App $script:app -SessionId $seed
