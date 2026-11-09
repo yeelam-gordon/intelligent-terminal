@@ -660,7 +660,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
     bool ProfileViewModel::CanDeleteProfile() const
     {
-        return !IsBaseLayer() && !::Microsoft::Terminal::AgentProfiles::IsProtected(_profile);
+        return !IsBaseLayer() && _profile.IsDeletable();
     }
 
     bool ProfileViewModel::Orphaned() const

@@ -541,6 +541,172 @@ public static class NativeProfileResumeMasterGate {
         }
     }
 
+    It 'Agent profiles default to home and migrate empty startup folders only once' {
+        $savedProfiles = Get-WtSetting -App $script:app -Key profiles
+        $panes = @()
+        try {
+            $generated = @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles |
+                Where-Object agent_id -EQ 'custom:fixture-adapter') | Select-Object -First 1
+            $generated | Should -Not -BeNullOrEmpty
+            $profiles = $savedProfiles | ConvertTo-Json -Depth 64 | ConvertFrom-Json
+            $entry = @($profiles.list | Where-Object guid -EQ $generated.id)[0]
+            $entry | Add-Member -NotePropertyName commandline -NotePropertyValue "`"$script:fixture`"" -Force
+            $entry | Add-Member -NotePropertyName suppressApplicationTitle -NotePropertyValue $true -Force
+            $entry.PSObject.Properties.Remove('startingDirectory')
+            Set-WtSetting -App $script:app -Key profiles -Value $profiles | Out-Null
+            $normal = Invoke-WtCli -App $script:app -Arguments @('new-tab', '-w', "$($script:app.WindowId)", '-p', $generated.id)
+            $panes += $normal.session_id
+            Assert-NativeFixtureTarget $normal.session_id
+            $proofPath = Join-Path $script:proofRoot ($normal.session_id.Trim('{}') + '.json')
+            (Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json).WorkingDirectory | Should -Be $env:USERPROFILE
+
+            $settings = Get-WtSettingsObject -App $script:app
+            $entry = @($settings.profiles.list | Where-Object guid -EQ $generated.id)[0]
+            $entry | Add-Member -NotePropertyName startingDirectory -NotePropertyValue '' -Force
+            $settings | Add-Member -NotePropertyName 'internal.agentProfileStartingDirectoryMigrationCompleted' -NotePropertyValue $false -Force
+            [IO.File]::WriteAllText($script:app.SettingsPath, ($settings | ConvertTo-Json -Depth 64))
+            Wait-Until -TimeoutSec 15 -Because 'upgrade writes the home directory and completion marker together' -Condition {
+                $current = Get-WtSettingsObject -App $script:app
+                $profile = @($current.profiles.list | Where-Object guid -EQ $generated.id)[0]
+                $current.'internal.agentProfileStartingDirectoryMigrationCompleted' -and
+                    $profile.startingDirectory -eq '%USERPROFILE%'
+            } | Out-Null
+            $upgraded = Invoke-WtCli -App $script:app -Arguments @('new-tab', '-w', "$($script:app.WindowId)", '-p', $generated.id)
+            $panes += $upgraded.session_id
+            Assert-NativeFixtureTarget $upgraded.session_id
+            $proofPath = Join-Path $script:proofRoot ($upgraded.session_id.Trim('{}') + '.json')
+            (Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json).WorkingDirectory | Should -Be $env:USERPROFILE
+
+            $profiles = Get-WtSetting -App $script:app -Key profiles
+            @($profiles.list | Where-Object guid -EQ $generated.id)[0].startingDirectory = ''
+            Set-WtSetting -App $script:app -Key profiles -Value $profiles | Out-Null
+            Wait-Until -TimeoutSec 10 -Because 'a subsequent deliberate empty directory remains empty after reload' -Condition {
+                $current = Invoke-WtCli -App $script:app -Arguments @('get-settings')
+                $profile = @($current.profiles.list | Where-Object guid -EQ $generated.id)[0]
+                $current.'internal.agentProfileStartingDirectoryMigrationCompleted' -and
+                    $profile.PSObject.Properties.Name -contains 'startingDirectory' -and $profile.startingDirectory -eq ''
+            } | Out-Null
+        } finally {
+            foreach ($pane in $panes) {
+                Invoke-WtCli -App $script:app -Arguments @('kill-pane', '-t', $pane) | Out-Null
+            }
+            Set-WtSetting -App $script:app -Key profiles -Value $savedProfiles | Out-Null
+        }
+    }
+
+    It 'Agent profile icon edits update live tabs and recent sessions without changing identity' {
+        Add-Type -AssemblyName System.Drawing, UIAutomationClient, UIAutomationTypes
+        $savedProfiles = Get-WtSetting -App $script:app -Key profiles
+        $panes = @()
+        function Get-ProfileIconParts($Element) {
+            $walker = [Windows.Automation.TreeWalker]::RawViewWalker
+            $child = $walker.GetFirstChild($Element)
+            while ($child) {
+                $child
+                Get-ProfileIconParts $child
+                $child = $walker.GetNextSibling($child)
+            }
+        }
+        function Assert-ProfileIconColor([string]$Marker, [Drawing.Color]$Color, [string]$Phase) {
+            Set-UiValue -App $script:app -Selector SearchTextBox -Value $Marker | Out-Null
+            $imagePath = Join-Path $script:proofRoot "$Phase-icons.png"
+            Wait-Until -TimeoutSec 15 -Because 'both live and recent icons render the configured profile artwork' -Condition {
+                $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+                $parts = @(Get-ProfileIconParts $root | Where-Object {
+                    $_.Current.AutomationId -in @('TabIconPresenter', 'HistoryProviderIcon') -and
+                        -not $_.Current.IsOffscreen -and $_.Current.BoundingRectangle.Width -gt 0
+                })
+                if (@($parts | Where-Object { $_.Current.AutomationId -eq 'TabIconPresenter' }).Count -ne 1 -or
+                    @($parts | Where-Object { $_.Current.AutomationId -eq 'HistoryProviderIcon' }).Count -ne 1) { return $false }
+                Save-UiScreenshot -App $script:app -Path $imagePath | Out-Null
+                $bitmap = [Drawing.Bitmap]::new($imagePath)
+                try {
+                    $window = $root.Current.BoundingRectangle
+                    $sx = $bitmap.Width / $window.Width
+                    $sy = $bitmap.Height / $window.Height
+                    foreach ($part in $parts) {
+                        $rect = $part.Current.BoundingRectangle
+                        $left = [Math]::Max(0, [int][Math]::Floor(($rect.Left - $window.Left) * $sx))
+                        $top = [Math]::Max(0, [int][Math]::Floor(($rect.Top - $window.Top) * $sy))
+                        $right = [Math]::Min($bitmap.Width, [int][Math]::Ceiling(($rect.Right - $window.Left) * $sx))
+                        $bottom = [Math]::Min($bitmap.Height, [int][Math]::Ceiling(($rect.Bottom - $window.Top) * $sy))
+                        $matches = 0
+                        for ($y = $top; $y -lt $bottom; $y++) {
+                            for ($x = $left; $x -lt $right; $x++) {
+                                $pixel = $bitmap.GetPixel($x, $y)
+                                if ([Math]::Abs($pixel.R - $Color.R) -le 5 -and
+                                    [Math]::Abs($pixel.G - $Color.G) -le 5 -and
+                                    [Math]::Abs($pixel.B - $Color.B) -le 5) { $matches++ }
+                            }
+                        }
+                        if ($matches -lt 4) { return $false }
+                    }
+                    return $true
+                } finally { $bitmap.Dispose() }
+            } | Out-Null
+        }
+        try {
+            Set-WtSetting -App $script:app -Key agentSessionManagementEnabled -Value $true | Out-Null
+            Set-WtSetting -App $script:app -Key sidebarShowRecentAgentSessions -Value $true | Out-Null
+            $builtin = @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles |
+                Where-Object agent_id -EQ 'copilot') | Select-Object -First 1
+            $builtin | Should -Not -BeNullOrEmpty
+            foreach ($target in @(
+                @{ id = $script:profile; provider = 'custom:profile-resume-fixture' },
+                @{ id = $builtin.id; provider = 'copilot' }
+            )) {
+                $marker = 'profile-icon-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+                $conversation = [guid]::NewGuid().ToString()
+                foreach ($phase in @(
+                    @{ name = 'before'; color = [Drawing.Color]::FromArgb(245, 39, 131) },
+                    @{ name = 'after'; color = [Drawing.Color]::FromArgb(23, 197, 173) }
+                )) {
+                    $iconPath = Join-Path $script:proofRoot "$marker-$($phase.name).png"
+                    $icon = [Drawing.Bitmap]::new(16, 16)
+                    $graphics = [Drawing.Graphics]::FromImage($icon)
+                    try {
+                        $graphics.Clear($phase.color)
+                        $icon.Save($iconPath, [Drawing.Imaging.ImageFormat]::Png)
+                    } finally { $graphics.Dispose(); $icon.Dispose() }
+                    $profiles = Get-WtSetting -App $script:app -Key profiles
+                    $entry = @($profiles.list | Where-Object guid -EQ $target.id)[0]
+                    $entry | Add-Member -NotePropertyName icon -NotePropertyValue $iconPath -Force
+                    $entry | Add-Member -NotePropertyName commandline -NotePropertyValue "`"$script:fixture`"" -Force
+                    $entry.name = "$marker-$($phase.name)"
+                    Set-WtSetting -App $script:app -Key profiles -Value $profiles | Out-Null
+                    if ($phase.name -eq 'before') {
+                        $created = Invoke-WtCli -App $script:app -Arguments @('new-tab', '-w', "$($script:app.WindowId)", '-p', $target.id, '-n', $marker)
+                        $panes += $created.session_id
+                        Assert-NativeFixtureTarget $created.session_id
+                        $hook = @{
+                            cli_source = $target.provider; agent_session_id = $conversation
+                            event = 'agent.session.start'; pane_id = $created.session_id
+                            payload = @{ cwd = $script:proofRoot; title = $marker }
+                        } | ConvertTo-Json -Depth 5 -Compress
+                        Invoke-WtCli -App $script:app -Arguments @('send-event', '-p', $created.session_id, '-e', 'agent.session.start', $hook) | Out-Null
+                        Wait-Until -TimeoutSec 15 -Because 'the owned conversation reaches the recent-session model' -Condition {
+                            @(Get-NativeMasterSessions | Where-Object {
+                                $_.session_id -eq $conversation -and $_.provider_id -eq $target.provider -and $_.title -eq $marker
+                            }).Count -eq 1
+                        } | Out-Null
+                    }
+                    Assert-ProfileIconColor $marker $phase.color "$marker-$($phase.name)"
+                    @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles | Where-Object {
+                        $_.id -eq $target.id -and $_.agent_id -eq $target.provider
+                    }).Count | Should -Be 1
+                }
+                Invoke-WtCli -App $script:app -Arguments @('kill-pane', '-t', $created.session_id) | Out-Null
+                $panes = @($panes | Where-Object { $_ -ne $created.session_id })
+            }
+        } finally {
+            Set-UiValue -App $script:app -Selector SearchTextBox -Value '' | Out-Null
+            foreach ($pane in $panes) {
+                Invoke-WtCli -App $script:app -Arguments @('kill-pane', '-t', $pane) | Out-Null
+            }
+            Set-WtSetting -App $script:app -Key profiles -Value $savedProfiles | Out-Null
+        }
+    }
+
     It 'Agent profile settings expose an indicator and automatic session ID guidance' {
         Open-WtSettings -App $script:app | Out-Null
         [IO.File]::WriteAllText((Join-Path $script:proofRoot 'settings-navigation.txt'), (Get-UiTree -App $script:app -Depth 20))
@@ -550,12 +716,17 @@ public static class NativeProfileResumeMasterGate {
         $tree = Get-UiTree -App $script:app -Depth 15
         Test-UiElementExists -App $script:app -Selector 'Added after the normal startup arguments only when resuming a session. The session ID is appended automatically.' -TimeoutSec 10 | Should -BeTrue
         $tree | Should -Match 'Delete profile'
+        $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
+        $deleteCondition = [Windows.Automation.PropertyCondition]::new(
+            [Windows.Automation.AutomationElement]::AutomationIdProperty, 'DeleteButton')
+        $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $deleteCondition).Current.IsEnabled | Should -BeTrue
         $original = @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles |
             Where-Object agent_id -EQ 'custom:fixture-adapter') | Select-Object -First 1
         Select-NativeProfilePage $original.name
         $generated = Get-UiTree -App $script:app -Depth 15
         $generated | Should -Match 'Agent profile'
-        $generated | Should -Not -Match 'Delete profile'
+        $generated | Should -Match 'Delete profile'
+        $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $deleteCondition).Current.IsEnabled | Should -BeFalse
         $generated | Should -Match 'Appearance'
     }
 }

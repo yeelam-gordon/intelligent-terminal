@@ -66,22 +66,34 @@ namespace winrt::TerminalApp::implementation
     {
         if (control)
         {
-            const auto providerId = winrt::get_self<ContentManager>(_manager)->NativeAgentProviderId(control.ContentId());
+            auto providerId = winrt::get_self<ContentManager>(_manager)->NativeAgentProviderId(control.ContentId());
             if (const auto agentInfo = _RichTabAgentInfoForControl(control);
-                agentInfo &&
-                !agentInfo->providerId.empty() &&
-                (agentInfo->status == "Idle" ||
-                 agentInfo->status == "Working" ||
-                 agentInfo->status == "Attention" ||
-                 agentInfo->status == "Error"))
+                agentInfo && !agentInfo->providerId.empty() &&
+                (agentInfo->status == "Idle" || agentInfo->status == "Working" ||
+                 agentInfo->status == "Attention" || agentInfo->status == "Error"))
             {
-                return _IsBuiltinAgentProviderId(agentInfo->providerId) ?
-                           ::Microsoft::Terminal::UI::AgentIcons::IconPathForProvider(std::wstring_view{ winrt::to_hstring(agentInfo->providerId) }) :
-                           profileIcon;
+                providerId = winrt::to_hstring(agentInfo->providerId);
             }
             if (!providerId.empty())
             {
-                return ::Microsoft::Terminal::UI::AgentIcons::IconPathForProvider(std::wstring_view{ providerId });
+                for (const auto& tab : _RuntimeTabs())
+                {
+                    const auto tabImpl = _GetTabImpl(tab);
+                    const auto root = tabImpl ? tabImpl->GetRootPane() : nullptr;
+                    if (const auto pane = root ? root->FindPaneByContentId(gsl::narrow<uint32_t>(control.ContentId())) : nullptr)
+                    {
+                        const auto profile = pane->GetProfile();
+                        if (profile && ::Microsoft::Terminal::Settings::Model::AgentRegistry::AgentIdEquals(profile.AgentProfileId(), providerId))
+                        {
+                            return profile.Icon().Resolved();
+                        }
+                    }
+                }
+                if (const auto profile = _FindNativeAgentProfile(providerId, {}))
+                {
+                    return profile.Icon().Resolved();
+                }
+                return L"ms-appx:///AgentIcons/generic.svg";
             }
         }
         return profileIcon;

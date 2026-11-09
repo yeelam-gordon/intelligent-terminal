@@ -105,5 +105,6 @@ namespace Microsoft.Terminal.Settings.Model
         INHERITABLE_PROFILE_SETTING(String, AgentProfileArguments);
         INHERITABLE_PROFILE_SETTING(String, AgentProfileResumeArguments);
         INHERITABLE_PROFILE_SETTING(String, DefaultSplitProfile);
+        Boolean IsDeletable { get; };
     }
 }

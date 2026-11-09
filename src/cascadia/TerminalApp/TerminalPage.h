@@ -1108,6 +1108,10 @@ namespace winrt::TerminalApp::implementation
         bool _RichTabCwdDependentFieldsVisible() const;
         std::vector<std::string> _SelectedRichTabVisibleFields() const;
         winrt::hstring _AgentIconForControl(const Microsoft::Terminal::Control::TermControl& control, const winrt::hstring& profileIcon);
+        winrt::Microsoft::Terminal::Settings::Model::Profile _FindNativeAgentProfile(
+            const winrt::hstring& providerId,
+            const winrt::hstring& sessionId,
+            std::optional<winrt::guid> requestedGuid = std::nullopt);
         std::unordered_map<std::string, std::string> _BuildRichTabFirstPartyFields(const Microsoft::Terminal::Control::TermControl& control);
         void _UpdateRichTabFirstPartyFields(const Microsoft::Terminal::Control::TermControl& control);
         void _LogSidebarRowFieldsTelemetry(const char* source) const;

@@ -50,6 +50,36 @@ namespace winrt
 
 namespace winrt::TerminalApp::implementation
 {
+    void TabStripHistoryItem::SyncIcon(const hstring& iconPath)
+    {
+        if (_iconPath == iconPath && IconSource())
+        {
+            return;
+        }
+        _iconPath = iconPath;
+        IconSource(::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(iconPath, false));
+    }
+
+    void TabStripHistoryItem::IconSource(const IInspectable& value)
+    {
+        const auto source = value.try_as<MUX::Controls::IconSource>();
+        THROW_HR_IF(E_INVALIDARG, !source);
+        if (_iconSource != source)
+        {
+            _iconSource = source;
+            PropertyChanged.raise(*this, WUX::Data::PropertyChangedEventArgs{ L"IconSource" });
+        }
+    }
+
+    WUX::Controls::IconElement TabStripHistoryItem::CreateIcon(const IInspectable& source) const
+    {
+        auto element = ::Microsoft::Terminal::UI::AgentIcons::ElementForIconSource(
+            source.as<MUX::Controls::IconSource>(), _iconPath.value_or(hstring{}));
+        element.Width(16);
+        element.Height(16);
+        return element;
+    }
+
     // TreeView 2.8 writes native node moves back through IBindableVector, not IVector<IInspectable>.
     struct SidebarViewportItems :
         implements<SidebarViewportItems,
@@ -2465,12 +2495,10 @@ namespace winrt::TerminalApp::implementation
                     _applyHistoryRowAutomation(container, item);
                 }
             }
-            auto iconKey = box_value(L"AgentIcon." + item.AgentId());
-            if (!Resources().HasKey(iconKey))
+            if (!item.IconSource())
             {
-                iconKey = box_value(L"AgentIcon.generic");
+                winrt::get_self<TabStripHistoryItem>(item)->SyncIcon(L"ms-appx:///AgentIcons/generic.svg");
             }
-            item.IconTemplate(Resources().Lookup(iconKey).as<DataTemplate>());
             _historySearchTerms.emplace_back(_buildHistorySearchTerms(item));
         }
         _applyHistoryProjection(true);
@@ -3811,7 +3839,6 @@ namespace winrt::TerminalApp::implementation
                 left.ProviderDisplayName() == right.ProviderDisplayName() &&
                 left.Cwd() == right.Cwd() &&
                 left.IsAgentPane() == right.IsAgentPane() &&
-                left.IconTemplate() == right.IconTemplate() &&
                 (!includeStatus ||
                  (left.Status() == right.Status() &&
                   winrt::get_self<TabStripHistoryItem>(left)->HasUnreadActivity() == winrt::get_self<TabStripHistoryItem>(right)->HasUnreadActivity() &&
@@ -3985,6 +4012,7 @@ namespace winrt::TerminalApp::implementation
                     {
                         const auto nativeCurrent = winrt::get_self<TabStripHistoryItem>(current);
                         const auto nativeIncoming = winrt::get_self<TabStripHistoryItem>(incoming);
+                        nativeCurrent->SyncIcon(nativeIncoming->IconPath());
                         if (!_sameHistoryItem(current, incoming))
                         {
                             const auto paneChanged = current.PaneSessionId() != incoming.PaneSessionId();

@@ -80,6 +80,28 @@ namespace winrt
 
 namespace TerminalAppLocalTests
 {
+    static Profile AddNativeAgentIconProfile(const CascadiaSettings& settings, const winrt::hstring& providerId, const winrt::hstring& icon)
+    {
+        constexpr GUID profileNamespace{ 0x2bde4a90, 0xd05f, 0x401c, { 0x94, 0x92, 0xe4, 0x8, 0x84, 0xea, 0xd1, 0xd8 } };
+        const auto identity = std::wstring{ ::Microsoft::Terminal::AgentProfiles::Source } + L":" + std::wstring{ providerId };
+        Profile profile{ winrt::guid{ Utils::CreateV5Uuid(profileNamespace, std::as_bytes(std::span{ identity })) } };
+        profile.Source(winrt::hstring{ ::Microsoft::Terminal::AgentProfiles::Source });
+        profile.Name(providerId);
+        profile.AgentProfileId(providerId);
+        profile.Commandline(L"cmd.exe /d /k");
+        profile.Icon(MediaResourceHelper::FromString(icon));
+        settings.AllProfiles().Append(profile);
+        return profile;
+    }
+
+    static void AddNativeAgentIconProfiles(const CascadiaSettings& settings)
+    {
+        for (const auto& agent : ::Microsoft::Terminal::Settings::Model::AgentRegistry::BuiltinNativeProfileAgents)
+        {
+            AddNativeAgentIconProfile(settings, winrt::hstring{ agent.id }, winrt::hstring{ L"ms-appx:///AgentIcons/" } + winrt::hstring{ agent.id } + L".svg");
+        }
+    }
+
     class TestSettingsPaneContent :
         public winrt::implements<TestSettingsPaneContent, IPaneContent>,
         public winrt::TerminalApp::implementation::BasicPaneEvents
@@ -567,7 +589,8 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabSelectionPreservesPresentation);
         TEST_METHOD(VerticalTabIconChangesUpdatePresentation);
         TEST_METHOD(SettingsTabIconFollowsContentAndTheme);
-        TEST_METHOD(RunningAgentIconOverridesProfileIcon);
+        TEST_METHOD(RunningAgentUsesCorrespondingProfileIcon);
+        TEST_METHOD(AgentProfileIconsFollowIdentityAndEdits);
         TEST_METHOD(AgentsOnlyPaneIconsFollowRowForeground);
         TEST_METHOD(NativeAgentCreationOwnsProviderBeforeHooks);
         TEST_METHOD(NativeAgentCreationMetadataSurvivesAdmissionLifecycle);
@@ -12815,6 +12838,7 @@ namespace TerminalAppLocalTests
         using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
         auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
         TestOnUIThread([&]() {
+            AddNativeAgentIconProfiles(page->_settings);
             page->_tabStrip.RichTabAgentStatusVisible(false);
             for (const auto launchProvider : { L"copilot", L"custom:fixture" })
             {
@@ -14646,32 +14670,98 @@ namespace TerminalAppLocalTests
             {
                 auto item = winrt::make<winrt::TerminalApp::implementation::TabStripHistoryItem>();
                 item.AgentId(provider);
-                stripImpl->CommitHistorySnapshot({ item });
                 const auto iconId = std::wstring_view{ provider }.empty() || std::wstring_view{ provider }.starts_with(L"custom:") ?
                                         winrt::hstring{ L"generic" } :
                                         winrt::hstring{ provider };
-                const auto expected = strip.Resources().Lookup(winrt::box_value(L"AgentIcon." + iconId)).as<DataTemplate>();
-                VERIFY_IS_TRUE(item.IconTemplate() == expected);
-                const auto art = item.IconTemplate().LoadContent().as<Viewbox>();
-                const auto bitmap = art.Child().as<BitmapIcon>();
+                const auto model = winrt::get_self<winrt::TerminalApp::implementation::TabStripHistoryItem>(item);
+                model->SyncIcon(winrt::hstring{ L"ms-appx:///AgentIcons/" } + iconId + L".svg");
+                stripImpl->CommitHistorySnapshot({ item });
+                const auto bitmap = item.CreateIcon(item.IconSource()).as<BitmapIcon>();
                 VERIFY_IS_TRUE(bitmap.ShowAsMonochrome());
                 VERIFY_ARE_EQUAL(winrt::hstring{ L"ms-appx:///AgentIcons/Masks/" } + iconId + L".png", bitmap.UriSource().AbsoluteUri());
-                for (const auto size : { 14.0f, 16.0f })
-                {
-                    art.Measure({ size, size });
-                    art.Arrange({ 0, 0, size, size });
-                    art.UpdateLayout();
-                    VERIFY_ARE_EQUAL(static_cast<double>(size), art.ActualWidth());
-                    VERIFY_ARE_EQUAL(static_cast<double>(size), art.ActualHeight());
-                }
-                for (const auto color : { winrt::Windows::UI::Colors::Black(), winrt::Windows::UI::Colors::White() })
-                {
-                    Media::SolidColorBrush foreground{ color };
-                    art.DataContext(foreground);
-                    VERIFY_IS_TRUE(bitmap.Foreground() == foreground);
-                }
+                VERIFY_ARE_EQUAL(16.0, bitmap.Width());
+                VERIFY_ARE_EQUAL(16.0, bitmap.Height());
+                VERIFY_IS_FALSE(bitmap == item.CreateIcon(item.IconSource()));
             }
+
+            auto custom = winrt::make<winrt::TerminalApp::implementation::TabStripHistoryItem>();
+            custom.AgentId(L"custom:fixture");
+            custom.SessionId(L"profile-icon");
+            const auto model = winrt::get_self<winrt::TerminalApp::implementation::TabStripHistoryItem>(custom);
+            uint32_t iconChanges = 0;
+            custom.PropertyChanged([&](auto&&, auto&& args) {
+                if (args.PropertyName() == L"IconSource")
+                {
+                    ++iconChanges;
+                }
+            });
+            model->SyncIcon(L"ms-appx:///ProfileIcons/{0caa0dad-35be-5f56-a8ff-afceeeaa6101}.png");
+            stripImpl->CommitHistorySnapshot({ custom });
+            const auto bitmap = custom.CreateIcon(custom.IconSource()).as<BitmapIcon>();
+            VERIFY_IS_FALSE(bitmap.ShowAsMonochrome());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ms-appx:///ProfileIcons/{0caa0dad-35be-5f56-a8ff-afceeeaa6101}.png" }, bitmap.UriSource().AbsoluteUri());
+            model->SyncIcon(L"\xE713");
+            VERIFY_ARE_EQUAL(2u, iconChanges);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE713" }, custom.CreateIcon(custom.IconSource()).as<FontIcon>().Glyph());
+
+            auto refreshed = winrt::make<winrt::TerminalApp::implementation::TabStripHistoryItem>();
+            refreshed.AgentId(custom.AgentId());
+            refreshed.SessionId(custom.SessionId());
+            winrt::get_self<winrt::TerminalApp::implementation::TabStripHistoryItem>(refreshed)->SyncIcon(L"\xE756");
+            const auto displayed = strip.HistoryItems().GetAt(0);
+            stripImpl->CommitHistorySnapshot({ refreshed });
+            VERIFY_IS_TRUE(strip.HistoryItems().GetAt(0) == displayed);
+            VERIFY_ARE_EQUAL(3u, iconChanges);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE756" }, displayed.CreateIcon(displayed.IconSource()).as<FontIcon>().Glyph());
         });
+    }
+
+    void TabTests::AgentProfileIconsFollowIdentityAndEdits()
+    {
+        using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
+        using Page = winrt::TerminalApp::implementation::TerminalPage;
+        for (const auto provider : { L"copilot", L"custom:qwen" })
+        {
+            auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+            TestOnUIThread([&]() {
+                const auto profile = AddNativeAgentIconProfile(page->_settings, provider, L"\xE713");
+                profile.Name(L"Renamed agent profile");
+                const auto copy = page->_settings.DuplicateProfile(profile);
+                copy.Name(L"Different profile name");
+                copy.Icon(MediaResourceHelper::FromString(L"\xE756"));
+                VERIFY_ARE_EQUAL(profile.Guid(), page->_FindNativeAgentProfile(provider, {}).Guid());
+                VERIFY_ARE_EQUAL(copy.Guid(), page->_FindNativeAgentProfile(provider, {}, copy.Guid()).Guid());
+                VERIFY_IS_FALSE(profile.IsDeletable());
+                VERIFY_IS_TRUE(copy.IsDeletable());
+
+                NewTerminalArgs args;
+                args.Profile(Utils::GuidToString(profile.Guid()));
+                const auto connection = winrt::make_self<TestConnection>(Utils::CreateGuid(), State::Connected);
+                const auto pane = page->_MakePane(args, nullptr, *connection);
+                VERIFY_IS_NOT_NULL(page->_CreateNewTabFromPane(pane));
+                const auto tab = page->_GetFocusedTabImpl();
+                tab->SuppressAgentPrewarm();
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE713" }, tab->Icon());
+                profile.Icon(MediaResourceHelper::FromString(L"\xE8A5"));
+                page->_UpdateTabIcon(*tab);
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE8A5" }, tab->Icon());
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE8A5" }, page->_AgentIconForControl(pane->GetTerminalControl(), pane->GetContent().Icon()));
+
+                page->_isVerticalRailVisible = true;
+                page->_isVerticalRailCollapsed = false;
+                page->_tabStrip.SidebarFilters().ShowRecentAgentSessions(true);
+                page->_historyRequestGeneration = 42;
+                auto item = winrt::make<winrt::TerminalApp::implementation::TabStripHistoryItem>();
+                item.AgentId(provider);
+                item.SessionId(L"history-session");
+                Page::_SidebarHistorySnapshot snapshot;
+                snapshot.state = Page::_SidebarHistorySnapshot::State::Ready;
+                snapshot.items.emplace_back(item);
+                page->_CompleteSidebarHistoryRefresh(42, std::move(snapshot));
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE8A5" }, item.CreateIcon(item.IconSource()).as<FontIcon>().Glyph());
+                VERIFY_ARE_EQUAL(profile.Guid(), page->_FindNativeAgentProfile(provider, {}).Guid());
+            });
+        }
     }
 
     void TabTests::VerticalTabHistoryEndedPresentation()
@@ -25062,6 +25152,7 @@ namespace TerminalAppLocalTests
         TestOnUIThread([&]() {
             const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
             const auto sourceConnection = winrt::make_self<TestConnection>(winrt::guid{ L"{22911111-2222-3333-4444-555555555555}" }, State::Connected);
+            AddNativeAgentIconProfiles(page->_settings);
             NewTerminalArgs sourceArgs;
             sourceArgs.NativeAgentProviderId(L"copilot");
             const auto sourcePane = page->_MakePane(sourceArgs, nullptr, *sourceConnection);
@@ -25603,6 +25694,7 @@ namespace TerminalAppLocalTests
             VERIFY_IS_FALSE(page->_RichTabAgentInfoForControl(controls[0]).has_value());
             // State follows ContentId, not a replaced split Pane or TermControl.
             const auto transferredContentId = controls[1].ContentId();
+            AddNativeAgentIconProfiles(page->_settings);
             const auto unrelatedEpoch = manager->NativeAgentObservationForContent(controls[0].ContentId()).value().modeEpoch;
             page->_TryPublishInteractiveResumeBinding(
                 controls[1], _formatPaneId(ids[1]), {}, L"claude", L"11111111-2222-3333-4444-555555555555");
@@ -26066,6 +26158,7 @@ namespace TerminalAppLocalTests
             VERIFY_IS_FALSE(page->_RichTabAgentInfoForControl(control).has_value());
             VERIFY_IS_FALSE(page->_BuildRichTabFirstPartyFields(control).contains("agentStatus"));
 
+            AddNativeAgentIconProfiles(page->_settings);
             for (const auto& [provider, icon] : {
                      std::pair{ L"copilot", L"ms-appx:///AgentIcons/copilot.svg" },
                      std::pair{ L"claude", L"ms-appx:///AgentIcons/claude.svg" } })
@@ -26644,6 +26737,7 @@ namespace TerminalAppLocalTests
         {
             auto page = _commonSetup(nullptr, nullptr, std::nullopt, verticalLayout);
             TestOnUIThread([&]() {
+                AddNativeAgentIconProfiles(page->_settings);
                 const auto profile = page->_settings.ActiveProfiles().GetAt(1);
                 profile.AgentProfileId(L"copilot");
                 profile.Icon(MediaResourceHelper::FromString(L"ms-appx:///AgentIcons/copilot.svg"));
@@ -26823,6 +26917,7 @@ namespace TerminalAppLocalTests
         const auto baseline = winrt::make_self<TestConnection>(winrt::guid{ L"{44911111-2222-3333-4444-555555555555}" }, State::Connected);
         auto page = _commonSetup(*baseline);
         TestOnUIThread([&]() {
+            AddNativeAgentIconProfiles(page->_settings);
             const auto manager = winrt::get_self<winrt::TerminalApp::implementation::ContentManager>(page->_manager);
             for (const auto provider : { L"copilot", L"claude", L"codex", L"gemini", L"opencode", L"antigravity", L"custom:fixture" })
             {
@@ -27101,7 +27196,7 @@ namespace TerminalAppLocalTests
         });
     }
 
-    void TabTests::RunningAgentIconOverridesProfileIcon()
+    void TabTests::RunningAgentUsesCorrespondingProfileIcon()
     {
         using State = winrt::Microsoft::Terminal::TerminalConnection::ConnectionState;
         const auto connection = winrt::make_self<TestConnection>(winrt::guid{ L"{436c8552-a3b3-4141-9b6c-c57b3251936e}" }, State::Connected);
@@ -27134,6 +27229,7 @@ namespace TerminalAppLocalTests
                    winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(page->_tabStrip)->HeaderForTab(focused->TabViewItem()) != nullptr;
         });
         TestOnUIThread([&]() {
+            AddNativeAgentIconProfiles(page->_settings);
             page->Width(1200);
             page->Height(600);
             page->UpdateLayout();

@@ -65,6 +65,30 @@ Copy a profile to create multiple project configurations for the same agent.
 Settings identifies these pages with an **Agent profile** label, including
 user-created copies.
 
+Agent selection and profile lookup use `agentProfile.id` and the generated
+profile's stable GUID, not its editable display name. Changing a profile's icon
+changes the icon for its running tabs and panes and corresponding recent-session
+rows. A known session keeps its owning profile, including a copy; history without
+that association uses the corresponding generated original.
+
+Supported generated agent profiles and the internal Agent Pane profile expose
+`IsDeletable = false` to the Settings model. The editor disables Delete Profile,
+but their other settings remain editable. Removing one of these profiles from
+JSON recreates its generated entry on the next settings load; explicitly hiding
+it remains supported. Copies and profiles for agents no longer supported remain
+deletable.
+
+New generated agent profiles default to `%USERPROFILE%` as their starting
+directory. On upgrade, existing agent profiles whose effective starting
+directory is empty are changed to `%USERPROFILE%` once. Non-empty values,
+including `.` and inherited profile defaults, are preserved; ordinary shell
+profiles are unchanged. After migration, choosing an empty directory again
+continues to inherit the launching process's directory.
+
+The hidden `internal.agentProfileStartingDirectoryMigrationCompleted` setting
+is saved with the migrated directories in `settings.json`. Removing this marker
+allows the migration to run again.
+
 An empty model or permission mode adds no corresponding managed option. The CLI
 keeps its configured default unless an explicitly provided additional argument
 changes it. Permission choices use provider-specific native modes.

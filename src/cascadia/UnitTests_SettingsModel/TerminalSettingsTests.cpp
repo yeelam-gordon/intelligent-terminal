@@ -315,8 +315,8 @@ namespace SettingsModelUnitTests
         const auto shell = settings.GetProfileForArgs(saved);
         shell.AgentProfileId(L"custom:fixture");
         const auto customSettings = TerminalSettings::CreateWithNewTerminalArgs(settings, saved).DefaultSettings();
-        VERIFY_IS_FALSE(customSettings->UsesManagedAgentCommand());
-        VERIFY_ARE_EQUAL(winrt::hstring{ L"cmd.exe" }, customSettings->Commandline());
+        VERIFY_IS_TRUE(customSettings->UsesManagedAgentCommand());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"\"cmd.exe\"" }, customSettings->Commandline());
         shell.ClearAgentProfileId();
         saved.NativeAgentProviderId(L"claude");
         saved.Profile(L"{00000000-0000-0000-0000-000000000003}");

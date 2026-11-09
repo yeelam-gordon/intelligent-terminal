@@ -17,6 +17,7 @@
 #include "WslDistroGenerator.h"
 #include "SshHostGenerator.h"
 #include "AgentProfileGenerator.h"
+#include "../inc/AgentProfileUtils.h"
 
 #include "ApplicationState.h"
 #include "../inc/AgentPolicy.h"
@@ -545,17 +546,21 @@ void SettingsLoader::FinalizeLayering()
 //
 // Returns true if something got changed and
 // the settings need to be saved to disk.
-bool SettingsLoader::DisableDeletedProfiles()
+bool SettingsLoader::DisableDeletedProfiles(ApplicationState& state)
 {
-    const auto& state = winrt::get_self<ApplicationState>(ApplicationState::SharedInstance());
-    auto generatedProfileIds = state->GeneratedProfiles();
+    auto generatedProfileIds = state.GeneratedProfiles();
     auto newGeneratedProfiles = false;
+    auto restoredProtectedProfiles = false;
 
     for (const auto& profile : _getNonUserOriginProfiles())
     {
         if (generatedProfileIds.emplace(profile->Guid()).second)
         {
             newGeneratedProfiles = true;
+        }
+        else if (!profile->IsDeletable())
+        {
+            restoredProtectedProfiles = true;
         }
         else
         {
@@ -566,10 +571,10 @@ bool SettingsLoader::DisableDeletedProfiles()
 
     if (newGeneratedProfiles)
     {
-        state->GeneratedProfiles(generatedProfileIds);
+        state.GeneratedProfiles(generatedProfileIds);
     }
 
-    return newGeneratedProfiles;
+    return newGeneratedProfiles || restoredProtectedProfiles;
 }
 
 // Returns true if something got changed and
@@ -660,6 +665,28 @@ bool SettingsLoader::FixupUserSettings()
 
     auto fixedUp = userSettings.fixupsAppliedDuringLoad;
     fixedUp = userSettings.globals->FixupsAppliedDuringLoad() || fixedUp;
+
+    if (!userSettings.globals->AgentProfileStartingDirectoryMigrationCompleted())
+    {
+        auto hasAgentProfiles = false;
+        for (const auto& profile : userSettings.profiles)
+        {
+            if (!profile->AgentProfileId().empty() || profile->Source() == ::Microsoft::Terminal::AgentProfiles::Source)
+            {
+                hasAgentProfiles = true;
+                if (profile->StartingDirectory().empty())
+                {
+                    profile->StartingDirectory(L"%USERPROFILE%");
+                }
+            }
+        }
+        if (hasAgentProfiles)
+        {
+            // Persist completion with the directories, not in a separate state write.
+            userSettings.globals->AgentProfileStartingDirectoryMigrationCompleted(true);
+            fixedUp = true;
+        }
+    }
 
     fixedUp = RemapColorSchemeForProfile(userSettings.baseLayerProfile) || fixedUp;
     for (const auto& profile : userSettings.profiles)
@@ -1322,7 +1349,7 @@ try
 
     // DisableDeletedProfiles returns true whenever we encountered any new generated/dynamic profiles.
     // Similarly FixupUserSettings returns true, when it encountered settings that were patched up.
-    mustWriteToDisk |= loader.DisableDeletedProfiles();
+    mustWriteToDisk |= loader.DisableDeletedProfiles(*applicationState);
     mustWriteToDisk |= loader.FixupUserSettings();
     mustWriteToDisk |= loader.AddDynamicProfileFolders();
 

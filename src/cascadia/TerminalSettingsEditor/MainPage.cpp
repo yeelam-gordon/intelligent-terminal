@@ -1503,7 +1503,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         {
             if (profileList.GetAt(i).Guid() == guid)
             {
-                if (::Microsoft::Terminal::AgentProfiles::IsProtected(profileList.GetAt(i)))
+                if (!profileList.GetAt(i).IsDeletable())
                 {
                     return;
                 }

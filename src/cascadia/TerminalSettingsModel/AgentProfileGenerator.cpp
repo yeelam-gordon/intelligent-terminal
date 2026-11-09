@@ -46,7 +46,8 @@ std::wstring_view AgentProfileGenerator::GetIcon() const noexcept
 }
 
 const AgentProfileGenerator::DiscoveryCache::Snapshot& AgentProfileGenerator::DiscoveryCache::Get(
-    const std::chrono::steady_clock::time_point now, const std::function<Snapshot()>& probe)
+    const std::chrono::steady_clock::time_point now,
+    const std::function<Snapshot()>& probe)
 {
     if (!_snapshot || now - _lastProbe >= std::chrono::seconds{ 30 })
     {
@@ -88,6 +89,7 @@ void AgentProfileGenerator::GenerateProfiles(std::vector<winrt::com_ptr<implemen
         profile->Name(winrt::hstring{ agent.displayName });
         profile->Icon(winrt::hstring{ L"ms-appx:///AgentIcons/" + std::wstring{ agent.id } + L".svg" });
         profile->AgentProfileId(winrt::hstring{ agent.id });
+        profile->StartingDirectory(L"%USERPROFILE%");
         // Generation defaults only. Runtime resume always reads the effective profile.
         const auto resume = agent.id == L"opencode"    ? L"--session" :
                             agent.id == L"codex"       ? L"resume" :
@@ -110,6 +112,7 @@ void AgentProfileGenerator::GenerateProfiles(std::vector<winrt::com_ptr<implemen
             auto profile = CreateDynamicProfile(std::wstring{ AgentProfiles::Source } + L":" + id);
             profile->Name(winrt::hstring{ id.substr(7) });
             profile->AgentProfileId(winrt::hstring{ id });
+            profile->StartingDirectory(L"%USERPROFILE%");
             // An ACP command may name an adapter (npx/uvx/etc.), not a TUI.
             // Require a separately configured native command; never guess one.
             profile->Commandline(L"");
