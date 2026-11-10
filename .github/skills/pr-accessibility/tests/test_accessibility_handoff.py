@@ -35,6 +35,8 @@ class MarkdownHandoffTests(unittest.TestCase):
         self.assertEqual(1, context["comments"][0]["in_reply_to_id"])
         self.assertEqual(comments[0]["body"], context["comments"][0]["body"])
         self.assertEqual("b" * 40, context["comments"][0]["commit_id"])
+        self.assertEqual("https://github.com/microsoft/intelligent-terminal/commit/" + "b" * 40,
+                         context["comments"][0]["source_commit_url"])
         self.assertEqual(comments[0]["html_url"], context["comments"][0]["html_url"])
         self.assertIn("per_page=20&sort=updated&direction=desc", fetch.call_args.args[0][-1])
         self.assertNotIn("novel", context)  # evidence, never automatic adjudication
@@ -54,6 +56,9 @@ class MarkdownHandoffTests(unittest.TestCase):
                 self.assertEqual("unavailable", handoff.prior_reviews("owner/repo", 1)["coverage"])
         with patch.object(handoff.subprocess, "check_output", return_value=b'[]'):
             self.assertEqual("available", handoff.prior_reviews("owner/repo", 1)["coverage"])
+        with patch.object(handoff.subprocess, "check_output",
+                          return_value=b'[{"commit_id": "not-an-immutable-sha"}]'):
+            self.assertIsNone(handoff.prior_reviews("owner/repo", 1)["comments"][0]["source_commit_url"])
         with patch.object(handoff.subprocess, "check_output",
                           return_value=json.dumps([{}] * 21).encode()):
             context = handoff.prior_reviews("owner/repo", 1)
@@ -228,6 +233,9 @@ class CompiledGraphTests(unittest.TestCase):
                     "DEPENDENCIES_OUTCOME": "success", "FRE_OUTCOME": "success",
                     "AGENTS_OUTCOME": "success", "FRE_SETTINGS_OUTCOME": "success"}
         cases = [({}, "scan-results-available")]
+        cases.append(({"BUILD_OUTCOME": "failure", "AXE_OUTCOME": "skipped",
+                       "DEPENDENCIES_OUTCOME": "skipped", "FRE_OUTCOME": "skipped",
+                       "AGENTS_OUTCOME": "skipped", "FRE_SETTINGS_OUTCOME": "skipped"}, "incomplete"))
         for key in defaults:
             for outcome in ("failure", "skipped", "cancelled", ""):
                 cases.append(({key: outcome}, "incomplete"))

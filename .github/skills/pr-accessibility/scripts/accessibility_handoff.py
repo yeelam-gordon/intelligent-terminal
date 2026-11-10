@@ -30,6 +30,8 @@ def prior_reviews(repository, number):
             {**{field: item.get(field) for field in fields if field != "body"},
              "body": (item.get("body") or "")[:2000],
              "body_truncated": len(item.get("body") or "") > 2000,
+             "source_commit_url": f"https://github.com/{repository}/commit/{item['commit_id']}"
+             if isinstance(item.get("commit_id"), str) and re.fullmatch(r"[0-9a-fA-F]{40}", item["commit_id"]) else None,
              "author": item.get("user", {}).get("login")}
             for item in comments[:20]
         ]
