@@ -658,7 +658,6 @@ public static class NativeProfileResumeMasterGate {
                     $rowImagePath = Join-Path $script:proofRoot "$Phase-$($part.kind)-row.png"
                     $rowImages = @($rowImagePath)
                     if ($MonochromeTheme) {
-                        $part.row.SetFocus()
                         $hoverImagePath = Join-Path $script:proofRoot "$Phase-$($part.kind)-hover-row.png"
                         $hoverApp = $script:app
                         $rowSelector = $part.row.Current.Name
@@ -667,8 +666,8 @@ public static class NativeProfileResumeMasterGate {
                                 'screenshot', $rowSelector, '--output', $hoverImagePath, '--json')
                             if ($capture.ExitCode -ne 0) { throw "Owned hover capture failed: $($capture.StdErr)" }
                         }.GetNewClosure()
-                        $hoverSelector = if ($part.kind -eq 'recent') { 'HistoryCwdText' } else { 'TabCloseButton' }
-                        Invoke-ItOwnedHover -App $script:app -Selector $hoverSelector -DwellMs 250 -DuringHover $duringHover
+                        $hoverSelector = if ($part.kind -eq 'recent') { 'HistoryProviderIcon' } else { 'TabCloseButton' }
+                        Invoke-ItOwnedHover -App $script:app -Selector $hoverSelector -DwellMs 1200 -DuringHover $duringHover
                         $rowImages += $hoverImagePath
                     }
                     if ($MonochromeTheme) {

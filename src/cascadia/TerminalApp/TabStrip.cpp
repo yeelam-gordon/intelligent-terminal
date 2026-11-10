@@ -1415,9 +1415,8 @@ namespace winrt::TerminalApp::implementation
                    Windows::UI::Colors::White();
     }
 
-    static void _bindMonochromeIconForeground(ContentPresenter const& presenter, Control const& foregroundOwner)
+    static void _bindMonochromeIconForeground(IconElement const& icon, Control const& foregroundOwner)
     {
-        const auto icon = presenter ? presenter.Content().try_as<IconElement>() : nullptr;
         const auto bitmap = icon ? icon.try_as<BitmapIcon>() : nullptr;
         if (icon && foregroundOwner && !icon.try_as<MUX::Controls::ImageIcon>() &&
             (!bitmap || bitmap.ShowAsMonochrome()))
@@ -1481,6 +1480,10 @@ namespace winrt::TerminalApp::implementation
                     control.SetBinding(Control::ForegroundProperty(), binding);
                 }
             }
+        }
+        if (const auto content = providerIcon.try_as<ContentControl>())
+        {
+            _bindMonochromeIconForeground(content.Content().try_as<IconElement>(), title);
         }
     }
 
@@ -1706,7 +1709,7 @@ namespace winrt::TerminalApp::implementation
             {
                 headerImpl->SetMetadataForeground(metadataForeground, _highContrast && !foregroundBrush && !searchFocused);
             }
-            _bindMonochromeIconForeground(iconPresenter, header);
+            _bindMonochromeIconForeground(iconPresenter ? iconPresenter.Content().try_as<IconElement>() : nullptr, header);
         }
     }
 
@@ -1790,7 +1793,7 @@ namespace winrt::TerminalApp::implementation
             }
         }
         const auto presenter = root.FindName(L"PaneIconPresenter").try_as<ContentPresenter>();
-        _bindMonochromeIconForeground(presenter, button);
+        _bindMonochromeIconForeground(presenter ? presenter.Content().try_as<IconElement>() : nullptr, button);
         if (const auto hover = root.FindName(L"PaneHoverBackground").try_as<UIElement>())
         {
             const auto showHover = !active && pointerOver;
@@ -2514,6 +2517,7 @@ namespace winrt::TerminalApp::implementation
             winrt::get_self<TabStripHistoryItem>(item)->SyncIcon(resolveIconPath(item));
         }
         _applyHistoryProjection(true);
+        _refreshRealizedHistoryRowForegrounds();
     }
 
     void TabStrip::TryCompleteAgentFilterTelemetry()
@@ -4023,7 +4027,15 @@ namespace winrt::TerminalApp::implementation
                     {
                         const auto nativeCurrent = winrt::get_self<TabStripHistoryItem>(current);
                         const auto nativeIncoming = winrt::get_self<TabStripHistoryItem>(incoming);
+                        const auto iconChanged = nativeCurrent->IconPath() != nativeIncoming->IconPath();
                         nativeCurrent->SyncIcon(nativeIncoming->IconPath());
+                        if (iconChanged)
+                        {
+                            if (const auto container = ItemsList().ContainerFromItem(current).try_as<ListViewItem>())
+                            {
+                                _applyHistoryRowForeground(container.ContentTemplateRoot().try_as<FrameworkElement>(), current);
+                            }
+                        }
                         if (!_sameHistoryItem(current, incoming))
                         {
                             const auto paneChanged = current.PaneSessionId() != incoming.PaneSessionId();

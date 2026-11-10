@@ -14749,6 +14749,14 @@ namespace TerminalAppLocalTests
             const auto root = strip->ItemsList().ContainerFromItem(item).as<ListViewItem>().ContentTemplateRoot().as<FrameworkElement>();
             const auto title = root.FindName(L"HistoryTitleText").as<Control>();
             const auto provider = root.FindName(L"HistoryProviderIcon").as<ContentControl>();
+            const auto verifyIconBinding = [&]() {
+                const auto icon = provider.Content().as<IconElement>();
+                const auto binding = icon.GetBindingExpression(IconElement::ForegroundProperty());
+                VERIFY_IS_NOT_NULL(binding);
+                VERIFY_IS_TRUE(binding.ParentBinding().Source() == title);
+                VERIFY_IS_TRUE(icon.Foreground() == title.Foreground());
+            };
+            verifyIconBinding();
             winrt::MUX::Controls::TabViewItem tab;
             for (const auto color : { winrt::Windows::UI::Colors::White(), winrt::Windows::UI::Colors::Black(), winrt::Windows::UI::Colors::Blue() })
             {
@@ -14759,13 +14767,33 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_NOT_NULL(item.CurrentForeground());
                 VERIFY_IS_TRUE(title.Foreground() == item.CurrentForeground());
                 VERIFY_IS_TRUE(provider.Foreground() == title.Foreground());
-                const auto icon = provider.Content().as<BitmapIcon>();
-                VERIFY_IS_TRUE(icon.ReadLocalValue(IconElement::ForegroundProperty()) == DependencyProperty::UnsetValue());
-                VERIFY_IS_TRUE(icon.Foreground() == title.Foreground());
+                verifyIconBinding();
             }
             strip->SetCurrentHistoryItem(nullptr, nullptr);
             VERIFY_IS_FALSE(item.IsCurrent());
             VERIFY_IS_TRUE(provider.ReadLocalValue(Control::ForegroundProperty()) == DependencyProperty::UnsetValue());
+            verifyIconBinding();
+            auto refreshed = winrt::make<winrt::TerminalApp::implementation::TabStripHistoryItem>();
+            refreshed.SessionId(item.SessionId());
+            refreshed.AgentId(item.AgentId());
+            refreshed.Title(item.Title());
+            winrt::get_self<winrt::TerminalApp::implementation::TabStripHistoryItem>(refreshed)->SyncIcon(L"ms-appx:///AgentIcons/claude.svg");
+            strip->CommitHistorySnapshot({ refreshed }, true);
+            view.strip.UpdateLayout();
+            VERIFY_IS_TRUE(view.strip.HistoryItems().GetAt(0) == item);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"ms-appx:///AgentIcons/Masks/claude.png" }, provider.Content().as<BitmapIcon>().UriSource().AbsoluteUri());
+            verifyIconBinding();
+            const auto originalIcon = provider.Content();
+            strip->RefreshHistoryIcons([](const auto&) { return winrt::hstring{ L"\xE713" }; });
+            view.strip.UpdateLayout();
+            VERIFY_IS_FALSE(provider.Content() == originalIcon);
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE713" }, provider.Content().as<FontIcon>().Glyph());
+            verifyIconBinding();
+            strip->RefreshHistoryIcons([](const auto&) { return winrt::hstring{ L"ms-appx:///ProfileIcons/{0caa0dad-35be-5f56-a8ff-afceeeaa6101}.png" }; });
+            view.strip.UpdateLayout();
+            const auto fullColor = provider.Content().as<BitmapIcon>();
+            VERIFY_IS_FALSE(fullColor.ShowAsMonochrome());
+            VERIFY_IS_NULL(fullColor.GetBindingExpression(IconElement::ForegroundProperty()));
         });
     }
 
