@@ -7,9 +7,75 @@ import tempfile
 import textwrap
 import unittest
 import zipfile
+import os
+
+import yaml
 
 
 ROOT = Path(__file__).parents[4]
+
+
+class SelectedNativeStatesTests(unittest.TestCase):
+    def script(self, name):
+        data = yaml.safe_load((ROOT / ".github/workflows/native-accessibility.yml").read_text())
+        return next(s for s in data["jobs"]["native-smoke"]["steps"] if s.get("name") == name)["run"]
+
+    def test_selection_rejects_unknown_duplicate_empty_states_before_build(self):
+        script = self.script("Validate selected native states before build")
+        for selected, valid in (("agents", True), ("fre,fre-settings", True),
+                                ("", False), ("None", False), ("fre,fre", False),
+                                ("uncertain", False), ("agents,fre ", False)):
+            with self.subTest(selected=selected), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                runner = root / "select.ps1"
+                runner.write_text(script)
+                result = subprocess.run(
+                    ["pwsh", "-NoProfile", "-File", str(runner)], capture_output=True,
+                    text=True, timeout=30, env={**os.environ, "SELECTED_SURFACES": selected,
+                                               "GITHUB_OUTPUT": str(root / "output.txt")})
+                self.assertEqual(valid, result.returncode == 0, result.stderr)
+                if not valid:
+                    self.assertIn(f"Invalid native selection '{selected}'", result.stderr)
+                    self.assertIn("fre, agents, fre-settings", result.stderr)
+
+    def test_selected_only_enforcement_passes_without_unselected_artifacts(self):
+        script = self.script("Enforce native scan results")
+        for selected, invalid in (("agents", False), ("fre,fre-settings", False),
+                                  ("agents", True)):
+            with self.subTest(selected=selected, invalid=invalid), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                markers = {"fre": "NextButton", "fre-settings": "AgentComboBox", "agents": "AcpAgentComboBox"}
+                sha = "a" * 40
+                for surface in selected.split(","):
+                    destination = root / surface
+                    destination.mkdir()
+                    result = {"status": "PASS", "source_sha": "b" * 40 if invalid else sha,
+                              "surface": surface, "process_id": 123,
+                              "axe_results": str(destination / "axe-results.json")}
+                    scan = {"scan_id": surface, "process_id": 123, "window_count": 1,
+                            "error_count": 0, "visible_state_marker": markers[surface],
+                            "uia_tree": str(destination / "uia-tree.json")}
+                    tree = [{"automation_id": markers[surface], "is_offscreen": False, "process_id": 123}]
+                    for name, data in (("result", result), ("axe-results", scan), ("uia-tree", tree)):
+                        (destination / f"{name}.json").write_text(json.dumps(data))
+                runner = root / "enforce.ps1"
+                runner.write_text(script)
+                env = {**os.environ, "SELECTED_SURFACES": selected, "SOURCE_SHA": sha,
+                       "ACCESSIBILITY_RESULTS": str(root), "SELECTION_OUTCOME": "success"}
+                for surface, key in (("fre", "FRE_OUTCOME"), ("agents", "AGENTS_OUTCOME"),
+                                     ("fre-settings", "FRE_SETTINGS_OUTCOME")):
+                    env[key] = "success" if surface in selected.split(",") else "skipped"
+                result = subprocess.run(["pwsh", "-NoProfile", "-File", str(runner)],
+                                        env=env, capture_output=True, text=True, timeout=30)
+                self.assertEqual(not invalid, result.returncode == 0, result.stderr)
+
+    def test_only_exact_selected_states_have_executable_scan_steps(self):
+        data = yaml.safe_load((ROOT / ".github/workflows/native-accessibility.yml").read_text())
+        scans = [s for s in data["jobs"]["native-smoke"]["steps"] if s.get("name", "").startswith("Scan ")]
+        for step, surface in zip(scans, ("fre", "agents", "fre-settings")):
+            self.assertEqual(f"contains(format(',{{0}},', inputs.surfaces), ',{surface},')", step["if"])
+            self.assertIn(f"-Surface {surface} ", step["run"])
+        self.assertEqual(3, len(scans))
 
 
 class TrustedHarnessIdentityTests(unittest.TestCase):
@@ -149,7 +215,9 @@ class NativeWorkflowIsolationTests(unittest.TestCase):
         publication = re.split(r"\n  [a-zA-Z][\w-]*:\n", compiled.split("\n  safe_outputs:\n", 1)[1], maxsplit=1)[0]
         self.assertNotIn("native-runtime", publication)
         discovery = re.split(r"\n  [a-zA-Z][\w-]*:\n", compiled.split("\n  native-runtime:\n", 1)[1], maxsplit=1)[0]
-        self.assertRegex(discovery, r"(?m)^    needs: agent$")
+        self.assertIn("      - agent", discovery)
+        self.assertIn("      - native-selection", discovery)
+        self.assertIn("needs.agent.result == 'success'", discovery)
         self.assertIn("head-sha: ${{ github.event.pull_request.head.sha }}", discovery)
         self.assertNotIn("published", discovery)
         self.assertNotIn("safe_outputs", discovery)
