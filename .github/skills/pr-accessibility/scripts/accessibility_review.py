@@ -302,6 +302,7 @@ def _verify_instruction_boundary(root: Path, base: str, head: str) -> None:
     trusted_harness_paths = ("test/accessibility/", "build/scripts/get-dependenciesfromappxrecipe.ps1")
     spelling_wordlists = {
         ".github/actions/spelling/allow/allow.txt",
+        ".github/actions/spelling/allow/apis.txt",
         ".github/actions/spelling/expect/expect.txt",
     }
     blocked = []

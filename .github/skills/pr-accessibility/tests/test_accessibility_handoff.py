@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import sys
 
 import yaml
@@ -33,6 +34,47 @@ def expand(text, attempt=1):
 
 
 class RoutingTests(unittest.TestCase):
+    def test_existing_review_context_preserves_reply_disposition_and_source_identity(self):
+        comments = [
+            {"id": 2, "in_reply_to_id": 1, "body": "Fixed in exact-sha; no-results now announces.",
+             "commit_id": "b" * 40, "path": "TabStrip.cpp", "html_url": "https://example.invalid/reply",
+             "user": {"login": "maintainer"}},
+            {"id": 1, "body": "Search gives no no-results announcement.",
+             "commit_id": "a" * 40, "path": "TabStrip.cpp", "user": {"login": "reviewer"}},
+        ]
+        with patch.object(HANDOFF.subprocess, "check_output",
+                          return_value=json.dumps(comments).encode()) as fetch:
+            context = HANDOFF.prior_reviews("microsoft/intelligent-terminal", 1288)
+        self.assertEqual("available", context["coverage"])
+        self.assertEqual(1, context["comments"][0]["in_reply_to_id"])
+        self.assertEqual(comments[0]["body"], context["comments"][0]["body"])
+        self.assertEqual("b" * 40, context["comments"][0]["commit_id"])
+        self.assertIn("sort=updated&direction=desc", fetch.call_args.args[0][-1])
+        self.assertNotIn("novel", context)  # evidence, never automatic adjudication
+
+    def test_context_api_failure_and_truncation_cannot_mean_no_prior_findings(self):
+        for error in (subprocess.TimeoutExpired("gh", 30), OSError("unavailable"),
+                      ValueError("invalid JSON")):
+            with self.subTest(error=type(error).__name__), patch.object(
+                    HANDOFF.subprocess, "check_output", side_effect=error):
+                context = HANDOFF.prior_reviews("microsoft/intelligent-terminal", 1213)
+                self.assertEqual("unavailable", context["coverage"])
+                self.assertIn("unknown", context["reason"])
+        with patch.object(HANDOFF.subprocess, "check_output", return_value=b'[{}]'):
+            self.assertEqual("available", HANDOFF.prior_reviews("owner/repo", 1)["coverage"])
+        with patch.object(HANDOFF.subprocess, "check_output",
+                          return_value=json.dumps([{}] * 20).encode()):
+            self.assertEqual("limited", HANDOFF.prior_reviews("owner/repo", 1)["coverage"])
+        with patch.object(HANDOFF.subprocess, "check_output",
+                          return_value=json.dumps([{"body": "x" * 3000}]).encode()):
+            context = HANDOFF.prior_reviews("owner/repo", 1)
+            self.assertEqual("limited", context["coverage"])
+            self.assertEqual(2000, len(context["comments"][0]["body"]))
+            self.assertTrue(context["comments"][0]["body_truncated"])
+        for repository, number in (("bad/repo/path", 1), ("owner/repo", 0)):
+            with self.assertRaises(ValueError):
+                HANDOFF.prior_reviews(repository, number)
+
     def test_actual_cpp_state_change_is_a_valid_related_candidate_without_keyword_filter(self):
         path = "src/cascadia/TerminalApp/TerminalPage.cpp"
         self.assertEqual("Related", HANDOFF.triage(
@@ -238,6 +280,40 @@ class CompiledContracts(unittest.TestCase):
                 receipt = (output / "deep-producer.txt").read_text()
                 self.assertIn("attempt=2", receipt)
                 self.assertIn("validation=failure", receipt)
+
+    def test_native_build_failure_retains_incomplete_receipt_not_product_defect_or_pass(self):
+        native = yaml.safe_load((ROOT / ".github/workflows/native-accessibility.yml").read_text())
+        job = native["jobs"]["native-smoke"]
+        record = step_named(job, "Record native discovery outcomes")
+        self.assertEqual("always()", record["if"])
+        names = [s.get("name") for s in job["steps"]]
+        self.assertLess(names.index(record["name"]), names.index("Upload native accessibility evidence"))
+        for stage, identifier in (("Build accessibility test host", "build"),
+                                  ("Acquire pinned Axe.Windows CLI", "axe"),
+                                  ("Install test host framework dependencies", "dependencies")):
+            self.assertEqual(identifier, step_named(job, stage)["id"])
+        for build, scan, expected in (("failure", "skipped", "incomplete"),
+                                      ("success", "failure", "incomplete"),
+                                      ("success", "success", "scan-results-available")):
+            with self.subTest(build=build, scan=scan), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                result = subprocess.run(
+                    ["pwsh", "-NoProfile", "-NonInteractive", "-Command", record["run"]],
+                    capture_output=True, text=True, timeout=30,
+                    env={**os.environ, "ACCESSIBILITY_RESULTS": str(root),
+                         "SOURCE_SHA": "a" * 40, "TRUSTED_SHA": "b" * 40,
+                         "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2",
+                         "SELECTED_SURFACES": "agents", "SELECTION_OUTCOME": "success",
+                         "BUILD_OUTCOME": build, "AXE_OUTCOME": "success",
+                         "DEPENDENCIES_OUTCOME": "success", "FRE_OUTCOME": "skipped",
+                         "AGENTS_OUTCOME": scan, "FRE_SETTINGS_OUTCOME": "skipped"})
+                self.assertEqual(0, result.returncode, result.stderr)
+                receipt = json.loads((root / "native-outcome.json").read_text(encoding="utf-8-sig"))
+                self.assertEqual(expected, receipt["status"])
+                self.assertEqual(build, receipt["stages"]["build"])
+                self.assertEqual(["agents"], receipt["selected_surfaces"])
+                self.assertEqual("a" * 40, receipt["source_sha"])
+                self.assertNotEqual("PASS", receipt["status"])
 
 
 if __name__ == "__main__":
