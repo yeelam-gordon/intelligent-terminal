@@ -537,12 +537,9 @@ void SettingsLoader::FinalizeLayering()
     }
 }
 
-// Let's say a user doesn't know that they need to write `"hidden": true` in
-// order to prevent a profile from showing up (and a settings UI doesn't exist).
-// Naturally they would open settings.json and try to remove the profile object.
-// This section of code recognizes if a profile was seen before and marks it as
-// `"hidden": true` by default and thus ensures the behavior the user expects:
-// Profiles won't show up again after they've been removed from settings.json.
+// Hide previously generated, deletable profiles removed from settings.json.
+// Protected originals are restored and persisted instead; explicit hiding is
+// handled separately.
 //
 // Returns true if something got changed and
 // the settings need to be saved to disk.

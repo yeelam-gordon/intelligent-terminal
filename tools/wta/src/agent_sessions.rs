@@ -454,7 +454,7 @@ pub enum SessionEvent {
     ResumeDispatched {
         key: AgentKey,
     },
-    /// A dispatched ACP `session/load` did not complete. Revert an optimistic
+    /// A dispatched resume attempt failed. Revert an optimistic
     /// live-without-pane row to a retryable historical state.
     ResumeFailed {
         key: AgentKey,

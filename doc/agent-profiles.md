@@ -68,8 +68,10 @@ user-created copies.
 Agent selection and profile lookup use `agentProfile.id` and the generated
 profile's stable GUID, not its editable display name. Changing a profile's icon
 changes the icon for its running tabs and panes and corresponding recent-session
-rows. A known session keeps its owning profile, including a copy; history without
-that association uses the corresponding generated original.
+rows. An existing native pane identifies its owning profile, including a copy.
+That association ends when the pane closes; host history without it uses the
+corresponding generated original. This does not persist arbitrary copied-profile
+ownership across pane closure or application restart.
 
 Supported generated agent profiles and the internal Agent Pane profile expose
 `IsDeletable = false` to the Settings model. The editor disables Delete Profile,

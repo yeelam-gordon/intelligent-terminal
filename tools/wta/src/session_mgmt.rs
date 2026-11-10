@@ -111,9 +111,9 @@ pub enum EnterAction {
     /// in-place. A known unsupported target is rejected before dispatch;
     /// an unknown target validates capability after it starts.
     ResumeInAgentPane { key: AgentKey, cli: CliSource },
-    /// Open a new WT tab + plain pane running `<cli> <resume_flag>
-    /// <key>` so the CLI itself rehydrates from its on-disk session
-    /// store. Requires `cli_supports_resume_flag`.
+    /// Request native CLI resume in a new tab. Host sessions use their
+    /// Terminal profile; WSL keeps its provider-specific command.
+    /// Requires `cli_supports_resume_flag`.
     ResumeCliFlag { key: AgentKey, cli: CliSource },
     /// No path applies; caller surfaces a message and stays on the
     /// session manager view.

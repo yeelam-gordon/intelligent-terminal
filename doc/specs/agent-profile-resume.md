@@ -47,7 +47,7 @@ beside the field; users never type `{sessionId}`. Parse resume arguments using t
 argument rules as additional startup arguments, then append the validated,
 opaque session ID as one argument. Use the existing executable/batch/WSL quoting
 helpers; never evaluate arguments as script text. Malformed or unsafe arguments
-produce an inline error and a launch-time error.
+produce a launch-time error.
 
 | Built-in provider | Default resume arguments (current repository contract) |
 | --- | --- |
@@ -133,6 +133,10 @@ available. Do not redesign the session registry or persistence format just to
 select a profile. Validate provider and execution location; never match by
 display name or command-string heuristics. User-created project-profile copies
 must remain distinguishable.
+
+The live-pane association is not a durable session-to-profile record. Once its
+pane is closed, host history without a profile GUID uses the generated original,
+not an arbitrary project-profile copy.
 
 For imported host history with no profile GUID, resolve the corresponding
 generated profile by provider identity. If the matching profile or its native
