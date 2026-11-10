@@ -48,7 +48,7 @@ Describe 'Feature: native agent profile resume' -Tag @('Feature', 'AgentProfileR
             sidebarIntroductionShown = $true; sidebarRolloutVersion = 1; sidebarRolloutAssignment = 'Sidebar'
             sidebarLayoutMigrationCompleted = $true
         } -Settings @{
-            language = 'en-US'; tabLayout = 'vertical'; startupActions = ''; defaultProfile = $shellProfile
+            language = 'en-US'; theme = 'dark'; tabLayout = 'vertical'; startupActions = ''; defaultProfile = $shellProfile
             firstWindowPreference = 'defaultProfile'; windowingBehavior = 'useNew'
             autoFixEnabled = $false; agentSessionManagementEnabled = $false
             acpAgent = 'custom:pwsh'; acpCustomCommand = $mockCommand
@@ -612,7 +612,7 @@ public static class NativeProfileResumeMasterGate {
                 $child = $walker.GetNextSibling($child)
             }
         }
-        function Assert-ProfileIconColor([string]$Marker, [Drawing.Color]$Color, [string]$Phase) {
+        function Assert-ProfileIconRendering([string]$Marker, [Drawing.Color]$Color, [string]$Phase, [string]$MonochromeTheme = '') {
             $root = [Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$script:app.Hwnd)
             $root.Current.ProcessId | Should -Be $script:app.Pid
             $searchToggle = $root.FindFirst([Windows.Automation.TreeScope]::Descendants,
@@ -656,9 +656,36 @@ public static class NativeProfileResumeMasterGate {
                 Save-UiScreenshot -App $script:app -Path $imagePath | Out-Null
                 foreach ($part in $parts) {
                     $rowImagePath = Join-Path $script:proofRoot "$Phase-$($part.kind)-row.png"
-                    $capture = Invoke-WinAppUi -App $script:app -UiArgs @(
-                        'screenshot', $part.row.Current.Name, '--output', $rowImagePath, '--json')
-                    if ($capture.ExitCode -ne 0) { throw "Owned row capture failed: $($capture.StdErr)" }
+                    $rowImages = @($rowImagePath)
+                    if ($MonochromeTheme) {
+                        $part.row.SetFocus()
+                        $hoverImagePath = Join-Path $script:proofRoot "$Phase-$($part.kind)-hover-row.png"
+                        $hoverApp = $script:app
+                        $rowSelector = $part.row.Current.Name
+                        $duringHover = {
+                            $capture = Invoke-WinAppUi -App $hoverApp -UiArgs @(
+                                'screenshot', $rowSelector, '--output', $hoverImagePath, '--json')
+                            if ($capture.ExitCode -ne 0) { throw "Owned hover capture failed: $($capture.StdErr)" }
+                        }.GetNewClosure()
+                        $hoverSelector = if ($part.kind -eq 'recent') { 'HistoryCwdText' } else { 'TabCloseButton' }
+                        Invoke-ItOwnedHover -App $script:app -Selector $hoverSelector -DwellMs 250 -DuringHover $duringHover
+                        $rowImages += $hoverImagePath
+                    }
+                    if ($MonochromeTheme) {
+                        $captureApp = $script:app
+                        $captureSelector = $part.row.Current.Name
+                        $afterHover = {
+                            $capture = Invoke-WinAppUi -App $captureApp -UiArgs @(
+                                'screenshot', $captureSelector, '--output', $rowImagePath, '--json')
+                            if ($capture.ExitCode -ne 0) { throw "Owned post-hover capture failed: $($capture.StdErr)" }
+                        }.GetNewClosure()
+                        Invoke-ItOwnedHover -App $script:app -Selector SearchTextBox -DwellMs 250 -DuringHover $afterHover
+                    } else {
+                        $capture = Invoke-WinAppUi -App $script:app -UiArgs @(
+                            'screenshot', $part.row.Current.Name, '--output', $rowImagePath, '--json')
+                        if ($capture.ExitCode -ne 0) { throw "Owned row capture failed: $($capture.StdErr)" }
+                    }
+                    foreach ($rowImagePath in $rowImages) {
                     $bitmap = [Drawing.Bitmap]::new($rowImagePath)
                     try {
                         $rowBounds = $part.row.Current.BoundingRectangle
@@ -673,13 +700,18 @@ public static class NativeProfileResumeMasterGate {
                         for ($y = $top; $y -lt $bottom; $y++) {
                             for ($x = $left; $x -lt $right; $x++) {
                                 $pixel = $bitmap.GetPixel($x, $y)
-                                if ([Math]::Abs($pixel.R - $Color.R) -le 5 -and
+                                if ($MonochromeTheme -eq 'dark') {
+                                    if ($pixel.R -ge 180 -and $pixel.G -ge 180 -and $pixel.B -ge 180) { $matches++ }
+                                } elseif ($MonochromeTheme -eq 'light') {
+                                    if ($pixel.R -le 75 -and $pixel.G -le 75 -and $pixel.B -le 75) { $matches++ }
+                                } elseif ([Math]::Abs($pixel.R - $Color.R) -le 5 -and
                                     [Math]::Abs($pixel.G - $Color.G) -le 5 -and
                                     [Math]::Abs($pixel.B - $Color.B) -le 5) { $matches++ }
                             }
                         }
                         if ($matches -lt 4) { return $false }
                     } finally { $bitmap.Dispose() }
+                    }
                 }
                 return $true
             } | Out-Null
@@ -757,10 +789,21 @@ public static class NativeProfileResumeMasterGate {
                             ([string]$_.pane_session_id).Trim('{}') -eq $created.session_id.Trim('{}')
                         }).Count | Should -Be 0 -Because 'the fresh live pane must not claim the historical conversation'
                     }
-                    Assert-ProfileIconColor $marker $phase.color "$marker-$($phase.name)"
+                    Assert-ProfileIconRendering $marker $phase.color "$marker-$($phase.name)"
                     @((Invoke-WtCli -App $script:app -Arguments @('list-profiles')).profiles | Where-Object {
                         $_.id -eq $target.id -and $_.agent_id -eq $target.provider
                     }).Count | Should -Be 1
+                }
+                if ($target.provider -eq 'copilot') {
+                    $profiles = Get-WtSetting -App $script:app -Key profiles
+                    @($profiles.list | Where-Object guid -EQ $target.id)[0].icon = 'ms-appx:///AgentIcons/copilot.svg'
+                    Set-WtSetting -App $script:app -Key profiles -Value $profiles | Out-Null
+                    $themePhase = 0
+                    foreach ($theme in @('dark', 'light', 'dark')) {
+                        Set-WtSetting -App $script:app -Key theme -Value $theme | Out-Null
+                        Assert-ProfileIconRendering $marker ([Drawing.Color]::Empty) "$marker-mono-$themePhase-$theme" $theme
+                        $themePhase++
+                    }
                 }
                 Invoke-WtCli -App $script:app -Arguments @('kill-pane', '-t', $created.session_id) | Out-Null
                 $panes = @($panes | Where-Object { $_ -ne $created.session_id })
@@ -770,6 +813,7 @@ public static class NativeProfileResumeMasterGate {
                 Invoke-WtCli -App $script:app -Arguments @('kill-pane', '-t', $pane) | Out-Null
             }
             Set-WtSetting -App $script:app -Key profiles -Value $savedProfiles | Out-Null
+            Set-WtSetting -App $script:app -Key theme -Value 'dark' | Out-Null
             if (Test-UiElementExists -App $script:app -Selector SearchTextBox -TimeoutSec 1) {
                 Set-UiValue -App $script:app -Selector SearchTextBox -Value '' | Out-Null
                 Invoke-UiElement -App $script:app -Selector SearchTabsButton | Out-Null

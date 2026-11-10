@@ -75,6 +75,7 @@ namespace winrt::TerminalApp::implementation
     {
         auto element = ::Microsoft::Terminal::UI::AgentIcons::ElementForIconSource(
             source.as<MUX::Controls::IconSource>(), _iconPath.value_or(hstring{}));
+        element.ClearValue(IconElement::ForegroundProperty());
         element.Width(16);
         element.Height(16);
         return element;
@@ -1446,14 +1447,15 @@ namespace winrt::TerminalApp::implementation
         const auto foreground = isCurrent ? item.CurrentForeground() : nullptr;
         const auto palette = root.FindName(L"HistorySelectionPalette").try_as<Control>();
         const auto title = root.FindName(L"HistoryTitleText").try_as<Control>();
+        const auto providerIcon = root.FindName(L"HistoryProviderIcon").try_as<Control>();
         const auto inheritForeground = item && _highContrast;
         const auto captionStyle = inheritForeground ? nullptr :
                                                       Application::Current().Resources().Lookup(box_value(L"SidebarCaptionControlStyle")).as<WUX::Style>();
-        for (const auto name : { L"HistoryTitleText", L"HistoryCwdText", L"HistorySubtitleText", L"HistoryStatusText", L"HistoryWindowHintText" })
+        for (const auto name : { L"HistoryTitleText", L"HistoryProviderIcon", L"HistoryCwdText", L"HistorySubtitleText", L"HistoryStatusText", L"HistoryWindowHintText" })
         {
             if (const auto control = root.FindName(name).try_as<Control>())
             {
-                if (control != title)
+                if (control != title && control != providerIcon)
                 {
                     if (inheritForeground)
                     {

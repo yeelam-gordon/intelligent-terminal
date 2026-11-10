@@ -283,7 +283,20 @@ extern "C" HRESULT __stdcall InitializeSidebarVisualFixture(wchar_t* errorMessag
         history.Status(L"Ended");
         history.IsHistorical(true);
         history.Subtitle(L"1h");
+        get_self<winrt::TerminalApp::implementation::TabStripHistoryItem>(history)->SyncIcon(L"ms-appx:///AgentIcons/copilot.svg");
         stripImpl->CommitHistorySnapshot({ history }, true);
+
+        ToggleSwitch historyCurrent;
+        historyCurrent.Header(box_value(L"Current history row"));
+        Automation::AutomationProperties::SetAutomationId(historyCurrent, L"FixtureHistoryCurrent");
+        historyCurrent.Toggled([weakStrip = make_weak(strip), history, group](const winrt::Windows::Foundation::IInspectable& sender, const RoutedEventArgs&) {
+            if (const auto sidebar = weakStrip.get())
+            {
+                get_self<winrt::TerminalApp::implementation::TabStrip>(sidebar)->SetCurrentHistoryItem(
+                    sender.as<ToggleSwitch>().IsOn() ? history : nullptr, group);
+            }
+        });
+        toolbar.Children().Append(historyCurrent);
 
         const auto paneEventCounts = std::make_shared<std::pair<uint64_t, uint64_t>>();
         const auto recordPaneEvent = [weakStrip = make_weak(strip), paneEventCounts](bool activation, uint32_t contentId) {
@@ -317,7 +330,7 @@ extern "C" HRESULT __stdcall InitializeSidebarVisualFixture(wchar_t* errorMessag
 
         stage = L"loading built-in theme presets";
         const auto settings = Model::CascadiaSettings::LoadDefaults();
-        const auto applyPreset = [weakRoot = make_weak(root), weakStrip = make_weak(strip), weakPreset = make_weak(themePreset), weakActive = make_weak(activePalette), themes = settings.GlobalSettings().Themes(), ownedTabs]() {
+        const auto applyPreset = [weakRoot = make_weak(root), weakStrip = make_weak(strip), weakPreset = make_weak(themePreset), weakActive = make_weak(activePalette), weakCurrent = make_weak(historyCurrent), history, group, themes = settings.GlobalSettings().Themes(), ownedTabs]() {
             const auto host = weakRoot.get();
             const auto sidebar = weakStrip.get();
             const auto picker = weakPreset.get();
@@ -345,6 +358,11 @@ extern "C" HRESULT __stdcall InitializeSidebarVisualFixture(wchar_t* errorMessag
                 owner->ThemeColor(theme.Tab() ? theme.Tab().Background() : nullptr,
                                   theme.Tab() ? theme.Tab().UnfocusedBackground() : nullptr,
                                   rowColor);
+            }
+            if (const auto current = weakCurrent.get())
+            {
+                get_self<winrt::TerminalApp::implementation::TabStrip>(sidebar)->SetCurrentHistoryItem(
+                    current.IsOn() ? history : nullptr, group);
             }
         };
         themePreset.SelectionChanged([applyPreset](const auto&, const SelectionChangedEventArgs&) { applyPreset(); });

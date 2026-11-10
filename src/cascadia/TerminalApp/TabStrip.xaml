@@ -332,7 +332,6 @@
                                     AutomationProperties.AccessibilityView="Raw"
                                     AutomationProperties.Name="{x:Bind ProviderDisplayName}"
                                     Content="{x:Bind CreateIcon(IconSource), Mode=OneWay}"
-                                    Foreground="{Binding Foreground, ElementName=HistoryTitleText}"
                                     IsTabStop="False" />
                     <Grid x:Name="HistoryTitleGroup"
                           Grid.Column="1"

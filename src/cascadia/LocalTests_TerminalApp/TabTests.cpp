@@ -703,6 +703,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(VerticalTabHistoryKeepRunningBadgeFitsRow);
         TEST_METHOD(VerticalTabHistoryCurrentSessionColors);
         TEST_METHOD(VerticalTabHistoryAgentIcons);
+        TEST_METHOD(VerticalTabHistoryIconForegroundFollowsCurrentState);
         TEST_METHOD(VerticalTabHistoryEndedPresentation);
         TEST_METHOD(VerticalTabHistoryUnfinishedFirst);
         TEST_METHOD(VerticalTabHistoryStatusStyles);
@@ -14678,6 +14679,7 @@ namespace TerminalAppLocalTests
                 stripImpl->CommitHistorySnapshot({ item });
                 const auto bitmap = item.CreateIcon(item.IconSource()).as<BitmapIcon>();
                 VERIFY_IS_TRUE(bitmap.ShowAsMonochrome());
+                VERIFY_IS_TRUE(bitmap.ReadLocalValue(IconElement::ForegroundProperty()) == DependencyProperty::UnsetValue());
                 VERIFY_ARE_EQUAL(winrt::hstring{ L"ms-appx:///AgentIcons/Masks/" } + iconId + L".png", bitmap.UriSource().AbsoluteUri());
                 VERIFY_ARE_EQUAL(16.0, bitmap.Width());
                 VERIFY_ARE_EQUAL(16.0, bitmap.Height());
@@ -14720,6 +14722,50 @@ namespace TerminalAppLocalTests
             stripImpl->CommitHistorySnapshot({ refreshed });
             const auto cached = strip.HistoryItems().GetAt(0);
             VERIFY_ARE_EQUAL(winrt::hstring{ L"\xE8A5" }, cached.CreateIcon(cached.IconSource()).as<FontIcon>().Glyph());
+        });
+    }
+
+    void TabTests::VerticalTabHistoryIconForegroundFollowsCurrentState()
+    {
+        HistoryTestView view;
+        winrt::TerminalApp::TabStripHistoryItem item{ nullptr };
+        TestOnUIThread([&]() {
+            item = winrt::make<winrt::TerminalApp::implementation::TabStripHistoryItem>();
+            item.SessionId(L"foreground-state");
+            item.AgentId(L"copilot");
+            item.Title(L"Foreground state");
+            winrt::get_self<winrt::TerminalApp::implementation::TabStripHistoryItem>(item)->SyncIcon(L"ms-appx:///AgentIcons/copilot.svg");
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(view.strip);
+            strip->CommitHistorySnapshot({ item }, true);
+            strip->SetHistoryExpanded(true);
+            view.strip.UpdateLayout();
+        });
+        _waitForContentTransferReviewUI([&]() {
+            view.strip.UpdateLayout();
+            return winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(view.strip)->ItemsList().ContainerFromItem(item) != nullptr;
+        });
+        TestOnUIThread([&]() {
+            const auto strip = winrt::get_self<winrt::TerminalApp::implementation::TabStrip>(view.strip);
+            const auto root = strip->ItemsList().ContainerFromItem(item).as<ListViewItem>().ContentTemplateRoot().as<FrameworkElement>();
+            const auto title = root.FindName(L"HistoryTitleText").as<Control>();
+            const auto provider = root.FindName(L"HistoryProviderIcon").as<ContentControl>();
+            winrt::MUX::Controls::TabViewItem tab;
+            for (const auto color : { winrt::Windows::UI::Colors::White(), winrt::Windows::UI::Colors::Black(), winrt::Windows::UI::Colors::Blue() })
+            {
+                tab.Background(Media::SolidColorBrush{ color });
+                strip->SetCurrentHistoryItem(item, tab);
+                view.strip.UpdateLayout();
+                VERIFY_IS_TRUE(item.IsCurrent());
+                VERIFY_IS_NOT_NULL(item.CurrentForeground());
+                VERIFY_IS_TRUE(title.Foreground() == item.CurrentForeground());
+                VERIFY_IS_TRUE(provider.Foreground() == title.Foreground());
+                const auto icon = provider.Content().as<BitmapIcon>();
+                VERIFY_IS_TRUE(icon.ReadLocalValue(IconElement::ForegroundProperty()) == DependencyProperty::UnsetValue());
+                VERIFY_IS_TRUE(icon.Foreground() == title.Foreground());
+            }
+            strip->SetCurrentHistoryItem(nullptr, nullptr);
+            VERIFY_IS_FALSE(item.IsCurrent());
+            VERIFY_IS_TRUE(provider.ReadLocalValue(Control::ForegroundProperty()) == DependencyProperty::UnsetValue());
         });
     }
 
