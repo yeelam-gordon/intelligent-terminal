@@ -613,6 +613,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(NativeAgentSessionsOffDiscardsSignalsQueuedBeforeToggle);
         TEST_METHOD(NativeAgentResumeSeedsProviderBeforeContent);
         TEST_METHOD(NativeAgentResumeProviderOverridesProfileBeforeFirstFrame);
+        TEST_METHOD(NativeAgentResumeRejectsUncorrelatedLaunch);
         TEST_METHOD(NativeAgentPreHookPersistenceRestoresTabAndSplit);
         TEST_METHOD(HorizontalNativeIconSelectionAppliesTemplateAgainWithReusableMasks);
         TEST_METHOD(VerticalTabThemeChangesDoNotReprojectPanes);
@@ -26799,6 +26800,71 @@ namespace TerminalAppLocalTests
             VERIFY_IS_TRUE(events[0]["params"]["tracking_enabled"].asBool());
             verifyCreation(events[0]);
         });
+    }
+
+    void TabTests::NativeAgentResumeRejectsUncorrelatedLaunch()
+    {
+        for (const auto layoutTransition : { true, false })
+        {
+            auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+            TestOnUIThread([&]() {
+                const auto tabCount = page->_tabs.Size();
+                winrt::Microsoft::Terminal::Settings::Model::Profile profile{ nullptr };
+                if (layoutTransition)
+                {
+                    VERIFY_IS_TRUE(page->_ApplyTabLayout(TabLayout::Horizontal));
+                    VERIFY_IS_TRUE(page->_changingTabLayout);
+                }
+                else
+                {
+                    VERIFY_IS_FALSE(page->IsRunningElevated());
+                    profile = AddNativeAgentIconProfile(page->_settings, L"copilot", L"\xE713");
+                    profile.Elevate(true);
+                }
+                const auto visualCount = page->_tabItems().Size();
+                const auto selectedTab = page->_GetFocusedTabImpl();
+                std::vector<Json::Value> receipts;
+                const auto token = page->ProtocolVtSequenceReceived([&](auto&&, const winrt::hstring& payload) {
+                    Json::Value event;
+                    Json::CharReaderBuilder reader;
+                    std::istringstream stream{ winrt::to_string(payload) };
+                    std::string errors;
+                    VERIFY_IS_TRUE(Json::parseFromStream(reader, stream, &event, &errors));
+                    if (event["method"] == "native_profile_resume_result")
+                    {
+                        receipts.push_back(event["params"]);
+                    }
+                });
+                const auto revoke = wil::scope_exit([&]() { page->ProtocolVtSequenceReceived(token); });
+                Json::Value request;
+                request["params"]["request_id"] = "guarded-native-resume";
+                request["params"]["resume_target"] = "native";
+                request["params"]["agent_id"] = "copilot";
+                request["params"]["agent_source"] = "host";
+                request["params"]["session_id"] = "11111111-2222-3333-4444-555555555555";
+                request["params"]["window_id"] = std::to_string(page->_WindowProperties.WindowId());
+                if (profile)
+                {
+                    request["params"]["profile_id"] = winrt::to_string(Utils::GuidToString(profile.Guid()));
+                }
+                page->OnResumeInNewAgentTabRequested(winrt::to_hstring(Json::writeString(Json::StreamWriterBuilder{}, request)));
+                VERIFY_ARE_EQUAL(size_t{ 1 }, receipts.size());
+                VERIFY_ARE_EQUAL(std::string{ "guarded-native-resume" }, receipts[0]["request_id"].asString());
+                VERIFY_IS_FALSE(receipts[0]["success"].asBool());
+                const auto expected = HRESULT_FROM_WIN32(layoutTransition ? ERROR_RETRY : ERROR_ELEVATION_REQUIRED);
+                VERIFY_ARE_EQUAL(winrt::to_string(winrt::hresult_error{ expected }.message()), receipts[0]["error"].asString());
+                VERIFY_ARE_EQUAL(tabCount, page->_tabs.Size());
+                VERIFY_ARE_EQUAL(visualCount, page->_tabItems().Size());
+                VERIFY_IS_TRUE(page->_GetFocusedTabImpl() == selectedTab);
+                if (layoutTransition)
+                {
+                    page->_CompleteTabLayoutChange(page->_tabLayoutGeneration);
+                    VERIFY_IS_FALSE(page->_changingTabLayout);
+                    VERIFY_ARE_EQUAL(tabCount, page->_tabs.Size());
+                    VERIFY_ARE_EQUAL(tabCount, page->_tabItems().Size());
+                }
+            });
+        }
     }
 
     void TabTests::NativeAgentResumeSeedsProviderBeforeContent()

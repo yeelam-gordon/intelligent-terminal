@@ -73,6 +73,7 @@ namespace winrt::TerminalApp::implementation
 
     WUX::Controls::IconElement TabStripHistoryItem::CreateIcon(const IInspectable& source) const
     {
+        // Snapshot projection initializes every source before the view can realize it.
         auto element = ::Microsoft::Terminal::UI::AgentIcons::ElementForIconSource(
             source.as<MUX::Controls::IconSource>(), _iconPath.value_or(hstring{}));
         element.ClearValue(IconElement::ForegroundProperty());

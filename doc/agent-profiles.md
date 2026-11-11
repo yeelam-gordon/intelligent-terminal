@@ -73,6 +73,9 @@ That association ends when the pane closes; host history without it uses the
 corresponding generated original. This does not persist arbitrary copied-profile
 ownership across pane closure or application restart.
 
+Resume an elevation-required native profile from an already elevated Terminal
+window. Receipt-based resume does not hand the launch off to another window.
+
 Supported generated agent profiles and the internal Agent Pane profile expose
 `IsDeletable = false` to the Settings model. The editor disables Delete Profile,
 but their other settings remain editable. Removing one of these profiles from

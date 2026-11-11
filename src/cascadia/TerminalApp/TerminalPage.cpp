@@ -11781,6 +11781,11 @@ namespace winrt::TerminalApp::implementation
                 }
                 CATCH_LOG()
             });
+            if (_changingTabLayout)
+            {
+                receipt["error"] = winrt::to_string(winrt::hresult_error{ HRESULT_FROM_WIN32(ERROR_RETRY) }.message());
+                return;
+            }
             namespace Registry = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
             namespace Policy = ::Microsoft::Terminal::Settings::Model::AgentPolicy;
             Policy::Reload();
@@ -11809,6 +11814,11 @@ namespace winrt::TerminalApp::implementation
                 selected.Commandline().empty())
             {
                 receipt["error"] = "Configure the native interactive command for this custom agent profile.";
+                return;
+            }
+            if (selected.Elevate() && !IsRunningElevated())
+            {
+                receipt["error"] = winrt::to_string(winrt::hresult_error{ HRESULT_FROM_WIN32(ERROR_ELEVATION_REQUIRED) }.message());
                 return;
             }
             Settings::Model::NewTerminalArgs args;
