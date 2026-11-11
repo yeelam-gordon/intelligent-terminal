@@ -170,7 +170,6 @@ disable resume.
 Native launch customization stays separate from ACP agent-pane loading.
 An explicit profile command line retains the override behavior described above.
 Custom profiles need both a native command and appropriate resume arguments.
-Existing ACP and legacy WSL session routes remain separate.
 
 Launch-derived tab metadata does not wait for hooks: provider, initial status,
 and launch directory keep their existing immediate initialization. Later
