@@ -28,6 +28,7 @@
 #include "../TerminalSettingsModel/CascadiaSettings.h"
 #include "../TerminalSettingsModel/AcpRuntimeState.h"
 #include "../TerminalSettingsModel/AgentProfileGenerator.h"
+#include "../TerminalSettingsModel/DynamicProfileUtils.h"
 #include "../TerminalSettingsModel/SettingsTelemetry.h"
 #include "../TerminalSettingsModel/ActionArgs.h"
 #include "../TerminalApp/AgentProviderTelemetry.h"
@@ -76,6 +77,7 @@ namespace SettingsModelUnitTests
         TEST_METHOD(AgentProfileNativeCommands);
         TEST_METHOD(AgentProfileResumeArguments);
         TEST_METHOD(CustomAgentNativeProfileGeneration);
+        TEST_METHOD(GeneratedAgentProfileGuidCompatibility);
         TEST_METHOD(AgentProfileStartingDirectoryMigration);
         TEST_METHOD(AgentProfileStartingDirectoryMigrationPreservesDefaults);
         TEST_METHOD(AgentProfileArgumentValidation);
@@ -534,6 +536,24 @@ namespace SettingsModelUnitTests
         VERIFY_IS_TRUE(args->Equals(restoredArgs));
         const auto missingProfileSettings = MakeSettings(R"("acpAgent":"")");
         VERIFY_THROWS(missingProfileSettings->GetProfileForArgs(restoredArgs), wil::ResultException);
+    }
+
+    void CustomAgentAndPolicyTests::GeneratedAgentProfileGuidCompatibility()
+    {
+        namespace Agents = ::Microsoft::Terminal::AgentProfiles;
+        for (const auto& [provider, expected] : {
+                 std::pair{ L"copilot", L"{72ffe5ea-2267-5559-b464-ea3f41417ca1}" },
+                 std::pair{ L"claude", L"{4fc4edb5-f738-5641-939c-d899c0eb54f4}" },
+                 std::pair{ L"codex", L"{c463268b-2056-5842-bed6-8bef21b31cbe}" },
+                 std::pair{ L"gemini", L"{c14eea2b-76c5-5a06-8f43-95974aaff4ba}" },
+                 std::pair{ L"opencode", L"{78cce479-9de7-57a3-bbaa-2753449d30d7}" },
+                 std::pair{ L"antigravity", L"{3c3eb666-5d61-5bc1-89c0-b4b102feda84}" },
+                 std::pair{ L"custom:native", L"{e8903a84-890e-564e-ab31-76208f449986}" } })
+        {
+            const winrt::guid expectedGuid{ expected };
+            VERIFY_ARE_EQUAL(expectedGuid, Agents::GeneratedGuid(provider));
+            VERIFY_ARE_EQUAL(expectedGuid, CreateDynamicProfile(Agents::GeneratedIdentity(provider))->Guid());
+        }
     }
 
     void CustomAgentAndPolicyTests::CustomAgentNativeProfileGeneration()

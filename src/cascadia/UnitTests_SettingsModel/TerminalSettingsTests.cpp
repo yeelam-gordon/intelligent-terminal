@@ -263,8 +263,7 @@ namespace SettingsModelUnitTests
         }
         saved.NativeAgentProviderId(L"");
         VERIFY_THROWS(winrt::get_self<implementation::CascadiaSettings>(settings)->GetProfileForArgs(saved), wil::ResultException);
-        const std::wstring identity{ L"IntelligentTerminal.AgentProfiles:claude" };
-        const auto generatedGuid = Utils::CreateV5Uuid(TERMINAL_PROFILE_NAMESPACE_GUID, std::as_bytes(std::span{ identity }));
+        const auto generatedGuid = ::Microsoft::Terminal::AgentProfiles::GeneratedGuid(L"claude");
         orphan.Guid(generatedGuid);
         saved.Profile(Utils::GuidToString(generatedGuid));
         const auto recovered = settings.GetProfileForArgs(saved);
@@ -283,8 +282,7 @@ namespace SettingsModelUnitTests
         saved.NativeAgentProviderId(L"");
         VERIFY_ARE_EQUAL(winrt::hstring{ L"claude" }, settings.GetProfileForArgs(saved).AgentProfileId());
         orphan.ClearAgentProfileId();
-        const std::wstring antigravityIdentity{ L"IntelligentTerminal.AgentProfiles:antigravity" };
-        const auto antigravityGuid = Utils::CreateV5Uuid(TERMINAL_PROFILE_NAMESPACE_GUID, std::as_bytes(std::span{ antigravityIdentity }));
+        const auto antigravityGuid = ::Microsoft::Terminal::AgentProfiles::GeneratedGuid(L"antigravity");
         orphan.Guid(antigravityGuid);
         saved.Profile(Utils::GuidToString(antigravityGuid));
         const auto restoredAntigravity = settings.GetProfileForArgs(saved);

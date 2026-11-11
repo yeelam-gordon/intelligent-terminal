@@ -832,8 +832,7 @@ Model::Profile CascadiaSettings::GetProfileForArgs(const Model::NewTerminalArgs&
                                     "Invalid orphaned native agent identity");
                     for (const auto& agent : Registry::BuiltinNativeProfileAgents)
                     {
-                        const auto name = std::wstring{ ::Microsoft::Terminal::AgentProfiles::Source } + L":" + std::wstring{ agent.id };
-                        const winrt::guid generatedGuid{ Utils::CreateV5Uuid(TERMINAL_PROFILE_NAMESPACE_GUID, std::as_bytes(std::span{ name })) };
+                        const auto generatedGuid = ::Microsoft::Terminal::AgentProfiles::GeneratedGuid(agent.id);
                         if (profile.Guid() == generatedGuid)
                         {
                             THROW_HR_IF_MSG(E_INVALIDARG, !identity.empty() && identity != agent.id,

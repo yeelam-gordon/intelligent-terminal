@@ -5,14 +5,28 @@
 
 #include "AgentPaneRestore.h"
 #include "AgentRegistry.h"
+#include "DynamicProfileIdentity.h"
+#include "../../types/inc/utils.hpp"
 #include <filesystem>
 #include <map>
 #include <shellapi.h>
+#include <span>
 #include <til/env.h>
 
 namespace Microsoft::Terminal::AgentProfiles
 {
     inline constexpr std::wstring_view Source{ L"IntelligentTerminal.AgentProfiles" };
+
+    inline std::wstring GeneratedIdentity(const std::wstring_view providerId)
+    {
+        return std::wstring{ Source } + L":" + std::wstring{ providerId };
+    }
+
+    inline winrt::guid GeneratedGuid(const std::wstring_view providerId)
+    {
+        const auto identity = GeneratedIdentity(providerId);
+        return winrt::guid{ ::Microsoft::Console::Utils::CreateV5Uuid(TERMINAL_PROFILE_NAMESPACE_GUID, std::as_bytes(std::span{ identity })) };
+    }
 
     inline std::wstring NativePath()
     {

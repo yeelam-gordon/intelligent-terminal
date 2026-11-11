@@ -82,9 +82,7 @@ namespace TerminalAppLocalTests
 {
     static Profile AddNativeAgentIconProfile(const CascadiaSettings& settings, const winrt::hstring& providerId, const winrt::hstring& icon)
     {
-        constexpr GUID profileNamespace{ 0x2bde4a90, 0xd05f, 0x401c, { 0x94, 0x92, 0xe4, 0x8, 0x84, 0xea, 0xd1, 0xd8 } };
-        const auto identity = std::wstring{ ::Microsoft::Terminal::AgentProfiles::Source } + L":" + std::wstring{ providerId };
-        Profile profile{ winrt::guid{ Utils::CreateV5Uuid(profileNamespace, std::as_bytes(std::span{ identity })) } };
+        Profile profile{ ::Microsoft::Terminal::AgentProfiles::GeneratedGuid(std::wstring_view{ providerId }) };
         profile.Source(winrt::hstring{ ::Microsoft::Terminal::AgentProfiles::Source });
         profile.Name(providerId);
         profile.AgentProfileId(providerId);
