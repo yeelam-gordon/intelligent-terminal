@@ -50,6 +50,38 @@ namespace winrt
 
 namespace winrt::TerminalApp::implementation
 {
+    void TabStripHistoryItem::SyncIcon(const hstring& iconPath)
+    {
+        if (_iconPath == iconPath && IconSource())
+        {
+            return;
+        }
+        _iconPath = iconPath;
+        IconSource(::Microsoft::Terminal::UI::AgentIcons::SourceForIconPath(iconPath, false));
+    }
+
+    void TabStripHistoryItem::IconSource(const IInspectable& value)
+    {
+        const auto source = value.try_as<MUX::Controls::IconSource>();
+        THROW_HR_IF(E_INVALIDARG, !source);
+        if (_iconSource != source)
+        {
+            _iconSource = source;
+            PropertyChanged.raise(*this, WUX::Data::PropertyChangedEventArgs{ L"IconSource" });
+        }
+    }
+
+    WUX::Controls::IconElement TabStripHistoryItem::CreateIcon(const IInspectable& source) const
+    {
+        // Snapshot projection initializes every source before the view can realize it.
+        auto element = ::Microsoft::Terminal::UI::AgentIcons::ElementForIconSource(
+            source.as<MUX::Controls::IconSource>(), _iconPath.value_or(hstring{}));
+        element.ClearValue(IconElement::ForegroundProperty());
+        element.Width(16);
+        element.Height(16);
+        return element;
+    }
+
     // TreeView 2.8 writes native node moves back through IBindableVector, not IVector<IInspectable>.
     struct SidebarViewportItems :
         implements<SidebarViewportItems,
@@ -1384,9 +1416,8 @@ namespace winrt::TerminalApp::implementation
                    Windows::UI::Colors::White();
     }
 
-    static void _bindMonochromeIconForeground(ContentPresenter const& presenter, Control const& foregroundOwner)
+    static void _bindMonochromeIconForeground(IconElement const& icon, Control const& foregroundOwner)
     {
-        const auto icon = presenter ? presenter.Content().try_as<IconElement>() : nullptr;
         const auto bitmap = icon ? icon.try_as<BitmapIcon>() : nullptr;
         if (icon && foregroundOwner && !icon.try_as<MUX::Controls::ImageIcon>() &&
             (!bitmap || bitmap.ShowAsMonochrome()))
@@ -1416,14 +1447,15 @@ namespace winrt::TerminalApp::implementation
         const auto foreground = isCurrent ? item.CurrentForeground() : nullptr;
         const auto palette = root.FindName(L"HistorySelectionPalette").try_as<Control>();
         const auto title = root.FindName(L"HistoryTitleText").try_as<Control>();
+        const auto providerIcon = root.FindName(L"HistoryProviderIcon").try_as<Control>();
         const auto inheritForeground = item && _highContrast;
         const auto captionStyle = inheritForeground ? nullptr :
                                                       Application::Current().Resources().Lookup(box_value(L"SidebarCaptionControlStyle")).as<WUX::Style>();
-        for (const auto name : { L"HistoryTitleText", L"HistoryCwdText", L"HistorySubtitleText", L"HistoryStatusText", L"HistoryWindowHintText" })
+        for (const auto name : { L"HistoryTitleText", L"HistoryProviderIcon", L"HistoryCwdText", L"HistorySubtitleText", L"HistoryStatusText", L"HistoryWindowHintText" })
         {
             if (const auto control = root.FindName(name).try_as<Control>())
             {
-                if (control != title)
+                if (control != title && control != providerIcon)
                 {
                     if (inheritForeground)
                     {
@@ -1449,6 +1481,21 @@ namespace winrt::TerminalApp::implementation
                     control.SetBinding(Control::ForegroundProperty(), binding);
                 }
             }
+        }
+        if (const auto content = providerIcon.try_as<ContentControl>())
+        {
+            const auto observerKey = box_value(L"HistoryIconForegroundBindingRegistered");
+            if (title && !content.Resources().HasKey(observerKey))
+            {
+                content.RegisterPropertyChangedCallback(ContentControl::ContentProperty(), [weakTitle = make_weak(title)](DependencyObject const& sender, DependencyProperty const&) {
+                    if (const auto owner = weakTitle.get())
+                    {
+                        _bindMonochromeIconForeground(sender.as<ContentControl>().Content().try_as<IconElement>(), owner);
+                    }
+                });
+                content.Resources().Insert(observerKey, box_value(true));
+            }
+            _bindMonochromeIconForeground(content.Content().try_as<IconElement>(), title);
         }
     }
 
@@ -1674,7 +1721,7 @@ namespace winrt::TerminalApp::implementation
             {
                 headerImpl->SetMetadataForeground(metadataForeground, _highContrast && !foregroundBrush && !searchFocused);
             }
-            _bindMonochromeIconForeground(iconPresenter, header);
+            _bindMonochromeIconForeground(iconPresenter ? iconPresenter.Content().try_as<IconElement>() : nullptr, header);
         }
     }
 
@@ -1758,7 +1805,7 @@ namespace winrt::TerminalApp::implementation
             }
         }
         const auto presenter = root.FindName(L"PaneIconPresenter").try_as<ContentPresenter>();
-        _bindMonochromeIconForeground(presenter, button);
+        _bindMonochromeIconForeground(presenter ? presenter.Content().try_as<IconElement>() : nullptr, button);
         if (const auto hover = root.FindName(L"PaneHoverBackground").try_as<UIElement>())
         {
             const auto showHover = !active && pointerOver;
@@ -2465,16 +2512,23 @@ namespace winrt::TerminalApp::implementation
                     _applyHistoryRowAutomation(container, item);
                 }
             }
-            auto iconKey = box_value(L"AgentIcon." + item.AgentId());
-            if (!Resources().HasKey(iconKey))
+            if (!item.IconSource())
             {
-                iconKey = box_value(L"AgentIcon.generic");
+                winrt::get_self<TabStripHistoryItem>(item)->SyncIcon(L"ms-appx:///AgentIcons/generic.svg");
             }
-            item.IconTemplate(Resources().Lookup(iconKey).as<DataTemplate>());
             _historySearchTerms.emplace_back(_buildHistorySearchTerms(item));
         }
         _applyHistoryProjection(true);
         TryCompleteAgentFilterTelemetry();
+    }
+
+    void TabStrip::RefreshHistoryIcons(const std::function<hstring(const TerminalApp::TabStripHistoryItem&)>& resolveIconPath)
+    {
+        for (const auto& item : _historySnapshot)
+        {
+            winrt::get_self<TabStripHistoryItem>(item)->SyncIcon(resolveIconPath(item));
+        }
+        _applyHistoryProjection(true);
     }
 
     void TabStrip::TryCompleteAgentFilterTelemetry()
@@ -3811,7 +3865,6 @@ namespace winrt::TerminalApp::implementation
                 left.ProviderDisplayName() == right.ProviderDisplayName() &&
                 left.Cwd() == right.Cwd() &&
                 left.IsAgentPane() == right.IsAgentPane() &&
-                left.IconTemplate() == right.IconTemplate() &&
                 (!includeStatus ||
                  (left.Status() == right.Status() &&
                   winrt::get_self<TabStripHistoryItem>(left)->HasUnreadActivity() == winrt::get_self<TabStripHistoryItem>(right)->HasUnreadActivity() &&
@@ -3985,6 +4038,7 @@ namespace winrt::TerminalApp::implementation
                     {
                         const auto nativeCurrent = winrt::get_self<TabStripHistoryItem>(current);
                         const auto nativeIncoming = winrt::get_self<TabStripHistoryItem>(incoming);
+                        nativeCurrent->SyncIcon(nativeIncoming->IconPath());
                         if (!_sameHistoryItem(current, incoming))
                         {
                             const auto paneChanged = current.PaneSessionId() != incoming.PaneSessionId();
