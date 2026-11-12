@@ -1742,12 +1742,12 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn("WORKFLOW_SHA: ${{ github.workflow_sha }}", workflow)
             self.assertIn('--base "$BASE_SHA"', workflow.replace('\\"', '"'))
             self.assertIn('--trusted-sha "$WORKFLOW_SHA"', workflow.replace('\\"', '"'))
-            self.assertIn("BASE_SHA: ${{ github.event.pull_request.base.sha }}", workflow)
+            self.assertIn("BASE_SHA: ${{ fromJSON(github.event.inputs.pull_request).base.sha }}", workflow)
 
     def test_preparation_preserves_named_pr_branch_for_transport(self):
         root = Path(__file__).parents[4]
         workflow = (root / ".github/workflows/ghaw-pr-accessibility.md").read_text(encoding="utf-8")
-        self.assertIn("HEAD_REF: ${{ github.event.pull_request.head.ref }}", workflow)
+        self.assertIn("HEAD_REF: ${{ fromJSON(github.event.inputs.pull_request).head.ref }}", workflow)
         self.assertLess(workflow.index('git check-ref-format --branch "$HEAD_REF"'),
                         workflow.index('git checkout -B "$HEAD_REF" "$HEAD_SHA"'))
         self.assertIn("one separate commit per eligible HIGH finding", workflow)
