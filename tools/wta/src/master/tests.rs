@@ -1419,18 +1419,123 @@ async fn model_scoped_agent_retires_only_after_its_final_helper_unbinds() {
             assert!(bind_helper_to_agent(&state, &agent, helper_a).await);
             assert!(bind_helper_to_agent(&state, &agent, helper_b).await);
             agent.bound_helpers.lock().await.remove(&helper_a);
-            retire_unbound_model_agent(&state, &agent).await;
+            retire_unbound_on_demand_agent(&state, &agent).await;
             assert!(
                 state.agents.lock().await.contains_key(&key),
                 "one remaining helper must keep the model generation alive"
             );
 
             agent.bound_helpers.lock().await.remove(&helper_b);
-            retire_unbound_model_agent(&state, &agent).await;
+            retire_unbound_on_demand_agent(&state, &agent).await;
             assert!(
                 !state.agents.lock().await.contains_key(&key),
                 "the final helper disconnect must retire the model generation"
             );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wsl_agent_retires_chat_and_history_after_final_helper_unbinds_but_host_stays_resident() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            for source in [
+                crate::agent_source::AgentSource::Host,
+                crate::agent_source::AgentSource::Wsl {
+                    distro: "Ubuntu".into(),
+                },
+            ] {
+                let state = make_state();
+                let mut agent = unbound_test_agent("on-demand-retirement");
+                let owned = Arc::get_mut(&mut agent).unwrap();
+                owned.source = source.clone();
+                let key = owned.cmd_key.clone();
+                let cell = Arc::new(tokio::sync::OnceCell::new());
+                assert!(cell.set(Arc::clone(&agent)).is_ok());
+                state.agents.lock().await.insert(key.clone(), cell);
+                let helper_a = HelperId(610);
+                let helper_b = HelperId(611);
+                assert!(bind_helper_to_agent(&state, &agent, helper_a).await);
+                assert!(bind_helper_to_agent(&state, &agent, helper_b).await);
+                agent.bound_helpers.lock().await.remove(&helper_a);
+                retire_unbound_on_demand_agent(&state, &agent).await;
+                assert!(state.agents.lock().await.contains_key(&key));
+                agent.bound_helpers.lock().await.remove(&helper_b);
+                retire_unbound_on_demand_agent(&state, &agent).await;
+                let is_host = matches!(source, crate::agent_source::AgentSource::Host);
+                assert_eq!(state.agents.lock().await.contains_key(&key), is_host);
+                assert_eq!(
+                    agent
+                        .history_refresh
+                        .retired
+                        .load(std::sync::atomic::Ordering::Acquire),
+                    !is_host,
+                );
+            }
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wsl_discovery_running_state_does_not_authorize_unused_history_but_default_or_use_does() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            let source = crate::agent_source::AgentSource::Wsl {
+                distro: "Ubuntu".into(),
+            };
+            let agent = listing_agent_from(
+                Some(crate::agent_sessions::CliSource::Copilot),
+                source.clone(),
+                &["history-row"],
+            );
+            agent.bound_helpers.lock().await.clear();
+            // Discovery can start Ubuntu, but never binds a provider helper.
+            assert!(!history_usage_eligible(&source, false));
+            assert_eq!(refresh_agent_history(&state, &agent).await, None);
+            // Authorized default prewarm and explicit use share this helper binding.
+            agent.bound_helpers.lock().await.insert(HelperId(612));
+            assert!(history_usage_eligible(&source, true));
+            assert_eq!(refresh_agent_history(&state, &agent).await, Some(1));
+            assert!(history_usage_eligible(
+                &crate::agent_source::AgentSource::Host,
+                false
+            ));
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wsl_history_usage_is_scoped_to_exact_provider_and_distribution() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let state = make_state();
+            for (provider, distro, selected) in [
+                (crate::agent_sessions::CliSource::Copilot, "Ubuntu", true),
+                (crate::agent_sessions::CliSource::Claude, "Ubuntu", false),
+                (crate::agent_sessions::CliSource::OpenCode, "Ubuntu", false),
+                (crate::agent_sessions::CliSource::Copilot, "Debian", false),
+            ] {
+                let agent = listing_agent_from(
+                    Some(provider),
+                    crate::agent_source::AgentSource::Wsl {
+                        distro: distro.into(),
+                    },
+                    &["scoped-history"],
+                );
+                agent.bound_helpers.lock().await.clear();
+                add_test_agent_to_pool(&state, &agent).await;
+                if selected {
+                    assert!(bind_helper_to_agent(&state, &agent, HelperId(613)).await);
+                }
+                assert_eq!(
+                    refresh_agent_history(&state, &agent).await,
+                    selected.then_some(1),
+                    "Ubuntu Copilot usage must not authorize {} in {}",
+                    agent.resolved_agent_id,
+                    distro,
+                );
+            }
         })
         .await;
 }
@@ -19068,7 +19173,13 @@ fn listing_agent_from(
         source: source.clone(),
         cmd_key: format!("listing-agent-{cli:?}-{source}"),
         cloud_catalog: Mutex::new(NativeCloudCatalogState::Pending),
-        bound_helpers: Mutex::new(HashSet::new()),
+        bound_helpers: Mutex::new(
+            if matches!(source, crate::agent_source::AgentSource::Wsl { .. }) {
+                HashSet::from([HelperId(0)])
+            } else {
+                HashSet::new()
+            },
+        ),
         history_refresh: AgentHistoryRefresh {
             gate: Arc::new(Mutex::new(HistoryRefreshState {
                 query: history::HistoryQuery::mock(client_connection_to_listing_agent(

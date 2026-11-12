@@ -209,9 +209,10 @@ pub(crate) async fn run(command: Command, json_mode: bool) -> Result<()> {
         Command::ProbeAgentSources {
             wsl_distro,
             all_wsl,
+            start_stopped_wsl,
         } => {
             if all_wsl {
-                probes::run_all_agent_sources().await
+                probes::run_all_agent_sources(start_stopped_wsl).await
             } else {
                 probes::run_agent_sources(
                     wsl_distro.as_deref().context("missing WSL distribution")?,

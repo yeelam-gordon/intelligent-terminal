@@ -504,6 +504,10 @@ pub(crate) enum Command {
         /// Enumerate registered distributions, probing only already-running ones.
         #[arg(long)]
         all_wsl: bool,
+        /// Explicit Settings discovery permission to start stopped distributions
+        /// for CLI path probes only, never ACP or dependency preparation.
+        #[arg(long, requires = "all_wsl", conflicts_with = "wsl_distro")]
+        start_stopped_wsl: bool,
     },
     /// List built-in ACP agents that WTA can launch on the Windows host.
     /// Used by FRE, Settings, and automatic agent selection so those surfaces

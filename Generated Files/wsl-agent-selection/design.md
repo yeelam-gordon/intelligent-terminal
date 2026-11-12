@@ -153,7 +153,7 @@ but do not introduce new WSL installers or bootstrap flows. Existing Claude/Code
 ACP command construction uses `npx -y` adapters for both execution sources, so
 an explicit existing launch can already obtain its adapter. Discovery and
 profile generation never install anything. Preserve existing source-aware
-preparation behavior, subject to the stopped-distribution gate, rather than
+preparation behavior, subject to exact provider/source authorization, rather than
 silently converting previously supported launches to installed-only behavior.
 Antigravity already has managed Linux ACP preparation; this change reuses that
 existing lifecycle and introduces no new provider installer.
