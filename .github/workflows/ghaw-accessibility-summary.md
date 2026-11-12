@@ -1,6 +1,7 @@
 ---
 name: Accessibility final summary
 on:
+  bots: ['github-actions[bot]']
   workflow_call:
     inputs:
       triage-result:
@@ -40,6 +41,23 @@ checkout:
   ref: ${{ github.workflow_sha }}
 env:
   ACCESSIBILITY_RUN: accessibility-${{ github.run_id }}-${{ github.run_attempt }}
+jobs:
+  admission:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/accessibility-ci-admission
+        with:
+          published-sha: ${{ inputs.published-sha }}
+  agent:
+    needs: [admission]
 safe-outputs:
   # A non-system artifact output suppresses gh-aw's default create-issue tool.
   upload-artifact:
