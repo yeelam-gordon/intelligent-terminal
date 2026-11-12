@@ -91,6 +91,7 @@ namespace winrt::TerminalApp::implementation
         void _RegisterSettingsChange();
         void _RegisterAgentPolicyChange();
         void _UpdateWtaServicePolicy();
+        winrt::fire_and_forget _RefreshWslAgentProfilesAsync();
 
         void _setupFolderPathEnvVar();
 

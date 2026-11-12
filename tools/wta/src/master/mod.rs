@@ -667,6 +667,7 @@ struct MasterStateInner {
     /// so a rejected/unknown helper request safely falls back to it.
     pub(crate) default_agent_cmd: String,
     pub(crate) default_agent_id: Option<String>,
+    pub(crate) default_agent_source: crate::agent_source::AgentSource,
     /// Allowlist of agent ids a helper may select over the pipe, from the
     /// host's GPO-filtered set (`--allowed-agent-ids`). `None` = the flag was
     /// absent (manual runs / older hosts): any *known* agent id is accepted.
@@ -3462,7 +3463,7 @@ impl HelperHandler {
         let ResolvedAgentSelection {
             command: agent_cmd,
             agent_id,
-            source: agent_source,
+            source: mut agent_source,
             explicit_selection,
         } = resolve_agent_selection(
             &self.state.default_agent_cmd,
@@ -3470,10 +3471,22 @@ impl HelperHandler {
             self.state.allowed_agent_ids.as_ref(),
             wta_meta.agent_id.as_deref(),
             wta_meta.model.as_deref(),
-            wta_meta.agent_source.as_deref(),
-            wta_meta.wsl_distro.as_deref(),
+            Some(
+                wta_meta
+                    .agent_source
+                    .as_deref()
+                    .unwrap_or(self.state.default_agent_source.kind()),
+            ),
+            if wta_meta.agent_source.is_some() {
+                wta_meta.wsl_distro.as_deref()
+            } else {
+                self.state.default_agent_source.distro()
+            },
             self.helper_id,
         )?;
+        if explicit_selection != ExplicitAgentSelection::Accepted {
+            agent_source = self.state.default_agent_source.clone();
+        }
         tracing::info!(
             target: "master",
             step = "helper→agent",
@@ -5111,6 +5124,7 @@ async fn run_master_loop(config: MasterConfig, pipe_name: String) -> Result<()> 
         custom_model_generations: Mutex::new(HashMap::new()),
         default_agent_cmd: config.agent.clone(),
         default_agent_id: config.agent_id.clone(),
+        default_agent_source: config.agent_source.clone(),
         allowed_agent_ids,
         helper_meta: Mutex::new(HashMap::new()),
         tab_ownership_gate: Mutex::new(()),

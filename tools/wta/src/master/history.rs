@@ -1109,15 +1109,14 @@ impl HistoryQuery {
         }
         self.cycle_in_progress = true;
         if self.process.is_none() {
-            self.process = Some(
-                await_history_startup(
-                    HistoryProcess::spawn(
-                        target.ok_or_else(|| anyhow!("history launch target missing"))?,
-                    ),
-                    cancelled,
-                )
-                .await?,
-            );
+            let target = target.ok_or_else(|| anyhow!("history launch target missing"))?;
+            if let crate::agent_source::AgentSource::Wsl { distro } = &target.source {
+                // History refresh is not explicit use. A selected chat launch
+                // starts its own distro; history must never resurrect it.
+                crate::agent_source::ensure_wsl_running(distro).await?;
+            }
+            self.process =
+                Some(await_history_startup(HistoryProcess::spawn(target), cancelled).await?);
         }
         if let Some(process) = self.process.as_mut().filter(|process| !process.initialized) {
             self.recycling = true;

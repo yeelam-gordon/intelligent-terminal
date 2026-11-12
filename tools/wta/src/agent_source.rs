@@ -5,8 +5,99 @@
 //! separate lets `/agent` offer both Windows and the current WSL distro without
 //! changing policy identifiers, telemetry bucketing, or session CLI labels.
 
+use anyhow::{Context, Result};
 use std::fmt;
 use std::time::Duration;
+
+/// Listing distributions does not start them. Never infer running state from
+/// registered distributions when the separate running-state query fails.
+pub(crate) async fn list_wsl_distros(running_only: bool) -> Result<Vec<String>> {
+    let mut command = tokio::process::Command::new("wsl.exe");
+    command.arg("--list");
+    if running_only {
+        command.arg("--running");
+    }
+    command
+        .arg("--quiet")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = tokio::time::timeout(Duration::from_secs(10), command.output())
+        .await
+        .context("WSL distribution enumeration timed out")?
+        .context("enumerate WSL distributions")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "WSL distribution enumeration failed ({})",
+        output.status
+    );
+    parse_wsl_distros(&output.stdout)
+}
+
+pub(crate) fn parse_wsl_distros(bytes: &[u8]) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        bytes.len() <= 1024 * 1024,
+        "WSL distribution list is too large"
+    );
+    let utf16 =
+        bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) || bytes.contains(&0);
+    let text = if utf16 {
+        let big_endian = bytes.starts_with(&[0xfe, 0xff]);
+        let bytes = if bytes.starts_with(&[0xff, 0xfe]) || big_endian {
+            &bytes[2..]
+        } else {
+            bytes
+        };
+        anyhow::ensure!(
+            bytes.len() % 2 == 0,
+            "Malformed UTF-16 WSL distribution list"
+        );
+        let units: Vec<_> = bytes
+            .chunks_exact(2)
+            .map(|pair| {
+                if big_endian {
+                    u16::from_be_bytes([pair[0], pair[1]])
+                } else {
+                    u16::from_le_bytes([pair[0], pair[1]])
+                }
+            })
+            .collect();
+        String::from_utf16(&units).context("decode UTF-16 WSL distribution list")?
+    } else {
+        std::str::from_utf8(bytes)
+            .context("decode UTF-8 WSL distribution list")?
+            .to_string()
+    };
+    let mut names: Vec<_> = text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .filter(|name| is_safe_wsl_distro_name(name))
+        .filter(|name| {
+            let lower = name.to_ascii_lowercase();
+            !lower.starts_with("docker-desktop") && !lower.starts_with("rancher-desktop")
+        })
+        .map(str::to_string)
+        .collect();
+    names.sort_by_key(|name| (name.to_ascii_lowercase(), name.clone()));
+    names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    Ok(names)
+}
+
+pub(crate) async fn ensure_wsl_running(distro: &str) -> Result<()> {
+    anyhow::ensure!(
+        is_safe_wsl_distro_name(distro),
+        "Invalid WSL distribution name"
+    );
+    let running = list_wsl_distros(true).await?;
+    anyhow::ensure!(
+        running.iter().any(|name| name.eq_ignore_ascii_case(distro)),
+        "WSL distribution is not running: {distro}"
+    );
+    Ok(())
+}
 
 pub(crate) fn is_safe_wsl_distro_name(name: &str) -> bool {
     !name.is_empty()
@@ -125,11 +216,13 @@ pub async fn resolve_source_cwd(source: &AgentSource, reported: Option<&str>) ->
         Some(relative) if relative.starts_with("~/") => {
             Some(format!("{}/{}", home.trim_end_matches('/'), &relative[2..]))
         }
-        Some(relative) if !relative.contains(':') && !relative.starts_with('\\') => Some(format!(
-            "{}/{}",
-            home.trim_end_matches('/'),
-            normalize_wsl_relative_cwd(relative)
-        )),
+        Some(relative) if !relative.contains(':') && !relative.starts_with(['\\', '/']) => {
+            Some(format!(
+                "{}/{}",
+                home.trim_end_matches('/'),
+                normalize_wsl_relative_cwd(relative)
+            ))
+        }
         _ => Some(home),
     }
 }
@@ -154,11 +247,15 @@ fn normalize_wsl_cwd(distro: &str, cwd: &str) -> Option<String> {
             return Some("/".to_string());
         }
         let prefix = format!("{root}/");
-        if normalized.len() >= prefix.len()
-            && normalized[..prefix.len()].eq_ignore_ascii_case(&prefix)
+        if normalized
+            .get(..prefix.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(&prefix))
         {
             return Some(format!("/{}", &normalized[prefix.len()..]));
         }
+    }
+    if normalized.starts_with("//") {
+        return None;
     }
     if cwd.starts_with('/') {
         return Some(cwd.to_string());
@@ -172,7 +269,10 @@ fn normalize_wsl_cwd(distro: &str, cwd: &str) -> Option<String> {
     None
 }
 
-async fn resolve_wsl_home(distro: &str) -> Option<String> {
+pub(crate) async fn resolve_wsl_home(distro: &str) -> Option<String> {
+    if !is_safe_wsl_distro_name(distro) {
+        return None;
+    }
     let mut command = tokio::process::Command::new("wsl.exe");
     command
         .arg("-d")
@@ -198,6 +298,25 @@ async fn resolve_wsl_home(distro: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wsl_enumeration_handles_encodings_filters_and_deduplicates() {
+        let text = "\u{feff}Ubuntu\r\nDebian\r\nubuntu\r\ndocker-desktop-data\r\nrancher-desktop\r\nbad name\r\n";
+        let expected = vec!["Debian", "Ubuntu"];
+        assert_eq!(parse_wsl_distros(text.as_bytes()).unwrap(), expected);
+        for bom in [false, true] {
+            let mut bytes = if bom { vec![0xff, 0xfe] } else { Vec::new() };
+            bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+            assert_eq!(parse_wsl_distros(&bytes).unwrap(), expected);
+        }
+        let mut bytes = vec![0xfe, 0xff];
+        bytes.extend(text.encode_utf16().flat_map(u16::to_be_bytes));
+        assert_eq!(parse_wsl_distros(&bytes).unwrap(), expected);
+        assert!(parse_wsl_distros(&[]).unwrap().is_empty());
+        assert!(parse_wsl_distros(&[0xff, 0xfe, 1]).is_err());
+        assert!(parse_wsl_distros(&[0xff, 0xfe, 0x00, 0xd8]).is_err());
+        assert!(parse_wsl_distros(&[0xff]).is_err());
+    }
 
     #[test]
     fn wire_source_does_not_accept_unsafe_wsl_metadata() {
@@ -294,6 +413,15 @@ mod tests {
         );
         assert_eq!(normalize_wsl_cwd("Ubuntu", "~"), None);
         assert_eq!(normalize_wsl_cwd("Ubuntu", r"\\wsl$\Debian\home\me"), None);
+        assert_eq!(normalize_wsl_cwd("Ubuntu", "//wsl$/Debian/home/me"), None);
+        assert_eq!(
+            normalize_wsl_cwd("Ubuntu", "//wsl.localhost/Debian/home/me"),
+            None
+        );
+        assert_eq!(
+            normalize_wsl_cwd("Ubuntu", "/home/路径/项目").as_deref(),
+            Some("/home/路径/项目")
+        );
     }
 
     #[test]

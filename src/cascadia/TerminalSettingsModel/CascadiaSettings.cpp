@@ -3,6 +3,7 @@
 
 #include "pch.h"
 #include "CascadiaSettings.h"
+#include "AgentProfileGenerator.h"
 #include "CascadiaSettings.g.cpp"
 #include "MatchProfilesEntry.h"
 
@@ -107,6 +108,12 @@ std::string_view Model::implementation::LoadStringResource(int resourceID)
 winrt::hstring CascadiaSettings::Hash() const noexcept
 {
     return _hash;
+}
+
+winrt::Windows::Foundation::IAsyncOperation<bool> CascadiaSettings::RefreshWslAgentProfilesAsync()
+{
+    co_await winrt::resume_background();
+    co_return Model::AgentProfileGenerator::RefreshWslSources();
 }
 
 Model::CascadiaSettings CascadiaSettings::Copy() const
@@ -373,6 +380,7 @@ Model::Profile CascadiaSettings::DuplicateProfile(const Model::Profile& source)
     if (!source.AgentProfileId().empty())
     {
         duplicated->AgentProfileId(source.AgentProfileId());
+        duplicated->AgentProfileSource(source.AgentProfileSource());
         duplicated->AgentProfileModel(source.AgentProfileModel());
         duplicated->AgentProfilePermissionMode(source.AgentProfilePermissionMode());
         duplicated->AgentProfileArguments(source.AgentProfileArguments());

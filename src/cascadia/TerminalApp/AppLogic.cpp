@@ -546,6 +546,25 @@ namespace winrt::TerminalApp::implementation
                                                           warnings.GetView(),
                                                           _settings);
         SettingsChanged.raise(*this, *ev);
+        _RefreshWslAgentProfilesAsync();
+    }
+
+    winrt::fire_and_forget AppLogic::_RefreshWslAgentProfilesAsync()
+    {
+        const auto weakSelf = get_weak();
+        const auto dispatcher = DispatcherQueue::GetForCurrentThread();
+        try
+        {
+            if (co_await CascadiaSettings::RefreshWslAgentProfilesAsync())
+            {
+                co_await wil::resume_foreground(dispatcher);
+                if (const auto self = weakSelf.get())
+                {
+                    self->ReloadSettingsThrottled();
+                }
+            }
+        }
+        CATCH_LOG()
     }
 
     void AppLogic::ReloadSettingsThrottled()
@@ -565,6 +584,8 @@ namespace winrt::TerminalApp::implementation
         // but LoadSettings skips it, so that the UI starts up faster.
         // Now that the UI is present we can do them with a less significant UX impact.
         _ProcessLazySettingsChanges();
+
+        _RefreshWslAgentProfilesAsync();
 
         FILETIME creationTime, exitTime, kernelTime, userTime, now;
         if (GetThreadTimes(GetCurrentThread(), &creationTime, &exitTime, &kernelTime, &userTime))

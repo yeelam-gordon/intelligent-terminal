@@ -26,6 +26,7 @@
 #include "NewTabMenu.h"
 #include "NavConstants.h"
 #include "..\inc\AgentAvailability.h"
+#include "..\inc\AgentPaneBackend.h"
 #include "..\inc\AgentProfileUtils.h"
 #include "..\types\inc\utils.hpp"
 #include <..\WinRTUtils\inc\Utils.h>
@@ -165,6 +166,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         // that VM into the appearance VMs within the profiles
         _InitializeProfilesList();
         _ProbeHostAgentAvailabilityAsync();
+        _ProbeWslAgentAvailabilityAsync();
 
         // Apply icons and tooltips (GH#19688, long names may be truncated) to static nav items
         for (const auto& item : SettingsNav().MenuItems())
@@ -1033,6 +1035,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
             else if (*clickedItemTag == aiAgentsTag)
             {
                 auto aiAgentsVm = winrt::make<AIAgentsViewModel>(_settingsClone.GlobalSettings());
+                winrt::get_self<AIAgentsViewModel>(aiAgentsVm)->SetAvailableWslAgents(_availableWslAgents);
                 aiAgentsVm.InitShellIntegrationRequested([weak = get_weak()](auto&&, auto target) {
                     if (auto s = weak.get())
                     {
@@ -1469,6 +1472,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     void MainPage::_ApplyHostAgentAvailability(const Editor::ProfileViewModel& profile)
     {
         winrt::get_self<implementation::ProfileViewModel>(profile)->SetAvailableHostAgents(_availableHostAgents);
+        winrt::get_self<implementation::ProfileViewModel>(profile)->SetAvailableWslAgents(_availableWslAgents);
     }
 
     safe_void_coroutine MainPage::_ProbeHostAgentAvailabilityAsync()
@@ -1490,6 +1494,48 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
             if (strongThis->_profileDefaultsVM)
             {
                 strongThis->_ApplyHostAgentAvailability(strongThis->_profileDefaultsVM);
+            }
+        }
+    }
+
+    safe_void_coroutine MainPage::_ProbeWslAgentAvailabilityAsync()
+    {
+        const auto dispatcher = Dispatcher();
+        auto weakThis = get_weak();
+        co_await winrt::resume_background();
+        auto sources = ::Microsoft::Terminal::AgentAvailability::ProbeWslAgentSources();
+        co_await wil::resume_foreground(dispatcher);
+        if (auto self = weakThis.get(); self && sources)
+        {
+            for (const auto& profile : self->_settingsClone.AllProfiles())
+            {
+                const auto backend = ::Microsoft::Terminal::Settings::Model::AgentPaneBackend::FromSettings(
+                    std::wstring_view{ profile.AgentProfileId() },
+                    std::wstring_view{ profile.AgentProfileSource() });
+                if (!backend || backend->source != ::Microsoft::Terminal::Settings::Model::AgentPaneBackendSource::Wsl)
+                {
+                    continue;
+                }
+                for (auto& source : *sources)
+                {
+                    if (source.distro == backend->wslDistro && (!source.running || source.probeFailed))
+                    {
+                        source.agentIds.emplace(backend->agentId);
+                    }
+                }
+            }
+            self->_availableWslAgents = std::move(*sources);
+            for (const auto& profile : self->_profileVMs)
+            {
+                winrt::get_self<implementation::ProfileViewModel>(profile)->SetAvailableWslAgents(self->_availableWslAgents);
+            }
+            if (self->_profileDefaultsVM)
+            {
+                winrt::get_self<implementation::ProfileViewModel>(self->_profileDefaultsVM)->SetAvailableWslAgents(self->_availableWslAgents);
+            }
+            if (const auto agentsPage = self->contentFrame().Content().try_as<Editor::AIAgents>())
+            {
+                winrt::get_self<AIAgentsViewModel>(agentsPage.ViewModel())->SetAvailableWslAgents(self->_availableWslAgents);
             }
         }
     }
