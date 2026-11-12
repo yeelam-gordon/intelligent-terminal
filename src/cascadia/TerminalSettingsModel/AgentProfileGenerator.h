@@ -64,7 +64,8 @@ namespace winrt::Microsoft::Terminal::Settings::Model
         public:
             using Snapshot = WslDiscoveryCache::Snapshot;
             Snapshot Read();
-            bool Refresh(std::chrono::steady_clock::time_point now, const std::function<std::optional<Snapshot>()>& probe);
+            bool Refresh(const std::function<std::optional<Snapshot>()>& probe,
+                         const std::function<std::chrono::steady_clock::time_point()>& now = std::chrono::steady_clock::now);
 
         private:
             std::mutex _mutex;

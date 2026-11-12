@@ -959,62 +959,81 @@ namespace SettingsModelUnitTests
         using Cache = AgentProfileGenerator::WslSourceCache;
         using Snapshot = Cache::Snapshot;
         Cache cache;
-        const auto now = std::chrono::steady_clock::time_point{};
+        auto logicalNow = std::chrono::steady_clock::time_point{};
+        const auto now = [&] { return logicalNow; };
         bool competingProbeRan = false;
-        VERIFY_IS_TRUE(cache.Refresh(now, [&]() -> std::optional<Snapshot> {
+        VERIFY_IS_TRUE(cache.Refresh([&]() -> std::optional<Snapshot> {
             // Generation can read the cache while discovery runs, and another
             // refresh does not wait or start a competing subprocess.
             VERIFY_IS_TRUE(cache.Read().empty());
-            VERIFY_IS_FALSE(cache.Refresh(now, [&]() -> std::optional<Snapshot> {
+            logicalNow += std::chrono::seconds{ 45 };
+            VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
                 competingProbeRan = true;
                 return Snapshot{};
-            }));
+            }, now));
             return Snapshot{ { L"Ubuntu", { L"copilot" }, true } };
-        }));
+        }, now));
         VERIFY_IS_FALSE(competingProbeRan);
         VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
-        VERIFY_IS_FALSE(cache.Refresh(now, [&]() -> std::optional<Snapshot> {
+        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
             competingProbeRan = true;
             return Snapshot{};
-        }));
+        }, now));
         VERIFY_IS_FALSE(competingProbeRan);
-        const auto expired = now + std::chrono::seconds{ 30 };
-        VERIFY_IS_FALSE(cache.Refresh(expired - std::chrono::milliseconds{ 1 }, [&]() -> std::optional<Snapshot> {
+        // The full TTL starts after the slow all-distro probe completes.
+        const auto expired = logicalNow + std::chrono::seconds{ 30 };
+        logicalNow = expired - std::chrono::milliseconds{ 1 };
+        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
             competingProbeRan = true;
             return Snapshot{};
-        }));
+        }, now));
         VERIFY_IS_FALSE(competingProbeRan);
-        VERIFY_IS_FALSE(cache.Refresh(expired, []() -> std::optional<Snapshot> { return std::nullopt; }));
+        logicalNow = expired;
+        bool failedProbeRan = false;
+        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
+            failedProbeRan = true;
+            logicalNow += std::chrono::seconds{ 35 };
+            return std::nullopt;
+        }, now));
+        VERIFY_IS_TRUE(failedProbeRan);
         VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
-        VERIFY_IS_FALSE(cache.Refresh(expired, []() -> std::optional<Snapshot> {
+        VERIFY_IS_FALSE(cache.Refresh([]() -> std::optional<Snapshot> { THROW_HR(E_FAIL); }, now));
+        VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
+        bool retryProbeRan = false;
+        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
+            retryProbeRan = true;
             return Snapshot{ { L"Ubuntu", {}, false, true } };
-        }));
+        }, now));
+        VERIFY_IS_TRUE(retryProbeRan);
         VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
-        VERIFY_IS_FALSE(cache.Refresh(expired, [&]() -> std::optional<Snapshot> {
+        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
             competingProbeRan = true;
             return Snapshot{};
-        }));
-        const auto nextExpiry = expired + std::chrono::seconds{ 30 };
-        VERIFY_IS_FALSE(cache.Refresh(nextExpiry - std::chrono::milliseconds{ 1 }, [&]() -> std::optional<Snapshot> {
+        }, now));
+        const auto nextExpiry = logicalNow + std::chrono::seconds{ 30 };
+        logicalNow = nextExpiry - std::chrono::milliseconds{ 1 };
+        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
             competingProbeRan = true;
             return Snapshot{};
-        }));
+        }, now));
         VERIFY_IS_FALSE(competingProbeRan);
-        VERIFY_IS_TRUE(cache.Refresh(nextExpiry, []() -> std::optional<Snapshot> {
+        logicalNow = nextExpiry;
+        VERIFY_IS_TRUE(cache.Refresh([]() -> std::optional<Snapshot> {
             return Snapshot{ { L"Ubuntu", { L"claude" }, true } };
-        }));
+        }, now));
         VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"claude"));
-        VERIFY_IS_FALSE(cache.Refresh(nextExpiry, [&]() -> std::optional<Snapshot> {
+        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
             competingProbeRan = true;
             return Snapshot{};
-        }));
+        }, now));
         VERIFY_IS_FALSE(competingProbeRan);
-        VERIFY_IS_TRUE(cache.Refresh(nextExpiry + std::chrono::seconds{ 30 }, []() -> std::optional<Snapshot> { return Snapshot{}; }));
+        logicalNow += std::chrono::seconds{ 30 };
+        VERIFY_IS_TRUE(cache.Refresh([]() -> std::optional<Snapshot> { return Snapshot{}; }, now));
         VERIFY_IS_TRUE(cache.Read().empty());
         Cache firstStopped;
-        VERIFY_IS_FALSE(firstStopped.Refresh(now, []() -> std::optional<Snapshot> {
+        VERIFY_IS_FALSE(firstStopped.Refresh([]() -> std::optional<Snapshot> {
             return Snapshot{ { L"Stopped", {}, false } };
-        }));
+        }, now));
     }
 
     void CustomAgentAndPolicyTests::AgentProfileWslPersistence()

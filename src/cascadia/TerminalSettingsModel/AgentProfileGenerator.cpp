@@ -76,12 +76,12 @@ AgentProfileGenerator::WslSourceCache::Snapshot AgentProfileGenerator::WslSource
     return previous ? *previous : Snapshot{};
 }
 
-bool AgentProfileGenerator::WslSourceCache::Refresh(const std::chrono::steady_clock::time_point now,
-                                                    const std::function<std::optional<Snapshot>()>& probe)
+bool AgentProfileGenerator::WslSourceCache::Refresh(const std::function<std::optional<Snapshot>()>& probe,
+                                                    const std::function<std::chrono::steady_clock::time_point()>& now)
 {
     {
         std::scoped_lock lock{ _mutex };
-        if (_refreshing || !_cache.NeedsRefresh(now))
+        if (_refreshing || !_cache.NeedsRefresh(now()))
         {
             return false;
         }
@@ -102,7 +102,7 @@ bool AgentProfileGenerator::WslSourceCache::Refresh(const std::chrono::steady_cl
         const auto previous = _cache.Previous();
         RetainKnownWslAgents(*sources, previous);
         const auto changed = WslProfileEvidence(*sources) != WslProfileEvidence(previous ? *previous : Snapshot{});
-        _cache.Store(now, std::move(*sources));
+        _cache.Store(now(), std::move(*sources));
         return changed;
     }
     CATCH_LOG();
@@ -111,7 +111,7 @@ bool AgentProfileGenerator::WslSourceCache::Refresh(const std::chrono::steady_cl
 
 bool AgentProfileGenerator::RefreshWslSources()
 {
-    return WslCache().Refresh(std::chrono::steady_clock::now(), [] {
+    return WslCache().Refresh([] {
         return ::Microsoft::Terminal::AgentAvailability::ProbeWslAgentSources();
     });
 }
