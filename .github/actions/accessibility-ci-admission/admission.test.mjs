@@ -127,6 +127,10 @@ test('publication summary can describe confirmed own repairs without claiming fi
 test('original safety and relevance path categories remain eligible', () => {
   for (const path of ['AGENTS.md', '.github/x', 'src/AGENTS.md', 'src/.agents/x',
     'test/accessibility/x', 'src/cascadia/LocalTests_TerminalApp/TestHostApp/x',
+    '.github/agents/pr-accessibility.agent.md', '.github/skills/pr-accessibility/SKILL.md',
+    '.github/workflows/ghaw-pr-accessibility.lock.yml', 'src/CLAUDE.md', 'src/GEMINI.md',
+    'src/copilot-instructions.md', 'src/SKILL.md', 'src/x.instructions.md',
+    'src/x.agent.md', 'src/.mcp.json', 'src/.claude/x', 'src/.copilot/x', 'src/.gemini/x',
     'build/scripts/Get-DependenciesFromAppxRecipe.ps1']) assert(relevantPath(path), path);
   assert.equal(relevantPath('tools/wta/src/main.rs'), false);
 });
