@@ -57,30 +57,31 @@ namespace winrt::Microsoft::Terminal::Settings::Model
         };
 
         using DiscoveryCache = BasicDiscoveryCache<std::map<std::wstring, std::filesystem::path>>;
-        using WslDiscoveryCache = BasicDiscoveryCache<std::vector<::Microsoft::Terminal::AgentAvailability::AgentSourceSnapshot>>;
+        using WslSnapshot = std::vector<::Microsoft::Terminal::AgentAvailability::AgentSourceSnapshot>;
 
         class WslSourceCache
         {
         public:
-            using Snapshot = WslDiscoveryCache::Snapshot;
+            using Snapshot = WslSnapshot;
             Snapshot Read();
-            bool Refresh(const std::function<std::optional<Snapshot>()>& probe,
-                         const std::function<std::chrono::steady_clock::time_point()>& now = std::chrono::steady_clock::now);
+            void Update(Snapshot sources);
+            void RestoreSavedProfiles(const std::vector<winrt::com_ptr<implementation::Profile>>& profiles);
 
         private:
             std::mutex _mutex;
-            WslDiscoveryCache _cache;
-            bool _refreshing{ false };
+            Snapshot _sources;
+            bool _discovered{ false };
         };
 
-        static bool RefreshWslSources();
-        static void RetainKnownWslAgents(WslDiscoveryCache::Snapshot& sources, const WslDiscoveryCache::Snapshot* previous);
+        static void UpdateWslSources(WslSnapshot sources);
+        static void RestoreSavedWslProfiles(const std::vector<winrt::com_ptr<implementation::Profile>>& profiles);
+        static void RetainKnownWslAgents(WslSnapshot& sources, const WslSnapshot* previous);
         std::wstring_view GetNamespace() const noexcept override;
         std::wstring_view GetDisplayName() const noexcept override;
         std::wstring_view GetIcon() const noexcept override;
         void GenerateProfiles(std::vector<winrt::com_ptr<implementation::Profile>>& profiles) const override;
         static void GenerateProfiles(std::vector<winrt::com_ptr<implementation::Profile>>& profiles,
                                      const DiscoveryCache::Snapshot& host,
-                                     const WslDiscoveryCache::Snapshot& wsl);
+                                     const WslSnapshot& wsl);
     };
 }

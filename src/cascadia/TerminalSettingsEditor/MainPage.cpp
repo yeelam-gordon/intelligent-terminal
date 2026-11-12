@@ -166,7 +166,6 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         // that VM into the appearance VMs within the profiles
         _InitializeProfilesList();
         _ProbeHostAgentAvailabilityAsync();
-        _ProbeWslAgentAvailabilityAsync();
 
         // Apply icons and tooltips (GH#19688, long names may be truncated) to static nav items
         for (const auto& item : SettingsNav().MenuItems())
@@ -266,6 +265,9 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     // - <none>
     void MainPage::UpdateSettings(const Model::CascadiaSettings& settings)
     {
+        const auto restoreUpdating = wil::scope_exit([this, previous = std::exchange(_updatingSettings, true)] {
+            _updatingSettings = previous;
+        });
         // Reset reuses the source object and must still discard page editing state.
         const auto externalReload = settings != _settingsSource;
         _settingsSource = settings;
@@ -903,6 +905,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         {
             _ApplyHostAgentAvailability(profile);
             contentFrame().Navigate(xaml_typename<Editor::Profiles_Base>(), winrt::make<NavigateToPageArgs>(profile, *this, elementToFocus));
+            _ProbeWslAgentAvailabilityAsync();
         }
         else if (page == ProfileSubPage::Appearance)
         {
@@ -1044,6 +1047,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
                 });
                 contentFrame().Navigate(xaml_typename<Editor::AIAgents>(), winrt::make<NavigateToPageArgs>(aiAgentsVm, *this, elementToFocus));
                 _breadcrumbs.Append(winrt::make<Breadcrumb>(vm, RS_(L"Nav_AIAgents/Content"), BreadcrumbSubPage::None));
+                _ProbeWslAgentAvailabilityAsync();
 
                 // Dismiss the "NEW" badge after the user visits the page
                 Model::ApplicationState::SharedInstance().DismissBadge(AIAgentsPageId);
@@ -1500,13 +1504,30 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
     safe_void_coroutine MainPage::_ProbeWslAgentAvailabilityAsync()
     {
+        if (_updatingSettings || _wslAgentProbeInFlight)
+        {
+            co_return;
+        }
+        _wslAgentProbeInFlight = true;
         const auto dispatcher = Dispatcher();
         auto weakThis = get_weak();
         co_await winrt::resume_background();
-        auto sources = ::Microsoft::Terminal::AgentAvailability::ProbeWslAgentSources();
-        co_await wil::resume_foreground(dispatcher);
-        if (auto self = weakThis.get(); self && sources)
+        std::optional<std::vector<::Microsoft::Terminal::AgentAvailability::AgentSourceSnapshot>> sources;
+        try
         {
+            const auto payload = co_await Model::CascadiaSettings::DiscoverWslAgentsAsync();
+            sources = ::Microsoft::Terminal::AgentAvailability::ParseWslAgentSources(winrt::to_string(payload));
+            THROW_HR_IF_MSG(E_INVALIDARG, !sources, "Invalid WSL agent discovery response");
+        }
+        CATCH_LOG()
+        co_await wil::resume_foreground(dispatcher);
+        if (auto self = weakThis.get())
+        {
+            self->_wslAgentProbeInFlight = false;
+            if (!sources)
+            {
+                co_return;
+            }
             for (const auto& profile : self->_settingsClone.AllProfiles())
             {
                 const auto backend = ::Microsoft::Terminal::Settings::Model::AgentPaneBackend::FromSettings(

@@ -33,7 +33,10 @@ listing a case here does not claim that its code exists or passed.
 | V11 | Unrelated settings reload versus changed source | Preserve live editor for unrelated reload; reconstruct when the effective source changes. |
 | V12 | Failed/partial/malformed discovery payload | Explicit unknown/error, not authoritative empty success; preserve unavailable selections. |
 | V13 | Utility, unsafe, duplicate distribution names | Exclude utility/unsafe entries; no duplicate choices or command injection. |
-| V14 | Registered distro stopped after a previously generated native profile | Reuse its saved provider/source as an unavailable selectable hint; never execute the distro to refresh it. A successful running-source probe supersedes stale hints. |
+| V14 | Cold ordinary load of previously generated native WSL profiles | Restore saved provider/source evidence without Linux execution. Explicit successful Settings discovery supersedes stale hints; per-source errors retain known metadata. |
+| V15 | Open global Agents or profile agent-picker page | Actively probe registered distros, including stopped ones, on a background thread; publish current choices without creating ACP/model processes. |
+| V16 | General Settings construction, settings-file reload, or reload restoring Agent-page navigation | No active WSL discovery; preserve current/saved evidence and unsaved editor state. |
+| V17 | Navigate repeatedly while discovery is pending | One in-flight discovery; completion targets live VMs without forced global settings reload. |
 
 ## Binding, reload, and model behavior
 
@@ -66,14 +69,15 @@ listing a case here does not claim that its code exists or passed.
 | R5 | Delegate global WSL from Windows path | Launch and registered session use translated Linux cwd, not raw Windows path. |
 | R6 | Delegate same-distro versus different-distro POSIX cwd | Reuse only same known namespace; otherwise target home; native Windows launch unchanged. |
 | R7 | Source-qualified process/session identity | Host and WSL same provider do not share process or session ownership; existing session MCP routing remains exact. |
-| R8 | Registered but stopped non-default distro | Settings/discovery/profile generation/history refresh/prewarm perform no distro execution or ACP startup. |
-| R9 | Already-running distro | Probe/discover normally without changing Windows eager startup behavior. |
-| R10 | Stopped distro explicitly selected as default or explicitly used | Only authorized source starts on demand; no eager startup of other stopped distros/providers. |
-| R11 | Running-state query fails or races with shutdown | Unknown is ineligible for automatic startup; explicit use remains possible and reports real failures. |
+| R8 | Ordinary startup/settings load with registered unused WSL agents | No active distro discovery, Linux profile-generation probe, or unused ACP/history startup. |
+| R9 | Distro already running or started by Settings discovery | Running/discovered state alone authorizes no chat/history ACP pair; Windows eager behavior remains unchanged. |
+| R10 | Exact WSL provider/source selected as default or actually used | Only that pair becomes eligible; another provider in the same distro and the same provider in another distro stay lazy. |
+| R11 | Running-state query fails or races with shutdown | State uncertainty grants no ACP permission; explicit Settings discovery/use remains possible and reports real failures. |
 | R12 | WSL native agent profiles | Stable provider+distro GUID, exact launch distro, policy filtering, separate native customization, no accidental Windows provider profile duplication. |
-| R15 | WSL native agent versus explicit shell command | Managed native agents never enter shell-integration sweeps; a user override to an interactive WSL shell retains existing behavior. |
-| R13 | Settings load/reload while WSL discovery is slow | Generate from existing evidence immediately; refresh in the background and request an ordinary throttled reload only when evidence changes. No dispatcher-thread WSL wait. |
+| R13 | Settings load/reload while explicit discovery is slow | Generate immediately from cached/saved evidence; no extra Linux probe, dispatcher wait, forced reload, or lost unsaved edits. |
 | R14 | Persisted stashed non-default WSL conversation on app restart | Retain deferred owner/session/view/cwd/geometry without a helper/ACP/distro start; serialize it again, omit it when session persistence is disabled, and materialize it only on explicit open/resume. |
+| R15 | WSL native agent versus explicit shell command | Managed native agents never enter shell-integration sweeps; a user override to an interactive WSL shell retains existing behavior. |
+| R16 | Passive all-WSL CLI versus explicit `--start-stopped-wsl` | Passive mode skips stopped distros; active Settings mode checks native executables in every registered eligible distro, without installation, models, or ACP. |
 
 ## Integration/manual proof (not unit-test substitutes)
 

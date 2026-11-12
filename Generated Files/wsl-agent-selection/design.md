@@ -26,18 +26,22 @@ Custom command editor saves explicitly select `host`.
 
 ## Reuse the existing Settings discovery owner
 
-Extend the existing MainPage background availability path with one all-WSL
-probe. Publish an immutable value snapshot to the global and profile view
-models on the UI thread. Those VMs build entries and notify bindings; XAML and
-code-behind do not discover distributions, launch probes, or encode settings.
+Extend the existing MainPage background availability path with one explicit
+all-WSL probe when navigating to global Agent settings or the profile Base page
+containing agent pickers. Merely constructing Settings or restoring navigation
+during a settings reload does not probe. Coalesce navigation while a probe is
+in flight. Publish an immutable snapshot to current live global/profile view
+models on the UI thread; those VMs build entries and notify bindings. XAML
+contains no discovery or source-encoding logic.
 
 WTA owns enumeration and installed-agent detection, reusing its per-distribution
 probe. Retain the existing single-distribution command for compatibility and add
-an explicit all-distribution mode with bounded concurrency and a running-state
-gate. Enumerating registered/running distributions does not start them; skip
-executable probing for stopped distributions. Return per-source
-results plus errors; do not report failed detection as authoritative absence.
-Order distributions/providers deterministically.
+an all-distribution mode with bounded concurrency. Settings explicitly adds
+`--start-stopped-wsl`: this may start registered distributions to check native
+executables, but never starts ACP/model probes or installs anything. The CLI's
+default passive mode retains compatibility. Return per-source results/errors;
+failed detection is not authoritative absence. Order distributions/providers
+deterministically.
 
 All three surfaces use the same result: global ACP, global delegation, and
 profile ACP/delegation. Existing `AgentEntry` carries a qualified selection ID;
@@ -49,7 +53,7 @@ while an observable list rebuilds.
 
 For a registered but stopped/failed source, saved native-profile provider/source
 metadata also supplies unavailable selectable hints. This is reused evidence,
-not a claim that the CLI is still installed. A successful running-source probe
+not a claim that the CLI is still installed. A successful explicit source probe
 supersedes those hints. No separate persistent discovery database is needed.
 
 ## Runtime precedence and ownership
@@ -85,29 +89,31 @@ Never silently fall back to a host process.
 Generate native WSL agent profiles through the existing dynamic agent-profile
 generator, preserving stable provider-plus-distribution identities and the
 separation between native profile customization and pane-managed ACP arguments.
-Discovery/generation must never start a stopped VM. Only known agents from an
-already-running distribution can be newly discovered. Preserve saved profile
-customizations and do not manufacture an installed-agent claim for a stopped
-distribution with no evidence.
+Generation itself never starts a VM or probes Linux. Restore known provider/source
+metadata from persisted native profiles on cold ordinary loads. Explicit Agent
+settings discovery may start distributions and supplies fresh installed-agent
+evidence. Preserve saved customizations; failed source probes retain previous
+evidence, while successful absence supersedes stale saved hints.
 
 Managed native agent commandlines are not interactive shells. Exclude them from
 the shared WSL shell-integration snapshot so reconciliation cannot run a shell
 probe or uninstall through an agent CLI. Explicit shell-command overrides keep
 the existing shell-integration behavior.
 
-Generation reads existing WSL cache immediately. The settings model's small
-asynchronous refresh method performs the bounded probe on a background thread;
-AppLogic then queues its existing throttled settings reload only when actual
-provider/distro evidence changed. A 30-second single-flight cache prevents
-recursive reload/probe loops. No WSL wait occurs on the settings dispatcher path.
+`CascadiaSettings::DiscoverWslAgentsAsync()` performs the explicit bounded probe
+off the UI thread, updates the native-profile cache, and returns the same JSON
+snapshot to MainPage. Generation only reads that cache. New profiles materialize
+on the next Save/ordinary reload; discovery must not force a global reload that
+discards unsaved edits. There is no WSL timer, implicit refresh callback, or
+startup/reload probe. Keep the existing host discovery cache unchanged.
 
 Do not treat WSL like eager Windows ACP providers. A stopped non-default WSL
-source is ineligible for automatic chat/history ACP startup. An already-running
-distribution is eligible; an explicitly chosen default agent-pane source or
-explicit use is also eligible to start its selected distribution. Settings
-enumeration alone is not use. Reuse an existing running-state query and put the
-eligibility decision before any distro command, preparation, ACP process, or
-session-history probe that could start the VM. Never call `wsl --shutdown` or
+source is ineligible for automatic chat/history ACP startup. Running a distro,
+including as a result of Settings discovery, grants no ACP permission. Require
+the exact default provider/source or actual use of that exact pair before
+automatic history initialization. Selecting Copilot/Ubuntu does not authorize
+Claude/Ubuntu or Copilot/Debian. Put this decision before preparation, ACP
+processes, and history probes; retain host eager behavior. Never shut down or
 terminate a distribution to test this policy in the shared environment.
 
 The tab-creation path is deliberately more conservative: automatically prewarm
@@ -123,10 +129,9 @@ cwd and geometry during subsequent saves; explicit open materializes that same
 record. Session persistence disabled omits the record. A changed effective
 backend invalidates the old deferred owner; a native-model hot update does not.
 
-Running-state checks and distro execution cannot be atomic through the public
-WSL CLI. Discovery/history recheck immediately before opportunistic execution
-and fail closed on query errors; a concurrent external shutdown remains a
-documented cross-process race rather than an invented atomic guarantee.
+Registered/running snapshots can race external distro changes; report real
+per-source discovery failures without inventing atomic guarantees. Running-state
+queries are discovery evidence, never automatic ACP authorization.
 
 ## Source-specific models
 

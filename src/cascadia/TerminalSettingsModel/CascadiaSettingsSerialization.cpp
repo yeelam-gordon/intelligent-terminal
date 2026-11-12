@@ -232,6 +232,7 @@ void SettingsLoader::GenerateProfiles()
     generateProfiles(WslDistroGenerator{});
     generateProfiles(AzureCloudShellGenerator{});
     generateProfiles(VisualStudioGenerator{});
+    AgentProfileGenerator::RestoreSavedWslProfiles(userSettings.profiles);
     generateProfiles(AgentProfileGenerator{});
     if constexpr (Feature_DynamicSSHProfiles::IsEnabled())
     {
