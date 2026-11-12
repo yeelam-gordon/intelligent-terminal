@@ -48,7 +48,9 @@ void AgentProfileGenerator::RetainKnownWslAgents(WslSnapshot& sources, const Wsl
             source.agentIds.clear();
             if (previous)
             {
-                const auto found = std::ranges::find(*previous, source.distro, &::Microsoft::Terminal::AgentAvailability::AgentSourceSnapshot::distro);
+                const auto found = std::ranges::find_if(*previous, [&](const auto& candidate) {
+                    return til::compare_ordinal_insensitive(candidate.distro, source.distro) == 0;
+                });
                 if (found != previous->end())
                 {
                     source.agentIds = found->agentIds;
