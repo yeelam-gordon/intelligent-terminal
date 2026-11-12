@@ -71,6 +71,7 @@ listing a case here does not claim that its code exists or passed.
 | R10 | Stopped distro explicitly selected as default or explicitly used | Only authorized source starts on demand; no eager startup of other stopped distros/providers. |
 | R11 | Running-state query fails or races with shutdown | Unknown is ineligible for automatic startup; explicit use remains possible and reports real failures. |
 | R12 | WSL native agent profiles | Stable provider+distro GUID, exact launch distro, policy filtering, separate native customization, no accidental Windows provider profile duplication. |
+| R15 | WSL native agent versus explicit shell command | Managed native agents never enter shell-integration sweeps; a user override to an interactive WSL shell retains existing behavior. |
 | R13 | Settings load/reload while WSL discovery is slow | Generate from existing evidence immediately; refresh in the background and request an ordinary throttled reload only when evidence changes. No dispatcher-thread WSL wait. |
 | R14 | Persisted stashed non-default WSL conversation on app restart | Retain deferred owner/session/view/cwd/geometry without a helper/ACP/distro start; serialize it again, omit it when session persistence is disabled, and materialize it only on explicit open/resume. |
 
