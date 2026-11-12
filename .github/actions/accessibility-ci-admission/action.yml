@@ -6,7 +6,7 @@ inputs:
     description: Reject a previously admitted CI attempt at the worker boundary.
   published-sha:
     default: ''
-    description: Confirmed repair tip, wired only by the trusted final summarizer.
+    description: Confirmed repair tip, wired only by the trusted worker for native discovery and final summary.
 outputs:
   pull_request:
     value: ${{ steps.admit.outputs.pull_request }}

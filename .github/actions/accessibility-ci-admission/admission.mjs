@@ -66,8 +66,8 @@ export async function admit({ github, context, trustedSha, deduplicate = false, 
     pr.head?.repo?.id === metadata.id && pr.base?.repo?.id === metadata.id);
   if (candidates.length !== 1) throw Error('Expected exactly one current CI pull request.');
   const pr = (await github.rest.pulls.get({ ...context.repo, pull_number: candidates[0].number })).data;
-  // The trusted worker alone wires safe_outputs' confirmed tip into its summary.
-  // That summary still concerns the original CI-tested revision, not fix validation.
+  // The trusted worker alone wires safe_outputs' confirmed tip into discovery/summary.
+  // Both still concern the original CI-tested revision, not fix validation.
   // External head changes remain stale; no arbitrary caller can supply this exception.
   let reviewedPull = pr;
   if (!source && publishedSha && pr.head.sha === publishedSha && sha(publishedSha)) {

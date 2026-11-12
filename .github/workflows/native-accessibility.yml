@@ -9,6 +9,11 @@ on:
       head-sha:
         required: true
         type: string
+      published-sha:
+        description: Confirmed repair tip from the trusted worker; admission only, never the scan revision.
+        required: false
+        default: ''
+        type: string
       trusted-repository:
         required: true
         type: string
@@ -30,6 +35,8 @@ jobs:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - uses: ./.github/actions/accessibility-ci-admission
+        with:
+          published-sha: ${{ inputs.published-sha }}
       - name: Bind native inputs to the admitted original revision
         env:
           HEAD_SHA: ${{ inputs.head-sha }}

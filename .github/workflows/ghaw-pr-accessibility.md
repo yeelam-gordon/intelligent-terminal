@@ -175,7 +175,7 @@ jobs:
 
   native-runtime:
     name: Native Axe.Windows smoke
-    needs: [agent, native-selection]
+    needs: [agent, native-selection, safe_outputs]
     if: ${{ !cancelled() && needs.native-selection.result == 'success' && needs.native-selection.outputs.native == 'true' }}
     uses: ./.github/workflows/native-accessibility.yml
     permissions:
@@ -185,6 +185,7 @@ jobs:
     with:
       head-repository: ${{ fromJSON(github.event.inputs.pull_request).head.repo.full_name }}
       head-sha: ${{ fromJSON(github.event.inputs.pull_request).head.sha }}
+      published-sha: ${{ needs.safe_outputs.outputs.push_commit_sha }}
       trusted-repository: ${{ github.repository }}
       trusted-sha: ${{ github.workflow_sha }}
 

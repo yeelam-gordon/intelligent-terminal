@@ -75,7 +75,7 @@ class CompiledGraphTests(unittest.TestCase):
         self.assertEqual("agent", selector["needs"])
         self.assertIn("steps.selection.outputs.native", selector["outputs"]["native"])
         native = self.jobs["native-runtime"]
-        self.assertEqual({"agent", "native-selection"}, set(native["needs"]))
+        self.assertEqual({"agent", "native-selection", "safe_outputs"}, set(native["needs"]))
         self.assertIn("needs.native-selection.result == 'success'", native["if"])
         self.assertIn("needs.native-selection.outputs.native == 'true'", native["if"])
         self.assertNotIn("triage", native["if"])
@@ -139,6 +139,28 @@ class CompiledGraphTests(unittest.TestCase):
         self.assertNotIn("native-runtime", dependencies)
         self.assertNotIn("native-selection", dependencies)
         self.assertNotIn("final-summary", dependencies)
+
+    def test_native_admits_confirmed_publication_but_scans_original_head(self):
+        native = self.jobs["native-runtime"]
+        # A status function retains discovery after failed/skipped publication.
+        self.assertEqual(
+            "${{ !cancelled() && needs.native-selection.result == 'success' && needs.native-selection.outputs.native == 'true' }}",
+            native["if"],
+        )
+        self.assertEqual("${{ needs.safe_outputs.outputs.push_commit_sha }}",
+                         native["with"]["published-sha"])
+        self.assertEqual("${{ fromJSON(github.event.inputs.pull_request).head.sha }}",
+                         native["with"]["head-sha"])
+        workflow = yaml.safe_load((ROOT / ".github/workflows/native-accessibility.yml").read_text(
+            encoding="utf-8"))
+        declared = workflow[True]["workflow_call"]["inputs"]["published-sha"]
+        self.assertFalse(declared["required"])
+        self.assertEqual("", declared["default"])
+        admission = next(step for step in workflow["jobs"]["admission"]["steps"]
+                         if step.get("uses") == "./.github/actions/accessibility-ci-admission")
+        self.assertEqual("${{ inputs.published-sha }}", admission["with"]["published-sha"])
+        checkout = workflow["jobs"]["native-smoke"]["steps"][0]
+        self.assertEqual("${{ inputs.head-sha }}", checkout["with"]["ref"])
 
     def test_reusable_workflow_permissions_fit_callers(self):
         levels = {"none": 0, "read": 1, "write": 2}

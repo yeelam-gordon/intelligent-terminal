@@ -41,8 +41,9 @@ worker, and duplicate dispatches for an already admitted CI attempt fail closed.
 A fresh successful CI attempt has a distinct identity. If the default branch or
 PR moves across admission/dispatch, admission fails rather than reviewing a
 substituted revision. As with publication, these live checks are not atomic.
-The final summary may describe this trusted worker's confirmed repair tip while
-retaining the original CI identity; that is not CI validation of the repairs.
+Native discovery admission and the final summary may accept this trusted worker's
+confirmed repair tip while retaining the original CI identity; that is not CI
+validation of the repairs. Unrelated live head changes still fail admission.
 
 PR CI currently publishes `ci-security-cpp-*` and `ci-security-rust-*` findings,
 not a supported TestHost package, Axe result or accessibility static report.
@@ -144,10 +145,13 @@ page reached through production Frame navigation. Native errors, blocked startup
 remain failures. Its artifacts and job outcome are separate from the source
 agent's Markdown and source-only runtime records.
 
-As in the pre-simplification workflow, native discovery follows the source
-agent, independently of branch publication. The publication job does not
-depend on native discovery, and the native job scans the event's original
-head, not a proposed repair commit. It is not post-fix validation.
+Native discovery follows the source agent and waits for safe-output publication
+to finish, avoiding a live-head admission race with this worker's own repairs.
+Only the publisher's confirmed `push_commit_sha` reaches native admission.
+Failed or skipped publication does not suppress selected discovery; cancellation
+does. The publication job does not depend on native discovery, and the native
+job still scans the event's original head, not a proposed repair commit.
+It is not post-fix validation.
 
 This smoke is not complete keyboard, Narrator, high-contrast or 200% scaling
 coverage. Axe output uses its supported no-screenshot format; JSON is not an
