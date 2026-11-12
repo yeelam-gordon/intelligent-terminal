@@ -79,6 +79,21 @@ listing a case here does not claim that its code exists or passed.
 | R15 | WSL native agent versus explicit shell command | Managed native agents never enter shell-integration sweeps; a user override to an interactive WSL shell retains existing behavior. |
 | R16 | Passive all-WSL CLI versus explicit `--start-stopped-wsl` | Passive mode skips stopped distros; active Settings mode checks native executables in every registered eligible distro, without installation, models, or ACP. |
 
+## ACP cwd namespace debt (#265)
+
+| ID | Input/action | Required observation |
+| --- | --- | --- |
+| C1 | Rooted Windows drive, including extended-length form; target maps it under `/windows/c` | Use the distro-supplied path, never a fabricated `/mnt` value; no extra home query on success. |
+| C2 | `wslpath`/directory check fails, times out, or the Windows drive is not mounted | Diagnose and use actual distro home; syntax-only translation is insufficient. |
+| C3 | Native POSIX, Unicode, same/foreign-distro WSL UNC, true UNC, drive-relative and relative paths | Preserve only the known source namespace; foreign/ambiguous values use home, relative values resolve there. No accidental drive-relative mapping. |
+| C4 | Complete same-instance session/list contains Windows, POSIX, mixed, relative, UNC, empty or no rows | Infer only unambiguous consensus; partial or other-generation evidence never locks a namespace. |
+| C5 | Built-in Windows agent with real System32 cwd; known WSL agent with an already-normalized cwd | Preserve actual cwd; existing host history startup and WSL eligibility do not change. |
+| C6 | Opaque custom wrapper, empty/unsupported/in-flight history or stale namespace evidence | No extra history ACP/list request or wait; preserve original namespace first when unknown, with at most one opposite-namespace fallback. Never guess a distro/mount root. |
+| C7 | Primary deterministic cwd preflight error versus echoed data, authentication, unrelated path-prefix/file error or timeout | Only the cwd rejection permits a second creation; at most two distinct attempts. |
+| C8 | First creation rejected, fallback succeeds or consumes remaining timeout | One total deadline, one completion telemetry event, and registry cwd equals the successful candidate. |
+| C9 | Real resume fails after cwd resolution | Exactly one session/load; preserve routing/MCP rollback and cleanup reserve. |
+| C10 | Orphan/already-loaded rebind with a different helper cwd and a same-ID foreign-provider row | No orphan load/probe; preserve actual qualified cwd and current metadata, without borrowing the foreign row. |
+
 ## Integration/manual proof (not unit-test substitutes)
 
 Open the deployed isolated Settings page, choose WSL globally, save/reopen, then

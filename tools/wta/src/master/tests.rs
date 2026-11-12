@@ -4179,6 +4179,233 @@ async fn failed_pending_session_cleanup_retires_close_marked_recovery_state() {
     assert!(!state.helper_meta.lock().await.contains_key(&helper_id));
 }
 
+fn cwd_test_handler() -> (
+    HelperHandler,
+    mpsc::UnboundedReceiver<(&'static str, PathBuf)>,
+) {
+    let (observed, received) = mpsc::unbounded_channel();
+    let (client_pipe, agent_pipe) = tokio::io::duplex(4096);
+    let (client_read, client_write) = tokio::io::split(client_pipe);
+    let (agent_read, agent_write) = tokio::io::split(agent_pipe);
+    let builder = acp::Agent
+        .builder()
+        .name("cwd-test-agent")
+        .on_receive_request(
+            move |request: acp::schema::v1::ClientRequest,
+                  responder: acp::Responder<serde_json::Value>,
+                  _cx| {
+                let observed = observed.clone();
+                async move {
+                    use acp::schema::v1::{AgentResponse as R, ClientRequest as Q};
+                    match request {
+                        Q::NewSessionRequest(request) => {
+                            observed.send(("new", request.cwd.clone())).unwrap();
+                            if request.cwd == PathBuf::from(r"C:\project") {
+                                responder.respond_with_error(acp::Error::new(
+                                    -32602,
+                                    "Directory path must be absolute",
+                                ))
+                            } else {
+                                conn::respond_enum(
+                                    responder,
+                                    Ok(R::NewSessionResponse(
+                                        acp::schema::v1::NewSessionResponse::new(SessionId::new(
+                                            "cwd-created",
+                                        )),
+                                    )),
+                                )
+                            }
+                        }
+                        Q::LoadSessionRequest(request) => {
+                            observed.send(("load", request.cwd)).unwrap();
+                            responder
+                                .respond_with_error(acp::Error::new(-32602, "cwd does not exist"))
+                        }
+                        Q::CloseSessionRequest(_) => conn::respond_enum(
+                            responder,
+                            Ok(R::CloseSessionResponse(
+                                acp::schema::v1::CloseSessionResponse::new(),
+                            )),
+                        ),
+                        _ => responder.respond_with_error(acp::Error::method_not_found()),
+                    }
+                }
+            },
+            acp::on_receive_request!(),
+        );
+    let (_, agent_io) = conn::spawn_agent(
+        builder,
+        conn::byte_streams(agent_write.compat_write(), agent_read.compat()),
+    );
+    tokio::task::spawn_local(async move {
+        let _ = agent_io.await;
+    });
+    let (connection, client_io) = conn::spawn_client(
+        acp::Client.builder().name("cwd-test-client"),
+        conn::byte_streams(client_write.compat_write(), client_read.compat()),
+    );
+    tokio::task::spawn_local(async move {
+        let _ = client_io.await;
+    });
+    let mut agent = unbound_test_agent("cwd-test");
+    let owned = Arc::get_mut(&mut agent).unwrap();
+    owned.resolved_agent_id = "custom:cwd".into();
+    owned.cli_source = Some(crate::agent_sessions::CliSource::Unknown(
+        "custom:cwd".into(),
+    ));
+    owned.conn = connection;
+    let cell = empty_agent_cell();
+    assert!(cell.set(agent).is_ok());
+    let (notif_tx, _) = mpsc::channel(NOTIF_CHANNEL_CAPACITY);
+    let slot = Arc::new(OnceLock::new());
+    slot.set(agent_link_to_noop_client()).unwrap();
+    (
+        HelperHandler {
+            helper_id: HelperId(1234),
+            agent: cell,
+            state: make_state(),
+            replacement_gate: Arc::new(Mutex::new(())),
+            notif_tx,
+            agent_side_slot: slot,
+        },
+        received,
+    )
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cwd_new_session_persists_successful_candidate_and_uses_only_same_generation_evidence() {
+    LocalSet::new()
+        .run_until(async {
+            for evidence in [None, Some(false), Some(true)] {
+                let (handler, mut received) = cwd_test_handler();
+                let agent = handler.resolved_agent("test").unwrap();
+                if let Some(same_generation) = evidence {
+                    let mut refresh = agent.history_refresh.gate.lock().await;
+                    refresh.owner = Some(if same_generation {
+                        agent.instance_id
+                    } else {
+                        AgentInstanceId::new_v4()
+                    });
+                    refresh.cwd_namespace = Some(CwdNamespace::Posix);
+                }
+                let response = handler
+                    .new_session(acp::schema::v1::NewSessionRequest::new(PathBuf::from(
+                        r"C:\project",
+                    )))
+                    .await
+                    .unwrap();
+                let row = handler
+                    .state
+                    .registry
+                    .lookup(&response.session_id)
+                    .await
+                    .unwrap();
+                assert_eq!(row.cwd, PathBuf::from("/tmp"));
+                if evidence != Some(true) {
+                    assert_eq!(
+                        received.try_recv().unwrap(),
+                        ("new", PathBuf::from(r"C:\project"))
+                    );
+                }
+                assert_eq!(received.try_recv().unwrap(), ("new", PathBuf::from("/tmp")));
+                assert!(
+                    received.try_recv().is_err(),
+                    "namespace selection must not request session/list"
+                );
+            }
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cwd_load_failure_is_never_replayed_with_a_fallback_candidate() {
+    LocalSet::new()
+        .run_until(async {
+            let (handler, mut received) = cwd_test_handler();
+            let sid = SessionId::new("cwd-resume");
+            handler
+                .load_session(acp::schema::v1::LoadSessionRequest::new(
+                    sid.clone(),
+                    PathBuf::from(r"C:\project"),
+                ))
+                .await
+                .expect_err("the primary load attempt should fail");
+            assert_eq!(
+                received.try_recv().unwrap(),
+                ("load", PathBuf::from(r"C:\project"))
+            );
+            assert!(
+                received.try_recv().is_err(),
+                "a failed load is never repeated"
+            );
+            assert!(!handler
+                .state
+                .session_to_helper
+                .lock()
+                .await
+                .contains_key(&sid));
+            assert!(handler.state.registry.lookup(&sid).await.is_none());
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cwd_orphan_rebind_preserves_actual_qualified_cwd_without_an_agent_request() {
+    LocalSet::new()
+        .run_until(async {
+            let (handler, mut received) = cwd_test_handler();
+            let agent = handler.resolved_agent("test").unwrap();
+            let sid = SessionId::new("cwd-orphan");
+            let mut existing = crate::session_registry::SessionInfo::new(
+                sid.clone(),
+                PathBuf::from("/actual/project"),
+            );
+            existing.provider_id = Some(agent.resolved_agent_id.clone());
+            existing.cli_source = agent.cli_source.clone();
+            existing.location = agent.source.session_location();
+            existing.title = Some("Existing conversation".into());
+            existing.updated_at = Some("2026-11-12T00:00:00Z".into());
+            handler.state.registry.upsert(existing.clone()).await;
+            let mut foreign = existing.clone();
+            foreign.provider_id = Some("claude".into());
+            foreign.cli_source = Some(crate::agent_sessions::CliSource::Claude);
+            foreign.cwd = PathBuf::from("/foreign/project");
+            foreign.title = Some("Unrelated conversation".into());
+            handler.state.registry.upsert(foreign).await;
+            handler
+                .state
+                .orphaned_sessions
+                .lock()
+                .await
+                .entry(agent.cmd_key.clone())
+                .or_default()
+                .insert(sid.clone());
+            handler
+                .load_session(acp::schema::v1::LoadSessionRequest::new(
+                    sid,
+                    PathBuf::from(r"C:\incoming"),
+                ))
+                .await
+                .unwrap();
+            let actual = handler
+                .state
+                .registry
+                .lookup_identity(&crate::session_registry::SessionIdentity::from_info(
+                    &existing,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(actual.cwd, existing.cwd);
+            assert_eq!(actual.title, existing.title);
+            assert_eq!(actual.updated_at, existing.updated_at);
+            assert!(
+                received.try_recv().is_err(),
+                "orphan rebind must not perform an ACP request"
+            );
+        })
+        .await;
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn failed_pending_cleanup_reads_destructive_marker_under_ownership_gate() {
     tokio::task::LocalSet::new()

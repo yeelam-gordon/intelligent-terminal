@@ -42,7 +42,7 @@ regular installation, settings, sessions, hooks, and unrelated worktrees.
 | Delegation | `src\cascadia\TerminalApp\TerminalPage.cpp:2298-2350`; `tools\wta\src\cli\delegate.rs:185-220,463-537` | WTA already accepts exact host/WSL delegation. C++ supplies WSL only for a profile override; Windows cwd is not translated for explicit WSL delegation. |
 | Model discovery | `src\cascadia\TerminalSettingsEditor\AIAgentsViewModel.cpp:1887-1998`; `tools\wta\src\protocol\acp\probe.rs:55-108,151-174` | Settings probes always start on the host. Model cache entries are keyed by provider, so they cannot distinguish Windows and WSL accounts/catalogs. |
 | WSL execution | `tools\wta\src\agent_source.rs:22-90`; `tools\wta\src\protocol\acp\spawn.rs:584-690` | Already source-aware: the master process pool distinguishes source and launches ACP in an explicit distribution. No new transport or second orchestrator is needed. |
-| Working directory | `src\cascadia\inc\AgentSourceUtils.h:211-241`; `tools\wta\src\agent_source.rs:104-188` | Helper and agent cwd are already separate. Drive paths can be translated to Linux form. Linux paths from a different distribution cannot be assumed to name the same workspace. |
+| Working directory | `src\cascadia\inc\AgentSourceUtils.h:211-241`; `tools\wta\src\agent_source.rs:104-188` | Helper and agent cwd are already separate, but the original Rust drive conversion fabricated `/mnt/<drive>`. That is not evidence that the directory is mounted or accessible. Linux paths from a different distribution cannot be assumed to name the same workspace. |
 | Session MCP | `tools\wta\AGENTS.md:35-58`; `tools\wta\src\master\session_mcp.rs` | A distro-local relay already reaches the master-owned endpoint. Terminal actions must continue targeting the owning helper's actual shell, not be retargeted to match the agent. |
 | MVVM ownership | `src\cascadia\TerminalSettingsEditor\MainPage.cpp:1469-1495` | Settings already has asynchronous availability discovery and distributes results to profile VMs. Extend that existing owner rather than introducing a discovery service or putting process work in XAML code-behind. |
 
@@ -83,3 +83,36 @@ Its own shell tools still run in WSL; these are intentionally different paths.
 Implementation and validation results belong in `validation.md`. This document
 describes inspected baseline source, not a claim that the requested behavior,
 deployment, or review has already passed.
+
+## Reconciliation with the earlier cwd PR
+
+The user identified #265, **wta: support WSL agent cwd namespaces**, head
+`152e9c36f6f66784c342c485fe9b840c34e55ffd`. Its preserved diff and namespace
+module are local evidence beside this document. It correctly distinguishes
+the helper's Windows working directory from the ACP agent's namespace, preserves
+a genuinely selected System32 directory, bounds `session/new` retries, and
+avoids replaying `session/load`. However, both its `windows_to_mnt` and
+`mnt_to_windows` functions assume the conventional mount root. Importing that
+PR unchanged would retain the exact gap the user called out.
+
+The current master also has newer replacement/routing rollback, session MCP
+capability ownership, generation-scoped history, and exact WSL-use eligibility.
+The older PR's master/history call sites cannot safely replace those paths.
+Instead, adapt its relevant namespace and retry behavior to those existing
+owners. Reuse an already-completed per-instance history result for opaque
+custom wrappers; do not start an additional history process or inventory just
+to discover a namespace. A namespace alone cannot identify a distro.
+
+For an explicitly selected WSL source, `wslpath -a -u` runs **inside that exact
+distro**, with the Windows path passed as a positional argument. Test the
+result with `-d` in the same process: a syntactically translated path is not
+proof that a drive is mounted. A failed/unavailable mapping uses the target
+home with a diagnostic; it must not fabricate a project path. Source-qualified
+Linux/WSL-UNC paths retain their existing handling. No inverse `/mnt` heuristic
+is valid without corresponding source/mount evidence.
+
+Read-only live inspection on the already-running Ubuntu distro confirmed that
+both `C:\Windows\System32` and this worktree's `Q:` path translate and exist in
+this environment. This proves only the actual conventional-root environment,
+not custom mount roots. Deterministic mapping tests supply `/windows/c/...`
+and an unmapped-drive failure without changing any shared distro configuration.

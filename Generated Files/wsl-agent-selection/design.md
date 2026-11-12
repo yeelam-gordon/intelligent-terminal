@@ -146,6 +146,40 @@ an old probe must not overwrite a later selection. WSL native models must not
 be replaced by host BYOK entries; host BYOK state remains saved for switching
 back to Windows.
 
+## ACP working-directory namespaces (#265)
+
+Keep one source-aware cwd resolver for helper startup and delegation. Preserve
+valid POSIX and same-distro WSL UNC values. For rooted Windows drives, ask the
+selected distro's `wslpath` and verify the resulting directory exists there.
+The mount root is configuration, not a string-format rule. Resolve relative
+values against the actual distro home; use that home with a warning when a
+Windows directory cannot be mapped. Reject foreign-distro UNC reuse. No cwd
+translation is added to settings loading, profile generation, or discovery.
+
+At the master ACP boundary, the explicit source is authoritative. Host built-in
+agents keep the Windows namespace and legitimate reported cwd, including
+System32. For opaque host custom wrappers, reuse only unambiguous cwd-namespace
+consensus from an already-completed, same-instance history inventory. Mixed,
+partial, unavailable or ambiguous evidence grants no namespace certainty.
+Never parse launcher commands or infer a distro from a POSIX path. Without
+distro identity, the opposite-namespace candidate is an explicit local fallback
+(`/tmp` or Windows home), not an invented mapping of the user's project.
+
+`session/new` has at most two distinct candidates under one absolute deadline,
+including any master-side cwd resolution. Retry only a primary deterministic
+cwd preflight rejection tied to the attempted directory or a cwd field; echoed
+request data, authentication, unrelated file errors, and timeouts never permit
+a second creation. Emit one completion telemetry result and register the cwd
+that actually succeeded.
+
+Resolve a real `session/load` once within its existing deadline and rollback
+reserve; never replay the RPC with another cwd. Keep routing pre-registration,
+MCP cancellation and replacement rollback unchanged. Orphan/already-loaded
+rebinds preserve the actual qualified registry cwd and current title/timestamp,
+not the new helper's cwd. An orphan fast path performs no cwd probe or ACP load.
+The adaptation needs no dependency, second history cache, or new lifecycle
+service. Unsupported WSL-custom-provider editing remains outside this feature.
+
 ## Existing WSL installation behavior
 
 The user clarified: preserve installation assistance that already exists for WSL,

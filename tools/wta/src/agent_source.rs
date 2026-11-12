@@ -203,14 +203,44 @@ pub async fn resolve_source_cwd(source: &AgentSource, reported: Option<&str>) ->
     let AgentSource::Wsl { distro } = source else {
         return reported.map(str::to_string);
     };
+    resolve_wsl_cwd_with(
+        distro,
+        reported,
+        |path| async move { translate_windows_cwd(distro, &path).await },
+        || resolve_wsl_home(distro),
+    )
+    .await
+}
 
+async fn resolve_wsl_cwd_with<T, TF, H, HF>(
+    distro: &str,
+    reported: Option<&str>,
+    translate: T,
+    home: H,
+) -> Option<String>
+where
+    T: FnOnce(String) -> TF,
+    TF: std::future::Future<Output = Option<String>>,
+    H: FnOnce() -> HF,
+    HF: std::future::Future<Output = Option<String>>,
+{
     if let Some(cwd) = reported.and_then(|cwd| normalize_wsl_cwd(distro, cwd)) {
         return Some(cwd);
     }
-
-    let home = resolve_wsl_home(distro)
-        .await
-        .unwrap_or_else(|| "/".to_string());
+    if let Some(path) = reported.and_then(absolute_windows_drive_path) {
+        if let Some(mapped) = translate(path.to_string()).await {
+            return Some(mapped);
+        }
+        tracing::warn!(
+            target: "agent_source",
+            %distro,
+            "Windows working directory is not accessible in the selected distro; using its home"
+        );
+    }
+    let home = home().await.unwrap_or_else(|| {
+        tracing::warn!(target: "agent_source", %distro, "cannot resolve WSL home; using filesystem root");
+        "/".to_string()
+    });
     match reported {
         Some("~") | None => Some(home),
         Some(relative) if relative.starts_with("~/") => {
@@ -261,12 +291,67 @@ fn normalize_wsl_cwd(distro: &str, cwd: &str) -> Option<String> {
         return Some(cwd.to_string());
     }
 
-    let bytes = normalized.as_bytes();
-    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
-        let drive = (bytes[0] as char).to_ascii_lowercase();
-        return Some(format!("/mnt/{drive}/{}", &normalized[3..]));
-    }
     None
+}
+
+pub(crate) fn absolute_windows_drive_path(path: &str) -> Option<&str> {
+    let path = path
+        .strip_prefix(r"\\?\")
+        .or_else(|| path.strip_prefix(r"\\.\"))
+        .unwrap_or(path);
+    let bytes = path.as_bytes();
+    (bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/'))
+    .then_some(path)
+}
+
+async fn translate_windows_cwd(distro: &str, path: &str) -> Option<String> {
+    if !is_safe_wsl_distro_name(distro) {
+        return None;
+    }
+    let mut command = tokio::process::Command::new("wsl.exe");
+    command
+        .args([
+            "-d",
+            distro,
+            "--exec",
+            "sh",
+            "-c",
+            // wslpath alone can name an unmounted drive. Verify accessibility
+            // in the same distro; the Windows path is data, never shell code.
+            "mapped=$(wslpath -a -u \"$1\") && [ -n \"$mapped\" ] && [ -d \"$mapped\" ] && printf '%s' \"$mapped\"",
+            "wta-cwd",
+            path,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = match tokio::time::timeout(Duration::from_secs(10), command.output()).await {
+        Ok(Ok(output)) if output.status.success() => output,
+        Ok(Ok(output)) => {
+            tracing::warn!(target: "agent_source", %distro, status = %output.status, "WSL cwd translation or directory check failed");
+            return None;
+        }
+        Ok(Err(error)) => {
+            tracing::warn!(target: "agent_source", %distro, %error, "cannot run WSL cwd translation");
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!(target: "agent_source", %distro, "WSL cwd translation timed out");
+            return None;
+        }
+    };
+    match String::from_utf8(output.stdout) {
+        Ok(path) if path.starts_with('/') && !path.contains(['\0', '\r', '\n']) => Some(path),
+        _ => {
+            tracing::warn!(target: "agent_source", %distro, "WSL cwd translation returned an invalid absolute path");
+            None
+        }
+    }
 }
 
 pub(crate) async fn resolve_wsl_home(distro: &str) -> Option<String> {
@@ -407,10 +492,7 @@ mod tests {
             normalize_wsl_cwd("Ubuntu", "//wsl.localhost/Ubuntu/home/me").as_deref(),
             Some("/home/me")
         );
-        assert_eq!(
-            normalize_wsl_cwd("Ubuntu", r"C:\src\project").as_deref(),
-            Some("/mnt/c/src/project")
-        );
+        assert_eq!(normalize_wsl_cwd("Ubuntu", r"C:\src\project"), None);
         assert_eq!(normalize_wsl_cwd("Ubuntu", "~"), None);
         assert_eq!(normalize_wsl_cwd("Ubuntu", r"\\wsl$\Debian\home\me"), None);
         assert_eq!(normalize_wsl_cwd("Ubuntu", "//wsl$/Debian/home/me"), None);
@@ -442,5 +524,57 @@ mod tests {
         assert_eq!(normalize_wsl_relative_cwd(r".\foo"), "foo");
         assert_eq!(normalize_wsl_relative_cwd("./foo"), "foo");
         assert_eq!(normalize_wsl_relative_cwd("../foo"), "../foo");
+    }
+
+    #[tokio::test]
+    async fn wsl_cwd_uses_the_distro_mapping_not_a_mount_root_guess() {
+        for path in [r"C:\src\project", r"\\?\C:\src\project"] {
+            let cwd = resolve_wsl_cwd_with(
+                "Ubuntu",
+                Some(path),
+                |path| async move {
+                    assert_eq!(path, r"C:\src\project");
+                    Some("/windows/c/src/project".to_string())
+                },
+                || async { panic!("a mapped directory does not require home discovery") },
+            )
+            .await;
+            assert_eq!(cwd.as_deref(), Some("/windows/c/src/project"));
+        }
+    }
+
+    #[tokio::test]
+    async fn wsl_cwd_unmounted_drive_uses_real_home() {
+        let cwd = resolve_wsl_cwd_with(
+            "Ubuntu",
+            Some(r"Q:\unmounted\project"),
+            |_| async { None },
+            || async { Some("/home/developer".to_string()) },
+        )
+        .await;
+        assert_eq!(cwd.as_deref(), Some("/home/developer"));
+    }
+
+    #[tokio::test]
+    async fn wsl_cwd_preserves_native_paths_and_rejects_foreign_namespaces() {
+        for (path, expected) in [
+            ("/home/开发/project", "/home/开发/project"),
+            (r"\\wsl.localhost\Ubuntu\home\me", "/home/me"),
+            (r"\\?\UNC\WSL$\UBUNTU\home\me", "/home/me"),
+            (r"\\wsl$\Debian\home\other", "/home/me"),
+            (r"\\server\share", "/home/me"),
+            ("C:relative", "/home/me"),
+            ("~/project", "/home/me/project"),
+            (r"relative\project", "/home/me/relative/project"),
+        ] {
+            let cwd = resolve_wsl_cwd_with(
+                "Ubuntu",
+                Some(path),
+                |_| async { panic!("no rooted Windows drive was supplied") },
+                || async { Some("/home/me".to_string()) },
+            )
+            .await;
+            assert_eq!(cwd.as_deref(), Some(expected), "{path}");
+        }
     }
 }

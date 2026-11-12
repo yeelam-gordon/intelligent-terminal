@@ -64,6 +64,7 @@ use crate::protocol::acp::authentication::{
     authentication_result_for_helper, browser_notification, take_auth_attempt_id, AUTH_TIMEOUT,
 };
 use crate::protocol::acp::conn;
+use crate::protocol::acp::cwd_format::{self, CwdAttemptFailure, CwdNamespace};
 use crate::protocol::acp::spawn::{
     spawn_agent_process_for_source_with_provider, AgentStderrLog, ChildEnvironmentPolicy,
     SharedProviderSelection,
@@ -1947,6 +1948,7 @@ struct HistoryRefreshState {
     listing_started_at_ms: Option<u64>,
     owner: Option<AgentInstanceId>,
     cwd_baseline: Option<HashMap<crate::session_registry::SessionIdentity, u64>>,
+    cwd_namespace: Option<CwdNamespace>,
 }
 
 impl HistoryRefreshState {
@@ -3165,24 +3167,39 @@ impl HelperHandler {
         &self,
         args: acp::schema::v1::NewSessionRequest,
         timeout: std::time::Duration,
-    ) -> acp::Result<acp::schema::v1::NewSessionResponse> {
+    ) -> acp::Result<(acp::schema::v1::NewSessionResponse, std::path::PathBuf)> {
         let timeout_secs = timeout.as_secs();
         let started = std::time::Instant::now();
+        let deadline = tokio::time::Instant::now() + timeout;
         let agent = self.resolved_agent("new_session")?;
-        let result = tokio::time::timeout(timeout, agent.conn.new_session(args)).await;
+        let result =
+            match tokio::time::timeout_at(deadline, agent_cwd_attempts(&agent, &args.cwd)).await {
+                Ok(attempts) => {
+                    cwd_format::run_cwd_attempts(&attempts, deadline, |cwd| {
+                        let mut request = args.clone();
+                        request.cwd = cwd;
+                        agent.conn.new_session(request)
+                    })
+                    .await
+                }
+                Err(_) => Err(CwdAttemptFailure::Timeout),
+            };
         let (failure_kind, acp_error_code) = match &result {
-            Ok(Ok(_)) => ("", 0),
-            Ok(Err(e)) => ("AcpError", e.code.into()),
-            Err(_) => ("Timeout", 0),
+            Ok(_) => ("", 0),
+            Err(CwdAttemptFailure::Agent(e)) => ("AcpError", e.code.into()),
+            Err(CwdAttemptFailure::Timeout) => ("Timeout", 0),
         };
         crate::telemetry::log_acp_new_session_complete(
             started.elapsed().as_secs_f64() * 1000.0,
-            matches!(result, Ok(Ok(_))),
+            result.is_ok(),
             "MasterForward",
             failure_kind,
             acp_error_code,
         );
-        result.map_err(|_| {
+        result.map_err(|failure| {
+            if let CwdAttemptFailure::Agent(error) = failure {
+                return error;
+            }
             let message = format!("agent CLI session/new timed out after {timeout_secs}s");
             tracing::error!(
                 target: "master",
@@ -3195,7 +3212,7 @@ impl HelperHandler {
             acp::Error::new(-32603, message.clone()).data(serde_json::json!({
                 "message": message
             }))
-        })?
+        })
     }
 
     fn load_session_timeout_error(
@@ -3731,7 +3748,6 @@ impl HelperHandler {
             .await
             .get(&self.helper_id)
             .and_then(|meta| meta.last_session_id.clone());
-        let cwd_for_registry = args.cwd.clone();
         let agent = match self.resolved_agent("new_session") {
             Ok(agent) => agent,
             Err(error) => {
@@ -3809,7 +3825,7 @@ impl HelperHandler {
             pane_session_id = ?wta_meta.pane_session_id,
             "forwarding new_session"
         );
-        let mut resp = match self
+        let (mut resp, cwd_for_registry) = match self
             .forward_new_session_to_agent(
                 args,
                 std::time::Duration::from_secs(SESSION_NEW_TIMEOUT_SECS),
@@ -4060,7 +4076,7 @@ impl HelperHandler {
             .is_some_and(|sid| sid != &session_id)
             .then(|| SESSION_ROLLBACK_CLOSE_TIMEOUT.min(timeout / 2))
             .unwrap_or_default();
-        let cwd_for_registry = args.cwd.clone();
+        let mut cwd_for_registry = args.cwd.clone();
         tracing::info!(
             target: "master",
             step = "helper→agent",
@@ -4184,14 +4200,29 @@ impl HelperHandler {
             } else {
                 None
             };
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            let load_rpc_timeout = remaining.saturating_sub(rollback_reserve);
-            let load_result = if load_rpc_timeout.is_zero() {
-                Err(self.load_session_timeout_error(timeout, "agent_rpc"))
-            } else {
+            let load_result = async {
+                let attempts = tokio::time::timeout_at(
+                    deadline - rollback_reserve,
+                    agent_cwd_attempts(&agent, &args.cwd),
+                )
+                .await
+                .map_err(|_| self.load_session_timeout_error(timeout, "cwd_resolution"))?;
+                args.cwd = attempts
+                    .into_iter()
+                    .next()
+                    .ok_or_else(acp::Error::internal_error)?;
+                cwd_for_registry = args.cwd.clone();
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let load_rpc_timeout = remaining.saturating_sub(rollback_reserve);
+                if load_rpc_timeout.is_zero() {
+                    return Err(self.load_session_timeout_error(timeout, "agent_rpc"));
+                }
+                // session/load can replay history or partially load a session.
+                // Resolve once, but never replay the RPC with another cwd.
                 self.forward_load_session_to_agent(args, load_rpc_timeout, timeout)
                     .await
-            };
+            }
+            .await;
             match load_result {
                 Ok(resp) => {
                     loaded_target_physically = true;
@@ -4451,7 +4482,15 @@ impl HelperHandler {
         // (master seeds the registry at startup with disk-derived chat titles;
         // a naked `SessionInfo::new` upsert would blank them to "—" in the
         // session-management view).
-        if let Some(existing) = self.state.registry.lookup(&session_id).await {
+        if let Some(existing) = self
+            .state
+            .registry
+            .lookup_identity(&crate::session_registry::SessionIdentity::from_info(&info))
+            .await
+        {
+            if is_orphan_rebind || rebound_existing_session {
+                info.cwd = existing.cwd.clone();
+            }
             if info.title.is_none() {
                 info.title = existing.title;
             }
@@ -7147,6 +7186,7 @@ async fn host_session_list_raw(
         .owner
         .is_some_and(|owner| owner != agent.instance_id)
     {
+        refresh.cwd_namespace = None;
         if let Err(error) = refresh.query.stop().await {
             tracing::error!(target: "master_history", %error, "previous history generation remains quarantined");
             return Err(HistoryRefreshFailure::Other);
@@ -7161,14 +7201,38 @@ async fn host_session_list_raw(
                 .as_millis() as u64,
         );
     }
-    refresh
+    let result = refresh
         .query
         .poll(
             agent.history_refresh.target.get(),
             &agent.history_refresh.cancelled,
             complete_inventory,
         )
-        .await
+        .await;
+    if let Ok(listing) = &result {
+        refresh.cwd_namespace = if listing.next_cursor.is_none() {
+            cwd_format::detect_namespace(
+                listing.sessions.iter().map(|session| session.cwd.as_path()),
+            )
+        } else {
+            None
+        };
+    }
+    result
+}
+
+async fn agent_cwd_attempts(agent: &AgentCli, cwd: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let native_host = crate::agent_registry::is_known_id(&agent.resolved_agent_id);
+    // Reuse completed per-instance history only. Namespace detection must not
+    // start a history ACP process or wait behind an in-flight inventory.
+    let detected = agent
+        .history_refresh
+        .gate
+        .try_lock()
+        .ok()
+        .filter(|refresh| refresh.owner == Some(agent.instance_id))
+        .and_then(|refresh| refresh.cwd_namespace);
+    cwd_format::build_cwd_attempts(cwd, &agent.source, native_host, detected).await
 }
 
 /// Legacy fallback for rows without a qualified provider identity.
