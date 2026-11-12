@@ -143,6 +143,8 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         std::unordered_set<std::wstring> _availableHostAgents;
         std::vector<::Microsoft::Terminal::AgentAvailability::AgentSourceSnapshot> _availableWslAgents;
+        bool _updatingSettings{ false };
+        bool _wslAgentProbeInFlight{ false };
         Windows::UI::Xaml::DispatcherTimer _agentProfilesIntroductionTimer{ nullptr };
         Windows::UI::Xaml::FrameworkElement::LayoutUpdated_revoker _agentProfilesIntroductionLayoutRevoker;
         Windows::UI::Xaml::Controls::Primitives::Popup _agentProfilesIntroductionPopup{ nullptr };

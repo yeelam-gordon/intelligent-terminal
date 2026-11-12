@@ -110,10 +110,15 @@ winrt::hstring CascadiaSettings::Hash() const noexcept
     return _hash;
 }
 
-winrt::Windows::Foundation::IAsyncOperation<bool> CascadiaSettings::RefreshWslAgentProfilesAsync()
+winrt::Windows::Foundation::IAsyncOperation<winrt::hstring> CascadiaSettings::DiscoverWslAgentsAsync()
 {
     co_await winrt::resume_background();
-    co_return Model::AgentProfileGenerator::RefreshWslSources();
+    std::string payload;
+    auto sources = ::Microsoft::Terminal::AgentAvailability::ProbeWslAgentSources(true, &payload);
+    THROW_HR_IF_MSG(E_FAIL, !sources || payload.empty(), "WSL agent discovery failed");
+    const auto result = winrt::to_hstring(payload);
+    Model::AgentProfileGenerator::UpdateWslSources(std::move(*sources));
+    co_return result;
 }
 
 Model::CascadiaSettings CascadiaSettings::Copy() const

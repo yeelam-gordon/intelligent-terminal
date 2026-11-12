@@ -87,9 +87,10 @@ namespace SettingsModelUnitTests
         TEST_METHOD(AgentProfileBatchCommand);
         TEST_METHOD(AgentProfileWslCommands);
         TEST_METHOD(AgentProfileWslGeneration);
-        TEST_METHOD(AgentProfileWslStoppedDiscovery);
+        TEST_METHOD(AgentProfileWslExplicitSnapshot);
         TEST_METHOD(AgentProfileWslFailedDiscovery);
-        TEST_METHOD(AgentProfileWslBackgroundRefresh);
+        TEST_METHOD(AgentProfileWslSavedMetadataRecovery);
+        TEST_METHOD(AgentProfileWslGenerationUsesSavedMetadata);
         TEST_METHOD(AgentProfileWslPersistence);
         TEST_METHOD(AgentProfileWslSkipsShellIntegration);
         TEST_METHOD(AgentProfileSplitTargets);
@@ -867,7 +868,7 @@ namespace SettingsModelUnitTests
     {
         SetPolicy(MakePolicy());
         const AgentProfileGenerator::DiscoveryCache::Snapshot host{ { L"copilot", L"C:\\copilot.exe" } };
-        const AgentProfileGenerator::WslDiscoveryCache::Snapshot sources{
+        const AgentProfileGenerator::WslSnapshot sources{
             { L"Ubuntu", { L"copilot", L"claude" }, true },
             { L"Debian", { L"copilot" }, true },
             { L"Stopped", {}, false },
@@ -905,32 +906,30 @@ namespace SettingsModelUnitTests
         VERIFY_ARE_EQUAL(winrt::hstring{ L"wsl:Ubuntu" }, profiles[0]->AgentProfileSource());
     }
 
-    void CustomAgentAndPolicyTests::AgentProfileWslStoppedDiscovery()
+    void CustomAgentAndPolicyTests::AgentProfileWslExplicitSnapshot()
     {
-        using Snapshot = AgentProfileGenerator::WslDiscoveryCache::Snapshot;
-        Snapshot previous{ { L"Ubuntu", { L"copilot" }, true } };
-        Snapshot stopped{
-            { L"Ubuntu", { L"claude" }, false },
-            { L"Debian", { L"copilot" }, false },
-        };
-        AgentProfileGenerator::RetainKnownWslAgents(stopped, &previous);
-        VERIFY_ARE_EQUAL(size_t{ 1 }, stopped[0].agentIds.size());
-        VERIFY_IS_TRUE(stopped[0].agentIds.contains(L"copilot"));
-        VERIFY_IS_TRUE(stopped[1].agentIds.empty());
-        VERIFY_IS_FALSE(stopped[0].running);
-        Snapshot fresh{ { L"Ubuntu", { L"copilot" }, false } };
-        AgentProfileGenerator::RetainKnownWslAgents(fresh, nullptr);
-        VERIFY_IS_TRUE(fresh.front().agentIds.empty());
-        AgentProfileGenerator::WslDiscoveryCache cache;
-        const auto start = std::chrono::steady_clock::time_point{};
-        cache.Get(start, [&] { return previous; });
-        const auto& retained = cache.Get(start + std::chrono::seconds{ 30 }, []() -> Snapshot { THROW_HR(E_FAIL); });
-        VERIFY_IS_TRUE(retained.front().agentIds.contains(L"copilot"));
+        AgentProfileGenerator::WslSourceCache cache;
+        VERIFY_IS_TRUE(cache.Read().empty());
+        cache.Update({ { L"Ubuntu", { L"copilot" }, false } });
+        VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
+        // Explicit discovery can find a CLI in a distribution it just started.
+        // Its originally stopped state is not a reason to discard the result.
+        VERIFY_IS_FALSE(cache.Read().front().running);
+        cache.Update({ { L"Ubuntu", { L"claude" }, true } });
+        VERIFY_ARE_EQUAL(size_t{ 1 }, cache.Read().front().agentIds.size());
+        VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"claude"));
+        cache.Update({ { L"Ubuntu", {}, true, true }, { L"Fresh", {}, false, true } });
+        VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"claude"));
+        VERIFY_IS_TRUE(cache.Read()[1].agentIds.empty());
+        cache.Update({ { L"Ubuntu", {}, false, false } });
+        VERIFY_IS_TRUE(cache.Read().front().agentIds.empty());
+        cache.Update({});
+        VERIFY_IS_TRUE(cache.Read().empty());
     }
 
     void CustomAgentAndPolicyTests::AgentProfileWslFailedDiscovery()
     {
-        using Snapshot = AgentProfileGenerator::WslDiscoveryCache::Snapshot;
+        using Snapshot = AgentProfileGenerator::WslSnapshot;
         const Snapshot previous{
             { L"Ubuntu", { L"copilot" }, true },
             { L"Debian", { L"codex" }, true },
@@ -954,86 +953,69 @@ namespace SettingsModelUnitTests
         VERIFY_IS_TRUE(firstFailure.front().agentIds.empty());
     }
 
-    void CustomAgentAndPolicyTests::AgentProfileWslBackgroundRefresh()
+    void CustomAgentAndPolicyTests::AgentProfileWslSavedMetadataRecovery()
     {
-        using Cache = AgentProfileGenerator::WslSourceCache;
-        using Snapshot = Cache::Snapshot;
-        Cache cache;
-        auto logicalNow = std::chrono::steady_clock::time_point{};
-        const auto now = [&] { return logicalNow; };
-        bool competingProbeRan = false;
-        VERIFY_IS_TRUE(cache.Refresh([&]() -> std::optional<Snapshot> {
-            // Generation can read the cache while discovery runs, and another
-            // refresh does not wait or start a competing subprocess.
-            VERIFY_IS_TRUE(cache.Read().empty());
-            logicalNow += std::chrono::seconds{ 45 };
-            VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
-                competingProbeRan = true;
-                return Snapshot{};
-            }, now));
-            return Snapshot{ { L"Ubuntu", { L"copilot" }, true } };
-        }, now));
-        VERIFY_IS_FALSE(competingProbeRan);
-        VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
-        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
-            competingProbeRan = true;
-            return Snapshot{};
-        }, now));
-        VERIFY_IS_FALSE(competingProbeRan);
-        // The full TTL starts after the slow all-distro probe completes.
-        const auto expired = logicalNow + std::chrono::seconds{ 30 };
-        logicalNow = expired - std::chrono::milliseconds{ 1 };
-        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
-            competingProbeRan = true;
-            return Snapshot{};
-        }, now));
-        VERIFY_IS_FALSE(competingProbeRan);
-        logicalNow = expired;
-        bool failedProbeRan = false;
-        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
-            failedProbeRan = true;
-            logicalNow += std::chrono::seconds{ 35 };
-            return std::nullopt;
-        }, now));
-        VERIFY_IS_TRUE(failedProbeRan);
-        VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
-        VERIFY_IS_FALSE(cache.Refresh([]() -> std::optional<Snapshot> { THROW_HR(E_FAIL); }, now));
-        VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
-        bool retryProbeRan = false;
-        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
-            retryProbeRan = true;
-            return Snapshot{ { L"Ubuntu", {}, false, true } };
-        }, now));
-        VERIFY_IS_TRUE(retryProbeRan);
-        VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
-        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
-            competingProbeRan = true;
-            return Snapshot{};
-        }, now));
-        const auto nextExpiry = logicalNow + std::chrono::seconds{ 30 };
-        logicalNow = nextExpiry - std::chrono::milliseconds{ 1 };
-        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
-            competingProbeRan = true;
-            return Snapshot{};
-        }, now));
-        VERIFY_IS_FALSE(competingProbeRan);
-        logicalNow = nextExpiry;
-        VERIFY_IS_TRUE(cache.Refresh([]() -> std::optional<Snapshot> {
-            return Snapshot{ { L"Ubuntu", { L"claude" }, true } };
-        }, now));
-        VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"claude"));
-        VERIFY_IS_FALSE(cache.Refresh([&]() -> std::optional<Snapshot> {
-            competingProbeRan = true;
-            return Snapshot{};
-        }, now));
-        VERIFY_IS_FALSE(competingProbeRan);
-        logicalNow += std::chrono::seconds{ 30 };
-        VERIFY_IS_TRUE(cache.Refresh([]() -> std::optional<Snapshot> { return Snapshot{}; }, now));
+        SetPolicy(MakePolicy());
+        std::vector<winrt::com_ptr<implementation::Profile>> saved;
+        AgentProfileGenerator::GenerateProfiles(saved, {}, { { L"Saved-WSL-Test", { L"copilot", L"claude" }, false } });
+        for (auto& profile : saved)
+        {
+            profile->Source(L"IntelligentTerminal.AgentProfiles");
+            profile->ClearCommandline();
+        }
+        saved.front()->Name(L"My saved CLI");
+        saved.front()->AgentProfileModel(L"custom-model");
+        AgentProfileGenerator::WslSourceCache cache;
+        cache.RestoreSavedProfiles(saved);
+        cache.RestoreSavedProfiles(saved);
+        VERIFY_ARE_EQUAL(size_t{ 1 }, cache.Read().size());
+        VERIFY_ARE_EQUAL(size_t{ 2 }, cache.Read().front().agentIds.size());
+        std::vector<winrt::com_ptr<implementation::Profile>> regenerated;
+        AgentProfileGenerator::GenerateProfiles(regenerated, {}, cache.Read());
+        VERIFY_ARE_EQUAL(saved.size(), regenerated.size());
+        VERIFY_ARE_EQUAL(saved.front()->Guid(), regenerated.front()->Guid());
+        // Saved metadata is only initial evidence, never an override of a fresh
+        // successful absence or an unregistered distro.
+        cache.Update({ { L"Saved-WSL-Test", {}, true } });
+        cache.RestoreSavedProfiles(saved);
+        VERIFY_IS_TRUE(cache.Read().front().agentIds.empty());
+        cache.Update({});
+        cache.RestoreSavedProfiles(saved);
         VERIFY_IS_TRUE(cache.Read().empty());
-        Cache firstStopped;
-        VERIFY_IS_FALSE(firstStopped.Refresh([]() -> std::optional<Snapshot> {
-            return Snapshot{ { L"Stopped", {}, false } };
-        }, now));
+        AgentProfileGenerator::WslSourceCache invalid;
+        auto wrongGuid = saved.front()->CopySettings();
+        wrongGuid->Guid(winrt::guid{ L"{00000000-0000-0000-0000-000000000001}" });
+        auto nonGenerated = saved.front()->CopySettings();
+        nonGenerated->ClearSource();
+        auto unsafe = saved.front()->CopySettings();
+        unsafe->AgentProfileSource(L"wsl:bad;name");
+        invalid.RestoreSavedProfiles({ wrongGuid, nonGenerated, unsafe });
+        VERIFY_IS_TRUE(invalid.Read().empty());
+    }
+
+    void CustomAgentAndPolicyTests::AgentProfileWslGenerationUsesSavedMetadata()
+    {
+        std::vector<winrt::com_ptr<implementation::Profile>> generated;
+        AgentProfileGenerator::GenerateProfiles(generated, {}, { { L"Saved-Load-Test", { L"claude" }, false } });
+        VERIFY_ARE_EQUAL(size_t{ 1 }, generated.size());
+        Json::Value user{ Json::objectValue };
+        auto metadata = generated.front()->ToJson();
+        metadata["source"] = "IntelligentTerminal.AgentProfiles";
+        metadata["name"] = "Renamed saved CLI";
+        metadata["agentProfile.model"] = "my-model";
+        metadata.removeMember("commandline");
+        user["profiles"]["list"].append(metadata);
+        implementation::SettingsLoader loader{ toString(user), R"({"profiles":[]})" };
+        // The distro does not exist: restoring this profile from metadata must
+        // not require any Linux execution or an availability claim.
+        loader.GenerateProfiles();
+        const auto restored = std::ranges::find_if(loader.inboxSettings.profiles, [&](const auto& candidate) {
+            return candidate->Guid() == generated.front()->Guid();
+        });
+        VERIFY_IS_TRUE(restored != loader.inboxSettings.profiles.end());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"wsl:Saved-Load-Test" }, (*restored)->AgentProfileSource());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"Renamed saved CLI" }, loader.userSettings.profiles.front()->Name());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"my-model" }, loader.userSettings.profiles.front()->AgentProfileModel());
     }
 
     void CustomAgentAndPolicyTests::AgentProfileWslPersistence()

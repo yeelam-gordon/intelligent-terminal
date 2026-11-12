@@ -84,7 +84,7 @@ namespace Microsoft::Terminal::AgentAvailability
         return sources;
     }
 
-    inline std::optional<std::vector<AgentSourceSnapshot>> ProbeWslAgentSources()
+    inline std::optional<std::vector<AgentSourceSnapshot>> ProbeWslAgentSources(const bool startStoppedWsl = false, std::string* payload = nullptr)
     {
         const auto wtaPath = WtaProcess::ResolveWtaExePath();
         if (wtaPath.empty())
@@ -92,7 +92,10 @@ namespace Microsoft::Terminal::AgentAvailability
             LOG_HR_MSG(HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "WSL agent discovery requires WTA");
             return std::nullopt;
         }
-        const auto result = WtaProcess::RunWtaCapture(wtaPath, L"probe-agent-sources --all-wsl", 90'000);
+        const auto arguments = startStoppedWsl ?
+                                   L"probe-agent-sources --all-wsl --start-stopped-wsl" :
+                                   L"probe-agent-sources --all-wsl";
+        const auto result = WtaProcess::RunWtaCapture(wtaPath, arguments, 90'000);
         if (!result.completed || result.exitCode != 0)
         {
             LOG_HR_MSG(E_FAIL, "WSL agent discovery failed (completed=%d, exit=%lu)", result.completed, result.exitCode);
@@ -102,6 +105,10 @@ namespace Microsoft::Terminal::AgentAvailability
         if (!sources)
         {
             LOG_HR_MSG(E_INVALIDARG, "Invalid WSL agent discovery response");
+        }
+        else if (payload)
+        {
+            *payload = result.output;
         }
         return sources;
     }

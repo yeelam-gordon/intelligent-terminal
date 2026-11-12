@@ -20,18 +20,6 @@ namespace
         return cache;
     }
 
-    auto WslProfileEvidence(const AgentProfileGenerator::WslSourceCache::Snapshot& sources)
-    {
-        std::map<std::wstring, std::unordered_set<std::wstring>> evidence;
-        for (const auto& source : sources)
-        {
-            if (!source.agentIds.empty())
-            {
-                evidence.emplace(source.distro, source.agentIds);
-            }
-        }
-        return evidence;
-    }
 }
 
 std::wstring_view AgentProfileGenerator::GetNamespace() const noexcept
@@ -49,13 +37,14 @@ std::wstring_view AgentProfileGenerator::GetIcon() const noexcept
     return L"\uE99A";
 }
 
-void AgentProfileGenerator::RetainKnownWslAgents(WslDiscoveryCache::Snapshot& sources, const WslDiscoveryCache::Snapshot* previous)
+void AgentProfileGenerator::RetainKnownWslAgents(WslSnapshot& sources, const WslSnapshot* previous)
 {
     for (auto& source : sources)
     {
-        if (!source.running || source.probeFailed)
+        if (source.probeFailed)
         {
-            // Stopped or failed sources cannot establish new installation evidence.
+            // Explicit discovery can start a stopped source. Only failed probes
+            // lack authoritative installation evidence.
             source.agentIds.clear();
             if (previous)
             {
@@ -72,48 +61,63 @@ void AgentProfileGenerator::RetainKnownWslAgents(WslDiscoveryCache::Snapshot& so
 AgentProfileGenerator::WslSourceCache::Snapshot AgentProfileGenerator::WslSourceCache::Read()
 {
     std::scoped_lock lock{ _mutex };
-    const auto previous = _cache.Previous();
-    return previous ? *previous : Snapshot{};
+    return _sources;
 }
 
-bool AgentProfileGenerator::WslSourceCache::Refresh(const std::function<std::optional<Snapshot>()>& probe,
-                                                    const std::function<std::chrono::steady_clock::time_point()>& now)
+void AgentProfileGenerator::WslSourceCache::Update(Snapshot sources)
 {
-    {
-        std::scoped_lock lock{ _mutex };
-        if (_refreshing || !_cache.NeedsRefresh(now()))
-        {
-            return false;
-        }
-        _refreshing = true;
-    }
-    const auto finished = wil::scope_exit([&] {
-        std::scoped_lock lock{ _mutex };
-        _refreshing = false;
-    });
-    try
-    {
-        auto sources = probe();
-        if (!sources)
-        {
-            return false;
-        }
-        std::scoped_lock lock{ _mutex };
-        const auto previous = _cache.Previous();
-        RetainKnownWslAgents(*sources, previous);
-        const auto changed = WslProfileEvidence(*sources) != WslProfileEvidence(previous ? *previous : Snapshot{});
-        _cache.Store(now(), std::move(*sources));
-        return changed;
-    }
-    CATCH_LOG();
-    return false;
+    std::scoped_lock lock{ _mutex };
+    RetainKnownWslAgents(sources, &_sources);
+    _sources = std::move(sources);
+    _discovered = true;
 }
 
-bool AgentProfileGenerator::RefreshWslSources()
+void AgentProfileGenerator::WslSourceCache::RestoreSavedProfiles(const std::vector<winrt::com_ptr<implementation::Profile>>& profiles)
 {
-    return WslCache().Refresh([] {
-        return ::Microsoft::Terminal::AgentAvailability::ProbeWslAgentSources();
-    });
+    std::scoped_lock lock{ _mutex };
+    if (_discovered)
+    {
+        return;
+    }
+    namespace Registry = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
+    namespace Backend = ::Microsoft::Terminal::Settings::Model;
+    for (const auto& profile : profiles)
+    {
+        const auto agentId = profile->AgentProfileId();
+        if (profile->Source() != AgentProfiles::Source ||
+            !profile->HasAgentProfileId() || !profile->HasAgentProfileSource() ||
+            !Registry::SupportsNativeProfile(std::wstring_view{ agentId }))
+        {
+            continue;
+        }
+        const auto backend = Backend::AgentPaneBackend::FromSettings(agentId, profile->AgentProfileSource());
+        if (!backend || backend->source != Backend::AgentPaneBackendSource::Wsl)
+        {
+            continue;
+        }
+        const auto identity = std::wstring{ AgentProfiles::Source } + L":" + backend->SelectionId();
+        if (profile->Guid() != CreateDynamicProfile(identity)->Guid())
+        {
+            continue;
+        }
+        auto found = std::ranges::find(_sources, backend->wslDistro, &::Microsoft::Terminal::AgentAvailability::AgentSourceSnapshot::distro);
+        if (found == _sources.end())
+        {
+            _sources.push_back({ backend->wslDistro, {}, false });
+            found = std::prev(_sources.end());
+        }
+        found->agentIds.emplace(agentId);
+    }
+}
+
+void AgentProfileGenerator::UpdateWslSources(WslSnapshot sources)
+{
+    WslCache().Update(std::move(sources));
+}
+
+void AgentProfileGenerator::RestoreSavedWslProfiles(const std::vector<winrt::com_ptr<implementation::Profile>>& profiles)
+{
+    WslCache().RestoreSavedProfiles(profiles);
 }
 
 void AgentProfileGenerator::GenerateProfiles(std::vector<winrt::com_ptr<implementation::Profile>>& profiles) const
@@ -132,7 +136,7 @@ void AgentProfileGenerator::GenerateProfiles(std::vector<winrt::com_ptr<implemen
 
 void AgentProfileGenerator::GenerateProfiles(std::vector<winrt::com_ptr<implementation::Profile>>& profiles,
                                              const DiscoveryCache::Snapshot& host,
-                                             const WslDiscoveryCache::Snapshot& wsl)
+                                             const WslSnapshot& wsl)
 {
     namespace Registry = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
     auto sortedSources = wsl;

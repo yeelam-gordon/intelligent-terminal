@@ -14,12 +14,15 @@ can override that default with an exact Windows or distribution-specific agent.
 Agent pane and command-palette delegation are separate selections. Also generate
 native agent profiles for discovered WSL agents.
 
-The user's additional performance requirement is authoritative: do not start a
-stopped distribution merely to discover agents, populate Settings, generate
-profiles, list sessions, or prewarm unused ACP processes. WSL ACP can start when
-that distribution is already running, it is the explicitly configured default
-agent-pane source, or the user explicitly uses that source. This includes
-session-list ACP processes, not only chat.
+The clarified performance requirement separates discovery from ACP use.
+Explicitly opening Agent settings actively probes registered distributions,
+even if this starts a stopped distribution, to show an accurate installed-agent
+list. Ordinary startup, settings-file loading/reloading, and native profile
+generation reuse saved/cached evidence without these expensive Linux probes.
+Discovery must not authorize unused ACP processes: neither a running distro nor
+finding its executables permits Windows-style chat/history pairs. Automatic WSL
+ACP eligibility requires the exact configured default provider and distribution,
+or actual use of that exact provider/source.
 
 Deliver source-backed investigation, a minimal MVVM design, a reasonable
 unit-test inventory, implementation, an isolated worktree Dev deployment, and
@@ -63,10 +66,11 @@ Its own shell tools still run in WSL; these are intentionally different paths.
   transfer Windows credentials or pretend a host BYOK model is a WSL catalog.
 - Discover registered user distributions, not merely the current profile or
   currently running ones. Exclude utility distributions consistently with
-  existing WSL profile generation. Enumeration must not start a distribution;
-  executable probing is restricted to already-running distributions. Retain
-  previously known/saved choices without implying they are currently available.
-  Do not install agents, change hooks, or modify global registrations.
+  existing WSL profile generation. Explicit Agent-page navigation may start
+  distributions for bounded executable-presence probes; ordinary loading must
+  not. Retain saved choices without implying current availability. Discovery
+  starts no ACP/model probes, installs no agents, and changes no hooks or global
+  registrations.
 - Treat discovery failure as unknown, log it, and retain saved selections.
   Bound subprocesses and ignore stale UI publication after navigation/reload.
 - Preserve explicit tab overrides, stashed panes, profile precedence, policy,
