@@ -1518,7 +1518,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
                 }
                 for (auto& source : *sources)
                 {
-                    if (source.distro == backend->wslDistro && (!source.running || source.probeFailed))
+                    if (til::compare_ordinal_insensitive(source.distro, backend->wslDistro) == 0 && (!source.running || source.probeFailed))
                     {
                         source.agentIds.emplace(backend->agentId);
                     }

@@ -2642,8 +2642,13 @@ namespace TerminalAppLocalTests
         VERIFY_IS_FALSE(Page::_CanPrewarmAgentBinding(binding, L"host"));
         VERIFY_IS_FALSE(Page::_CanPrewarmAgentBinding(binding, L"wsl:Debian"));
         VERIFY_IS_TRUE(Page::_CanPrewarmAgentBinding(binding, L"wsl:Ubuntu"));
+        VERIFY_IS_TRUE(Page::_CanPrewarmAgentBinding(binding, L"wsl:uBuNtU"));
+        VERIFY_IS_FALSE(Page::_CanPrewarmAgentBinding(binding, L"wsl:dEbIaN"));
+        VERIFY_IS_FALSE(Page::_CanPrewarmAgentBinding(binding, L"WSL:Ubuntu"));
+        VERIFY_IS_FALSE(Page::_CanPrewarmAgentBinding(binding, L"wsl:"));
         binding.launchable = false;
         VERIFY_IS_FALSE(Page::_CanPrewarmAgentBinding(binding, L"wsl:Ubuntu"));
+        VERIFY_IS_FALSE(Page::_CanPrewarmAgentBinding(binding, L"wsl:uBuNtU"));
     }
 
     void SettingsTests::TestAgentPaneSwitchCapability()

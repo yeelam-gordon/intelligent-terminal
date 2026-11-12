@@ -959,7 +959,7 @@ namespace SettingsModelUnitTests
         using Cache = AgentProfileGenerator::WslSourceCache;
         using Snapshot = Cache::Snapshot;
         Cache cache;
-        const auto now = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::time_point{};
         bool competingProbeRan = false;
         VERIFY_IS_TRUE(cache.Refresh(now, [&]() -> std::optional<Snapshot> {
             // Generation can read the cache while discovery runs, and another
@@ -978,18 +978,38 @@ namespace SettingsModelUnitTests
             return Snapshot{};
         }));
         VERIFY_IS_FALSE(competingProbeRan);
-        const auto expired = now + std::chrono::seconds{ 31 };
+        const auto expired = now + std::chrono::seconds{ 30 };
+        VERIFY_IS_FALSE(cache.Refresh(expired - std::chrono::milliseconds{ 1 }, [&]() -> std::optional<Snapshot> {
+            competingProbeRan = true;
+            return Snapshot{};
+        }));
+        VERIFY_IS_FALSE(competingProbeRan);
         VERIFY_IS_FALSE(cache.Refresh(expired, []() -> std::optional<Snapshot> { return std::nullopt; }));
         VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
         VERIFY_IS_FALSE(cache.Refresh(expired, []() -> std::optional<Snapshot> {
             return Snapshot{ { L"Ubuntu", {}, false, true } };
         }));
         VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
-        VERIFY_IS_TRUE(cache.Refresh(expired, []() -> std::optional<Snapshot> {
+        VERIFY_IS_FALSE(cache.Refresh(expired, [&]() -> std::optional<Snapshot> {
+            competingProbeRan = true;
+            return Snapshot{};
+        }));
+        const auto nextExpiry = expired + std::chrono::seconds{ 30 };
+        VERIFY_IS_FALSE(cache.Refresh(nextExpiry - std::chrono::milliseconds{ 1 }, [&]() -> std::optional<Snapshot> {
+            competingProbeRan = true;
+            return Snapshot{};
+        }));
+        VERIFY_IS_FALSE(competingProbeRan);
+        VERIFY_IS_TRUE(cache.Refresh(nextExpiry, []() -> std::optional<Snapshot> {
             return Snapshot{ { L"Ubuntu", { L"claude" }, true } };
         }));
         VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"claude"));
-        VERIFY_IS_TRUE(cache.Refresh(expired, []() -> std::optional<Snapshot> { return Snapshot{}; }));
+        VERIFY_IS_FALSE(cache.Refresh(nextExpiry, [&]() -> std::optional<Snapshot> {
+            competingProbeRan = true;
+            return Snapshot{};
+        }));
+        VERIFY_IS_FALSE(competingProbeRan);
+        VERIFY_IS_TRUE(cache.Refresh(nextExpiry + std::chrono::seconds{ 30 }, []() -> std::optional<Snapshot> { return Snapshot{}; }));
         VERIFY_IS_TRUE(cache.Read().empty());
         Cache firstStopped;
         VERIFY_IS_FALSE(firstStopped.Refresh(now, []() -> std::optional<Snapshot> {

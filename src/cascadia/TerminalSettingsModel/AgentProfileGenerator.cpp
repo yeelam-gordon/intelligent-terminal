@@ -102,7 +102,7 @@ bool AgentProfileGenerator::WslSourceCache::Refresh(const std::chrono::steady_cl
         const auto previous = _cache.Previous();
         RetainKnownWslAgents(*sources, previous);
         const auto changed = WslProfileEvidence(*sources) != WslProfileEvidence(previous ? *previous : Snapshot{});
-        _cache.Store(std::chrono::steady_clock::now(), std::move(*sources));
+        _cache.Store(now, std::move(*sources));
         return changed;
     }
     CATCH_LOG();

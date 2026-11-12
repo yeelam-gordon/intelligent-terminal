@@ -4401,7 +4401,8 @@ namespace winrt::TerminalApp::implementation
         return binding.launchable &&
                (binding.agentSource == L"host" ||
                 (binding.agentSource == L"wsl" &&
-                 globalAgentSource == L"wsl:" + binding.agentWslDistro));
+                 globalAgentSource.starts_with(L"wsl:") &&
+                 til::compare_ordinal_insensitive(globalAgentSource.substr(4), binding.agentWslDistro) == 0));
     }
 
     bool TerminalPage::_AutoCreateHiddenAgentPaneShared(winrt::com_ptr<Tab> tab,
