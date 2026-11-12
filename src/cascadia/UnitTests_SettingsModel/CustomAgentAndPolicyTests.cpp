@@ -1011,6 +1011,8 @@ namespace SettingsModelUnitTests
         const winrt::guid agentGuid{ L"{00000000-0000-0000-0000-000000000002}" };
         const auto installed = winrt::make_self<implementation::CascadiaSettings>(user, generated);
         const auto profile = installed->FindProfile(agentGuid);
+        winrt::get_self<implementation::Profile>(profile.CommandlineOverrideSource())->Origin(OriginTag::Generated);
+        VERIFY_IS_TRUE(::Microsoft::Terminal::AgentProfiles::IsManaged(profile));
         const auto duplicate = installed->DuplicateProfile(profile);
         VERIFY_ARE_EQUAL(winrt::hstring{ L"wsl:Ubuntu" }, duplicate.AgentProfileSource());
         VERIFY_ARE_EQUAL(profile.AgentProfileModel(), duplicate.AgentProfileModel());
