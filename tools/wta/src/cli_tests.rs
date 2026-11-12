@@ -533,6 +533,22 @@ fn process_label_subcommands() {
         "wta",
         "probe-agent-sources",
         "--all-wsl",
+        "--start-stopped-wsl",
+    ])
+    .is_ok());
+    assert!(Cli::try_parse_from(["wta", "probe-agent-sources", "--start-stopped-wsl",]).is_err());
+    assert!(Cli::try_parse_from([
+        "wta",
+        "probe-agent-sources",
+        "--wsl-distro",
+        "Ubuntu",
+        "--start-stopped-wsl",
+    ])
+    .is_err());
+    assert!(Cli::try_parse_from([
+        "wta",
+        "probe-agent-sources",
+        "--all-wsl",
         "--wsl-distro",
         "Ubuntu"
     ])

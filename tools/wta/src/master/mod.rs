@@ -3327,6 +3327,7 @@ impl HelperHandler {
             .agent
             .get_or_try_init(|| acquire_and_bind_agent(&self.state, self.helper_id, acquire))
             .await?;
+        start_agent_history_worker(&self.state, agent);
         Ok(Arc::clone(agent))
     }
 
@@ -5853,7 +5854,9 @@ where
                         // OnceCell has published the agent, so every subsequent
                         // reaper can retire it. Start history while pool ownership
                         // is still confirmed, including for warmed/switched agents.
-                        start_agent_history_worker(state, agent);
+                        if matches!(agent.source, crate::agent_source::AgentSource::Host) {
+                            start_agent_history_worker(state, agent);
+                        }
                         return Ok(Arc::clone(agent));
                     }
                 }
@@ -6766,7 +6769,7 @@ async fn serve_helper(
 
     let cleanup = cleanup_disconnected_helper(&handler).await;
     if let Some(agent) = handler.agent.get() {
-        retire_unbound_model_agent(&state, agent).await;
+        retire_unbound_on_demand_agent(&state, agent).await;
     }
 
     tracing::info!(
@@ -6781,8 +6784,10 @@ async fn serve_helper(
     result
 }
 
-async fn retire_unbound_model_agent(state: &MasterStateInner, agent: &Arc<AgentCli>) {
-    if !agent.cmd_key.starts_with("model:") {
+async fn retire_unbound_on_demand_agent(state: &MasterStateInner, agent: &Arc<AgentCli>) {
+    if !agent.cmd_key.starts_with("model:")
+        && matches!(agent.source, crate::agent_source::AgentSource::Host)
+    {
         return;
     }
 
@@ -6802,8 +6807,9 @@ async fn retire_unbound_model_agent(state: &MasterStateInner, agent: &Arc<AgentC
         tracing::info!(
             target: "master",
             agent = %agent.cmd_key,
-            "retiring unbound model-specific agent CLI"
+            "retiring unbound on-demand agent CLI"
         );
+        retire_agent_history(agent).await;
         agent.conn.shutdown();
     }
 }
@@ -7673,6 +7679,9 @@ async fn refresh_agent_history(state: &MasterStateInner, agent: &AgentCli) -> Op
     {
         return None;
     }
+    if !history_usage_eligible(&agent.source, !agent.bound_helpers.lock().await.is_empty()) {
+        return None;
+    }
     let generation = agent.history_refresh.generation.load(Ordering::Acquire);
     let mut refresh = agent.history_refresh.gate.lock().await;
     if agent.history_refresh.retired.load(Ordering::Acquire) {
@@ -7849,7 +7858,12 @@ fn start_agent_history_worker(state: &Arc<MasterStateInner>, agent: &Arc<AgentCl
         let _ownership = ownership;
         loop {
             let Some(state) = state.upgrade() else { break };
-            if agent.history_refresh.retired.load(Ordering::Acquire) {
+            if agent.history_refresh.retired.load(Ordering::Acquire)
+                || !history_usage_eligible(
+                    &agent.source,
+                    !agent.bound_helpers.lock().await.is_empty(),
+                )
+            {
                 break;
             }
             refresh_agent_history(&state, &agent).await;
@@ -7868,6 +7882,15 @@ fn start_agent_history_worker(state: &Arc<MasterStateInner>, agent: &Arc<AgentCl
             }
         }
     });
+}
+
+fn history_usage_eligible(
+    source: &crate::agent_source::AgentSource,
+    has_bound_helper: bool,
+) -> bool {
+    // Both an authorized default prewarm and explicit agent use bind a helper.
+    // Settings path discovery does not; a running distro is not ACP usage.
+    matches!(source, crate::agent_source::AgentSource::Host) || has_bound_helper
 }
 
 fn host_history_agent_ids(
