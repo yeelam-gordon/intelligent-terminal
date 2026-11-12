@@ -90,6 +90,11 @@ already-running distribution can be newly discovered. Preserve saved profile
 customizations and do not manufacture an installed-agent claim for a stopped
 distribution with no evidence.
 
+Managed native agent commandlines are not interactive shells. Exclude them from
+the shared WSL shell-integration snapshot so reconciliation cannot run a shell
+probe or uninstall through an agent CLI. Explicit shell-command overrides keep
+the existing shell-integration behavior.
+
 Generation reads existing WSL cache immediately. The settings model's small
 asynchronous refresh method performs the bounded probe on a background thread;
 AppLogic then queues its existing throttled settings reload only when actual

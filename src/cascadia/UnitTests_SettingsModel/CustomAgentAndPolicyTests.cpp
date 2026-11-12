@@ -31,6 +31,7 @@
 #include "../TerminalSettingsModel/SettingsTelemetry.h"
 #include "../TerminalSettingsModel/ActionArgs.h"
 #include "../TerminalApp/AgentProviderTelemetry.h"
+#include "../TerminalApp/ShellIntegrationSweep.h"
 #include "../inc/AgentPolicy.h"
 #include "../inc/AgentRegistry.h"
 #include "../inc/CustomModelProviderUtils.h"
@@ -90,6 +91,7 @@ namespace SettingsModelUnitTests
         TEST_METHOD(AgentProfileWslFailedDiscovery);
         TEST_METHOD(AgentProfileWslBackgroundRefresh);
         TEST_METHOD(AgentProfileWslPersistence);
+        TEST_METHOD(AgentProfileWslSkipsShellIntegration);
         TEST_METHOD(AgentProfileSplitTargets);
         TEST_METHOD(CustomDelegateAgentRoundtrips);
         TEST_METHOD(CustomAgentCollectionsRoundtrip);
@@ -1032,6 +1034,23 @@ namespace SettingsModelUnitTests
         VERIFY_ARE_EQUAL(winrt::hstring{ L"--add-dir /home/me/project" }, revived.AgentProfileArguments());
         VERIFY_ARE_EQUAL(::Microsoft::Terminal::AgentProfiles::Command(profile, true, L""),
                          ::Microsoft::Terminal::AgentProfiles::Command(revived, true, L""));
+    }
+
+    void CustomAgentAndPolicyTests::AgentProfileWslSkipsShellIntegration()
+    {
+        auto generated = winrt::make_self<implementation::Profile>();
+        generated->Origin(OriginTag::Generated);
+        generated->AgentProfileId(L"copilot");
+        generated->AgentProfileSource(L"wsl:Ubuntu");
+        generated->Commandline(winrt::hstring{ ::Microsoft::Terminal::AgentProfiles::BuildWslCommand(L"Ubuntu", L"copilot", {}, {}, {}) });
+        auto child = winrt::make_self<implementation::Profile>();
+        child->AddLeastImportantParent(generated);
+        const auto profile = child.as<Profile>();
+        VERIFY_IS_TRUE(::Microsoft::Terminal::AgentProfiles::IsManaged(profile));
+        VERIFY_IS_TRUE(winrt::TerminalApp::implementation::ShellIntegrationSweep::WslProfileCommandline(profile).empty());
+        profile.Commandline(L"wsl.exe --distribution Ubuntu");
+        VERIFY_ARE_EQUAL(std::wstring{ L"wsl.exe --distribution Ubuntu" },
+                         winrt::TerminalApp::implementation::ShellIntegrationSweep::WslProfileCommandline(profile));
     }
 
     void CustomAgentAndPolicyTests::AgentProfileBatchCommand()
