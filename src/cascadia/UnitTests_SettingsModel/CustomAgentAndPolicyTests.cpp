@@ -90,6 +90,7 @@ namespace SettingsModelUnitTests
         TEST_METHOD(AgentProfileWslExplicitSnapshot);
         TEST_METHOD(AgentProfileWslFailedDiscovery);
         TEST_METHOD(AgentProfileWslSavedMetadataRecovery);
+        TEST_METHOD(AgentProfileWslSavedMetadataCaseInsensitiveRetention);
         TEST_METHOD(AgentProfileWslGenerationUsesSavedMetadata);
         TEST_METHOD(AgentProfileWslPersistence);
         TEST_METHOD(AgentProfileWslSkipsShellIntegration);
@@ -991,6 +992,34 @@ namespace SettingsModelUnitTests
         unsafe->AgentProfileSource(L"wsl:bad;name");
         invalid.RestoreSavedProfiles({ wrongGuid, nonGenerated, unsafe });
         VERIFY_IS_TRUE(invalid.Read().empty());
+    }
+
+    void CustomAgentAndPolicyTests::AgentProfileWslSavedMetadataCaseInsensitiveRetention()
+    {
+        SetPolicy(MakePolicy());
+        std::vector<winrt::com_ptr<implementation::Profile>> saved;
+        AgentProfileGenerator::GenerateProfiles(saved, {}, { { L"Saved-WSL-Test", { L"copilot" }, false } });
+        VERIFY_ARE_EQUAL(size_t{ 1 }, saved.size());
+        saved.front()->Source(L"IntelligentTerminal.AgentProfiles");
+        AgentProfileGenerator::WslSourceCache cache;
+        cache.RestoreSavedProfiles(saved);
+        VERIFY_ARE_EQUAL(size_t{ 1 }, cache.Read().size());
+        VERIFY_IS_TRUE(cache.Read().front().agentIds.contains(L"copilot"));
+
+        cache.Update({ { L"saved-wsl-test", {}, true, true } });
+        const auto retained = cache.Read();
+        VERIFY_ARE_EQUAL(size_t{ 1 }, retained.size());
+        VERIFY_ARE_EQUAL(std::wstring{ L"saved-wsl-test" }, retained.front().distro);
+        VERIFY_IS_TRUE(retained.front().probeFailed);
+        VERIFY_IS_TRUE(retained.front().agentIds.contains(L"copilot"));
+        std::vector<winrt::com_ptr<implementation::Profile>> regenerated;
+        AgentProfileGenerator::GenerateProfiles(regenerated, {}, retained);
+        VERIFY_ARE_EQUAL(size_t{ 1 }, regenerated.size());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"wsl:saved-wsl-test" }, regenerated.front()->AgentProfileSource());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"copilot" }, regenerated.front()->AgentProfileId());
+
+        cache.Update({ { L"saved-wsl-test", {}, true, false } });
+        VERIFY_IS_TRUE(cache.Read().front().agentIds.empty());
     }
 
     void CustomAgentAndPolicyTests::AgentProfileWslGenerationUsesSavedMetadata()
