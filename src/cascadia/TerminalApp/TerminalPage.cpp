@@ -1586,7 +1586,7 @@ namespace winrt::TerminalApp::implementation
                 if (!command.empty())
                 {
                     auto id = "custom:" + winrt::to_string(::Microsoft::Terminal::Settings::Model::DeriveCustomAgentId(command));
-                    std::ranges::transform(id, id.begin(), [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                    std::ranges::transform(id, id.begin(), [](const unsigned char ch) { return static_cast<char>(til::tolower_ascii(ch)); });
                     if (id != "custom:" && !commands.isMember(id))
                     {
                         commands[id] = winrt::to_string(command);
