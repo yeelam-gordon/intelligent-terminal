@@ -170,9 +170,15 @@ fn helper_config(cli: Cli) -> helper::config::HelperConfig {
 }
 
 fn master_config(cli: Cli) -> Result<master::config::MasterConfig> {
-    let custom_agent_commands = cli
-        .custom_agent_commands
+    let file_commands = cli
+        .custom_agent_commands_file
         .as_deref()
+        .map(std::fs::read_to_string)
+        .transpose()
+        .map_err(|_| anyhow::anyhow!("could not read custom agent startup catalog"))?;
+    let custom_agent_commands = file_commands
+        .as_deref()
+        .or(cli.custom_agent_commands.as_deref())
         .map(master::config::parse_custom_agent_commands)
         .transpose()
         .map_err(anyhow::Error::msg)?

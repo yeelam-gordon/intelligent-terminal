@@ -79,6 +79,13 @@ Custom agents arrive as a resolved `--agent` command plus their canonical
 `custom:<name>` ID. Do not re-parse a known ID from an adapter command when the
 host supplied `--agent-id`.
 
+The host passes nonempty custom-provider history catalogs through a unique
+`--custom-agent-commands-file` UTF-8 JSON handoff in the shared runtime cache,
+not the size-limited Windows command line. The host owns its delete-on-close
+handle through launch failure, master exit, and restart; each launch gets a
+fresh file. WTA reads it before validating the existing catalog format. The
+inline `--custom-agent-commands` form remains available for CLI compatibility.
+
 ## State and routing invariants
 
 - `session_to_helper` is the authoritative ACP SessionId routing map.

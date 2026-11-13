@@ -53,6 +53,14 @@ namespace winrt::TerminalApp::implementation
 {
     namespace details
     {
+        struct CustomAgentCommandsFile
+        {
+            std::wstring path;
+            wil::unique_hfile handle;
+        };
+
+        CustomAgentCommandsFile CreateCustomAgentCommandsFile(std::wstring_view json);
+
         class LiveObjectGenerationTracker
         {
         public:
@@ -418,6 +426,7 @@ namespace winrt::TerminalApp::implementation
         wil::unique_handle _process;
         wil::unique_handle _job;
         wil::unique_handle _shutdownEvent;
+        wil::unique_hfile _customAgentCommandsFile;
         HANDLE _waitHandle{ nullptr };
         details::ProcessWaitGenerationTracker _waitGeneration;
         details::UnexpectedExitRecoveryPolicy _unexpectedExitRecovery;
