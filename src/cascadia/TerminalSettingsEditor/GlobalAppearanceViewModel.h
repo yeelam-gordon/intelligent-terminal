@@ -45,6 +45,18 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         PERMANENT_OBSERVABLE_PROJECTED_SETTING(_GlobalSettings, EnableUnfocusedAcrylic);
 
     private:
+        struct AppearanceAction
+        {
+            std::wstring_view property;
+            bool write;
+            bool value;
+            bool invert;
+        };
+
+        bool _DispatchAppearanceAction(const AppearanceAction& action);
+        bool _ReadAppearanceValue(std::wstring_view property);
+        void _WriteAppearanceValue(std::wstring_view property, bool value);
+
         Model::GlobalAppSettings _GlobalSettings;
         winrt::Windows::Foundation::IInspectable _currentTheme;
 

@@ -25,6 +25,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     {
         const auto args = e.Parameter().as<Editor::NavigateToPageArgs>();
         _ViewModel = args.ViewModel().as<Editor::GlobalAppearanceViewModel>();
+        _ApplyTabVisibility();
         BringIntoViewWhenLoaded(args.ElementToFocus());
 
         TraceLoggingWrite(
@@ -34,5 +35,16 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
             TraceLoggingValue("globalAppearance", "PageId", "The identifier of the page that was navigated to"),
             TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
             TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
+    }
+
+    void GlobalAppearance::_ApplyTabVisibility()
+    {
+        const auto viewModel = ViewModel();
+        const auto showTabsInTitlebar = viewModel.ShowTabsInTitlebar();
+        const auto alwaysShowTabs = viewModel.AlwaysShowTabs();
+        if (!showTabsInTitlebar && !alwaysShowTabs)
+        {
+            viewModel.AlwaysShowTabs(true);
+        }
     }
 }
