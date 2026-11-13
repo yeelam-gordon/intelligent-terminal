@@ -17,6 +17,9 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         til::property_changed_event PropertyChanged;
         WINRT_OBSERVABLE_PROPERTY(Editor::GlobalAppearanceViewModel, ViewModel, PropertyChanged.raise, nullptr);
+
+    private:
+        void _ApplyTabVisibility();
     };
 }
 

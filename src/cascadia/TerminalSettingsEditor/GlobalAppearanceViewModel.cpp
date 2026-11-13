@@ -47,7 +47,11 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
     winrt::Windows::Foundation::IInspectable GlobalAppearanceViewModel::CurrentTheme()
     {
-        return _GlobalSettings.CurrentTheme();
+        if (!_currentTheme)
+        {
+            _currentTheme = _GlobalSettings.CurrentTheme();
+        }
+        return _currentTheme;
     }
 
     // Get the name out of the newly selected item, stash that as the Theme name
@@ -58,6 +62,16 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         if (const auto& theme{ tag.try_as<Model::Theme>() })
         {
             _GlobalSettings.Theme(Model::ThemePair{ theme.Name() });
+            if (theme.Name() == darkThemeName || theme.Name() == legacyDarkThemeName)
+            {
+                _GlobalSettings.TabWidthMode(winrt::Microsoft::UI::Xaml::Controls::TabViewWidthMode::Compact);
+                _GlobalSettings.NewTabPosition(Model::NewTabPosition::AfterCurrentTab);
+            }
+            else
+            {
+                _GlobalSettings.TabWidthMode(winrt::Microsoft::UI::Xaml::Controls::TabViewWidthMode::Equal);
+                _GlobalSettings.NewTabPosition(Model::NewTabPosition::AfterLastTab);
+            }
         }
     }
 
@@ -75,49 +89,96 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     // - the potentially localized name to use for this Theme.
     winrt::hstring GlobalAppearanceViewModel::ThemeNameConverter(const Model::Theme& theme)
     {
-        if (theme.Name() == darkThemeName)
+        const auto name = theme.Name();
+        if (name == darkThemeName)
         {
             return RS_(L"Globals_ThemeDark/Content");
         }
-        else if (theme.Name() == lightThemeName)
+        else if (name == lightThemeName)
         {
             return RS_(L"Globals_ThemeLight/Content");
         }
-        else if (theme.Name() == systemThemeName)
+        else if (name == systemThemeName)
         {
             return RS_(L"Globals_ThemeSystem/Content");
         }
-        else if (theme.Name() == legacyDarkThemeName)
+        else if (name == legacyDarkThemeName)
         {
             return RS_(L"Globals_ThemeDarkLegacy/Content");
         }
-        else if (theme.Name() == legacyLightThemeName)
+        else if (name == legacyLightThemeName)
         {
             return RS_(L"Globals_ThemeLightLegacy/Content");
         }
-        else if (theme.Name() == legacySystemThemeName)
+        else if (name == legacySystemThemeName)
         {
             return RS_(L"Globals_ThemeSystemLegacy/Content");
         }
-        return theme.Name();
+        return name;
     }
 
     bool GlobalAppearanceViewModel::InvertedDisableAnimations()
     {
-        return !_GlobalSettings.DisableAnimations();
+        return _DispatchAppearanceAction({ L"DisableAnimations", false, false, true });
     }
 
     void GlobalAppearanceViewModel::InvertedDisableAnimations(bool value)
     {
-        _GlobalSettings.DisableAnimations(!value);
+        _DispatchAppearanceAction({ L"DisableAnimations", true, value, true });
+    }
+
+    bool GlobalAppearanceViewModel::_DispatchAppearanceAction(const AppearanceAction& action)
+    {
+        if (action.write)
+        {
+            const auto value = action.invert ? !action.value : action.value;
+            _WriteAppearanceValue(action.property, value);
+            return action.value;
+        }
+
+        const auto value = _ReadAppearanceValue(action.property);
+        return action.invert ? !value : value;
+    }
+
+    bool GlobalAppearanceViewModel::_ReadAppearanceValue(const std::wstring_view property)
+    {
+        if (property == L"DisableAnimations")
+        {
+            return _GlobalSettings.DisableAnimations();
+        }
+        if (property == L"ShowTabsInTitlebar")
+        {
+            return ShowTabsInTitlebar();
+        }
+        if (property == L"AlwaysShowTabs")
+        {
+            return AlwaysShowTabs();
+        }
+        return false;
+    }
+
+    void GlobalAppearanceViewModel::_WriteAppearanceValue(const std::wstring_view property, const bool value)
+    {
+        if (property == L"DisableAnimations")
+        {
+            _GlobalSettings.DisableAnimations(value);
+        }
+        else if (property == L"ShowTabsInTitlebar")
+        {
+            ShowTabsInTitlebar(value);
+        }
+        else if (property == L"AlwaysShowTabs")
+        {
+            AlwaysShowTabs(value);
+        }
     }
 
     void GlobalAppearanceViewModel::ShowTitlebarToggled(const winrt::Windows::Foundation::IInspectable& /* sender */, const RoutedEventArgs& /* args */)
     {
         // Set AlwaysShowTabs to true if ShowTabsInTitlebar was toggled OFF -> ON
-        if (!ShowTabsInTitlebar())
+        if (_DispatchAppearanceAction({ L"ShowTabsInTitlebar", false, false, true }))
         {
-            AlwaysShowTabs(true);
+            _DispatchAppearanceAction({ L"AlwaysShowTabs", true, true, false });
         }
     }
 }
