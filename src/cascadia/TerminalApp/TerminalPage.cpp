@@ -1577,33 +1577,6 @@ namespace winrt::TerminalApp::implementation
         return winrt::to_string(id).starts_with("custom:");
     }
 
-    static std::wstring _CaptureCustomAgentCommands(const GlobalAppSettings& globals)
-    {
-        Json::Value commands{ Json::objectValue };
-        if (AgentPolicy::IsCustomAgentAllowed())
-        {
-            const auto append = [&](const winrt::hstring& command) {
-                if (!command.empty())
-                {
-                    auto id = "custom:" + winrt::to_string(::Microsoft::Terminal::Settings::Model::DeriveCustomAgentId(command));
-                    std::ranges::transform(id, id.begin(), [](const unsigned char ch) { return static_cast<char>(til::tolower_ascii(ch)); });
-                    if (id != "custom:" && !commands.isMember(id))
-                    {
-                        commands[id] = winrt::to_string(command);
-                    }
-                }
-            };
-            for (const auto& command : globals.AcpCustomCommands())
-            {
-                append(command);
-            }
-            append(globals.AcpCustomCommand());
-        }
-        Json::StreamWriterBuilder writer;
-        writer["indentation"] = "";
-        return std::wstring{ winrt::to_hstring(Json::writeString(writer, commands)) };
-    }
-
     bool TerminalPage::_IsBuiltinAgentProviderId(const std::string_view id)
     {
         return std::ranges::any_of(
@@ -2589,7 +2562,6 @@ namespace winrt::TerminalApp::implementation
             snapshot.allowedAgentIds.emplace_back(agent.id);
         }
         snapshot.customAgentsAllowed = AgentPolicy::IsCustomAgentAllowed();
-        snapshot.customAgentCommands = _CaptureCustomAgentCommands(globals);
         return snapshot;
     }
 
@@ -2598,7 +2570,6 @@ namespace winrt::TerminalApp::implementation
         Json::Value identity{ Json::objectValue };
         identity["acp_agent"] = winrt::to_string(winrt::hstring{ snapshot.acpAgent });
         identity["acp_custom_command"] = winrt::to_string(winrt::hstring{ snapshot.acpCustomCommand });
-        identity["custom_agent_commands"] = winrt::to_string(winrt::hstring{ snapshot.customAgentCommands });
         identity["acp_model"] = winrt::to_string(winrt::hstring{ snapshot.acpModel });
         identity["allowed_agent_ids"] = Json::arrayValue;
         for (const auto& id : snapshot.allowedAgentIds)
@@ -2636,8 +2607,7 @@ namespace winrt::TerminalApp::implementation
         const AgentSettingsSnapshot& current)
     {
         if (previous.allowedAgentIds != current.allowedAgentIds ||
-            previous.customAgentsAllowed != current.customAgentsAllowed ||
-            previous.customAgentCommands != current.customAgentCommands)
+            previous.customAgentsAllowed != current.customAgentsAllowed)
         {
             return AgentSettingsChangeKind::RecreatePane;
         }
@@ -4269,7 +4239,6 @@ namespace winrt::TerminalApp::implementation
             pushFlagValue(L"--agent", agentCliPath);
         }
         pushFlagValue(L"--agent-id", globals.EffectiveAcpAgent());
-        pushFlagValue(L"--custom-agent-commands", _CaptureCustomAgentCommands(globals));
         // Pass the GPO-filtered set of allowed agent ids to the master.
         // A per-tab helper declares the agent it wants by *id* over the
         // pipe; the master reconstructs the command from that id only when
@@ -5438,10 +5407,9 @@ namespace winrt::TerminalApp::implementation
         // arbitrary command from pipe metadata, so entering/leaving a custom
         // selection or editing its command requires fresh trusted master args.
         const bool customMasterArgsChanged =
-            _lastAgentSettings.customAgentCommands != current.customAgentCommands ||
-            ((til::starts_with(_lastAgentSettings.acpAgent, L"custom:") || til::starts_with(current.acpAgent, L"custom:")) &&
-             (_lastAgentSettings.acpAgent != current.acpAgent ||
-              _lastAgentSettings.acpCustomCommand != current.acpCustomCommand));
+            (til::starts_with(_lastAgentSettings.acpAgent, L"custom:") || til::starts_with(current.acpAgent, L"custom:")) &&
+            (_lastAgentSettings.acpAgent != current.acpAgent ||
+             _lastAgentSettings.acpCustomCommand != current.acpCustomCommand);
         const bool customModelLaunchChanged =
             _lastAgentSettings.customModelLaunch != current.customModelLaunch;
         const bool cloudModelChanged =

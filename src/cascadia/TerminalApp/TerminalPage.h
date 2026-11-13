@@ -543,7 +543,6 @@ namespace winrt::TerminalApp::implementation
             bool agentSessionManagementEnabled{ true };
             std::vector<std::wstring> allowedAgentIds;
             bool customAgentsAllowed{ true };
-            std::wstring customAgentCommands;
         };
         AgentSettingsSnapshot _lastAgentSettings{};
         bool _agentSettingsSnapshotInitialized{ false };

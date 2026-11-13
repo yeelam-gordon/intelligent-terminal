@@ -7,9 +7,6 @@
 
 #include <type_traits>
 #include <utility>
-#include <filesystem>
-#include <set>
-#include "../inc/IntelligentTerminalPaths.h"
 
 using namespace WEX::Logging;
 using namespace WEX::TestExecution;
@@ -130,12 +127,6 @@ namespace TerminalAppUnitTests
         TEST_CLASS(SharedWtaTests);
 
         TEST_METHOD(EmptyLeaseOperationsAreNoOps);
-        TEST_METHOD(CustomAgentCatalogRoundtripsBeyondCommandLineLimit);
-        TEST_METHOD(CustomAgentCatalogCleanupOwnsOnlyItsLaunch);
-        TEST_METHOD(CustomAgentCatalogFailedSpawnCleansUp);
-        TEST_METHOD(CustomAgentCatalogEmptyHasNoFileDependency);
-        TEST_METHOD(CustomAgentCatalogSameArgumentsPreserveHealthyMaster);
-        TEST_METHOD(CustomAgentCatalogUnexpectedExitCleansUp);
         TEST_METHOD(FailedAcquireDoesNotOwnReferences);
         TEST_METHOD(KeepRunningLeaseDoesNotSpawnMaster);
         TEST_METHOD(KeepRunningLeaseOutlivesLastPane);
@@ -201,103 +192,6 @@ namespace TerminalAppUnitTests
             return owner._AcquireLeaseLocked();
         }
     };
-
-    void SharedWtaTests::CustomAgentCatalogRoundtripsBeyondCommandLineLimit()
-    {
-        const auto json = std::wstring{ L"{\"custom:test\":\"agent --acp " } + std::wstring(40000, L'\u4E2D') + L"\"}";
-        auto file = details::CreateCustomAgentCommandsFile(json);
-        const auto expected = winrt::to_string(json);
-        wil::unique_hfile reader{ CreateFileW(file.path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr) };
-        VERIFY_IS_TRUE(reader.is_valid());
-        std::string actual(expected.size(), '\0');
-        DWORD read = 0;
-        VERIFY_IS_TRUE(ReadFile(reader.get(), actual.data(), static_cast<DWORD>(actual.size()), &read, nullptr));
-        VERIFY_ARE_EQUAL(expected.size(), static_cast<size_t>(read));
-        VERIFY_ARE_EQUAL(expected, actual);
-        reader.reset();
-        file.handle.reset();
-        VERIFY_IS_FALSE(std::filesystem::exists(file.path));
-    }
-
-    void SharedWtaTests::CustomAgentCatalogCleanupOwnsOnlyItsLaunch()
-    {
-        auto first = details::CreateCustomAgentCommandsFile(L"{\"custom:test\":\"agent --acp\"}");
-        auto next = details::CreateCustomAgentCommandsFile(L"{\"custom:test\":\"agent --acp\"}");
-        VERIFY_ARE_NOT_EQUAL(first.path, next.path);
-        SharedWta owner;
-        owner._customAgentCommandsFile = std::move(first.handle);
-        owner._CleanupLocked();
-        VERIFY_IS_FALSE(std::filesystem::exists(first.path));
-        VERIFY_IS_TRUE(std::filesystem::exists(next.path));
-        owner._customAgentCommandsFile = std::move(next.handle);
-        owner._CleanupLocked();
-        VERIFY_IS_FALSE(std::filesystem::exists(next.path));
-    }
-
-    void SharedWtaTests::CustomAgentCatalogFailedSpawnCleansUp()
-    {
-        const auto catalogs = []() {
-            std::set<std::wstring> paths;
-            for (const auto& entry : std::filesystem::directory_iterator(::IntelligentTerminal::LogDir().parent_path()))
-            {
-                if (entry.path().filename().wstring().starts_with(L"wta-custom-agent-commands-"))
-                {
-                    paths.insert(entry.path().wstring());
-                }
-            }
-            return paths;
-        };
-        auto existing = details::CreateCustomAgentCommandsFile(L"{\"custom:test\":\"agent --acp\"}");
-        const auto before = catalogs();
-        SharedWta owner;
-        const std::vector<std::wstring> args{ L"--custom-agent-commands", std::wstring{ L"{\"custom:test\":\"" } + std::wstring(40000, L'x') + L"\"}" };
-        VERIFY_IS_FALSE(owner._SpawnLocked(existing.path + L"\\wta.exe", args, {}));
-        VERIFY_IS_TRUE(before == catalogs());
-        VERIFY_IS_FALSE(owner._customAgentCommandsFile.is_valid());
-    }
-
-    void SharedWtaTests::CustomAgentCatalogEmptyHasNoFileDependency()
-    {
-        const auto file = details::CreateCustomAgentCommandsFile(L"{}");
-        VERIFY_IS_TRUE(file.path.empty());
-        VERIFY_IS_FALSE(file.handle.is_valid());
-    }
-
-    void SharedWtaTests::CustomAgentCatalogSameArgumentsPreserveHealthyMaster()
-    {
-        const std::vector<std::wstring> args{ L"--custom-agent-commands", L"{\"custom:test\":\"agent --acp\"}" };
-        auto file = details::CreateCustomAgentCommandsFile(args[1]);
-        const auto handle = file.handle.get();
-        SharedWta owner;
-        owner._process.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-        VERIFY_IS_TRUE(owner._process.is_valid());
-        const auto process = owner._process.get();
-        owner._customAgentCommandsFile = std::move(file.handle);
-        owner._cachedWtaPath = L"wta.exe";
-        owner._cachedExtraArgs = args;
-        for (size_t i = 0; i < 2; ++i)
-        {
-            VERIFY_IS_TRUE(owner.Restart(L"wta.exe", args, {}));
-            VERIFY_ARE_EQUAL(process, owner._process.get());
-            VERIFY_ARE_EQUAL(handle, owner._customAgentCommandsFile.get());
-            VERIFY_IS_TRUE(owner._cachedExtraArgs == args);
-        }
-        owner._CleanupLocked();
-        VERIFY_IS_FALSE(std::filesystem::exists(file.path));
-    }
-
-    void SharedWtaTests::CustomAgentCatalogUnexpectedExitCleansUp()
-    {
-        auto file = details::CreateCustomAgentCommandsFile(L"{\"custom:test\":\"agent --acp\"}");
-        SharedWta owner;
-        owner._customAgentCommandsFile = std::move(file.handle);
-        owner._process.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-        VERIFY_IS_TRUE(owner._process.is_valid());
-        const auto generation = owner._waitGeneration.Register(123);
-        owner._OnProcessExited(generation);
-        VERIFY_IS_FALSE(owner._process.is_valid());
-        VERIFY_IS_FALSE(std::filesystem::exists(file.path));
-    }
 
     void SharedWtaTests::EmptyLeaseOperationsAreNoOps()
     {

@@ -79,12 +79,17 @@ Custom agents arrive as a resolved `--agent` command plus their canonical
 `custom:<name>` ID. Do not re-parse a known ID from an adapter command when the
 host supplied `--agent-id`.
 
-The host passes nonempty custom-provider history catalogs through a unique
-`--custom-agent-commands-file` UTF-8 JSON handoff in the shared runtime cache,
-not the size-limited Windows command line. The host owns its delete-on-close
-handle through launch failure, master exit, and restart; each launch gets a
-fresh file. WTA reads it before validating the existing catalog format. The
-inline `--custom-agent-commands` form remains available for CLI compatibility.
+Custom ACP history discovery reads the master's own host channel through
+`wtcli get-settings --custom-acp-commands`. This local projection uses the
+existing raw settings read and current custom-agent policy; ordinary
+`get-settings` is unchanged. An independent bounded five-second refresh retains
+the last valid catalog on failure and reports a sanitized discovery error.
+Catalog commands never come from helpers or events. Catalog-only edits do not
+restart helpers or the master, retire pooled clients, or alter live session
+routes. Superseded catalog generations cannot commit history or native inference.
+An exact custom selection from trusted master startup argv remains eligible for
+history when no catalog binding exists; it never becomes a discovery entry.
+A current catalog binding takes precedence for shared history.
 
 ## State and routing invariants
 

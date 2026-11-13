@@ -604,7 +604,7 @@ namespace TerminalAppLocalTests
         TEST_METHOD(NativeAgentSessionsOffStatusIsPaneLocal);
         TEST_METHOD(NativeAgentSessionsOnPublishesProgressForHookOwner);
         TEST_METHOD(CustomNativeAgentsUseHooklessStatusInBothModes);
-        TEST_METHOD(CustomAgentHistoryCommandsUseTrustedMasterArguments);
+        TEST_METHOD(CustomAgentCatalogEditsPreserveExistingAgentPane);
         TEST_METHOD(NativeAgentProgressFollowsConfirmedOwner);
         TEST_METHOD(NativeAgentAcceptedOwnerSurvivesUnreadyReceiver);
         TEST_METHOD(NativeAgentSessionsOffObservesParsedSignals);
@@ -25984,30 +25984,36 @@ namespace TerminalAppLocalTests
         }
     }
 
-    void TabTests::CustomAgentHistoryCommandsUseTrustedMasterArguments()
+    void TabTests::CustomAgentCatalogEditsPreserveExistingAgentPane()
     {
-        auto page = _commonSetup(nullptr, nullptr, std::nullopt, true);
+        auto page = _commonSetup();
         const auto cleanup = wil::scope_exit([&]() { RunOnUIThread([&]() { page = nullptr; }); });
         TestOnUIThread([&]() {
             const auto globals = page->_settings.GlobalSettings();
-            globals.AcpCustomCommands(winrt::single_threaded_vector<winrt::hstring>({ L"qwen --acp" }));
-            globals.AcpCustomCommand(L"kimi acp");
-            globals.DelegateCustomCommands(winrt::single_threaded_vector<winrt::hstring>({ L"native-only --interactive" }));
-            auto before = page->_CaptureAgentSettingsSnapshot();
-            const auto arguments = page->_BuildSharedWtaExtraArgs([]() { return winrt::hstring{ L"copilot --acp" }; });
-            const auto flag = std::find(arguments.begin(), arguments.end(), L"--custom-agent-commands");
-            VERIFY_IS_TRUE(flag != arguments.end() && std::next(flag) != arguments.end());
-            Json::Value catalog;
-            Json::CharReaderBuilder builder;
-            std::istringstream stream{ winrt::to_string(winrt::hstring{ *std::next(flag) }) };
-            std::string errors;
-            VERIFY_IS_TRUE(Json::parseFromStream(builder, stream, &catalog, &errors));
-            VERIFY_ARE_EQUAL(std::string{ "qwen --acp" }, catalog["custom:qwen"].asString());
-            VERIFY_ARE_EQUAL(std::string{ "kimi acp" }, catalog["custom:kimi"].asString());
-            VERIFY_ARE_EQUAL(Json::ArrayIndex{ 2 }, catalog.size());
-            globals.AcpCustomCommands(winrt::single_threaded_vector<winrt::hstring>({ L"qwen --acp --changed" }));
-            VERIFY_IS_TRUE(page->_ClassifyAgentSettingsChange(before, page->_CaptureAgentSettingsSnapshot()) ==
-                           winrt::TerminalApp::implementation::TerminalPage::AgentSettingsChangeKind::RecreatePane);
+            const auto tab = page->_GetFocusedTabImpl();
+            auto pane = page->_WrapInAgentPaneContent(page->_MakePane(nullptr, nullptr, nullptr));
+            pane->IsAgentPane(true);
+            page->_SplitPane(tab, SplitDirection::Left, 0.5f, pane);
+            const auto content = tab->FindAgentPaneContent();
+            const auto impl = winrt::get_self<winrt::TerminalApp::implementation::AgentPaneContent>(content);
+            impl->SetAgentSessionId(L"preserved-acp-session");
+            const auto transferId = impl->TransferId();
+            for (const auto selected : { L"copilot", L"custom:existing" })
+            {
+                globals.AcpAgent(selected);
+                globals.AcpCustomCommand(L"existing --acp");
+                page->_lastAgentSettings = page->_CaptureAgentSettingsSnapshot();
+                page->_agentSettingsSnapshotInitialized = true;
+                for (const auto command : { L"qwen --acp", L"qwen --acp --changed", L"" })
+                {
+                    globals.AcpCustomCommands(winrt::single_threaded_vector<winrt::hstring>({ command }));
+                    page->_ReconcileAgentSettings();
+                    VERIFY_IS_TRUE(tab->FindAgentPaneContent() == content);
+                    VERIFY_ARE_EQUAL(transferId, impl->TransferId());
+                    VERIFY_IS_TRUE(impl->AgentSessionId() == L"preserved-acp-session");
+                    VERIFY_IS_FALSE(page->_agentLifecycleOperationInProgress);
+                }
+            }
         });
     }
 

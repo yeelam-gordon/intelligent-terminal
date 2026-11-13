@@ -132,19 +132,6 @@ pub(crate) struct Cli {
     #[arg(long, hide = true)]
     pub(crate) no_session_management: bool,
 
-    /// Host-approved ACP commands for custom-provider history discovery.
-    #[arg(long, hide = true)]
-    pub(crate) custom_agent_commands: Option<String>,
-
-    /// Launch-owned UTF-8 catalog supplied only by the trusted host.
-    #[arg(
-        long,
-        hide = true,
-        requires = "master",
-        conflicts_with = "custom_agent_commands"
-    )]
-    pub(crate) custom_agent_commands_file: Option<std::path::PathBuf>,
-
     /// Ask supported providers to enable their advertised ACP session Yolo mode.
     /// Hidden because Terminal owns this setting.
     #[arg(long, hide = true)]

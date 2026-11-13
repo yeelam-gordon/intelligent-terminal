@@ -24,35 +24,6 @@ namespace
 
 namespace winrt::TerminalApp::implementation::details
 {
-    CustomAgentCommandsFile CreateCustomAgentCommandsFile(const std::wstring_view json)
-    {
-        if (json == L"{}")
-        {
-            return {};
-        }
-        const auto cache = ::IntelligentTerminal::LogDir().parent_path();
-        THROW_HR_IF(E_UNEXPECTED, cache.empty());
-        std::filesystem::create_directories(cache);
-        GUID guid{};
-        THROW_IF_FAILED(CoCreateGuid(&guid));
-        wchar_t guidText[40]{};
-        THROW_HR_IF(E_FAIL, StringFromGUID2(guid, guidText, ARRAYSIZE(guidText)) == 0);
-        const auto path = cache / (std::wstring{ L"wta-custom-agent-commands-" } + guidText + L".json");
-        CustomAgentCommandsFile file{ path.wstring(), wil::unique_hfile{ CreateFileW(path.c_str(), GENERIC_WRITE | DELETE, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr) } };
-        THROW_LAST_ERROR_IF(!file.handle);
-        const auto utf8 = winrt::to_string(json);
-        size_t offset = 0;
-        while (offset < utf8.size())
-        {
-            DWORD written = 0;
-            const auto count = static_cast<DWORD>(std::min<size_t>(utf8.size() - offset, MAXDWORD));
-            THROW_IF_WIN32_BOOL_FALSE(WriteFile(file.handle.get(), utf8.data() + offset, count, &written, nullptr));
-            THROW_HR_IF(E_FAIL, written == 0);
-            offset += written;
-        }
-        return file;
-    }
-
     uint64_t LiveObjectGenerationTracker::Get(const winrt::Windows::Foundation::IInspectable& object)
     {
         std::lock_guard lock{ _mutex };
@@ -975,38 +946,6 @@ namespace winrt::TerminalApp::implementation
         std::span<const std::pair<std::wstring, std::wstring>> environment,
         const bool armUnexpectedExitRecovery)
     {
-        // Keep the full trusted JSON in the restart cache, but never put the
-        // unbounded catalog on CreateProcessW's size-limited command line.
-        details::CustomAgentCommandsFile customAgentCommandsFile;
-        std::vector<std::wstring> launchArgs{ extraArgs.begin(), extraArgs.end() };
-        for (size_t i = 0; i < launchArgs.size(); ++i)
-        {
-            if (launchArgs[i] == L"--custom-agent-commands")
-            {
-                if (i + 1 == launchArgs.size())
-                {
-                    LOG_HR_MSG(E_INVALIDARG, "Missing WTA custom agent startup catalog");
-                    return false;
-                }
-                try
-                {
-                    customAgentCommandsFile = details::CreateCustomAgentCommandsFile(launchArgs[i + 1]);
-                }
-                catch (...)
-                {
-                    LOG_HR_MSG(wil::ResultFromCaughtException(), "Could not create WTA custom agent startup handoff");
-                    return false;
-                }
-                if (!customAgentCommandsFile.handle)
-                {
-                    launchArgs.erase(launchArgs.begin() + i, launchArgs.begin() + i + 2);
-                    break;
-                }
-                launchArgs[i] = L"--custom-agent-commands-file";
-                launchArgs[++i] = customAgentCommandsFile.path;
-            }
-        }
-
         // Lazily allocate the master pipe name once per process. We
         // intentionally keep it across master respawns: helpers
         // spawned earlier may still hold the original pipe path on
@@ -1045,7 +984,7 @@ namespace winrt::TerminalApp::implementation
         // element is escaped here via QuoteAndEscapeCommandlineArg
         // so callers don't have to think about quoting.
         size_t argsBudget = 0;
-        for (const auto& a : launchArgs)
+        for (const auto& a : extraArgs)
         {
             // +3 covers leading space and the two surrounding quotes
             // that QuoteAndEscapeCommandlineArg always emits.
@@ -1058,7 +997,7 @@ namespace winrt::TerminalApp::implementation
         commandline.append(L"\" --master \"");
         commandline.append(_masterPipeName);
         commandline.append(L"\"");
-        for (const auto& arg : launchArgs)
+        for (const auto& arg : extraArgs)
         {
             // Skip empty values defensively — callers shouldn't push
             // them, but if a settings string is empty we'd otherwise
@@ -1203,7 +1142,6 @@ namespace winrt::TerminalApp::implementation
         _process = std::move(process);
         _job = std::move(job);
         _shutdownEvent = std::move(shutdownEvent);
-        _customAgentCommandsFile = std::move(customAgentCommandsFile.handle);
         _serviceRequested = true;
         _pid = pid;
         _masterGeneration = receiverGeneration;
@@ -1239,7 +1177,6 @@ namespace winrt::TerminalApp::implementation
         auto process = std::move(_process);
         _job.reset();
         _shutdownEvent.reset();
-        _customAgentCommandsFile.reset();
         if (_waitHandle)
         {
             // Invalidate before the non-blocking unregister. A queued
@@ -1300,7 +1237,6 @@ namespace winrt::TerminalApp::implementation
         _agentPaneLog("wta-master exited unexpectedly pid=" + std::to_string(*observedPid) + " (crash/OOM/external kill — observed by wait callback)");
         _job.reset();
         _shutdownEvent.reset();
-        _customAgentCommandsFile.reset();
         _process.reset();
         if (_waitHandle)
         {
