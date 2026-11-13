@@ -667,6 +667,8 @@ struct MasterStateInner {
     /// so a rejected/unknown helper request safely falls back to it.
     pub(crate) default_agent_cmd: String,
     pub(crate) default_agent_id: Option<String>,
+    /// Trusted launch-time commands, never commands supplied by helpers or WT events.
+    custom_agent_commands: HashMap<String, String>,
     /// Allowlist of agent ids a helper may select over the pipe, from the
     /// host's GPO-filtered set (`--allowed-agent-ids`). `None` = the flag was
     /// absent (manual runs / older hosts): any *known* agent id is accepted.
@@ -5111,6 +5113,7 @@ async fn run_master_loop(config: MasterConfig, pipe_name: String) -> Result<()> 
         custom_model_generations: Mutex::new(HashMap::new()),
         default_agent_cmd: config.agent.clone(),
         default_agent_id: config.agent_id.clone(),
+        custom_agent_commands: config.custom_agent_commands,
         allowed_agent_ids,
         helper_meta: Mutex::new(HashMap::new()),
         tab_ownership_gate: Mutex::new(()),
@@ -7906,6 +7909,14 @@ async fn refresh_host_history_agents(state: &Arc<MasterStateInner>, agent_ids: &
     .await
 }
 
+fn host_history_agent_command(state: &MasterStateInner, agent_id: &str) -> String {
+    state
+        .custom_agent_commands
+        .get(agent_id)
+        .cloned()
+        .unwrap_or_else(|| crate::agent_registry::build_acp_command(agent_id, None))
+}
+
 async fn refresh_host_history_agents_with<F, Fut>(
     state: &Arc<MasterStateInner>,
     agent_ids: &[&str],
@@ -7917,7 +7928,7 @@ where
 {
     let initialize = &initialize;
     let results = futures::future::join_all(agent_ids.iter().map(|&agent_id| async move {
-        let command = crate::agent_registry::build_acp_command(agent_id, None);
+        let command = host_history_agent_command(state, agent_id);
         let key = agent_cmd_key(
             &command,
             Some(agent_id),
@@ -8073,11 +8084,15 @@ fn request_host_history_discovery(state: &Arc<MasterStateInner>) {
             .await;
             match discovery {
                 Ok(agent_ids) => {
+                    let agent_ids: Vec<&str> = agent_ids
+                        .into_iter()
+                        .chain(state.custom_agent_commands.keys().map(String::as_str))
+                        .collect();
                     let eligible_keys: HashSet<_> = agent_ids
                         .iter()
                         .map(|id| {
                             agent_cmd_key(
-                                &crate::agent_registry::build_acp_command(id, None),
+                                &host_history_agent_command(&state, id),
                                 Some(id),
                                 &crate::agent_source::AgentSource::Host,
                             )

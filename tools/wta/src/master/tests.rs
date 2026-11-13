@@ -3067,6 +3067,7 @@ fn make_state_with_retirement_pending_timeout(
         custom_model_generations: Mutex::new(HashMap::new()),
         default_agent_cmd: "copilot --acp --stdio".to_string(),
         default_agent_id: Some("copilot".to_string()),
+        custom_agent_commands: HashMap::new(),
         allowed_agent_ids: None,
         helper_meta: Mutex::new(HashMap::new()),
         tab_ownership_gate: Mutex::new(()),
@@ -14617,6 +14618,7 @@ fn make_state_with_wt(wt: Arc<dyn crate::shell::wt_channel::WtChannel>) -> Arc<M
         custom_model_generations: Mutex::new(HashMap::new()),
         default_agent_cmd: "copilot --acp --stdio".to_string(),
         default_agent_id: Some("copilot".to_string()),
+        custom_agent_commands: HashMap::new(),
         allowed_agent_ids: None,
         helper_meta: Mutex::new(HashMap::new()),
         tab_ownership_gate: Mutex::new(()),
@@ -19192,6 +19194,84 @@ async fn untitled_history_filter_prunes_explicit_rejections_from_partial_listing
                     "partial listing and ownership guards must preserve: {id}"
                 );
             }
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn custom_native_history_uses_trusted_command_without_an_agent_pane() {
+    use crate::agent_sessions::AgentStatus;
+    let _capture = crate::wt_protocol_events::capture_test_published_events();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut state = make_state();
+            let provider = "custom:qwen";
+            let command = "qwen --acp";
+            Arc::get_mut(&mut state)
+                .unwrap()
+                .custom_agent_commands
+                .insert(provider.into(), command.into());
+            Arc::get_mut(&mut state)
+                .unwrap()
+                .native_observation_receiver_generation = Some(7);
+            handle_master_wt_event(
+                &state,
+                serde_json::json!({"method":"wt_listener_ready","params":{}}),
+            )
+            .await;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let pane = "00112233-4455-6677-8899-aabbccddeeff";
+            handle_master_wt_event(
+                &state,
+                serde_json::json!({"method":"native_agent_observation","params":{
+                    "pane_id":pane,"provider_id":provider,"window_id":7,"tab_id":"native",
+                    "mode_epoch":1,"kind":"reset","tracking_enabled":false,"location":"Host",
+                    "pane_created_at_ms":now-1000,"pane_creation_sequence":42,"receiver_generation":7
+                }}),
+            )
+            .await;
+            assert_eq!(state.registry.native_pane_observations().await.len(), 1);
+            let activity =
+                time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(now - 500) * 1_000_000)
+                    .unwrap()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap();
+            let mut agent = listing_agent_with_cli(None, &[]);
+            let inner = Arc::get_mut(&mut agent).unwrap();
+            inner.resolved_agent_id = provider.into();
+            inner.cmd_key = agent_cmd_key(
+                command,
+                Some(provider),
+                &crate::agent_source::AgentSource::Host,
+            );
+            inner.history_refresh.gate.lock().await.query =
+                history::HistoryQuery::mock(client_connection_to_listing_agent_with_cursor(
+                    vec!["fresh-custom".into()],
+                    Some(activity),
+                    None,
+                ));
+            assert!(
+                refresh_host_history_agents_with(&state, &[provider], |resolved, id| {
+                    assert_eq!(resolved, command);
+                    assert_eq!(id, provider);
+                    std::future::ready(Ok(Arc::clone(&agent)))
+                })
+                .await
+            );
+            let native = state.registry.native_pane_observations().await.remove(0);
+            assert_eq!(
+                native.inferred_agent_session_id.as_deref(),
+                Some("fresh-custom")
+            );
+            assert!(native.agent_session_id.is_none());
+            let history = state.registry.lookup(&"fresh-custom".into()).await.unwrap();
+            assert_eq!(history.provider_id.as_deref(), Some(provider));
+            assert_eq!(history.status, Some(AgentStatus::Historical));
+            assert!(history.pane_session_id.is_none());
+            assert!(state.session_to_helper.lock().await.is_empty());
         })
         .await;
 }

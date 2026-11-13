@@ -675,6 +675,49 @@ fn master_session_management_reconciliation_defaults_on_and_can_be_disabled() {
     assert!(disabled.no_session_management);
 }
 
+#[test]
+fn custom_history_commands_are_host_supplied_and_independent_of_hook_management() {
+    for sessions_off in [false, true] {
+        let mut args = vec![
+            "wta",
+            "--master",
+            r"\\.\pipe\m",
+            "--custom-agent-commands",
+            r#"{"custom:Qwen":"qwen --acp","custom:kimi":"kimi acp"}"#,
+        ];
+        if sessions_off {
+            args.push("--no-session-management");
+        }
+        let config = crate::master_config(Cli::try_parse_from(args).unwrap()).unwrap();
+        let commands = config.custom_agent_commands;
+        assert_eq!(commands["custom:qwen"], "qwen --acp");
+        assert_eq!(commands["custom:kimi"], "kimi acp");
+    }
+    for invalid in [
+        "invalid JSON",
+        "[]",
+        r#"{"custom:qwen":42}"#,
+        r#"{"copilot":"unapproved command"}"#,
+        r#"{"custom:":"empty identity"}"#,
+        r#"{"custom: test":"spaced identity"}"#,
+        r#"{"custom:test":""}"#,
+        r#"{"custom:test":"   "}"#,
+        r#"{"custom:test":"bad\u0000command"}"#,
+        r#"{"custom:Test":"first","custom:test":"second"}"#,
+    ] {
+        let cli = Cli::try_parse_from([
+            "wta",
+            "--master",
+            r"\\.\pipe\m",
+            "--custom-agent-commands",
+            invalid,
+        ])
+        .unwrap();
+        let error = crate::master_config(cli).unwrap_err().to_string();
+        assert!(!error.contains(invalid), "configuration must not be echoed");
+    }
+}
+
 // ── json_str_or_num: tolerant scalar extraction for human table rows ─────────
 
 #[test]

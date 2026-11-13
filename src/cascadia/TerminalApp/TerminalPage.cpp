@@ -30,6 +30,7 @@
 #include "../inc/AgentRegistry.h"
 #include "../inc/AgentIconUtils.h"
 #include "../inc/AgentProfileUtils.h"
+#include "../inc/CustomAgentId.h"
 #include "../inc/NewTabMenuUtils.h"
 #include "../inc/AgentPolicy.h"
 #include "../inc/AgentPaneBackend.h"
@@ -1576,6 +1577,33 @@ namespace winrt::TerminalApp::implementation
         return winrt::to_string(id).starts_with("custom:");
     }
 
+    static std::wstring _CaptureCustomAgentCommands(const GlobalAppSettings& globals)
+    {
+        Json::Value commands{ Json::objectValue };
+        if (AgentPolicy::IsCustomAgentAllowed())
+        {
+            const auto append = [&](const winrt::hstring& command) {
+                if (!command.empty())
+                {
+                    auto id = "custom:" + winrt::to_string(::Microsoft::Terminal::Settings::Model::DeriveCustomAgentId(command));
+                    std::ranges::transform(id, id.begin(), [](const unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                    if (id != "custom:" && !commands.isMember(id))
+                    {
+                        commands[id] = winrt::to_string(command);
+                    }
+                }
+            };
+            for (const auto& command : globals.AcpCustomCommands())
+            {
+                append(command);
+            }
+            append(globals.AcpCustomCommand());
+        }
+        Json::StreamWriterBuilder writer;
+        writer["indentation"] = "";
+        return std::wstring{ winrt::to_hstring(Json::writeString(writer, commands)) };
+    }
+
     bool TerminalPage::_IsBuiltinAgentProviderId(const std::string_view id)
     {
         return std::ranges::any_of(
@@ -2561,6 +2589,7 @@ namespace winrt::TerminalApp::implementation
             snapshot.allowedAgentIds.emplace_back(agent.id);
         }
         snapshot.customAgentsAllowed = AgentPolicy::IsCustomAgentAllowed();
+        snapshot.customAgentCommands = _CaptureCustomAgentCommands(globals);
         return snapshot;
     }
 
@@ -2569,6 +2598,7 @@ namespace winrt::TerminalApp::implementation
         Json::Value identity{ Json::objectValue };
         identity["acp_agent"] = winrt::to_string(winrt::hstring{ snapshot.acpAgent });
         identity["acp_custom_command"] = winrt::to_string(winrt::hstring{ snapshot.acpCustomCommand });
+        identity["custom_agent_commands"] = winrt::to_string(winrt::hstring{ snapshot.customAgentCommands });
         identity["acp_model"] = winrt::to_string(winrt::hstring{ snapshot.acpModel });
         identity["allowed_agent_ids"] = Json::arrayValue;
         for (const auto& id : snapshot.allowedAgentIds)
@@ -2606,7 +2636,8 @@ namespace winrt::TerminalApp::implementation
         const AgentSettingsSnapshot& current)
     {
         if (previous.allowedAgentIds != current.allowedAgentIds ||
-            previous.customAgentsAllowed != current.customAgentsAllowed)
+            previous.customAgentsAllowed != current.customAgentsAllowed ||
+            previous.customAgentCommands != current.customAgentCommands)
         {
             return AgentSettingsChangeKind::RecreatePane;
         }
@@ -3335,7 +3366,8 @@ namespace winrt::TerminalApp::implementation
         }
 
         if (const auto paneSessionId = _TryParsePaneSessionId(paneId);
-            paneSessionId && _settings.GlobalSettings().EffectiveAgentSessionManagementEnabled())
+            paneSessionId && _settings.GlobalSettings().EffectiveAgentSessionManagementEnabled() &&
+            winrt::get_self<ContentManager>(_manager)->AcceptsAgentSessionEvents(*paneSessionId))
         {
             _pendingRestoredSessionBindings.erase(*paneSessionId);
             // A CLI that exited on its own leaves nothing to resume. One that
@@ -4237,6 +4269,7 @@ namespace winrt::TerminalApp::implementation
             pushFlagValue(L"--agent", agentCliPath);
         }
         pushFlagValue(L"--agent-id", globals.EffectiveAcpAgent());
+        pushFlagValue(L"--custom-agent-commands", _CaptureCustomAgentCommands(globals));
         // Pass the GPO-filtered set of allowed agent ids to the master.
         // A per-tab helper declares the agent it wants by *id* over the
         // pipe; the master reconstructs the command from that id only when
@@ -5405,9 +5438,10 @@ namespace winrt::TerminalApp::implementation
         // arbitrary command from pipe metadata, so entering/leaving a custom
         // selection or editing its command requires fresh trusted master args.
         const bool customMasterArgsChanged =
-            (til::starts_with(_lastAgentSettings.acpAgent, L"custom:") || til::starts_with(current.acpAgent, L"custom:")) &&
-            (_lastAgentSettings.acpAgent != current.acpAgent ||
-             _lastAgentSettings.acpCustomCommand != current.acpCustomCommand);
+            _lastAgentSettings.customAgentCommands != current.customAgentCommands ||
+            ((til::starts_with(_lastAgentSettings.acpAgent, L"custom:") || til::starts_with(current.acpAgent, L"custom:")) &&
+             (_lastAgentSettings.acpAgent != current.acpAgent ||
+              _lastAgentSettings.acpCustomCommand != current.acpCustomCommand));
         const bool customModelLaunchChanged =
             _lastAgentSettings.customModelLaunch != current.customModelLaunch;
         const bool cloudModelChanged =
@@ -12997,8 +13031,7 @@ namespace winrt::TerminalApp::implementation
             return;
         }
         if (control.ConnectionState() != ConnectionState::Connected &&
-            (_settings.GlobalSettings().EffectiveAgentSessionManagementEnabled() ||
-             winrt::get_self<ContentManager>(_manager)->NativeAgentProviderId(control.ContentId()).empty()))
+            !winrt::get_self<ContentManager>(_manager)->UsesNativeAgentFallback(control.ContentId()))
         {
             return;
         }
@@ -13363,10 +13396,6 @@ namespace winrt::TerminalApp::implementation
                 _ReplayRestoredSessionBindings(tab, /*helperSubscribed*/ false);
             }
         }
-        if (_settings.GlobalSettings().EffectiveAgentSessionManagementEnabled() && !replacement)
-        {
-            return;
-        }
         for (const auto& runtimeTab : _RuntimeTabs())
         {
             if (const auto tab = _GetTabImpl(runtimeTab); tab && tab->GetRootPane())
@@ -13375,6 +13404,11 @@ namespace winrt::TerminalApp::implementation
                     if (const auto control = pane->GetTerminalControl())
                     {
                         const auto manager = winrt::get_self<ContentManager>(_manager);
+                        if (!replacement && _settings.GlobalSettings().EffectiveAgentSessionManagementEnabled() &&
+                            !manager->UsesNativeAgentFallback(control.ContentId()))
+                        {
+                            return false;
+                        }
                         const auto identity = manager->NativeAgentObservationForContent(control.ContentId());
                         const auto paneId = _TryParsePaneSessionId(_FindSessionIdForControl(control));
                         if (!replacement && identity && paneId)
@@ -13394,7 +13428,7 @@ namespace winrt::TerminalApp::implementation
                         }
                         if (replacement)
                         {
-                            if (_settings.GlobalSettings().EffectiveAgentSessionManagementEnabled())
+                            if (!manager->UsesNativeAgentFallback(control.ContentId()))
                             {
                                 _PublishNativeAgentObservation(control, "reset", true, std::nullopt, true);
                             }
@@ -13434,7 +13468,8 @@ namespace winrt::TerminalApp::implementation
         }
         const auto previous = manager->NativeAgentObservationForContent(control.ContentId());
         const auto paneSessionId = _TryParsePaneSessionId(paneId);
-        const auto enabled = _settings.GlobalSettings().EffectiveAgentSessionManagementEnabled();
+        const auto enabled = _settings.GlobalSettings().EffectiveAgentSessionManagementEnabled() &&
+                             !manager->UsesNativeAgentFallback(control.ContentId());
         std::string agentSessionId;
         std::string source;
         bool explicitBinding = false;
@@ -13611,7 +13646,8 @@ namespace winrt::TerminalApp::implementation
     void TerminalPage::_PublishNativeAgentSignal(const TermControl& control, const bool attention, const uint64_t progressState)
     {
         _SyncNativeAgentStatusMode();
-        if (!_lastEffectiveAgentSessionManagementEnabled.value() || !attention)
+        if (!_lastEffectiveAgentSessionManagementEnabled.value() || !attention ||
+            winrt::get_self<ContentManager>(_manager)->UsesNativeAgentFallback(control.ContentId()))
         {
             _PublishNativeAgentObservation(control, attention ? "bell" : "progress", false, progressState);
         }
@@ -13654,7 +13690,8 @@ namespace winrt::TerminalApp::implementation
         {
             return std::nullopt;
         }
-        if (!_settings.GlobalSettings().EffectiveAgentSessionManagementEnabled())
+        if (!_settings.GlobalSettings().EffectiveAgentSessionManagementEnabled() ||
+            winrt::get_self<ContentManager>(_manager)->UsesNativeAgentFallback(control.ContentId()))
         {
             const auto identity = winrt::get_self<ContentManager>(_manager)->NativeAgentObservationForContent(control.ContentId());
             if (identity)
@@ -15184,8 +15221,7 @@ namespace winrt::TerminalApp::implementation
                                 }
                                 else
                                 {
-                                    if (page->_settings.GlobalSettings().EffectiveAgentSessionManagementEnabled() ||
-                                        winrt::get_self<ContentManager>(page->_manager)->NativeAgentProviderId(term2.ContentId()).empty())
+                                    if (!winrt::get_self<ContentManager>(page->_manager)->UsesNativeAgentFallback(term2.ContentId()))
                                     {
                                         page->_DetachRichTabControl(term2);
                                     }
@@ -18509,8 +18545,7 @@ namespace winrt::TerminalApp::implementation
         const auto& termControl = paneContent.GetTermControl();
         _SyncNativeAgentStatusMode();
         const auto manager = winrt::get_self<ContentManager>(_manager);
-        const auto nativeFallback = !_settings.GlobalSettings().EffectiveAgentSessionManagementEnabled() &&
-                                    !manager->NativeAgentProviderId(termControl.ContentId()).empty();
+        const auto nativeFallback = manager->UsesNativeAgentFallback(termControl.ContentId());
         std::optional<_PaneAgentSession> resumeBinding;
         std::string resumeLocation;
         const auto oldPaneId = _FindSessionIdForControl(termControl);

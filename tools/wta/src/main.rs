@@ -169,13 +169,21 @@ fn helper_config(cli: Cli) -> helper::config::HelperConfig {
     }
 }
 
-fn master_config(cli: Cli) -> master::config::MasterConfig {
-    master::config::MasterConfig {
+fn master_config(cli: Cli) -> Result<master::config::MasterConfig> {
+    let custom_agent_commands = cli
+        .custom_agent_commands
+        .as_deref()
+        .map(master::config::parse_custom_agent_commands)
+        .transpose()
+        .map_err(anyhow::Error::msg)?
+        .unwrap_or_default();
+    Ok(master::config::MasterConfig {
         agent: cli.agent,
         agent_id: cli.agent_id,
         allowed_agent_ids: cli.allowed_agent_ids,
         session_management_enabled: !cli.no_session_management,
-    }
+        custom_agent_commands,
+    })
 }
 
 #[tokio::main]
@@ -221,7 +229,10 @@ async fn main() -> Result<()> {
         Some(command) => cli::run(command, json_mode).await,
         None => {
             if let Some(pipe_name) = cli.master.clone() {
-                master::run_master_mode(master_config(cli), pipe_name).await
+                match master_config(cli) {
+                    Ok(config) => master::run_master_mode(config, pipe_name).await,
+                    Err(error) => Err(error),
+                }
             } else if let Some(pipe_name) = cli.connect_master.clone() {
                 helper::run_helper_mode(helper_config(cli), pipe_name).await
             } else {
