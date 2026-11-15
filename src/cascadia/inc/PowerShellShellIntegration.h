@@ -1055,7 +1055,7 @@ if (-not $Global:__ShellInteg_Installed -or
     $Global:__ShellInteg_LastErrorRecord = $Global:Error[0]
     $Global:__ShellInteg_LastSubmittedLine = $null
     if (-not $Global:__ShellInteg_Installed -or
-        -not (Get-Variable -Name __ShellInteg_PrevPrompt -Scope Global -ErrorAction Ignore)) {
+        $null -eq (Get-Variable -Name __ShellInteg_PrevPrompt -Scope Global -ValueOnly -ErrorAction Ignore)) {
         $Global:__ShellInteg_PrevPrompt = $legacyDelegate
     }
     $Global:__ShellInteg_Owner = $null

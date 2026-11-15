@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$IntegrationPath,
     [Parameter(Mandatory)]
-    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade', 'StrictFalseInstalledInitialization', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
+    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'LifecycleMissingFallback', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade', 'StrictFalseInstalledInitialization', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
     [string]$Scenario
 )
 
@@ -109,7 +109,7 @@ try {
     if ($Scenario -eq 'Constrained') {
         $ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'
     }
-    if ($Scenario -in @('Lifecycle', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade')) {
+    if ($Scenario -in @('Lifecycle', 'LifecycleMissingFallback', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade')) {
         # Model v14's shared-state delegation and adoption, including its
         # initially empty fallback and absent v15 migration sentinel.
         $Global:__ShellInteg_OriginalPrompt = $function:prompt
@@ -144,9 +144,9 @@ try {
             __ShellInteg_Rearm
             & $Global:__ShellInteg_OriginalPSConsoleHostReadLine @args
         }
-        if ($Scenario -eq 'Lifecycle') {
+        if ($Scenario -eq 'LifecycleMissingFallback') {
             # Retain coverage of older installed state without a fallback
-            # variable; the separate v14 upgrade cases preserve its real null value.
+            # variable; Lifecycle retains v14's normal initialized null value.
             Remove-Variable __ShellInteg_PrevPrompt -Scope Global
         }
     }
@@ -189,7 +189,6 @@ try {
             . $IntegrationPath
         }
         finally { Set-StrictMode -Off }
-        Assert-Equal $Global:__ShellInteg_PrevPrompt $null 'upgrade preserves intentionally empty legacy fallback'
     }
     else { . $IntegrationPath }
     $first = prompt
@@ -222,7 +221,14 @@ try {
             . $IntegrationPath
             Assert-Render (prompt) 'BASE> '
             Assert-Equal $Global:BaseCalls 2 'strict upgrade retains original delegate'
-            Assert-Equal $Global:__ShellInteg_PrevPrompt $null 'repeat source retains empty fallback'
+            function Global:prompt { 'REPLACEMENT> ' }
+            Invoke-ReadBoundary
+            Assert-Render (prompt) 'REPLACEMENT> '
+            Set-Item Function:\global:prompt $legacyWrapper
+            Invoke-ReadBoundary
+            $beforeBase = $Global:BaseCalls
+            Assert-Render (prompt) 'BASE> '
+            Assert-Equal $Global:BaseCalls ($beforeBase + 1) 'saved legacy wrapper retains one base call after strict upgrade'
         }
         FirstStatus {
             Add-History -InputObject ([pscustomobject]@{
@@ -249,7 +255,7 @@ try {
             Assert-Render $failed 'BASE> ' 1 -1
             Assert-Equal $Global:SeenStatus $false 'PowerShell failure reaches original prompt'
         }
-        Lifecycle {
+        { $_ -in @('Lifecycle', 'LifecycleMissingFallback') } {
             Assert-Equal ($null -ne $Global:__ShellInteg_Owner) $true 'upgrade creates ownership identity'
             Assert-Equal (Test-Path Function:\__ShellInteg_NewWrapper) $true 'upgrade installs wrapper factory'
             Invoke-ReadBoundary
@@ -258,7 +264,9 @@ try {
             Assert-Render (prompt) 'UPGRADED> '
             Set-Item Function:\global:prompt $legacyWrapper
             Invoke-ReadBoundary
+            $beforeBase = $Global:BaseCalls
             Assert-Render (prompt) 'BASE> '
+            Assert-Equal $Global:BaseCalls ($beforeBase + 1) 'restored legacy wrapper invokes base once'
             $owner = $Global:__ShellInteg_Owner
             . $IntegrationPath
             Assert-Equal ($Global:__ShellInteg_Owner -eq $owner) $true 'repeat source retains upgraded owner'

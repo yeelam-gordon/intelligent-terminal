@@ -31,7 +31,7 @@ dot-sourcing, late renderer takeover (including StrictMode 2.0/Latest), nested f
 ordinary work-changing chains compared with a no-integration control, once-only calls,
 OSC ordering, first-prompt suppression, v14 shared-state wrapper upgrades
 (including a chain adopted before migration and StrictMode 2.0 enabled before
-upgrade, preserving an intentionally empty legacy fallback),
+upgrade, restoring the saved legacy wrapper with its normal initially null fallback),
 older installed state with no fallback variable,
 noninteractive StrictMode 2.0 initialization with only the Installed guard
 explicitly false, legacy globals absent and no readline function
@@ -42,7 +42,7 @@ existing ConstrainedLanguage manual-recovery baseline. No Python installation
 or product-specific environment heuristic is involved.
 Extraction checks preserve payload bytes across adjacent-comment and structural
 whitespace changes and reject malformed function/initializer/literal boundaries.
-The suite contains 29 cases: seven extraction checks and eleven lifecycle scenarios
+The suite contains 31 cases: seven extraction checks and twelve lifecycle scenarios
 on each of the two required hosts.
 
 ```powershell
