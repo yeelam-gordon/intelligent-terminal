@@ -27,12 +27,15 @@ them in separate `pwsh.exe` 7+ and `powershell.exe` 5.1 children using the share
 `Invoke-Native` timeout/capture helper. Both hosts are required, not silently
 skipped. Generic save/chain/restore fixtures cover repeated environment
 activation, switching and deactivation, old-wrapper restoration, repeated
-dot-sourcing, late renderer takeover (including StrictMode 2.0/Latest), nested failure status, once-only calls,
+dot-sourcing, late renderer takeover (including StrictMode 2.0/Latest), nested failure status,
+ordinary work-changing chains compared with a no-integration control, once-only calls,
 OSC ordering, first-prompt suppression, v14 shared-state wrapper upgrades,
 throwing/empty-renderer and integration
 fail-safe recovery, and the
 existing ConstrainedLanguage manual-recovery baseline. No Python installation
 or product-specific environment heuristic is involved.
+Extraction checks preserve payload bytes across adjacent-comment and structural
+whitespace changes and reject malformed function/initializer/literal boundaries.
 
 ```powershell
 Invoke-Pester test\e2e\tests\Source.PowerShellPromptLifecycle.Tests.ps1

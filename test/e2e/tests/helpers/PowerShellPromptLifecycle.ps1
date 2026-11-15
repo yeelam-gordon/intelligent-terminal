@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$IntegrationPath,
     [Parameter(Mandatory)]
-    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'Chaining', 'Throwing', 'FailSafe', 'Constrained')]
+    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
     [string]$Scenario
 )
 
@@ -61,6 +61,14 @@ function New-ChainedPrompt([string]$Label, [scriptblock]$Saved) {
     }.GetNewClosure()
 }
 
+function New-WorkChangingPrompt([scriptblock]$Saved) {
+    {
+        $Global:ChainCalls++
+        $text = & $Saved
+        "work:${text}"
+    }.GetNewClosure()
+}
+
 function Invoke-ReadBoundary {
     $before = $Global:ReadCalls
     $line = PSConsoleHostReadLine
@@ -69,6 +77,23 @@ function Invoke-ReadBoundary {
 }
 
 try {
+    if ($Scenario -eq 'WorkChangingChain') {
+        $basePrompt = $function:prompt
+        Set-Item Function:\global:prompt (New-WorkChangingPrompt $basePrompt)
+        $Global:LASTEXITCODE = 17
+        Get-Variable '__Lifecycle_Missing__' -ErrorAction Ignore
+        $controlText = prompt
+        $control = @{
+            Text = $controlText; Status = $Global:SeenStatus
+            BaseCalls = $Global:BaseCalls; ChainCalls = $Global:ChainCalls
+            ExitCode = $Global:LASTEXITCODE
+        }
+        Assert-Equal $control.Status $true 'ordinary successful chain work changes failure to success without integration'
+        Assert-Equal $control.Text 'work:BASE> ' 'control invokes equivalent saved base'
+        Set-Item Function:\global:prompt $basePrompt
+        $Global:BaseCalls = 0
+        $Global:ChainCalls = 0
+    }
     if ($Scenario -eq 'HostGate') {
         $env:INTELLIGENT_TERMINAL = '0'
         . $IntegrationPath
@@ -216,6 +241,25 @@ try {
             $output = prompt
             Assert-Render $output 'inner:outer:BASE> '
             Assert-Equal $Global:SeenStatus $true 'nested success is not stale failure'
+        }
+        WorkChangingChain {
+            $saved = $function:prompt
+            Set-Item Function:\global:prompt (New-WorkChangingPrompt $saved)
+            Invoke-ReadBoundary
+            Add-History -InputObject ([pscustomobject]@{
+                CommandLine = 'fixture work-changing failure'; ExecutionStatus = 'Completed'
+                StartExecutionTime = [datetime]::Now; EndExecutionTime = [datetime]::Now
+            })
+            $beforeBase = $Global:BaseCalls
+            $Global:LASTEXITCODE = 17
+            Get-Variable '__Lifecycle_Missing__' -ErrorAction Ignore
+            $output = prompt
+            $seen = $Global:SeenStatus
+            Assert-Render $output $control.Text 1 17
+            Assert-Equal $seen $control.Status 'deepest status matches no-integration control'
+            Assert-Equal ($Global:BaseCalls - $beforeBase) $control.BaseCalls 'base call count matches control'
+            Assert-Equal $Global:ChainCalls $control.ChainCalls 'chain call count matches control'
+            Assert-Equal $Global:LASTEXITCODE $control.ExitCode 'native status matches control'
         }
         Throwing {
             function Global:prompt { $Global:ChainCalls++; throw 'fixture renderer failure' }
