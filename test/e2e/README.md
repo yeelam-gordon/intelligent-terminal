@@ -27,7 +27,7 @@ them in separate `pwsh.exe` 7+ and `powershell.exe` 5.1 children using the share
 `Invoke-Native` timeout/capture helper. Both hosts are required, not silently
 skipped. Generic save/chain/restore fixtures cover repeated environment
 activation, switching and deactivation, old-wrapper restoration, repeated
-dot-sourcing, late renderer takeover, nested failure status, once-only calls,
+dot-sourcing, late renderer takeover (including StrictMode 2.0/Latest), nested failure status, once-only calls,
 OSC ordering, first-prompt suppression, v14 shared-state wrapper upgrades,
 throwing/empty-renderer and integration
 fail-safe recovery, and the

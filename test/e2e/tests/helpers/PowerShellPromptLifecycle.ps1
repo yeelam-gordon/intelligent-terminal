@@ -145,6 +145,17 @@ try {
             $owner = $Global:__ShellInteg_Owner
             . $IntegrationPath
             Assert-Equal ($Global:__ShellInteg_Owner -eq $owner) $true 'repeat source retains upgraded owner'
+            foreach ($strictVersion in @('2.0', 'Latest')) {
+                function Global:prompt { 'STRICT> ' }
+                try {
+                    Set-StrictMode -Version $strictVersion
+                    Invoke-ReadBoundary
+                }
+                finally {
+                    Set-StrictMode -Off
+                }
+                Assert-Render (prompt) 'STRICT> '
+            }
             Set-Item Function:\global:prompt (__ShellInteg_NewWrapper $Global:__ShellInteg_OriginalPrompt)
             $original = $function:prompt
             $oldActive = $null

@@ -1390,10 +1390,13 @@ function Global:__ShellInteg_Rearm {
     if ($null -eq $current) { return }
     if ($current -eq $Global:__ShellInteg_Wrapper) { return }
     if ($Global:__ShellInteg_CanInspectErrors -and
-        $null -ne $Global:__ShellInteg_Owner -and
-        $current.__ShellInteg_Owner -eq $Global:__ShellInteg_Owner) {
-        $Global:__ShellInteg_Wrapper = $current
-        return
+        $null -ne $Global:__ShellInteg_Owner) {
+        $ownerProperty = $current.PSObject.Properties['__ShellInteg_Owner']
+        if ($null -ne $ownerProperty -and
+            $ownerProperty.Value -eq $Global:__ShellInteg_Owner) {
+            $Global:__ShellInteg_Wrapper = $current
+            return
+        }
     }
 
     # Best-effort. This runs from PSConsoleHostReadLine, so a throw here would
