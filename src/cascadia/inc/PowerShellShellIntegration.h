@@ -1037,7 +1037,7 @@ if ($env:INTELLIGENT_TERMINAL -ne '1') {
 }
 
 if (-not $Global:__ShellInteg_Installed -or
-    $null -eq $Global:__ShellInteg_WrapperTemplate) {
+    $null -eq (Get-Variable -Name __ShellInteg_WrapperTemplate -Scope Global -ValueOnly -ErrorAction Ignore)) {
 
     # ── Escape characters (PS 5.1 doesn't support `e / `a literals) ──
     $Global:__ShellInteg_ESC = [char]0x1B   # ESC
@@ -1054,7 +1054,10 @@ if (-not $Global:__ShellInteg_Installed -or
     $Global:__ShellInteg_LastHistoryId  = -1
     $Global:__ShellInteg_LastErrorRecord = $Global:Error[0]
     $Global:__ShellInteg_LastSubmittedLine = $null
-    $Global:__ShellInteg_PrevPrompt = $legacyDelegate
+    if (-not $Global:__ShellInteg_Installed -or
+        -not (Get-Variable -Name __ShellInteg_PrevPrompt -Scope Global -ErrorAction Ignore)) {
+        $Global:__ShellInteg_PrevPrompt = $legacyDelegate
+    }
     $Global:__ShellInteg_Owner = $null
     $Global:__ShellInteg_Rendering = $false
     $Global:__ShellInteg_CanInspectErrors =
@@ -1352,7 +1355,7 @@ if (-not $Global:__ShellInteg_Installed -or
     $Global:__ShellInteg_WrapperTemplate = $function:prompt
     function Global:__ShellInteg_NewWrapper {
         param([scriptblock]$__ShellInteg_Delegate)
-        # CLM cannot create closures; its template keeps the baseline shared state.
+        # ConstrainedLanguage cannot create closures; its template keeps the baseline shared state.
         if (-not $Global:__ShellInteg_CanInspectErrors) {
             return $Global:__ShellInteg_WrapperTemplate
         }
@@ -1406,7 +1409,7 @@ function Global:__ShellInteg_Rearm {
     # profile, which makes Set-Item raise SessionStateUnauthorizedAccessException.
     # Shell integration is a convenience; never let it take the shell down.
     try {
-        # Preserve manual re-source recovery and chaining fallback in CLM.
+        # Preserve manual re-source recovery and chaining fallback in ConstrainedLanguage.
         if (-not $Global:__ShellInteg_CanInspectErrors) {
             if ($current -ne $Global:__ShellInteg_OriginalPrompt) {
                 $Global:__ShellInteg_PrevPrompt = $Global:__ShellInteg_OriginalPrompt

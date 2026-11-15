@@ -29,13 +29,18 @@ skipped. Generic save/chain/restore fixtures cover repeated environment
 activation, switching and deactivation, old-wrapper restoration, repeated
 dot-sourcing, late renderer takeover (including StrictMode 2.0/Latest), nested failure status,
 ordinary work-changing chains compared with a no-integration control, once-only calls,
-OSC ordering, first-prompt suppression, v14 shared-state wrapper upgrades,
+OSC ordering, first-prompt suppression, v14 shared-state wrapper upgrades
+(including a chain adopted before migration and StrictMode 2.0 enabled before
+upgrade, preserving an intentionally empty legacy fallback),
+older installed state with no fallback variable,
 throwing/empty-renderer and integration
 fail-safe recovery, and the
 existing ConstrainedLanguage manual-recovery baseline. No Python installation
 or product-specific environment heuristic is involved.
 Extraction checks preserve payload bytes across adjacent-comment and structural
 whitespace changes and reject malformed function/initializer/literal boundaries.
+The suite contains 27 cases: seven extraction checks and ten lifecycle scenarios
+on each of the two required hosts.
 
 ```powershell
 Invoke-Pester test\e2e\tests\Source.PowerShellPromptLifecycle.Tests.ps1

@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$IntegrationPath,
     [Parameter(Mandatory)]
-    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
+    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
     [string]$Scenario
 )
 
@@ -107,31 +107,103 @@ try {
     if ($Scenario -eq 'Constrained') {
         $ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'
     }
-    if ($Scenario -eq 'Lifecycle') {
-        # Model v14's installed shared-state wrapper and readline driver.
+    if ($Scenario -in @('Lifecycle', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade')) {
+        # Model v14's shared-state delegation and adoption, including its
+        # initially empty fallback and absent v15 migration sentinel.
         $Global:__ShellInteg_OriginalPrompt = $function:prompt
+        $Global:__ShellInteg_PrevPrompt = $null
+        $Global:__ShellInteg_Rendering = $false
         $Global:__ShellInteg_OriginalPSConsoleHostReadLine = $function:PSConsoleHostReadLine
         $Global:__ShellInteg_CanInspectErrors = $true
         $Global:__ShellInteg_Installed = $true
         function Global:prompt {
             if ($Global:__ShellInteg_Rendering) {
-                return (& $Global:__ShellInteg_PrevPrompt)
+                if ($Global:__ShellInteg_PrevPrompt) {
+                    return (& $Global:__ShellInteg_PrevPrompt)
+                }
+                return ''
             }
-            & $Global:__ShellInteg_OriginalPrompt
+            $Global:__ShellInteg_Rendering = $true
+            try { & $Global:__ShellInteg_OriginalPrompt }
+            finally { $Global:__ShellInteg_Rendering = $false }
         }
         $Global:__ShellInteg_Wrapper = $function:prompt
         $legacyWrapper = $function:prompt
+        function Global:__ShellInteg_Rearm {
+            $current = $function:prompt
+            if ($current -eq $Global:__ShellInteg_Wrapper) { return }
+            if ($current -ne $Global:__ShellInteg_OriginalPrompt) {
+                $Global:__ShellInteg_PrevPrompt = $Global:__ShellInteg_OriginalPrompt
+                $Global:__ShellInteg_OriginalPrompt = $current
+            }
+            Set-Item Function:\global:prompt $Global:__ShellInteg_Wrapper
+        }
         function Global:PSConsoleHostReadLine {
             __ShellInteg_Rearm
             & $Global:__ShellInteg_OriginalPSConsoleHostReadLine @args
         }
+        if ($Scenario -eq 'Lifecycle') {
+            # Retain coverage of older installed state without a fallback
+            # variable; the separate v14 upgrade cases preserve its real null value.
+            Remove-Variable __ShellInteg_PrevPrompt -Scope Global
+        }
     }
-    . $IntegrationPath
+    if ($Scenario -eq 'AdoptedLegacyUpgrade') {
+        $saved = $function:prompt
+        $renderer = {
+            $Global:ChainCalls++
+            # Bound a broken migration's recursion without modifying the embed.
+            if ($Global:ChainCalls -gt 12) { throw 'fixture recursion fuse' }
+            $text = & $saved
+            "legacy:${text}"
+        }.GetNewClosure()
+        Set-Item Function:\global:prompt $renderer
+        Invoke-ReadBoundary
+        Assert-Equal ($Global:__ShellInteg_OriginalPrompt -eq $renderer) $true 'v14 adopted chain before migration'
+        Assert-Equal (prompt) 'legacy:BASE> ' 'legacy chain works before migration'
+        Assert-Equal $Global:BaseCalls 1 'legacy base called once before migration'
+        Assert-Equal $Global:ChainCalls 1 'legacy chain called once before migration'
+        $fallback = $Global:__ShellInteg_PrevPrompt
+        $Global:BaseCalls = 0
+        $Global:ChainCalls = 0
+    }
+    if ($Scenario -eq 'StrictLegacyUpgrade') {
+        Assert-Equal ([bool](Get-Variable __ShellInteg_WrapperTemplate -Scope Global -ErrorAction Ignore)) $false 'v14 has no migration sentinel'
+        try {
+            Set-StrictMode -Version 2.0
+            . $IntegrationPath
+        }
+        finally { Set-StrictMode -Off }
+        Assert-Equal $Global:__ShellInteg_PrevPrompt $null 'upgrade preserves intentionally empty legacy fallback'
+    }
+    else { . $IntegrationPath }
     $first = prompt
-    Assert-Render $first 'BASE> '
+    $expected = if ($Scenario -eq 'AdoptedLegacyUpgrade') { 'legacy:BASE> ' } else { 'BASE> ' }
+    Assert-Render $first $expected
     Assert-Equal $Global:BaseCalls 1 'first prompt delegates once'
 
     switch ($Scenario) {
+        AdoptedLegacyUpgrade {
+            Assert-Equal ($Global:__ShellInteg_PrevPrompt -eq $fallback) $true 'upgrade preserves adopted legacy fallback'
+            Assert-Equal $Global:ChainCalls 1 'migrated chain called once'
+            $delegate = $Global:__ShellInteg_OriginalPrompt
+            foreach ($cycle in 1..2) {
+                . $IntegrationPath
+                Invoke-ReadBoundary
+                Assert-Equal ($Global:__ShellInteg_OriginalPrompt -eq $delegate) $true 'repeat source retains adopted delegate'
+                Assert-Equal ($Global:__ShellInteg_PrevPrompt -eq $fallback) $true 'repeat source retains legacy fallback'
+                Assert-Render (prompt) 'legacy:BASE> '
+                Assert-Equal $Global:BaseCalls ($cycle + 1) 'one base call per upgraded render'
+                Assert-Equal $Global:ChainCalls ($cycle + 1) 'one chain call per upgraded render'
+            }
+        }
+        StrictLegacyUpgrade {
+            Invoke-ReadBoundary
+            . $IntegrationPath
+            Assert-Render (prompt) 'BASE> '
+            Assert-Equal $Global:BaseCalls 2 'strict upgrade retains original delegate'
+            Assert-Equal $Global:__ShellInteg_PrevPrompt $null 'repeat source retains empty fallback'
+        }
         FirstStatus {
             Add-History -InputObject ([pscustomobject]@{
                 CommandLine = 'fixture native failure'; ExecutionStatus = 'Completed'
