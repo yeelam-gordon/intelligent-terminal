@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$IntegrationPath,
     [Parameter(Mandatory)]
-    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'LifecycleMissingFallback', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade', 'StrictFalseInstalledInitialization', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
+    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'LifecycleMissingFallback', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade', 'StrictFalseInstalledInitialization', 'StrictFalseInstalledReadlineInitialization', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
     [string]$Scenario
 )
 
@@ -169,11 +169,12 @@ try {
         $Global:BaseCalls = 0
         $Global:ChainCalls = 0
     }
-    if ($Scenario -eq 'StrictFalseInstalledInitialization') {
-        Assert-Equal (Test-Path Function:\PSConsoleHostReadLine) $false 'no readline function before initialization'
+    if ($Scenario -in @('StrictFalseInstalledInitialization', 'StrictFalseInstalledReadlineInitialization')) {
+        Assert-Equal (Test-Path Function:\PSConsoleHostReadLine) ($Scenario -eq 'StrictFalseInstalledReadlineInitialization') 'expected readline presence before initialization'
+        $readline = $function:PSConsoleHostReadLine
         $Global:__ShellInteg_Installed = $false
         Assert-Equal (@(Get-Variable __ShellInteg_* -Scope Global).Count) 1 'only the false Installed guard is initialized'
-        foreach ($name in @('__ShellInteg_OriginalPrompt', '__ShellInteg_Wrapper', '__ShellInteg_WrapperTemplate')) {
+        foreach ($name in @('__ShellInteg_OriginalPrompt', '__ShellInteg_Wrapper', '__ShellInteg_WrapperTemplate', '__ShellInteg_OriginalPSConsoleHostReadLine')) {
             Assert-Equal ([bool](Get-Variable $name -Scope Global -ErrorAction Ignore)) $false "$name is absent before initialization"
         }
         try {
@@ -201,6 +202,20 @@ try {
             . $IntegrationPath
             Assert-Render (prompt) 'BASE> '
             Assert-Equal $Global:BaseCalls 2 'repeat source delegates once per render after false-guard initialization'
+        }
+        StrictFalseInstalledReadlineInitialization {
+            Assert-Equal ($Global:__ShellInteg_OriginalPSConsoleHostReadLine -eq $readline) $true 'initialization captures the original readline driver'
+            Invoke-ReadBoundary
+            $wrapper = $function:PSConsoleHostReadLine
+            foreach ($cycle in 1..2) {
+                . $IntegrationPath
+                Assert-Equal ($Global:__ShellInteg_OriginalPSConsoleHostReadLine -eq $readline) $true 'repeat source preserves the captured readline driver'
+                Assert-Equal ($function:PSConsoleHostReadLine -eq $wrapper) $true 'repeat source does not wrap readline again'
+                Invoke-ReadBoundary
+                Assert-Render (prompt) 'BASE> '
+                Assert-Equal $Global:BaseCalls ($cycle + 1) 'one prompt delegation per render after readline initialization'
+            }
+            Assert-Equal $Global:ReadCalls 3 'one readline delegation per boundary across repeat sources'
         }
         AdoptedLegacyUpgrade {
             Assert-Equal ($Global:__ShellInteg_PrevPrompt -eq $fallback) $true 'upgrade preserves adopted legacy fallback'

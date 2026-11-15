@@ -34,7 +34,9 @@ OSC ordering, first-prompt suppression, v14 shared-state wrapper upgrades
 upgrade, restoring the saved legacy wrapper with its normal initially null fallback),
 older installed state with no fallback variable,
 noninteractive StrictMode 2.0 initialization with only the Installed guard
-explicitly false, legacy globals absent and no readline function
+explicitly false and legacy globals absent, both without readline and with
+an existing readline driver (including once-only delegation and driver preservation
+across repeated sourcing)
 (not fully unset fresh StrictMode initialization),
 throwing/empty-renderer and integration
 fail-safe recovery, and the
@@ -42,7 +44,7 @@ existing ConstrainedLanguage manual-recovery baseline. No Python installation
 or product-specific environment heuristic is involved.
 Extraction checks preserve payload bytes across adjacent-comment and structural
 whitespace changes and reject malformed function/initializer/literal boundaries.
-The suite contains 31 cases: seven extraction checks and twelve lifecycle scenarios
+The suite contains 33 cases: seven extraction checks and thirteen lifecycle scenarios
 on each of the two required hosts.
 
 ```powershell

@@ -1134,7 +1134,7 @@ if (-not $Global:__ShellInteg_Installed -or
             return @{ Agent = $resumeAgent; SessionId = $resumeSession }
         }
 
-        if ($null -eq $Global:__ShellInteg_OriginalPSConsoleHostReadLine) {
+        if ($null -eq (Get-Variable -Name __ShellInteg_OriginalPSConsoleHostReadLine -Scope Global -ValueOnly -ErrorAction Ignore)) {
             $Global:__ShellInteg_OriginalPSConsoleHostReadLine = $function:PSConsoleHostReadLine
         }
         function Global:PSConsoleHostReadLine {
