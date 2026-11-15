@@ -82,6 +82,25 @@ try {
     if ($Scenario -eq 'Constrained') {
         $ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'
     }
+    if ($Scenario -eq 'Lifecycle') {
+        # Model v14's installed shared-state wrapper and readline driver.
+        $Global:__ShellInteg_OriginalPrompt = $function:prompt
+        $Global:__ShellInteg_OriginalPSConsoleHostReadLine = $function:PSConsoleHostReadLine
+        $Global:__ShellInteg_CanInspectErrors = $true
+        $Global:__ShellInteg_Installed = $true
+        function Global:prompt {
+            if ($Global:__ShellInteg_Rendering) {
+                return (& $Global:__ShellInteg_PrevPrompt)
+            }
+            & $Global:__ShellInteg_OriginalPrompt
+        }
+        $Global:__ShellInteg_Wrapper = $function:prompt
+        $legacyWrapper = $function:prompt
+        function Global:PSConsoleHostReadLine {
+            __ShellInteg_Rearm
+            & $Global:__ShellInteg_OriginalPSConsoleHostReadLine @args
+        }
+    }
     . $IntegrationPath
     $first = prompt
     Assert-Render $first 'BASE> '
@@ -114,6 +133,19 @@ try {
             Assert-Equal $Global:SeenStatus $false 'PowerShell failure reaches original prompt'
         }
         Lifecycle {
+            Assert-Equal ($null -ne $Global:__ShellInteg_Owner) $true 'upgrade creates ownership identity'
+            Assert-Equal (Test-Path Function:\__ShellInteg_NewWrapper) $true 'upgrade installs wrapper factory'
+            Invoke-ReadBoundary
+            function Global:prompt { 'UPGRADED> ' }
+            Invoke-ReadBoundary
+            Assert-Render (prompt) 'UPGRADED> '
+            Set-Item Function:\global:prompt $legacyWrapper
+            Invoke-ReadBoundary
+            Assert-Render (prompt) 'BASE> '
+            $owner = $Global:__ShellInteg_Owner
+            . $IntegrationPath
+            Assert-Equal ($Global:__ShellInteg_Owner -eq $owner) $true 'repeat source retains upgraded owner'
+            Set-Item Function:\global:prompt (__ShellInteg_NewWrapper $Global:__ShellInteg_OriginalPrompt)
             $original = $function:prompt
             $oldActive = $null
             foreach ($cycle in 1..3) {

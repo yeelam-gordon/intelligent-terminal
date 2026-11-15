@@ -1036,18 +1036,25 @@ if ($env:INTELLIGENT_TERMINAL -ne '1') {
     return
 }
 
-if (-not $Global:__ShellInteg_Installed) {
+if (-not $Global:__ShellInteg_Installed -or
+    $null -eq $Global:__ShellInteg_WrapperTemplate) {
 
     # ── Escape characters (PS 5.1 doesn't support `e / `a literals) ──
     $Global:__ShellInteg_ESC = [char]0x1B   # ESC
     $Global:__ShellInteg_BEL = [char]0x07   # BEL (OSC string terminator)
 
     # ── Snapshot the user's current prompt before we touch it ──────────
-    $Global:__ShellInteg_OriginalPrompt = $function:prompt
+    # Upgrade legacy shared-state wrappers without wrapping ourselves or the
+    # existing readline driver. Retain a delegate for saved legacy wrappers.
+    $legacyDelegate = $Global:__ShellInteg_OriginalPrompt
+    if (-not $Global:__ShellInteg_Installed -or
+        $function:prompt -ne $Global:__ShellInteg_Wrapper) {
+        $Global:__ShellInteg_OriginalPrompt = $function:prompt
+    }
     $Global:__ShellInteg_LastHistoryId  = -1
     $Global:__ShellInteg_LastErrorRecord = $Error[0]
     $Global:__ShellInteg_LastSubmittedLine = $null
-    $Global:__ShellInteg_PrevPrompt = $null
+    $Global:__ShellInteg_PrevPrompt = $legacyDelegate
     $Global:__ShellInteg_Owner = $null
     $Global:__ShellInteg_Rendering = $false
     $Global:__ShellInteg_CanInspectErrors =
@@ -1124,7 +1131,9 @@ if (-not $Global:__ShellInteg_Installed) {
             return @{ Agent = $resumeAgent; SessionId = $resumeSession }
         }
 
-        $Global:__ShellInteg_OriginalPSConsoleHostReadLine = $function:PSConsoleHostReadLine
+        if ($null -eq $Global:__ShellInteg_OriginalPSConsoleHostReadLine) {
+            $Global:__ShellInteg_OriginalPSConsoleHostReadLine = $function:PSConsoleHostReadLine
+        }
         function Global:PSConsoleHostReadLine {
             __ShellInteg_Rearm
             $line = & $Global:__ShellInteg_OriginalPSConsoleHostReadLine @args
@@ -1359,13 +1368,7 @@ if (-not $Global:__ShellInteg_Installed) {
 # identity, adopt the newcomer as the prompt we wrap, and reinstall ourselves.
 # Runs on every source and once per command from the PSReadLine boundary.
 function Global:__ShellInteg_Rearm {
-    # No wrapper of our own to install. This happens when an OLDER version of
-    # this script is already installed in the session: it set
-    # __ShellInteg_Installed, so the block above was skipped and never created
-    # our wrapper. Do nothing. Installing a null would clobber `prompt`, and
-    # adopting the older version's wrapper as the prompt we wrap would make it
-    # delegate to itself and overflow the call stack. The upgrade completes in
-    # the next shell, which sources only this version.
+    # Never clobber the prompt if initialization did not produce a wrapper.
     if ($null -eq $Global:__ShellInteg_Wrapper) { return }
 
     # Identity is compared with -eq rather than a static reference-equality
@@ -1387,6 +1390,7 @@ function Global:__ShellInteg_Rearm {
     if ($null -eq $current) { return }
     if ($current -eq $Global:__ShellInteg_Wrapper) { return }
     if ($Global:__ShellInteg_CanInspectErrors -and
+        $null -ne $Global:__ShellInteg_Owner -and
         $current.__ShellInteg_Owner -eq $Global:__ShellInteg_Owner) {
         $Global:__ShellInteg_Wrapper = $current
         return
