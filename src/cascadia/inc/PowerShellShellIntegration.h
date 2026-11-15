@@ -1359,6 +1359,7 @@ if (-not $Global:__ShellInteg_Installed -or
         if (-not $Global:__ShellInteg_CanInspectErrors) {
             return $Global:__ShellInteg_WrapperTemplate
         }
+        # The template reads this exact parameter name; capture its value per wrapper.
         $wrapper = $Global:__ShellInteg_WrapperTemplate.GetNewClosure()
         $wrapper | Add-Member -NotePropertyName __ShellInteg_Owner -NotePropertyValue $Global:__ShellInteg_Owner
         return $wrapper
