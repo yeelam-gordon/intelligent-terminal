@@ -8,7 +8,7 @@ param(
 # Source/process coverage only: no installed package, profile, policy or desktop access.
 BeforeDiscovery {
     $cases = foreach ($shell in @('pwsh.exe', 'powershell.exe')) {
-        foreach ($scenario in @('HostGate', 'FirstStatus', 'Lifecycle', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')) {
+        foreach ($scenario in @('HostGate', 'FirstStatus', 'Lifecycle', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade', 'StrictFalseInstalledInitialization', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')) {
             @{ Shell = $shell; Scenario = $scenario }
         }
     }

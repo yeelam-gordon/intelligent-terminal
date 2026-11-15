@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$IntegrationPath,
     [Parameter(Mandatory)]
-    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
+    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade', 'StrictFalseInstalledInitialization', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
     [string]$Scenario
 )
 
@@ -45,9 +45,11 @@ function Global:prompt {
     'BASE> '
 }
 
-function Global:PSConsoleHostReadLine {
-    $Global:ReadCalls++
-    'fixture command'
+if ($Scenario -ne 'StrictFalseInstalledInitialization') {
+    function Global:PSConsoleHostReadLine {
+        $Global:ReadCalls++
+        'fixture command'
+    }
 }
 
 function New-ChainedPrompt([string]$Label, [scriptblock]$Saved) {
@@ -167,7 +169,20 @@ try {
         $Global:BaseCalls = 0
         $Global:ChainCalls = 0
     }
-    if ($Scenario -eq 'StrictLegacyUpgrade') {
+    if ($Scenario -eq 'StrictFalseInstalledInitialization') {
+        Assert-Equal (Test-Path Function:\PSConsoleHostReadLine) $false 'no readline function before initialization'
+        $Global:__ShellInteg_Installed = $false
+        Assert-Equal (@(Get-Variable __ShellInteg_* -Scope Global).Count) 1 'only the false Installed guard is initialized'
+        foreach ($name in @('__ShellInteg_OriginalPrompt', '__ShellInteg_Wrapper', '__ShellInteg_WrapperTemplate')) {
+            Assert-Equal ([bool](Get-Variable $name -Scope Global -ErrorAction Ignore)) $false "$name is absent before initialization"
+        }
+        try {
+            Set-StrictMode -Version 2.0
+            . $IntegrationPath
+        }
+        finally { Set-StrictMode -Off }
+    }
+    elseif ($Scenario -eq 'StrictLegacyUpgrade') {
         Assert-Equal ([bool](Get-Variable __ShellInteg_WrapperTemplate -Scope Global -ErrorAction Ignore)) $false 'v14 has no migration sentinel'
         try {
             Set-StrictMode -Version 2.0
@@ -183,6 +198,11 @@ try {
     Assert-Equal $Global:BaseCalls 1 'first prompt delegates once'
 
     switch ($Scenario) {
+        StrictFalseInstalledInitialization {
+            . $IntegrationPath
+            Assert-Render (prompt) 'BASE> '
+            Assert-Equal $Global:BaseCalls 2 'repeat source delegates once per render after false-guard initialization'
+        }
         AdoptedLegacyUpgrade {
             Assert-Equal ($Global:__ShellInteg_PrevPrompt -eq $fallback) $true 'upgrade preserves adopted legacy fallback'
             Assert-Equal $Global:ChainCalls 1 'migrated chain called once'

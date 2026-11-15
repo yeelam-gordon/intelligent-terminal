@@ -1046,7 +1046,7 @@ if (-not $Global:__ShellInteg_Installed -or
     # ── Snapshot the user's current prompt before we touch it ──────────
     # Upgrade legacy shared-state wrappers without wrapping ourselves or the
     # existing readline driver. Retain a delegate for saved legacy wrappers.
-    $legacyDelegate = $Global:__ShellInteg_OriginalPrompt
+    $legacyDelegate = Get-Variable -Name __ShellInteg_OriginalPrompt -Scope Global -ValueOnly -ErrorAction Ignore
     if (-not $Global:__ShellInteg_Installed -or
         $function:prompt -ne $Global:__ShellInteg_Wrapper) {
         $Global:__ShellInteg_OriginalPrompt = $function:prompt
