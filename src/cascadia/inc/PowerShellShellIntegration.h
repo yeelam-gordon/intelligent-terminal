@@ -1136,22 +1136,22 @@ if (-not $Global:__ShellInteg_Installed -or
 
         if ($null -eq (Get-Variable -Name __ShellInteg_OriginalPSConsoleHostReadLine -Scope Global -ValueOnly -ErrorAction Ignore)) {
             $Global:__ShellInteg_OriginalPSConsoleHostReadLine = $function:PSConsoleHostReadLine
-        }
-        function Global:PSConsoleHostReadLine {
-            __ShellInteg_Rearm
-            $line = & $Global:__ShellInteg_OriginalPSConsoleHostReadLine @args
-            $Global:__ShellInteg_LastSubmittedLine =
-                if ($line -is [string]) { $line } else { $null }
-            if ($line -is [string]) {
-                $resume = __ShellInteg_GetResumeTarget $line
-                if ($null -ne $resume) {
-                    $resumeMark = '{0}]9001;Resume;{1};{2}{3}' -f
-                        $Global:__ShellInteg_ESC, $resume.Agent, $resume.SessionId,
-                        $Global:__ShellInteg_BEL
-                    [Console]::Write($resumeMark)
+            function Global:PSConsoleHostReadLine {
+                __ShellInteg_Rearm
+                $line = & $Global:__ShellInteg_OriginalPSConsoleHostReadLine @args
+                $Global:__ShellInteg_LastSubmittedLine =
+                    if ($line -is [string]) { $line } else { $null }
+                if ($line -is [string]) {
+                    $resume = __ShellInteg_GetResumeTarget $line
+                    if ($null -ne $resume) {
+                        $resumeMark = '{0}]9001;Resume;{1};{2}{3}' -f
+                            $Global:__ShellInteg_ESC, $resume.Agent, $resume.SessionId,
+                            $Global:__ShellInteg_BEL
+                        [Console]::Write($resumeMark)
+                    }
                 }
+                return $line
             }
-            return $line
         }
     }
 

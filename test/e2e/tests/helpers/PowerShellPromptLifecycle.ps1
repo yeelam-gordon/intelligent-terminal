@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$IntegrationPath,
     [Parameter(Mandatory)]
-    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'LifecycleMissingFallback', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade', 'StrictFalseInstalledInitialization', 'StrictFalseInstalledReadlineInitialization', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
+    [ValidateSet('HostGate', 'FirstStatus', 'Lifecycle', 'LifecycleMissingFallback', 'AdoptedLegacyUpgrade', 'LaterReaderUpgrade', 'StrictLegacyUpgrade', 'StrictFalseInstalledInitialization', 'StrictFalseInstalledReadlineInitialization', 'Chaining', 'WorkChangingChain', 'Throwing', 'FailSafe', 'Constrained')]
     [string]$Scenario
 )
 
@@ -109,7 +109,7 @@ try {
     if ($Scenario -eq 'Constrained') {
         $ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'
     }
-    if ($Scenario -in @('Lifecycle', 'LifecycleMissingFallback', 'AdoptedLegacyUpgrade', 'StrictLegacyUpgrade')) {
+    if ($Scenario -in @('Lifecycle', 'LifecycleMissingFallback', 'AdoptedLegacyUpgrade', 'LaterReaderUpgrade', 'StrictLegacyUpgrade')) {
         # Model v14's shared-state delegation and adoption, including its
         # initially empty fallback and absent v15 migration sentinel.
         $Global:__ShellInteg_OriginalPrompt = $function:prompt
@@ -142,7 +142,30 @@ try {
         }
         function Global:PSConsoleHostReadLine {
             __ShellInteg_Rearm
-            & $Global:__ShellInteg_OriginalPSConsoleHostReadLine @args
+            $line = & $Global:__ShellInteg_OriginalPSConsoleHostReadLine @args
+            $Global:__ShellInteg_LastSubmittedLine =
+                if ($line -is [string]) { $line } else { $null }
+            return $line
+        }
+        if ($Scenario -eq 'LaterReaderUpgrade') {
+            $savedCore = $Global:__ShellInteg_OriginalPSConsoleHostReadLine
+            $Global:ReaderPreCalls = 0
+            $Global:ReaderPostCalls = 0
+            $readerModule = New-Module -Name LaterReaderModule -ArgumentList $function:PSConsoleHostReadLine -ScriptBlock {
+                param([scriptblock]$SavedReader)
+                $script:SavedReader = $SavedReader
+                function PSConsoleHostReadLine {
+                    $Global:ReaderPreCalls++
+                    if ($Global:ReaderPreCalls -gt 10) { throw 'fixture reader recursion fuse' }
+                    $line = & $script:SavedReader @args
+                    $Global:ReaderPostCalls++
+                    return $line
+                }
+                Export-ModuleMember -Function PSConsoleHostReadLine
+            }
+            Import-Module $readerModule -Global
+            $activeReader = $function:PSConsoleHostReadLine
+            Assert-Equal (Get-Command PSConsoleHostReadLine).ModuleName 'LaterReaderModule' 'real later module owns reader before upgrade'
         }
         if ($Scenario -eq 'LifecycleMissingFallback') {
             # Retain coverage of older installed state without a fallback
@@ -198,6 +221,23 @@ try {
     Assert-Equal $Global:BaseCalls 1 'first prompt delegates once'
 
     switch ($Scenario) {
+        LaterReaderUpgrade {
+            foreach ($stage in @('Upgrade', 'RepeatSource1', 'RepeatSource2')) {
+                if ($stage -ne 'Upgrade') { . $IntegrationPath }
+                Assert-Equal ([object]::ReferenceEquals($function:PSConsoleHostReadLine, $activeReader)) $true "$stage preserves active reader identity"
+                Assert-Equal ([object]::ReferenceEquals((Get-Command PSConsoleHostReadLine).Module, $readerModule)) $true "$stage preserves module ownership"
+                Assert-Equal ([object]::ReferenceEquals($Global:__ShellInteg_OriginalPSConsoleHostReadLine, $savedCore)) $true "$stage preserves original core delegate"
+                function Global:prompt { 'REPLACEMENT> ' }
+                $beforePre = $Global:ReaderPreCalls
+                $beforePost = $Global:ReaderPostCalls
+                Invoke-ReadBoundary
+                Assert-Equal $Global:ReaderPreCalls ($beforePre + 1) "$stage invokes module pre callback once"
+                Assert-Equal $Global:ReaderPostCalls ($beforePost + 1) "$stage invokes module post callback once"
+                Assert-Equal $Global:__ShellInteg_LastSubmittedLine 'fixture command' "$stage preserves v14 submitted-line tracking"
+                Assert-Equal ($function:prompt -eq $Global:__ShellInteg_Wrapper) $true "$stage rearms prompt through saved v14 reader"
+                Assert-Render (prompt) 'REPLACEMENT> '
+            }
+        }
         StrictFalseInstalledInitialization {
             . $IntegrationPath
             Assert-Render (prompt) 'BASE> '
