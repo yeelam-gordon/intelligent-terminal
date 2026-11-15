@@ -1052,7 +1052,7 @@ if (-not $Global:__ShellInteg_Installed -or
         $Global:__ShellInteg_OriginalPrompt = $function:prompt
     }
     $Global:__ShellInteg_LastHistoryId  = -1
-    $Global:__ShellInteg_LastErrorRecord = $Error[0]
+    $Global:__ShellInteg_LastErrorRecord = $Global:Error[0]
     $Global:__ShellInteg_LastSubmittedLine = $null
     $Global:__ShellInteg_PrevPrompt = $legacyDelegate
     $Global:__ShellInteg_Owner = $null
@@ -1230,7 +1230,8 @@ if (-not $Global:__ShellInteg_Installed -or
         }
         try {
             $submittedLine = $Global:__ShellInteg_LastSubmittedLine
-            $errorRecord   = $Error[0]
+            # Closures have a module-local error collection; inspect the shell's.
+            $errorRecord   = $Global:Error[0]
             $entry         = Get-History -Count 1
             $loc           = $executionContext.SessionState.Path.CurrentLocation
             $E             = $Global:__ShellInteg_ESC
@@ -1317,7 +1318,7 @@ if (-not $Global:__ShellInteg_Installed -or
             finally { $Global:__ShellInteg_Rendering = $false }
 
             $Global:__ShellInteg_LastHistoryId = if ($entry) { $entry.Id } else { -1 }
-            $Global:__ShellInteg_LastErrorRecord = $Error[0]
+            $Global:__ShellInteg_LastErrorRecord = $Global:Error[0]
             $Global:__ShellInteg_LastSubmittedLine = $null
 
             return "${prefix}${originalOutput}${suffix}"

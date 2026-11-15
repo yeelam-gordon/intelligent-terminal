@@ -702,7 +702,7 @@ void ShellIntegrationTests::PowerShell_ScriptContent_TracksUnhistoriedErrors()
     const auto untrackedErrorCheck = script.find("$newUntrackedError = -not $historyAdvanced -and $gle -ne 0 -and $newErrorRecord", sentinelAssignment);
     const auto combinedCheck = script.find("if ($historyAdvanced -or $newUntrackedError -or $inputHadParserError)", untrackedErrorCheck);
     const auto originalPrompt = script.find("$originalOutput = & $__ShellInteg_Delegate", combinedCheck);
-    const auto consumeError = script.find("$Global:__ShellInteg_LastErrorRecord = $Error[0]", originalPrompt);
+    const auto consumeError = script.find("$Global:__ShellInteg_LastErrorRecord = $Global:Error[0]", originalPrompt);
     const auto consumeLine = script.find("$Global:__ShellInteg_LastSubmittedLine = $null", consumeError);
 
     VERIFY_ARE_NOT_EQUAL(std::string::npos, consumeLine);
@@ -1106,7 +1106,7 @@ void ShellIntegrationTests::PowerShell_ScriptContent_ReArmsFromReadLineBoundary(
     const auto wrapperCapture = script.find("$Global:__ShellInteg_WrapperTemplate = $function:prompt");
     const auto captureDelegate = script.find("param([scriptblock]$__ShellInteg_Delegate)", wrapperCapture);
     const auto closure = script.find("$Global:__ShellInteg_WrapperTemplate.GetNewClosure()", captureDelegate);
-    const auto ownerCheck = script.find("$current.__ShellInteg_Owner -eq $Global:__ShellInteg_Owner", identityCheck);
+    const auto ownerCheck = script.find("$ownerProperty.Value -eq $Global:__ShellInteg_Owner", identityCheck);
     const auto newWrapper = script.find("$wrapper = __ShellInteg_NewWrapper $current", reinstall);
     const auto installNewWrapper = script.find("Set-Item Function:\\global:prompt $wrapper -ErrorAction Stop", newWrapper);
 
