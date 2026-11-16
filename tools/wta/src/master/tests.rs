@@ -2301,6 +2301,231 @@ fn make_state() -> Arc<MasterStateInner> {
     make_state_with_retirement_pending_timeout(SESSION_CLOSE_TIMEOUT)
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn native_wsl_lease_correlation_is_read_only_and_rechecks_lifetime() {
+    LocalSet::new()
+        .run_until(async {
+            for scenario in [
+                "bind",
+                "epoch",
+                "closed",
+                "owned",
+                "retired",
+                "collision",
+                "unavailable",
+                "uppercase",
+                "braced",
+                "mixed",
+                "ambiguous",
+            ] {
+                let wt = Arc::new(MockWtChannel::ok());
+                let state = make_state_with_wt(wt.clone());
+                let pane = uuid::Uuid::new_v4();
+                let session =
+                    uuid::Uuid::parse_str("abcdef01-2345-6789-abcd-ef0123456789").unwrap();
+                let source = crate::agent_source::AgentSource::Wsl {
+                    distro: "Ubuntu".into(),
+                };
+                let mut agent = unbound_test_agent("native-wsl-lease");
+                Arc::get_mut(&mut agent).unwrap().source = source.clone();
+                let admission = serde_json::json!({
+                    "pane_id":pane.to_string(), "provider_id":"copilot",
+                    "window_id":1, "tab_id":"1", "mode_epoch":1,
+                    "kind":"reset", "tracking_enabled":true,
+                    "location":source.session_location(),
+                });
+                assert!(
+                    state
+                        .registry
+                        .apply_native_observation(
+                            serde_json::from_value(admission.clone()).unwrap()
+                        )
+                        .await
+                );
+                state
+                    .registry
+                    .record_pane_connected(&pane.to_string())
+                    .await;
+                let mut row = crate::session_registry::SessionInfo::new(
+                    match scenario {
+                        "uppercase" | "mixed" | "ambiguous" => session.to_string().to_uppercase(),
+                        "braced" => format!("{{{session}}}"),
+                        _ => session.to_string(),
+                    }
+                    .into(),
+                    PathBuf::from("/home/native"),
+                );
+                row.provider_id = Some("copilot".into());
+                row.cli_source = Some(crate::agent_sessions::CliSource::Copilot);
+                row.location = source.session_location();
+                row.title = Some("Same title is not ownership evidence".into());
+                row.status = Some(crate::agent_sessions::AgentStatus::Historical);
+                state.registry.upsert(row.clone()).await;
+                let mut inventory = vec![row.clone()];
+                let other_session =
+                    uuid::Uuid::parse_str("12345678-abcd-4321-abcd-123456789abc").unwrap();
+                let other_pane = uuid::Uuid::new_v4();
+                if matches!(scenario, "mixed" | "ambiguous") {
+                    let mut other_admission = admission.clone();
+                    other_admission["pane_id"] = serde_json::json!(other_pane.to_string());
+                    state
+                        .registry
+                        .apply_native_observation(serde_json::from_value(other_admission).unwrap())
+                        .await;
+                    state
+                        .registry
+                        .record_pane_connected(&other_pane.to_string())
+                        .await;
+                    let mut other = row.clone();
+                    other.session_id = other_session.to_string().into();
+                    inventory.push(other);
+                }
+                if scenario == "ambiguous" {
+                    let mut equivalent = row.clone();
+                    equivalent.session_id = format!("{{{session}}}").into();
+                    inventory.push(equivalent);
+                }
+                for extra in &inventory[1..] {
+                    state.registry.upsert(extra.clone()).await;
+                }
+                let inventory_before = inventory.clone();
+                let registry = state.registry.clone();
+                let agent_for_probe = agent.clone();
+                let row_for_probe = row.clone();
+                refresh_native_wsl_copilot_correlations_with_probe(
+                    &state,
+                    &agent,
+                    &inventory,
+                    |distro, ids| async move {
+                        assert_eq!(distro, "Ubuntu");
+                        for id in &ids {
+                            assert_eq!(*id, uuid::Uuid::parse_str(id).unwrap().to_string());
+                        }
+                        let mut expected = match scenario {
+                            "ambiguous" => vec![other_session.to_string()],
+                            "mixed" => vec![session.to_string(), other_session.to_string()],
+                            _ => vec![session.to_string()],
+                        };
+                        let mut actual = ids;
+                        actual.sort();
+                        expected.sort();
+                        assert_eq!(actual, expected);
+                        match scenario {
+                            "epoch" => {
+                                let mut replacement = admission.clone();
+                                replacement["mode_epoch"] = serde_json::json!(2);
+                                registry
+                                    .apply_native_observation(
+                                        serde_json::from_value(replacement).unwrap(),
+                                    )
+                                    .await;
+                            }
+                            "closed" => {
+                                let mut removal = admission.clone();
+                                removal["kind"] = serde_json::json!("removed");
+                                registry
+                                    .apply_native_observation(
+                                        serde_json::from_value(removal).unwrap(),
+                                    )
+                                    .await;
+                            }
+                            "owned" => {
+                                let mut owner = row_for_probe.clone();
+                                owner.session_id = uuid::Uuid::new_v4().to_string().into();
+                                owner.pane_session_id = Some(pane.to_string());
+                                owner.status = Some(crate::agent_sessions::AgentStatus::Idle);
+                                owner.origin = Some(crate::agent_sessions::SessionOrigin::Unknown);
+                                registry.upsert(owner).await;
+                            }
+                            "retired" => agent_for_probe
+                                .history_refresh
+                                .retired
+                                .store(true, std::sync::atomic::Ordering::Release),
+                            "collision" => {
+                                let mut collision = row_for_probe;
+                                collision.location = crate::agent_sessions::SessionLocation::Host;
+                                registry.upsert(collision).await;
+                            }
+                            "unavailable" => return Err(anyhow::anyhow!("lease unavailable")),
+                            _ => {}
+                        }
+                        let mut leases = vec![(session, pane)];
+                        if matches!(scenario, "mixed" | "ambiguous") {
+                            leases.push((other_session, other_pane));
+                        }
+                        Ok(leases)
+                    },
+                )
+                .await;
+                assert!(
+                    wt.calls().is_empty(),
+                    "display correlation must not publish ownership events"
+                );
+                let unchanged = state
+                    .registry
+                    .lookup_identity(&crate::session_registry::SessionIdentity::from_info(&row))
+                    .await
+                    .unwrap();
+                assert_eq!(unchanged, row);
+                for original in &inventory_before {
+                    assert_eq!(
+                        state
+                            .registry
+                            .lookup_identity(&crate::session_registry::SessionIdentity::from_info(
+                                original
+                            ))
+                            .await
+                            .as_ref(),
+                        Some(original)
+                    );
+                }
+                let (statuses, _) = state.registry.pane_status_snapshot().await;
+                if matches!(scenario, "mixed" | "ambiguous") {
+                    assert_eq!(
+                        statuses
+                            .iter()
+                            .find(|status| status.pane_id == other_pane.to_string())
+                            .unwrap()
+                            .inferred_history_key,
+                        inventory[1].history_row_key()
+                    );
+                }
+                let advisory = statuses
+                    .iter()
+                    .find(|status| status.pane_id == pane.to_string())
+                    .filter(|status| status.inferred_history_key.is_some());
+                if matches!(
+                    scenario,
+                    "bind" | "collision" | "uppercase" | "braced" | "mixed"
+                ) {
+                    let advisory = advisory.unwrap();
+                    assert!(advisory.agent_session_id.is_none());
+                    assert_eq!(advisory.pane_id, pane.to_string());
+                    assert_eq!(advisory.inferred_history_key, row.history_row_key());
+                    assert!(
+                        refresh_native_wsl_copilot_correlations_with_probe(
+                            &state,
+                            &agent,
+                            &[row],
+                            |_, _| async { Err(anyhow::anyhow!("lease disappeared")) }
+                        )
+                        .await
+                    );
+                    assert!(state
+                        .registry
+                        .pane_status_snapshot()
+                        .await
+                        .0
+                        .iter()
+                        .all(|status| status.inferred_history_key.is_none()));
+                } else {
+                    assert!(advisory.is_none(), "{scenario}");
+                }
+            }
+        })
+        .await;
+}
+
 #[tokio::test]
 async fn native_launch_source_dispatch_refines_only_admitted_unbound_pane_in_place() {
     let _capture = crate::wt_protocol_events::capture_test_published_events();
