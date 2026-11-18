@@ -124,7 +124,7 @@ private:
     bool _notificationIconShown = false;
     winrt::TerminalApp::ContentManager _keptManager{ nullptr };
     mutable std::mutex _keptPagesMutex;
-    std::vector<winrt::TerminalApp::TerminalPage> _keptPages;
+    std::vector<winrt::weak_ref<winrt::TerminalApp::TerminalPage>> _keptPages;
     winrt::Windows::System::DispatcherQueue _keptDispatcher{ nullptr };
     winrt::TerminalApp::ContentManager::KeptSessionsChanged_revoker _keptChanged;
     winrt::TerminalApp::ContentManager::DetachedSessionEvent_revoker _keptEvents;

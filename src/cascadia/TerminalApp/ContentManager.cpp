@@ -753,6 +753,55 @@ namespace winrt::TerminalApp::implementation
         return geometry;
     }
 
+    std::shared_ptr<ContentManager::KeptOwner> ContentManager::_RememberKeptOwner(
+        const winrt::TerminalApp::TerminalPage& owner,
+        const KeptWindowGeometry& geometry)
+    {
+        _CheckThread();
+        for (auto it = _keptOwners.begin(); it != _keptOwners.end();)
+        {
+            const auto entry = it->lock();
+            if (!entry)
+            {
+                it = _keptOwners.erase(it);
+                continue;
+            }
+            if (entry->page.get() == owner)
+            {
+                entry->geometry = geometry;
+                return entry;
+            }
+            ++it;
+        }
+
+        auto entry = std::make_shared<KeptOwner>();
+        entry->page = winrt::make_weak(owner);
+        entry->geometry = geometry;
+        _keptOwners.emplace_back(entry);
+        return entry;
+    }
+
+    winrt::TerminalApp::TerminalPage ContentManager::_ResolveKeptOwner(const KeptGroup& group)
+    {
+        if (group.owner)
+        {
+            return group.owner->page.get();
+        }
+        return nullptr;
+    }
+
+    ContentManager::KeptGroup ContentManager::_PrepareKeptGroup(
+        const winrt::TerminalApp::TerminalPage& owner,
+        const winrt::TerminalApp::Tab& tab,
+        const KeptWindowGeometry& geometry)
+    {
+        KeptGroup group;
+        group.tab = tab;
+        group.owner = _RememberKeptOwner(owner, geometry);
+        group.lease = SharedWta::Instance().AcquireKeepRunningLease();
+        return group;
+    }
+
     void ContentManager::KeepTab(const winrt::TerminalApp::TerminalPage& owner, const winrt::TerminalApp::Tab& tab, const KeptWindowGeometry* geometry)
     {
         _CheckThread();
@@ -761,7 +810,8 @@ namespace winrt::TerminalApp::implementation
         const winrt::guid id{ impl->StableId() };
         THROW_HR_IF(E_ILLEGAL_METHOD_CALL, !impl->KeepRunning() || _keptGroups.contains(id));
         const auto snapshot = geometry ? *geometry : CaptureKeptWindowGeometry(owner);
-        _keptGroups.emplace(id, KeptGroup{ owner, tab, snapshot, false, SharedWta::Instance().AcquireKeepRunningLease() });
+        auto group = _PrepareKeptGroup(owner, tab, snapshot);
+        _keptGroups.emplace(id, std::move(group));
         _NotifyKeptSessionsChanged();
     }
 
@@ -823,11 +873,20 @@ namespace winrt::TerminalApp::implementation
     {
         _CheckThread();
         std::vector<winrt::TerminalApp::TerminalPage> pages;
-        for (const auto& [id, group] : _keptGroups)
+        pages.reserve(_keptOwners.size());
+        for (const auto& weakOwner : _keptOwners)
         {
-            if (std::ranges::find(pages, group.owner) == pages.end())
+            const auto entry = weakOwner.lock();
+            if (!entry)
             {
-                pages.emplace_back(group.owner);
+                continue;
+            }
+            if (const auto owner = entry->page.get())
+            {
+                if (std::ranges::find(pages, owner) == pages.end())
+                {
+                    pages.emplace_back(owner);
+                }
             }
         }
         return winrt::single_threaded_vector(std::move(pages)).GetView();
@@ -839,7 +898,7 @@ namespace winrt::TerminalApp::implementation
         std::vector<winrt::TerminalApp::Tab> tabs;
         for (const auto& [id, group] : _keptGroups)
         {
-            if (group.owner == owner)
+            if (_ResolveKeptOwner(group) == owner)
             {
                 tabs.emplace_back(group.tab);
             }
@@ -851,14 +910,14 @@ namespace winrt::TerminalApp::implementation
     {
         _CheckThread();
         const auto it = _keptGroups.find(groupId);
-        return it == _keptGroups.end() ? nullptr : it->second.owner;
+        return it == _keptGroups.end() ? nullptr : _ResolveKeptOwner(it->second);
     }
 
     void ContentManager::MarkKeptGroupSelectedOnWindowClose(const winrt::TerminalApp::TerminalPage& owner, const winrt::guid& groupId)
     {
         _CheckThread();
         const auto it = _keptGroups.find(groupId);
-        if (it != _keptGroups.end() && it->second.owner == owner && !it->second.restoring)
+        if (it != _keptGroups.end() && _ResolveKeptOwner(it->second) == owner && !it->second.restoring)
         {
             it->second.selectedOnWindowClose = true;
         }
@@ -905,7 +964,7 @@ namespace winrt::TerminalApp::implementation
         _CheckThread();
         const auto it = _keptGroups.find(groupId);
         THROW_HR_IF(E_INVALIDARG, it == _keptGroups.end());
-        return it->second.geometry.bounds;
+        return it->second.owner->geometry.bounds;
     }
 
     winrt::TerminalApp::WindowRequestedArgs ContentManager::KeptWindowRequest(const winrt::Windows::Foundation::Collections::IVectorView<winrt::guid>& groups)
@@ -920,7 +979,7 @@ namespace winrt::TerminalApp::implementation
             const auto it = _keptGroups.find(groupId);
             THROW_HR_IF(E_INVALIDARG, it == _keptGroups.end());
             THROW_HR_IF(E_ILLEGAL_METHOD_CALL, it->second.restoring);
-            const auto& saved = it->second.geometry;
+            const auto& saved = it->second.owner->geometry;
             bounds.Width = std::max(bounds.Width, saved.bounds.Width);
             bounds.Height = std::max(bounds.Height, saved.bounds.Height);
             if (saved.position &&
@@ -973,7 +1032,7 @@ namespace winrt::TerminalApp::implementation
         THROW_HR_IF(E_INVALIDARG, it == _keptGroups.end());
         THROW_HR_IF(E_ILLEGAL_METHOD_CALL, it->second.restoring);
         it->second.restoring = true;
-        const auto owner = it->second.owner;
+        const auto owner = _ResolveKeptOwner(it->second);
         const auto tab = it->second.tab;
         try
         {
