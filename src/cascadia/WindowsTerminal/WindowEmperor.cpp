@@ -1187,9 +1187,15 @@ void WindowEmperor::_setupKeptSessions()
     _keptDispatcher = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
     _keptChanged = _keptManager.KeptSessionsChanged(winrt::auto_revoke, [this](auto&&, auto&&) {
         const auto pages = _keptManager.KeptPages();
+        std::vector<winrt::weak_ref<winrt::TerminalApp::TerminalPage>> snapshot;
+        snapshot.reserve(pages.Size());
+        for (const auto& page : pages)
+        {
+            snapshot.emplace_back(winrt::make_weak(page));
+        }
         {
             std::lock_guard lock{ _keptPagesMutex };
-            _keptPages.assign(pages.begin(), pages.end());
+            _keptPages = std::move(snapshot);
         }
         LOG_IF_WIN32_BOOL_FALSE(PostMessageW(_window.get(), WM_KEPT_SESSIONS_CHANGED, 0, 0));
     });
@@ -1211,9 +1217,10 @@ std::vector<winrt::TerminalApp::TerminalPage> WindowEmperor::GetProtocolPages() 
         }
     }
     std::lock_guard lock{ _keptPagesMutex };
-    for (const auto& page : _keptPages)
+    for (const auto& weakPage : _keptPages)
     {
-        if (std::ranges::find(pages, page) == pages.end())
+        if (const auto page = weakPage.get();
+            page && std::ranges::find(pages, page) == pages.end())
         {
             pages.emplace_back(page);
         }

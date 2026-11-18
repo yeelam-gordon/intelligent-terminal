@@ -24,6 +24,7 @@ Abstract:
 --*/
 #pragma once
 
+#include <memory>
 #include <mutex>
 #include <string_view>
 #include "ContentManager.g.h"
@@ -207,20 +208,27 @@ namespace winrt::TerminalApp::implementation
             winrt::hstring eventJson;
             winrt::hstring agent;
         };
+        struct KeptOwner
+        {
+            winrt::weak_ref<winrt::TerminalApp::TerminalPage> page;
+            KeptWindowGeometry geometry;
+        };
         struct KeptGroup
         {
-            winrt::TerminalApp::TerminalPage owner{ nullptr };
+            std::shared_ptr<KeptOwner> owner;
             winrt::TerminalApp::Tab tab{ nullptr };
-            KeptWindowGeometry geometry;
             bool restoring{ false };
             SharedWtaLease lease;
             bool selectedOnWindowClose{ false };
         };
-        // All windows share this dispatcher. Retaining the tab and its event owner
-        // preserves the live pane tree, helper lifetime and background protocol routing.
+        std::shared_ptr<KeptOwner> _RememberKeptOwner(const winrt::TerminalApp::TerminalPage& owner, const KeptWindowGeometry& geometry);
+        KeptGroup _PrepareKeptGroup(const winrt::TerminalApp::TerminalPage& owner, const winrt::TerminalApp::Tab& tab, const KeptWindowGeometry& geometry);
+        static winrt::TerminalApp::TerminalPage _ResolveKeptOwner(const KeptGroup& group);
+        // All windows share this dispatcher; the tab retains the live pane tree.
         winrt::Windows::System::DispatcherQueue _dispatcher{ winrt::Windows::System::DispatcherQueue::GetForCurrentThread() };
         std::unordered_map<uint64_t, AgentBinding> _agentBindings;
         std::unordered_map<winrt::guid, KeptGroup> _keptGroups;
+        std::vector<std::weak_ptr<KeptOwner>> _keptOwners;
         uint64_t _keptGeometryCaptureOrdinal{};
         // Only kept groups own retention; the sidebar index must not keep tabs alive.
         std::unordered_map<winrt::hstring, winrt::weak_ref<winrt::TerminalApp::Tab>> _keepRunningTabs;
