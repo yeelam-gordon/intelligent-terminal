@@ -929,17 +929,33 @@ export function publicationDecision(report) {
 
 export const CI_DEFINITION_PATHS = [
   '.github/workflows/pr-ci.yml',
+  '.github/workflows/pr-ci-native.yml',
+  '.github/workflows/native-accessibility.yml',
   'build/scripts/Run-Tests.ps1',
   'tools/razzle.cmd',
   'tools/.razzlerc.cmd',
   'build/scripts/ci-security-analysis.mjs',
+  'build/scripts/Invoke-CiPerformanceAnalysis.ps1',
+  '.cargo/config.toml',
+  '.cargo/config',
+  'src/common.build.pre.props',
   'build/config/codeql-accepted-warnings.json',
+  'build/scripts/ci-accessibility-scope.mjs',
+  'build/scripts/ci-accessibility-payload.py',
+  'test/accessibility/Invoke-AxeWindowsTestHost.ps1',
+  'test/accessibility/Invoke-AxeWindowsScan.ps1',
+  'build/scripts/Get-DependenciesFromAppxRecipe.ps1',
 ];
 
 export function validateCiDefinition(sourceTree, comparisonBaseTree) {
-  const definitions = [sourceTree, comparisonBaseTree].map(tree => {
+  const trees = [sourceTree, comparisonBaseTree];
+  for (const tree of trees) {
     if (tree?.truncated !== false || !Array.isArray(tree.tree)) fail('CI implementation requires complete immutable trees');
-    return CI_DEFINITION_PATHS.map(path => {
+  }
+  const paths = [...new Set([...CI_DEFINITION_PATHS, ...trees.flatMap(tree =>
+    tree.tree.filter(file => /(^|\/)\.clang-tidy$/.test(file?.path ?? '')).map(file => file.path))])];
+  const definitions = trees.map(tree => {
+    return paths.map(path => {
       const entries = tree.tree.filter(file => file?.path === path);
       if (entries.length > 1 || entries.some(file => file.type !== 'blob' ||
           !['100644', '100755'].includes(file.mode) || !SHA.test(file.sha ?? ''))) {
@@ -948,8 +964,8 @@ export function validateCiDefinition(sourceTree, comparisonBaseTree) {
       return entries.length ? [entries[0].mode, entries[0].type, entries[0].sha] : null;
     });
   });
-  for (const path of CI_DEFINITION_PATHS) {
-    const index = CI_DEFINITION_PATHS.indexOf(path);
+  for (const path of paths) {
+    const index = paths.indexOf(path);
     if (stableJson(definitions[0][index]) !== stableJson(definitions[1][index])) {
       fail('CI implementation differs from the trusted workflow revision; manual review is required');
     }
@@ -985,19 +1001,38 @@ export function validateCiPull(pull, run, identity) {
   }
 }
 
+export function validateCiFreshness(run, runs) {
+  if (!Number.isSafeInteger(run.run_number) || run.run_number < 1 || !Array.isArray(runs)) {
+    fail('CI freshness requires workflow-scoped run numbers');
+  }
+  // run_number is monotonic within a workflow; IDs and list order are not clocks.
+  if (runs.some(other => other.workflow_id === run.workflow_id &&
+      other.path === run.path && other.event === 'pull_request' &&
+      other.repository?.id === run.repository.id &&
+      other.head_repository?.id === run.head_repository.id &&
+      other.head_branch === run.head_branch && other.head_sha === run.head_sha &&
+      Number.isSafeInteger(other.run_number) && other.run_number > run.run_number)) {
+    fail('A newer PR CI run supersedes this review');
+  }
+}
+
+export function validateCiArtifact(artifacts, run, name) {
+  const matches = artifacts.filter(item => item.name === name);
+  if (matches.length !== 1 || matches[0].expired !== false ||
+      !Number.isSafeInteger(matches[0].id) || matches[0].id < 1 ||
+      matches[0].workflow_run?.id !== run.id ||
+      matches[0].workflow_run?.head_sha !== run.head_sha) fail('CI artifact identity is missing, expired or ambiguous');
+  return matches[0];
+}
+
 export function validateCiArtifacts(artifacts, run) {
   return ['cpp', 'rust'].map(language => {
     const name = `ci-security-${language}-${run.id}-${run.run_attempt}`;
-    const matches = artifacts.filter(item => item.name === name);
-    if (matches.length !== 1 || matches[0].expired !== false ||
-        !Number.isSafeInteger(matches[0].id) || matches[0].id < 1 ||
-        matches[0].workflow_run?.id !== run.id ||
-        matches[0].workflow_run?.head_sha !== run.head_sha) fail('CI artifact identity is missing, expired or ambiguous');
-    return { language, id: matches[0].id, name };
+    return { language, id: validateCiArtifact(artifacts, run, name).id, name };
   });
 }
 
-export function verifyCiSecurity({ environment = process.env, request } = {}) {
+export function verifyCiSecurity({ environment = process.env, request, artifactNames, producerJob } = {}) {
   const repository = environment.GITHUB_REPOSITORY;
   const identity = {
     repository, repositoryId: Number(environment.GITHUB_REPOSITORY_ID),
@@ -1019,7 +1054,7 @@ export function verifyCiSecurity({ environment = process.env, request } = {}) {
   const collect = (endpoint, key) => {
     const items = [];
     for (let page = 1; page <= 20; page++) {
-      const batch = api(`${endpoint}?per_page=100&page=${page}`)[key];
+      const batch = api(`${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=100&page=${page}`)[key];
       if (!Array.isArray(batch)) fail('invalid CI API list');
       items.push(...batch);
       if (batch.length < 100) return items;
@@ -1035,7 +1070,30 @@ export function verifyCiSecurity({ environment = process.env, request } = {}) {
   validateCiDefinition(api(`git/trees/${identity.headSha}?recursive=1`),
     api(`git/trees/${comparison.merge_base_commit.sha}?recursive=1`));
   validateCiPull(api(`pulls/${identity.prNumber}`), run, identity);
-  const artifacts = validateCiArtifacts(collect(`actions/runs/${identity.runId}/artifacts`, 'artifacts'), run);
+  if (artifactNames) {
+    // Other CI consumers reuse this identity boundary, not the security report schema.
+    validateCiFreshness(run, collect(
+      `actions/workflows/${workflow.id}/runs?event=pull_request&head_sha=${identity.headSha}`, 'workflow_runs'));
+  }
+  let producer;
+  if (producerJob !== undefined) {
+    if (typeof producerJob !== 'string' || !producerJob || !artifactNames) fail('CI producer selection is invalid');
+    const jobs = collect(`actions/runs/${identity.runId}/jobs?filter=all`, 'jobs')
+      .filter(job => job.name === producerJob);
+    if (!jobs.length || jobs.some(job => !Number.isSafeInteger(job.run_attempt) ||
+        job.run_attempt < 1 || job.run_attempt > run.run_attempt)) fail('CI producer attempt is invalid');
+    const latestAttempt = Math.max(...jobs.map(job => job.run_attempt));
+    const latest = jobs.filter(job => job.run_attempt === latestAttempt);
+    if (latest.length !== 1 || latest[0].run_id !== run.id || latest[0].head_sha !== run.head_sha ||
+        latest[0].status !== 'completed' || latest[0].conclusion !== 'success') {
+      fail('CI producer identity or successful conclusion is invalid');
+    }
+    producer = latest[0];
+  }
+  const available = collect(`actions/runs/${identity.runId}/artifacts`, 'artifacts');
+  const artifacts = artifactNames
+    ? artifactNames(run, producer).map(name => validateCiArtifact(available, run, name))
+    : validateCiArtifacts(available, run);
   return { run, artifacts, identity: { runId: String(run.id), runAttempt: run.run_attempt, headSha: run.head_sha } };
 }
 
