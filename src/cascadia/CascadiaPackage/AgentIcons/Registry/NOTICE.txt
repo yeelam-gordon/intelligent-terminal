@@ -17,16 +17,16 @@ Modifications for Intelligent Terminal:
 - artwork rasterized to transparent 128x128 PNG alpha masks;
 - Qoder's external SVG 1.1 DTD declaration removed without resolving it;
 - no artwork geometry or provider wordmark was deliberately redesigned;
-- Dirac and VT Code PNG text rendered using local Windows Georgia italic and
-  Consolas bold, respectively, according to their supplied font families.
+- Dirac PNG text rendered using local Windows Georgia italic according to
+  its supplied font family.
 
 The following registry IDs are included:
-agoragentic-acp, amp-acp, antigravity-acp, auggie, autohand, bob,
+amp-acp, auggie, autohand, bob,
 cline, codebuddy-code, cortex-code, corust-agent, crow-cli, cursor,
-deepagents, devin, dimcode, dirac, factory-droid, fast-agent, gemini,
+devin, dimcode, dirac, factory-droid, fast-agent,
 glm-acp-agent, goose, grok-build, harn, junie, kilo, kimchi, kimi-code,
-kimi, kiro, minimax-code, minion-code, mistral-vibe, muse-code, nova,
-opencode, pi-acp, poolside, qoder, qwen-code, sigit, stakpak, vtcode.
+kimi, kiro, minimax-code, mistral-vibe, muse-code, nova,
+pi-acp, poolside, qoder, qwen-code, sigit, stakpak.
 
 Names, logos and other marks remain the property of their respective owners.
 Apache-2.0 section 6 does not grant general trademark rights. Inclusion only

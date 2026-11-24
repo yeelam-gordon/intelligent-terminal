@@ -73,7 +73,7 @@ def main():
             "preset_command": row[2] if row else None,
             "setup": "quarantined" if not row else "editable package command" if row[2] else "manual executable/environment configuration",
             "profile": "Generated for configured valid custom binding; native interactive command/resume configured separately." if row else "not offered",
-            "native_resume": "Unknown unless explicitly covered in native-contracts.md; ACP session IDs are not assumed native IDs.",
+            "native_resume": "Unknown unless explicitly covered in doc/specs/acp-registry-native-sessions.md; ACP session IDs are not assumed native IDs.",
             "runtime_verified": False,
         })
     if args.matrix:
