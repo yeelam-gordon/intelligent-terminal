@@ -133,7 +133,9 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
     void AIAgentsViewModel::CurrentAcpPreset(const Editor::AgentEntry& value)
     {
-        if (!IsChoosingAcpPreset() || _GlobalSettings.IsCustomAgentPolicyLocked())
+        // Two-way SelectedItem binding can write the same object back while
+        // handling PropertyChanged. Do not re-notify or overwrite an edited command.
+        if (!IsChoosingAcpPreset() || _GlobalSettings.IsCustomAgentPolicyLocked() || _currentAcpPreset == value)
         {
             return;
         }

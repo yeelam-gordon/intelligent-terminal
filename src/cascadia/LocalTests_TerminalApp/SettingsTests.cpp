@@ -268,6 +268,15 @@ namespace TerminalAppLocalTests
                 VERIFY_IS_NOT_NULL(entry);
                 viewModel.CurrentAcpAgent(entry);
             };
+            uint32_t selectionChanges = 0;
+            const auto selectionToken = viewModel.PropertyChanged([&](const auto&, const auto& args) {
+                if (args.PropertyName() == L"CurrentAcpPreset" && viewModel.CurrentAcpPreset())
+                {
+                    ++selectionChanges;
+                    // Reproduce the two-way SelectedItem binding's write-back.
+                    viewModel.CurrentAcpPreset(viewModel.CurrentAcpPreset());
+                }
+            });
             for (const auto id : { L"bob", L"cline" })
             {
                 add();
@@ -279,10 +288,14 @@ namespace TerminalAppLocalTests
                 VERIFY_ARE_EQUAL(winrt::hstring{ Presets::IconPath(*Presets::Find(id), true) }, preset.IconPath());
                 // Never execute/download a registry provider during the test.
                 viewModel.CustomAcpCommand(L"registry-test-unavailable --acp");
+                viewModel.CurrentAcpPreset(preset);
+                VERIFY_ARE_EQUAL(winrt::hstring{ L"registry-test-unavailable --acp" }, viewModel.CustomAcpCommand());
                 viewModel.SaveCustomAcpAgent();
                 VERIFY_ARE_EQUAL(settingsId, globals.AcpAgent());
                 VERIFY_ARE_EQUAL(winrt::hstring{ L"registry-test-unavailable --acp" }, globals.EffectiveAcpCustomCommand());
             }
+            VERIFY_ARE_EQUAL(2u, selectionChanges);
+            viewModel.PropertyChanged(selectionToken);
             VERIFY_ARE_EQUAL(2u, globals.AcpNamedCustomCommands().Size());
             VERIFY_ARE_EQUAL(1u, globals.AcpCustomCommands().Size());
             VERIFY_ARE_EQUAL(winrt::hstring{ L"legacy --acp" }, globals.AcpCustomCommands().GetAt(0));
