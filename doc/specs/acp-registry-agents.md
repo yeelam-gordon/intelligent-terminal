@@ -57,7 +57,7 @@ the named binding is authoritative.
 
 Only canonical lowercase `custom:` IDs with an alphanumeric first/last
 character and interior alphanumeric, `-`, `_`, `.` characters are accepted.
-Built-in slugs, blank commands and embedded NULs are rejected. Commands are
+Built-in slugs, blank commands and embedded NUL characters are rejected. Commands are
 user-trusted executable configuration, not a sandbox.
 
 ```mermaid

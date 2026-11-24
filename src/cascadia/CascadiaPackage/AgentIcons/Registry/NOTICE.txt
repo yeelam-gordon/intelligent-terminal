@@ -14,9 +14,9 @@ verification that every contributor controlled all underlying brand rights.
 
 Modifications for Intelligent Terminal:
 - currentColor resolved to white for dark-theme SVGs and black for -light SVGs;
-- artwork rasterized to transparent 128x128 PNG alpha masks;
+- artwork converted to transparent 128x128 PNG alpha masks;
 - Qoder's external SVG 1.1 DTD declaration removed without resolving it;
-- no artwork geometry or provider wordmark was deliberately redesigned;
+- no artwork geometry or provider lettering was deliberately redesigned;
 - Dirac PNG text rendered using local Windows Georgia italic according to
   its supplied font family.
 
