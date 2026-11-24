@@ -25,7 +25,11 @@ def main():
     repo = Path(__file__).resolve().parents[2]
     header = (repo / "src/cascadia/inc/AcpAgentPresets.h").read_text(encoding="utf-8")
     assert REVISION in header
-    rows = re.findall(r'Preset\{ L"([^"]+)", L"([^"]+)", L"([^"]*)", L"([^"]*)" \}', header)
+    rows = re.findall(
+        r'Preset\s*\{\s*L"([^"]+)"\s*,\s*L"([^"]+)"\s*,'
+        r'\s*L"([^"]*)"\s*,\s*L"([^"]*)"\s*\}',
+        header,
+    )
     assert len(rows) == 42 and len({r[0] for r in rows}) == len(rows), "42 distinct active presets required"
     presets = {row[0]: row for row in rows}
     manifests = {
