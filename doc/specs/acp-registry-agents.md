@@ -2,7 +2,7 @@
 
 ## User experience and boundaries
 
-If a supported ACP agent is already installed on the Windows host, it appears by name in the **existing Settings → AI agents → Agent dropdown** and existing custom-ACP discovery path, subject to policy. Select it there; no registry browser, preset picker or catalog setup step is required. The original **Add Custom / + Add New…** command-entry flow remains unchanged for commands outside automatic discovery.
+If a supported ACP agent is already installed on the Windows host, it appears by name in the **existing Settings → Agents → Agent dropdown** and existing custom-ACP discovery path, subject to policy. Select it there; no registry browser, preset picker or catalog setup step is required. The original **Add Custom / + Add New…** command-entry flow remains unchanged for commands outside automatic discovery.
 
 Discovery uses bundled metadata, commands and packaged icons, derived from [`agentclientprotocol/registry@2a27ff18b5816f47d7ec538e22943ff194e05131`][registry]. It does not fetch a catalog or download/install a provider. There is no remote feed, default-catalog download, automatic update or new runtime registry-refresh machinery. “Offline” describes discovery and bundled assets, not an assurance that an agent's own service works without a network.
 
@@ -12,7 +12,7 @@ The six existing built-ins—Copilot, Claude, Codex, Gemini, OpenCode and Antigr
 
 ## Installed detection, identity and policy
 
-The source of the local command list is [`AcpAgentCatalog.h`](../../src/cascadia/inc/AcpAgentCatalog.h). `Executable()` uses `SearchPathW` to find the listed agent's `.exe` or `.cmd` and rejects directories. `Command()` quotes the resolved path and appends the bundled ACP arguments. It does not run `--version`, an agent, authentication, a hook probe or a package manager during discovery. Finding `npx`, `uvx`, Node or Python alone is **not** evidence that an agent is installed. Amp additionally requires `amp`; pi ACP additionally requires `pi`, besides their adapter executables.
+The source of the local command list is [`AcpAgentCatalog.h`](../../src/cascadia/inc/AcpAgentCatalog.h). `Executable()` uses `SearchPathW` with explicitly configured PATH entries to find the listed agent's `.exe` or `.cmd` and rejects directories. Empty PATH components and the implicit current/application-directory search are excluded: a workspace file is not an installed agent. `Command()` quotes the resolved path and appends the bundled ACP arguments. It does not run `--version`, an agent, authentication, a hook probe or a package manager during discovery. Finding `npx`, `uvx`, Node or Python alone is **not** evidence that an agent is installed. Amp additionally requires `amp`; pi ACP additionally requires `pi`, besides their adapter executables.
 
 Registry-derived entries use stable IDs `custom:acp-registry:<id>` (for example, `custom:acp-registry:bob`). The extra namespace separator avoids taking over executable-derived handwritten IDs such as `custom:acp-registry-bob`. They resolve to an installed command from the bundled metadata, not to an additional user-maintained named-command map or a package-download command. Original handwritten `acpCustomCommand` / `acpCustomCommands` behavior remains available; this feature does not require a new settings schema or custom-ID migration.
 

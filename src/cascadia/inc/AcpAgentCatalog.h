@@ -89,13 +89,61 @@ namespace Microsoft::Terminal::Settings::Model::AcpAgentCatalog
 
     inline std::wstring Executable(const std::wstring_view name, const wchar_t* searchPath = nullptr)
     {
-        // Match existing host discovery's executable/shim lookup. Search only:
-        // never run --version, a package manager, a provider, or a hook probe.
+        // Search configured PATH only, not SearchPathW's implicit application /
+        // current-directory search. A workspace file is not an installed agent.
+        std::wstring environmentPath;
+        if (!searchPath)
+        {
+            const auto required = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+            if (!required)
+            {
+                return {};
+            }
+            environmentPath.resize(required);
+            const auto length = GetEnvironmentVariableW(L"PATH", environmentPath.data(), required);
+            if (!length || length >= required)
+            {
+                return {};
+            }
+            environmentPath.resize(length);
+            searchPath = environmentPath.c_str();
+        }
+        // Empty PATH components also make SearchPathW search the workspace.
+        // Match native executable discovery: ignore them and strip path quotes.
+        std::wstring paths;
+        const std::wstring_view configuredPath{ searchPath };
+        for (size_t start = 0; start < configuredPath.size();)
+        {
+            const auto end = configuredPath.find(L';', start);
+            auto directory = configuredPath.substr(start, end == std::wstring_view::npos ? end : end - start);
+            if (directory.size() >= 2 && directory.front() == L'"' && directory.back() == L'"')
+            {
+                directory = directory.substr(1, directory.size() - 2);
+            }
+            if (!directory.empty())
+            {
+                if (!paths.empty())
+                {
+                    paths.push_back(L';');
+                }
+                paths.append(directory);
+            }
+            if (end == std::wstring_view::npos)
+            {
+                break;
+            }
+            start = end + 1;
+        }
+        if (paths.empty())
+        {
+            return {};
+        }
+        // Never run --version, a package manager, a provider, or a hook probe.
         for (const auto extension : { L".exe", L".cmd" })
         {
             const auto leaf = std::wstring{ name } + extension;
             std::wstring path(32768, L'\0');
-            const auto length = SearchPathW(searchPath, leaf.c_str(), nullptr, static_cast<DWORD>(path.size()), path.data(), nullptr);
+            const auto length = SearchPathW(paths.c_str(), leaf.c_str(), nullptr, static_cast<DWORD>(path.size()), path.data(), nullptr);
             if (length && length < path.size())
             {
                 path.resize(length);

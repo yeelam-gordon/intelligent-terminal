@@ -352,8 +352,17 @@ namespace SettingsModelUnitTests
         VERIFY_IS_TRUE(globals.EffectiveAcpCustomCommand().empty());
         SetPolicy(MakePolicy());
         std::filesystem::remove(root / L"stakpak.exe");
+        const auto originalDirectory = std::filesystem::current_path();
+        const auto restoreDirectory = wil::scope_exit([&]() { std::filesystem::current_path(originalDirectory); });
+        const auto uninstalledDirectory = root / L"Not On PATH";
+        std::filesystem::create_directory(uninstalledDirectory);
+        std::ofstream{ uninstalledDirectory / L"stakpak.exe" }.put('\n');
+        std::filesystem::current_path(uninstalledDirectory);
+        VERIFY_IS_TRUE(Catalog::Executable(L"stakpak", L"").empty());
+        VERIFY_IS_TRUE(Catalog::Executable(L"stakpak", L";").empty());
         globals.AcpCustomCommand(L"wrong-unrelated-command --stdio");
-        // Saved unavailable catalog selection must not launch a stale custom command.
+        // A matching file in a workspace is not an installed agent. A saved
+        // unavailable selection must not resolve it or a stale custom command.
         VERIFY_IS_TRUE(globals.EffectiveAcpAgent().empty());
         VERIFY_IS_TRUE(globals.EffectiveAcpCustomCommand().empty());
         globals.AcpAgent(L"custom:user-owned-agent");
