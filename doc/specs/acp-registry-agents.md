@@ -90,7 +90,7 @@ availability on every CPU/OS.
 | nova | 1.1.68 | `npx @compass-ai/nova@1.1.68 acp` | P | [`nova`](https://unpkg.com/@compass-ai/nova@1.1.68/package.json) `acp` |
 | opencode | 2.4.1 | archive `opencode[.exe] acp` | W,WA,L,LA,M | Existing OpenCode built-in unchanged |
 | pi-acp | 0.0.35 | `npx pi-acp@0.0.35` | P | [`pi-acp`](https://unpkg.com/pi-acp@0.0.35/package.json); also requires `pi` |
-| poolside | 1.0.16 | archive `pool-<platform>-<arch>[.exe] acp` | W,WA,L,LA | `pool-windows-amd64 acp` |
+| poolside | 1.0.16 | archive `pool-<platform>-<arch>[.exe] acp` | W,WA,L,LA | installed [`pool acp`](https://github.com/poolsideai/pool/blob/fcabc59ff67810ecec5429ec9d45fa1dda6c1136/README.md#run-as-an-acp-server-pool-acp); fallback `pool-windows-amd64 acp` (x64) / `pool-windows-arm64 acp` (ARM64), same choice |
 | qoder | 1.1.96 | `npx @qoder-ai/qodercli@1.1.96 --acp` | P | [`qodercli`](https://unpkg.com/@qoder-ai/qodercli@1.1.96/package.json) `--acp` |
 | qwen-code | 0.28.4 | `npx @qwen-code/qwen-code@0.28.4 --acp --experimental-skills` | P | [`qwen`](https://unpkg.com/@qwen-code/qwen-code@0.28.4/package.json) `--acp --experimental-skills` |
 | sigit | 1.7.10 | `npx @smbcloud/sigit@1.7.10` (manifest omits `--acp`) | P; W,WA,L,LA binary alternative | [`sigit`](https://unpkg.com/@smbcloud/sigit@1.7.10/package.json) `--acp`; explicit README override below |

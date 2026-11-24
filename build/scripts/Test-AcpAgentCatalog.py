@@ -45,7 +45,8 @@ def main():
     assert REVISION in header
     rows = re.findall(
         r'Agent\s*\{\s*L"([^"]+)"\s*,\s*L"([^"]+)"\s*,'
-        r'\s*L"([^"]+)"\s*,\s*L"([^"]*)"(?:\s*,\s*L"([^"]*)")?\s*\}',
+        r'\s*L"([^"]+)"\s*,\s*L"([^"]*)"(?:\s*,\s*L"([^"]*)")?'
+        r'(?:\s*,\s*(PoolsideArchiveExecutable))?\s*\}',
         header,
     )
     assert len(rows) == 30 and len({r[0] for r in rows}) == len(rows), "30 distinct local-command candidates required"
@@ -71,15 +72,27 @@ def main():
     for id_, row in catalog.items():
         manifest = manifests[id_]
         distribution = manifest["distribution"]
-        _, _, executable, arguments, dependency = row
+        _, _, executable, arguments, dependency, alternate = row
         assert executable not in {"npx", "uvx", "node", "python"}, "runtime is not agent installation"
+        assert alternate == ("PoolsideArchiveExecutable" if id_ == "poolside" else "")
         if id_ in NPM_BINS:
             source = distribution["npx"]
             assert executable == NPM_BINS[id_], f"{id_}: published bin drift"
         else:
             source = distribution["binary"]["windows-x86_64"]
             leaf = source["cmd"].replace("\\", "/").split("/")[-1]
-            assert executable == leaf.removesuffix(".exe").removesuffix(".cmd"), f"{id_}: executable drift"
+            if id_ == "poolside":
+                # The pinned provider README documents the installed pool
+                # launcher; both archive aliases must match pinned manifests.
+                assert executable == "pool"
+                aliases = re.findall(r'PoolsideArchiveExecutable\s*\{\s*L"([^"]+)"', header)
+                expected_aliases = {
+                    Path(distribution["binary"][platform]["cmd"]).stem
+                    for platform in ["windows-x86_64", "windows-aarch64"]
+                }
+                assert set(aliases) == expected_aliases
+            else:
+                assert executable == leaf.removesuffix(".exe").removesuffix(".cmd"), f"{id_}: executable drift"
         assert not source.get("env"), f"{id_}: required environment must not be dropped"
         expected_args = "--acp" if id_ == "sigit" else " ".join(source.get("args", []))
         assert arguments == expected_args, f"{id_}: ACP argument drift"

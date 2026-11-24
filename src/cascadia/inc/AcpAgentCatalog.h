@@ -16,6 +16,12 @@ namespace Microsoft::Terminal::Settings::Model::AcpAgentCatalog
     // package.json bin metadata; see doc/specs/acp-registry-agents.md.
     inline constexpr std::wstring_view Revision{ L"2a27ff18b5816f47d7ec538e22943ff194e05131" };
 
+#if defined(_M_ARM64)
+    inline constexpr std::wstring_view PoolsideArchiveExecutable{ L"pool-windows-arm64" };
+#else
+    inline constexpr std::wstring_view PoolsideArchiveExecutable{ L"pool-windows-amd64" };
+#endif
+
     struct Agent
     {
         std::wstring_view id;
@@ -23,6 +29,7 @@ namespace Microsoft::Terminal::Settings::Model::AcpAgentCatalog
         std::wstring_view executable;
         std::wstring_view arguments;
         std::wstring_view dependency{};
+        std::wstring_view alternateExecutable{};
     };
 
     // Existing built-ins keep their existing discovery/auth/launch behavior.
@@ -56,7 +63,7 @@ namespace Microsoft::Terminal::Settings::Model::AcpAgentCatalog
         Agent{ L"mistral-vibe", L"Mistral Vibe", L"vibe-acp", L"" },
         Agent{ L"nova", L"Nova", L"nova", L"acp" },
         Agent{ L"pi-acp", L"pi ACP", L"pi-acp", L"", L"pi" },
-        Agent{ L"poolside", L"Poolside", L"pool-windows-amd64", L"acp" },
+        Agent{ L"poolside", L"Poolside", L"pool", L"acp", L"", PoolsideArchiveExecutable },
         Agent{ L"qoder", L"Qoder CLI", L"qodercli", L"--acp" },
         Agent{ L"qwen-code", L"Qwen Code", L"qwen", L"--acp --experimental-skills" },
         // The exact-version README requires --acp; the registry omits it.
@@ -159,7 +166,11 @@ namespace Microsoft::Terminal::Settings::Model::AcpAgentCatalog
 
     inline std::wstring Command(const Agent& agent, const wchar_t* searchPath = nullptr)
     {
-        const auto executable = Executable(agent.executable, searchPath);
+        auto executable = Executable(agent.executable, searchPath);
+        if (executable.empty() && !agent.alternateExecutable.empty())
+        {
+            executable = Executable(agent.alternateExecutable, searchPath);
+        }
         if (executable.empty() ||
             (!agent.dependency.empty() && Executable(agent.dependency, searchPath).empty()))
         {

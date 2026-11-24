@@ -280,6 +280,25 @@ namespace SettingsModelUnitTests
         VERIFY_ARE_EQUAL(size_t{ 4 }, installed.size());
         std::filesystem::remove(root / L"cline.cmd");
         VERIFY_IS_TRUE(Catalog::Command(*cline, root.c_str()).empty());
+        const auto poolside = Catalog::Find(L"custom:acp-registry:poolside");
+        VERIFY_IS_NOT_NULL(poolside);
+        const auto archiveName = std::wstring{ Catalog::PoolsideArchiveExecutable } + L".exe";
+        const auto wrongArchiveName = Catalog::PoolsideArchiveExecutable == L"pool-windows-arm64" ?
+                                          L"pool-windows-amd64.exe" :
+                                          L"pool-windows-arm64.exe";
+        add(wrongArchiveName);
+        VERIFY_IS_TRUE(Catalog::Command(*poolside, root.c_str()).empty());
+        add(archiveName.c_str());
+        VERIFY_ARE_EQUAL((root / archiveName).native(), ParseFullCommandLine(Catalog::Command(*poolside, root.c_str()))[0]);
+        add(L"pool.cmd");
+        const auto poolArguments = ParseFullCommandLine(Catalog::Command(*poolside, root.c_str()));
+        VERIFY_ARE_EQUAL((root / L"pool.cmd").native(), poolArguments[0]);
+        VERIFY_ARE_EQUAL(std::wstring{ L"acp" }, poolArguments[1]);
+        installed = Catalog::Discover(root.c_str());
+        VERIFY_ARE_EQUAL(ptrdiff_t{ 1 }, std::ranges::count_if(installed, [&](const auto& agent) { return agent.metadata == poolside; }));
+        std::filesystem::remove(root / L"pool.cmd");
+        std::filesystem::remove(root / archiveName);
+        VERIFY_IS_TRUE(Catalog::Command(*poolside, root.c_str()).empty());
         for (const auto& agent : Catalog::Agents)
         {
             VERIFY_IS_FALSE(::Microsoft::Terminal::Settings::Model::AgentRegistry::SupportsSessionHooks(Catalog::Id(agent)));
