@@ -3090,4 +3090,23 @@ Alt+Shift+/ introduzca una consulta; Alt+Shift+B inicie sin una consulta inicial
     <value>Se añaden después de los argumentos de inicio normales solo al reanudar una sesión. El identificador de sesión se agrega automáticamente al final.</value>
     <comment>The user enters arguments, never a placeholder for the session identifier.</comment>
   </data>
+  <data name="AIAgents_AcpRegistry.Header" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistry.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Accessible name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryHelp.Text" xml:space="preserve">
+    <value>Revise el comando y las instrucciones de configuración del proveedor antes de guardar. Los comandos de paquetes pueden descargar software al ejecutarse. La inclusión en el registro no garantiza la compatibilidad.</value>
+    <comment>Shown below the registry preset picker; choosing a preset does not run its command.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistrySetup.Text" xml:space="preserve">
+    <value>Se requiere configuración manual: configure un ejecutable instalado y las variables de entorno necesarias siguiendo las instrucciones del proveedor.</value>
+    <comment>Shown when a registry distribution cannot safely be represented as a plain command, such as an archive or a command requiring environment variables.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryDocs.Content" xml:space="preserve">
+    <value>Instrucciones de configuración del proveedor</value>
+  </data>
 </root>

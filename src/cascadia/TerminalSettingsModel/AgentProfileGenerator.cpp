@@ -8,6 +8,8 @@
 #include "../inc/AgentProfileUtils.h"
 #include "../inc/AgentRegistry.h"
 #include "../inc/CustomAgentId.h"
+#include "../inc/AcpAgentPresets.h"
+#include "../inc/NamedCustomAcpCommands.h"
 #include <mutex>
 #include <set>
 
@@ -18,15 +20,34 @@ AgentProfileGenerator::AgentProfileGenerator(const implementation::GlobalAppSett
 {
     if (settings)
     {
+        namespace Named = ::Microsoft::Terminal::Settings::Model::NamedCustomAcpCommands;
+        const auto appendLegacy = [&](const winrt::hstring& command) {
+            const auto id = L"custom:" + std::wstring{ ::Microsoft::Terminal::Settings::Model::DeriveCustomAgentId(command) };
+            if (!command.empty() && id != L"custom:")
+            {
+                _customAgentIds.emplace_back(id);
+            }
+        };
         for (const auto& commands : { settings->AcpCustomCommands(), settings->DelegateCustomCommands() })
         {
             for (const auto& command : commands)
             {
-                _customCommands.emplace_back(command);
+                appendLegacy(command);
             }
         }
-        _customCommands.emplace_back(settings->AcpCustomCommand());
-        _customCommands.emplace_back(settings->DelegateCustomCommand());
+        const auto named = settings->AcpNamedCustomCommands();
+        if (!Named::HasSelectedBinding(settings->AcpAgent(), named))
+        {
+            appendLegacy(settings->AcpCustomCommand());
+        }
+        appendLegacy(settings->DelegateCustomCommand());
+        for (const auto& entry : named)
+        {
+            if (Named::IsValidId(entry.Key()) && Named::IsValidCommand(entry.Value()))
+            {
+                _customAgentIds.emplace_back(entry.Key());
+            }
+        }
     }
 }
 
@@ -101,16 +122,20 @@ void AgentProfileGenerator::GenerateProfiles(std::vector<winrt::com_ptr<implemen
     if (::Microsoft::Terminal::Settings::Model::AgentPolicy::IsCustomAgentAllowed())
     {
         std::set<std::wstring> seen;
-        for (const auto& command : _customCommands)
+        for (const auto& id : _customAgentIds)
         {
-            const auto id = L"custom:" + std::wstring{ ::Microsoft::Terminal::Settings::Model::DeriveCustomAgentId(command) };
-            if (command.empty() || id == L"custom:" || !seen.insert(id).second)
+            if (!seen.insert(id).second)
             {
                 continue;
             }
             auto profile = CreateDynamicProfile(AgentProfiles::GeneratedIdentity(id));
             profile->Name(winrt::hstring{ id.substr(7) });
             profile->AgentProfileId(winrt::hstring{ id });
+            if (const auto preset = ::Microsoft::Terminal::Settings::Model::AcpAgentPresets::FindByCustomId(id))
+            {
+                profile->Name(winrt::hstring{ preset->name });
+                profile->Icon(winrt::hstring{ ::Microsoft::Terminal::Settings::Model::AcpAgentPresets::IconPath(*preset) });
+            }
             profile->StartingDirectory(L"%USERPROFILE%");
             // An ACP command may name an adapter, not an interactive CLI.
             // Require a separately configured native command; never guess one.

@@ -3090,4 +3090,23 @@ Alt+Shift+/ 輸入提問；Alt+Shift+B 不帶初始提問啟動。</value><comme
     <value>僅在恢復工作階段時，才會新增至一般啟動引數之後。工作階段 ID 會自動附加至結尾。</value>
     <comment>The user enters arguments, never a placeholder for the session identifier.</comment>
   </data>
+  <data name="AIAgents_AcpRegistry.Header" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistry.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Accessible name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryHelp.Text" xml:space="preserve">
+    <value>儲存前請檢查命令並參閱提供者的設定指示。套件命令在執行時可能會下載軟體。收錄於目錄中並不保證相容性。</value>
+    <comment>Shown below the registry preset picker; choosing a preset does not run its command.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistrySetup.Text" xml:space="preserve">
+    <value>需要手動設定：請依照提供者的指示，設定已安裝的可執行檔及任何必要的環境變數。</value>
+    <comment>Shown when a registry distribution cannot safely be represented as a plain command, such as an archive or a command requiring environment variables.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryDocs.Content" xml:space="preserve">
+    <value>提供者設定指示</value>
+  </data>
 </root>

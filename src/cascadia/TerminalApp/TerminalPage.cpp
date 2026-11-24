@@ -1846,7 +1846,7 @@ namespace winrt::TerminalApp::implementation
         // Custom agents: use the stored custom command directly.
         if (_IsCustomAgentId(acpAgent))
         {
-            const auto customCmd = globals.AcpCustomCommand();
+            const auto customCmd = globals.EffectiveAcpCustomCommand();
             if (!customCmd.empty())
                 return customCmd;
         }
@@ -2119,7 +2119,7 @@ namespace winrt::TerminalApp::implementation
 
         const auto& globals = _settings.GlobalSettings();
         return _IsCustomAgentId(globals.EffectiveAcpAgent()) ?
-                   globals.AcpCustomCommand() :
+                   globals.EffectiveAcpCustomCommand() :
                    winrt::hstring{};
     }
 
@@ -2549,7 +2549,7 @@ namespace winrt::TerminalApp::implementation
         const auto& globals = _settings.GlobalSettings();
         AgentSettingsSnapshot snapshot{
             std::wstring{ globals.AcpAgent() },
-            std::wstring{ globals.AcpCustomCommand() },
+            std::wstring{ globals.EffectiveAcpCustomCommand() },
             _IsAgentByokConfigured(globals.EffectiveAcpAgent(), globals) ?
                 std::wstring{} :
                 std::wstring{ globals.AcpModel() },

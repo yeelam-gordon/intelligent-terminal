@@ -11,6 +11,7 @@
 #include "FontConfig.h"
 #include "../inc/AgentProfileUtils.h"
 #include "../inc/CustomAgentId.h"
+#include "../inc/NamedCustomAcpCommands.h"
 
 #include "Profile.g.cpp"
 
@@ -37,6 +38,16 @@ bool Profile::IsDeletable() const
     {
         if (const auto settings = SettingsOwner.get())
         {
+            namespace Named = ::Microsoft::Terminal::Settings::Model::NamedCustomAcpCommands;
+            const auto named = settings.AcpNamedCustomCommands();
+            for (const auto& entry : named)
+            {
+                if (Named::IsValidId(entry.Key()) && Named::IsValidCommand(entry.Value()) &&
+                    Guid() == ::Microsoft::Terminal::AgentProfiles::GeneratedGuid(entry.Key()))
+                {
+                    return false;
+                }
+            }
             const auto matches = [&](const winrt::hstring& command) {
                 if (command.empty())
                 {
@@ -45,7 +56,8 @@ bool Profile::IsDeletable() const
                 const auto id = L"custom:" + std::wstring{ ::Microsoft::Terminal::Settings::Model::DeriveCustomAgentId(command) };
                 return id != L"custom:" && Guid() == ::Microsoft::Terminal::AgentProfiles::GeneratedGuid(id);
             };
-            if (matches(settings.AcpCustomCommand()) || matches(settings.DelegateCustomCommand()) ||
+            if ((!Named::HasSelectedBinding(settings.AcpAgent(), named) && matches(settings.AcpCustomCommand())) ||
+                matches(settings.DelegateCustomCommand()) ||
                 std::ranges::any_of(settings.AcpCustomCommands(), matches) ||
                 std::ranges::any_of(settings.DelegateCustomCommands(), matches))
             {

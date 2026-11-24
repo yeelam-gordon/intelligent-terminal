@@ -3126,4 +3126,23 @@ Alt+Shift+/ 프롬프트 입력; Alt+Shift+B 초기 프롬프트 없이 실행</
     <value>세션을 재개할 때만 일반 시작 인수 뒤에 추가됩니다. 세션 ID는 끝에 자동으로 추가됩니다.</value>
     <comment>The user enters arguments, never a placeholder for the session identifier.</comment>
   </data>
+  <data name="AIAgents_AcpRegistry.Header" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistry.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Accessible name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryHelp.Text" xml:space="preserve">
+    <value>저장하기 전에 명령과 공급자의 설정 지침을 검토하세요. 패키지 명령을 실행하면 소프트웨어가 다운로드될 수 있습니다. 레지스트리에 포함되어 있다고 해서 호환성이 보장되는 것은 아닙니다.</value>
+    <comment>Shown below the registry preset picker; choosing a preset does not run its command.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistrySetup.Text" xml:space="preserve">
+    <value>수동 설정 필요: 공급자의 지침에 따라 설치된 실행 파일과 필요한 환경 변수를 구성하세요.</value>
+    <comment>Shown when a registry distribution cannot safely be represented as a plain command, such as an archive or a command requiring environment variables.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryDocs.Content" xml:space="preserve">
+    <value>공급자의 설정 지침</value>
+  </data>
 </root>

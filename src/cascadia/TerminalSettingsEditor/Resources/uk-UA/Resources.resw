@@ -3075,4 +3075,23 @@ Alt+Shift+/ введіть запит; Alt+Shift+B запустіть без п�
     <value>Додаються після звичайних аргументів запуску лише під час відновлення сеансу. Ідентифікатор сеансу автоматично додається в кінці.</value>
     <comment>The user enters arguments, never a placeholder for the session identifier.</comment>
   </data>
+  <data name="AIAgents_AcpRegistry.Header" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistry.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Accessible name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryHelp.Text" xml:space="preserve">
+    <value>Перед збереженням перевірте команду та інструкції постачальника з налаштування. Команди пакетів можуть завантажувати програмне забезпечення під час виконання. Наявність у реєстрі не гарантує сумісності.</value>
+    <comment>Shown below the registry preset picker; choosing a preset does not run its command.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistrySetup.Text" xml:space="preserve">
+    <value>Потрібне ручне налаштування: налаштуйте інстальований виконуваний файл і всі потрібні змінні середовища відповідно до інструкцій постачальника.</value>
+    <comment>Shown when a registry distribution cannot safely be represented as a plain command, such as an archive or a command requiring environment variables.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryDocs.Content" xml:space="preserve">
+    <value>Інструкції постачальника з налаштування</value>
+  </data>
 </root>

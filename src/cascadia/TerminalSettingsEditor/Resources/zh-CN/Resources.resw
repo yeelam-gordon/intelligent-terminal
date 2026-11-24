@@ -3126,4 +3126,23 @@ Alt+Shift+/ 输入提示词；Alt+Shift+B 不带初始提示词启动。</value>
     <value>仅在恢复会话时添加到常规启动参数之后。会话 ID 会自动追加到末尾。</value>
     <comment>The user enters arguments, never a placeholder for the session identifier.</comment>
   </data>
+  <data name="AIAgents_AcpRegistry.Header" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistry.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Accessible name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryHelp.Text" xml:space="preserve">
+    <value>保存前请检查命令并查阅提供商的设置说明。软件包命令在运行时可能会下载软件。收录在名录中并不保证兼容性。</value>
+    <comment>Shown below the registry preset picker; choosing a preset does not run its command.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistrySetup.Text" xml:space="preserve">
+    <value>需要手动设置：请按照提供商的说明配置已安装的可执行文件和任何必需的环境变量。</value>
+    <comment>Shown when a registry distribution cannot safely be represented as a plain command, such as an archive or a command requiring environment variables.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryDocs.Content" xml:space="preserve">
+    <value>提供商设置说明</value>
+  </data>
 </root>

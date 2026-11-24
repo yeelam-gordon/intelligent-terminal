@@ -3091,4 +3091,23 @@ Alt+Shift+/ saisir une requête ; Alt+Shift+B lancer sans requête initiale.</va
     <value>Ajoutés après les arguments de démarrage habituels uniquement lors de la reprise d’une session. L’identifiant de session est automatiquement ajouté à la fin.</value>
     <comment>The user enters arguments, never a placeholder for the session identifier.</comment>
   </data>
+  <data name="AIAgents_AcpRegistry.Header" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistry.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
+    <value>ACP Registry</value>
+    <comment>{Locked} Accessible name of the Agent Client Protocol registry preset picker.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryHelp.Text" xml:space="preserve">
+    <value>Vérifiez la commande et les instructions de configuration du fournisseur avant d’enregistrer. Les commandes de packages peuvent télécharger des logiciels lors de leur exécution. L’inclusion dans le registre ne garantit pas la compatibilité.</value>
+    <comment>Shown below the registry preset picker; choosing a preset does not run its command.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistrySetup.Text" xml:space="preserve">
+    <value>Configuration manuelle requise : configurez un exécutable installé et les variables d’environnement nécessaires en suivant les instructions du fournisseur.</value>
+    <comment>Shown when a registry distribution cannot safely be represented as a plain command, such as an archive or a command requiring environment variables.</comment>
+  </data>
+  <data name="AIAgents_AcpRegistryDocs.Content" xml:space="preserve">
+    <value>Instructions de configuration du fournisseur</value>
+  </data>
 </root>

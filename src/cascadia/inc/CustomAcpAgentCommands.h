@@ -4,6 +4,7 @@
 #pragma once
 
 #include "CustomAgentId.h"
+#include "NamedCustomAcpCommands.h"
 #include <algorithm>
 #include <json/json.h>
 #include <stdexcept>
@@ -46,7 +47,34 @@ namespace Microsoft::Terminal::Settings::Model
         {
             append(plural);
         }
-        append(settings["acpCustomCommand"]);
+        const auto& named = settings["acpNamedCustomCommands"];
+        if (!named.isNull() && !named.isObject())
+        {
+            throw std::invalid_argument("named custom ACP commands must be an object");
+        }
+        bool selectedMirror = false;
+        if (named.isObject())
+        {
+            const auto& selected = settings["acpAgent"];
+            selectedMirror = selected.isString() && named.isMember(selected.asString());
+            for (auto entry = named.begin(); entry != named.end(); ++entry)
+            {
+                if (!entry->isString())
+                {
+                    throw std::invalid_argument("named custom ACP command must be a string");
+                }
+                const auto key = entry.name();
+                if (NamedCustomAcpCommands::IsValidId(winrt::to_hstring(key)) &&
+                    NamedCustomAcpCommands::IsValidCommand(winrt::to_hstring(entry->asString())))
+                {
+                    commands[key] = *entry;
+                }
+            }
+        }
+        if (!selectedMirror)
+        {
+            append(settings["acpCustomCommand"]);
+        }
         return commands;
     }
 }

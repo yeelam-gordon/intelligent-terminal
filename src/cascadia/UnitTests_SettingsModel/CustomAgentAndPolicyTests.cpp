@@ -34,8 +34,10 @@
 #include "../TerminalApp/AgentProviderTelemetry.h"
 #include "../inc/AgentPolicy.h"
 #include "../inc/AgentRegistry.h"
+#include "../inc/CustomAcpAgentCommands.h"
 #include "../inc/CustomModelProviderUtils.h"
 #include "../inc/AgentProfileUtils.h"
+#include "../inc/AcpAgentPresets.h"
 #include "../inc/ProfileSplitPolicy.h"
 #include "JsonTestClass.h"
 #include <cstring>
@@ -96,6 +98,12 @@ namespace SettingsModelUnitTests
         TEST_METHOD(AgentProfileSplitTargets);
         TEST_METHOD(CustomDelegateAgentRoundtrips);
         TEST_METHOD(CustomAgentCollectionsRoundtrip);
+        TEST_METHOD(NamedCustomAcpCommandsRoundtripAndProjection);
+        TEST_METHOD(NamedCustomAcpCommandsCloneIsolation);
+        TEST_METHOD(NamedCustomAcpCommandsProfilesAndPolicy);
+        TEST_METHOD(NamedCustomAcpCommandsRejectMalformedBindings);
+        TEST_METHOD(NamedCustomAcpCommandsTelemetry);
+        TEST_METHOD(RegistryPresetProfilesShareIcons);
         TEST_METHOD(QuotedPathCustomCommandRoundtrips);
         TEST_METHOD(AgentTelemetryProviderBuckets);
         TEST_METHOD(AgentTelemetryProviderTransitions);
@@ -1237,6 +1245,207 @@ namespace SettingsModelUnitTests
         VERIFY_ARE_EQUAL(Json::ArrayIndex{ 2 }, serialized["delegateCustomCommands"].size());
         VERIFY_ARE_EQUAL(std::string{ "delegate1" }, serialized["delegateCustomCommands"][0].asString());
         VERIFY_ARE_EQUAL(std::string{ "delegate2" }, serialized["delegateCustomCommands"][1].asString());
+    }
+
+    void CustomAgentAndPolicyTests::NamedCustomAcpCommandsRoundtripAndProjection()
+    {
+        namespace Settings = ::Microsoft::Terminal::Settings::Model;
+        const auto settings = MakeSettings(R"(
+            "acpAgent":"custom:acp-registry-first",
+            "acpCustomCommand":"npx --yes first-acp@1.2.3",
+            "acpCustomCommands":["npx --yes legacy-acp@1"],
+            "acpNamedCustomCommands":{
+                "custom:acp-registry-first":"npx --yes first-acp@1.2.3",
+                "custom:acp-registry-second":"npx --yes second-acp@4.5.6"})");
+        SetPolicy(MakePolicy());
+        const auto globals = settings->GlobalSettings();
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"npx --yes first-acp@1.2.3" }, globals.EffectiveAcpCustomCommand());
+        auto serialized = settings->ToJson();
+        const auto reloaded = implementation::GlobalAppSettings::FromJson(serialized);
+        VERIFY_ARE_EQUAL(uint32_t{ 2 }, reloaded->AcpNamedCustomCommands().Size());
+        VERIFY_ARE_EQUAL(globals.EffectiveAcpCustomCommand(), reloaded->EffectiveAcpCustomCommand());
+        auto projected = Settings::ProjectCustomAcpAgentCommands(serialized);
+        VERIFY_ARE_EQUAL(Json::ArrayIndex{ 3 }, projected.size());
+        VERIFY_ARE_EQUAL(std::string{ "npx --yes legacy-acp@1" }, projected["custom:npx"].asString());
+        VERIFY_ARE_EQUAL(std::string{ "npx --yes first-acp@1.2.3" }, projected["custom:acp-registry-first"].asString());
+        VERIFY_ARE_EQUAL(std::string{ "npx --yes second-acp@4.5.6" }, projected["custom:acp-registry-second"].asString());
+
+        serialized.removeMember("acpCustomCommands");
+        projected = Settings::ProjectCustomAcpAgentCommands(serialized);
+        VERIFY_ARE_EQUAL(Json::ArrayIndex{ 2 }, projected.size());
+        VERIFY_IS_FALSE(projected.isMember("custom:npx"));
+        globals.AcpNamedCustomCommands().Insert(L"custom:acp-registry-first", L"npx --yes first-acp@2");
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"npx --yes first-acp@2" }, globals.EffectiveAcpCustomCommand());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"npx --yes first-acp@1.2.3" }, globals.AcpCustomCommand());
+        serialized["acpNamedCustomCommands"]["custom:acp-registry-first"] = "npx --yes first-acp@2";
+        VERIFY_IS_FALSE(Settings::ProjectCustomAcpAgentCommands(serialized).isMember("custom:npx"));
+        globals.AcpAgent(L"custom:acp-registry-second");
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"npx --yes second-acp@4.5.6" }, globals.EffectiveAcpCustomCommand());
+        globals.AcpAgent(L"custom:npx");
+        VERIFY_ARE_EQUAL(globals.AcpCustomCommand(), globals.EffectiveAcpCustomCommand());
+    }
+
+    void CustomAgentAndPolicyTests::NamedCustomAcpCommandsCloneIsolation()
+    {
+        const auto settings = MakeSettings(R"(
+            "acpAgent":"custom:stable",
+            "acpNamedCustomCommands":{"custom:stable":"npx stable-acp@1","custom:other":"npx other-acp@1"})");
+        const auto copy = settings->Copy();
+        const auto original = settings->GlobalSettings().AcpNamedCustomCommands();
+        const auto cloned = copy.GlobalSettings().AcpNamedCustomCommands();
+        cloned.Insert(L"custom:stable", L"npx stable-acp@2");
+        cloned.Remove(L"custom:other");
+        cloned.Insert(L"custom:added", L"npx added-acp@1");
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"npx stable-acp@1" }, original.Lookup(L"custom:stable"));
+        VERIFY_IS_TRUE(original.HasKey(L"custom:other"));
+        VERIFY_IS_FALSE(original.HasKey(L"custom:added"));
+        const auto parent = winrt::get_self<implementation::GlobalAppSettings>(settings->GlobalSettings());
+        const auto child = parent->CreateChild();
+        const auto childCopy = child->Copy();
+        childCopy->AcpNamedCustomCommands().Clear();
+        VERIFY_ARE_EQUAL(uint32_t{ 2 }, original.Size());
+    }
+
+    void CustomAgentAndPolicyTests::RegistryPresetProfilesShareIcons()
+    {
+        namespace Presets = ::Microsoft::Terminal::Settings::Model::AcpAgentPresets;
+        const auto globals = implementation::GlobalAppSettings::FromJson(VerifyParseSucceeded("{}"));
+        auto bindings = winrt::single_threaded_map<winrt::hstring, winrt::hstring>();
+        for (const auto& preset : Presets::Presets)
+        {
+            bindings.Insert(winrt::hstring{ L"custom:acp-registry-" + std::wstring{ preset.id } }, L"unavailable-fixture --acp");
+        }
+        globals->AcpNamedCustomCommands(bindings);
+        SetPolicy(MakePolicy());
+        std::vector<winrt::com_ptr<implementation::Profile>> profiles;
+        AgentProfileGenerator{ globals.get() }.GenerateProfiles(profiles);
+        size_t count = 0;
+        for (const auto& profile : profiles)
+        {
+            if (const auto preset = Presets::FindByCustomId(profile->AgentProfileId()))
+            {
+                ++count;
+                VERIFY_ARE_EQUAL(winrt::hstring{ preset->name }, profile->Name());
+                VERIFY_ARE_EQUAL(winrt::hstring{ Presets::IconPath(*preset) }, profile->Icon().Path());
+                VERIFY_IS_TRUE(profile->Commandline().empty());
+                VERIFY_IS_TRUE(profile->AgentProfileResumeArguments().empty());
+            }
+        }
+        VERIFY_ARE_EQUAL(Presets::Presets.size(), count);
+    }
+
+    void CustomAgentAndPolicyTests::NamedCustomAcpCommandsProfilesAndPolicy()
+    {
+        namespace Agents = ::Microsoft::Terminal::AgentProfiles;
+        const auto globals = implementation::GlobalAppSettings::FromJson(VerifyParseSucceeded(R"({
+            "acpAgent":"custom:stable",
+            "acpCustomCommand":"npx stable-acp@1",
+            "acpCustomCommands":["npx legacy-acp@1"],
+            "acpNamedCustomCommands":{"custom:stable":"npx stable-acp@1","custom:other":"npx other-acp@1"}})"));
+        SetPolicy(MakePolicy());
+        std::vector<winrt::com_ptr<implementation::Profile>> profiles;
+        AgentProfileGenerator{ globals.get() }.GenerateProfiles(profiles);
+        std::set<std::wstring> ids;
+        for (const auto& profile : profiles)
+        {
+            const auto id = std::wstring{ profile->AgentProfileId() };
+            if (id.starts_with(L"custom:"))
+            {
+                ids.insert(id);
+                VERIFY_ARE_EQUAL(Agents::GeneratedGuid(id), profile->Guid());
+                VERIFY_IS_TRUE(profile->Commandline().empty());
+                VERIFY_IS_TRUE(profile->AgentProfileResumeArguments().empty());
+            }
+        }
+        VERIFY_ARE_EQUAL(size_t{ 3 }, ids.size());
+        VERIFY_IS_TRUE(ids.contains(L"custom:stable"));
+        VERIFY_IS_TRUE(ids.contains(L"custom:other"));
+        VERIFY_IS_TRUE(ids.contains(L"custom:npx"));
+
+        globals->AcpCustomCommands(winrt::single_threaded_vector<winrt::hstring>());
+        profiles.clear();
+        AgentProfileGenerator{ globals.get() }.GenerateProfiles(profiles);
+        VERIFY_IS_FALSE(std::ranges::any_of(profiles, [](const auto& profile) { return profile->AgentProfileId() == L"custom:npx"; }));
+
+        const auto guid = Agents::GeneratedGuid(L"custom:stable");
+        const auto user = std::string{ R"({
+            "defaultProfile":"{00000000-0000-0000-0000-000000000001}",
+            "acpNamedCustomCommands":{"custom:stable":"npx stable-acp@2"},
+            "profiles":[
+                {"name":"Shell","guid":"{00000000-0000-0000-0000-000000000001}","commandline":"cmd.exe"},
+                {"name":"Stable","guid":")" } +
+                          winrt::to_string(Utils::GuidToString(guid)) +
+                          R"(","source":"IntelligentTerminal.AgentProfiles","agentProfile.id":"custom:stable"}]})";
+        const auto settings = winrt::make_self<implementation::CascadiaSettings>(user, std::string_view{ R"({"profiles":[]})" });
+        const auto original = settings->FindProfile(guid);
+        VERIFY_IS_FALSE(original.IsDeletable());
+        VERIFY_IS_TRUE(settings->DuplicateProfile(original).IsDeletable());
+        SetPolicy(MakePolicy(std::nullopt, AgentPolicy::PolicyState::Blocked));
+        VERIFY_IS_TRUE(globals->EffectiveAcpAgent().empty());
+        VERIFY_IS_TRUE(globals->EffectiveAcpCustomCommand().empty());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"npx stable-acp@1" }, globals->AcpNamedCustomCommands().Lookup(L"custom:stable"));
+        VERIFY_IS_FALSE(original.IsDeletable());
+        profiles.clear();
+        AgentProfileGenerator{ globals.get() }.GenerateProfiles(profiles);
+        VERIFY_IS_FALSE(std::ranges::any_of(profiles, [](const auto& profile) { return std::wstring_view{ profile->AgentProfileId() }.starts_with(L"custom:"); }));
+        SetPolicy(MakePolicy(std::set<std::wstring, AgentPolicy::CaseInsensitiveLess>{}));
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"custom:stable" }, globals->EffectiveAcpAgent());
+        VERIFY_ARE_EQUAL(winrt::hstring{ L"npx stable-acp@1" }, globals->EffectiveAcpCustomCommand());
+    }
+
+    void CustomAgentAndPolicyTests::NamedCustomAcpCommandsRejectMalformedBindings()
+    {
+        namespace Settings = ::Microsoft::Terminal::Settings::Model;
+        SetPolicy(MakePolicy());
+        for (const auto id : { L"", L"custom:", L"Custom:upper", L"custom:Upper", L"copilot", L"custom:copilot", L"custom:has space", L"custom:../path", L"custom:trailing-", L"custom:\u00e9" })
+        {
+            Log::Comment(id);
+            VERIFY_IS_FALSE(Settings::NamedCustomAcpCommands::IsValidId(id));
+            Json::Value raw{ Json::objectValue };
+            raw["acpAgent"] = winrt::to_string(id);
+            raw["acpCustomCommand"] = "npx unsafe-acp";
+            raw["acpNamedCustomCommands"][winrt::to_string(id)] = "npx unsafe-acp";
+            const auto globals = implementation::GlobalAppSettings::FromJson(raw);
+            VERIFY_IS_TRUE(globals->EffectiveAcpCustomCommand().empty());
+            const auto projected = Settings::ProjectCustomAcpAgentCommands(raw);
+            VERIFY_ARE_EQUAL(Json::ArrayIndex{ 0 }, projected.size());
+        }
+        auto raw = VerifyParseSucceeded(R"({
+            "acpAgent":"custom:empty",
+            "acpCustomCommand":" ",
+            "acpNamedCustomCommands":{"custom:empty":" ","custom:nul":"npx\u0000bad","custom:valid":"npx valid"}})");
+        const auto globals = implementation::GlobalAppSettings::FromJson(raw);
+        VERIFY_IS_TRUE(globals->EffectiveAcpAgent().empty());
+        VERIFY_IS_TRUE(globals->EffectiveAcpCustomCommand().empty());
+        VERIFY_ARE_EQUAL(Json::ArrayIndex{ 1 }, Settings::ProjectCustomAcpAgentCommands(raw).size());
+        raw["acpNamedCustomCommands"] = Json::arrayValue;
+        VERIFY_THROWS(Settings::ProjectCustomAcpAgentCommands(raw), std::invalid_argument);
+        raw["acpNamedCustomCommands"] = Json::objectValue;
+        raw["acpNamedCustomCommands"]["custom:bad"] = 42;
+        VERIFY_THROWS(Settings::ProjectCustomAcpAgentCommands(raw), std::invalid_argument);
+    }
+
+    void CustomAgentAndPolicyTests::NamedCustomAcpCommandsTelemetry()
+    {
+        using namespace implementation::AgentSettingsTelemetry;
+        const auto settings = MakeSettings(R"(
+            "acpAgent":"custom:private-preset",
+            "acpCustomCommand":"npx --secret private-package",
+            "acpCustomCommands":["npx legacy-package"],
+            "acpNamedCustomCommands":{
+                "custom:private-preset":"npx --secret private-package",
+                "custom:second":"npx second-package",
+                "custom:INVALID":"npx invalid-package"})");
+        SetPolicy(MakePolicy());
+        const auto snapshot = GetProviderSnapshot(settings->GlobalSettings(), true);
+        VERIFY_ARE_EQUAL(std::string{ "custom" }, std::string{ snapshot.configured });
+        VERIFY_ARE_EQUAL(std::string{ "custom" }, std::string{ snapshot.effective });
+        VERIFY_ARE_EQUAL(uint32_t{ 3 }, snapshot.custom.count);
+        VERIFY_IS_TRUE(snapshot.custom.selectedCommandConfigured);
+        VERIFY_IS_TRUE(implementation::IsAISettingChange("global.acpNamedCustomCommands"));
+        VERIFY_IS_TRUE(implementation::IsAISettingChange("global.acpNamedCustomCommands.custom:private-preset"));
+        settings->GlobalSettings().AcpCustomCommands(winrt::single_threaded_vector<winrt::hstring>());
+        VERIFY_ARE_EQUAL(uint32_t{ 2 }, GetProviderSnapshot(settings->GlobalSettings(), true).custom.count);
     }
 
     void CustomAgentAndPolicyTests::QuotedPathCustomCommandRoundtrips()

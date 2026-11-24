@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "AcpAgentPresets.h"
+
 namespace Microsoft::Terminal
 {
     inline void BindAgentIconTheme(const winrt::Windows::UI::Xaml::FrameworkElement& element,
@@ -10,6 +12,19 @@ namespace Microsoft::Terminal
     {
         const auto uri = source.UriSource().AbsoluteUri();
         winrt::hstring originalPath;
+        for (const auto& preset : ::Microsoft::Terminal::Settings::Model::AcpAgentPresets::Presets)
+        {
+            if (!preset.builtinIcon.empty())
+            {
+                continue;
+            }
+            const auto path = winrt::hstring{ L"ms-appx:///AgentIcons/Registry/" } + winrt::hstring{ preset.id };
+            if (uri == path + L".svg" || uri == path + L"-light.svg")
+            {
+                originalPath = path;
+                break;
+            }
+        }
         for (const auto provider : { L"copilot", L"claude", L"codex", L"opencode", L"antigravity" })
         {
             const auto path = winrt::hstring{ L"ms-appx:///AgentIcons/" } + provider;

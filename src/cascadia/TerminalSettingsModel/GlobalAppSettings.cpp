@@ -6,6 +6,7 @@
 #include "../inc/AgentPolicy.h"
 #include "../inc/AgentRegistry.h"
 #include "../inc/AgentYoloPolicy.h"
+#include "../inc/NamedCustomAcpCommands.h"
 #include "../../types/inc/Utils.hpp"
 #include "JsonUtils.h"
 #include "KeyChordSerialization.h"
@@ -136,6 +137,14 @@ winrt::com_ptr<GlobalAppSettings> GlobalAppSettings::Copy() const
         for (const auto& command : *_DelegateCustomCommands)
         {
             globals->_DelegateCustomCommands->Append(command);
+        }
+    }
+    if (_AcpNamedCustomCommands)
+    {
+        globals->_AcpNamedCustomCommands = winrt::single_threaded_map<hstring, hstring>();
+        for (const auto& entry : *_AcpNamedCustomCommands)
+        {
+            globals->_AcpNamedCustomCommands->Insert(entry.Key(), entry.Value());
         }
     }
 
@@ -601,6 +610,13 @@ winrt::hstring GlobalAppSettings::EffectiveAcpAgent() const
         {
             return winrt::hstring{};
         }
+        const auto named = AcpNamedCustomCommands();
+        if (named.HasKey(agent) &&
+            (!::Microsoft::Terminal::Settings::Model::NamedCustomAcpCommands::IsValidId(agent) ||
+             !::Microsoft::Terminal::Settings::Model::NamedCustomAcpCommands::IsValidCommand(named.Lookup(agent))))
+        {
+            return {};
+        }
         return agent;
     }
 
@@ -610,6 +626,23 @@ winrt::hstring GlobalAppSettings::EffectiveAcpAgent() const
         return winrt::hstring{};
     }
     return agent;
+}
+
+winrt::hstring GlobalAppSettings::EffectiveAcpCustomCommand() const
+{
+    namespace Named = ::Microsoft::Terminal::Settings::Model::NamedCustomAcpCommands;
+    if (!AgentPolicy::IsCustomAgentAllowed())
+    {
+        return {};
+    }
+    const auto selected = AcpAgent();
+    const auto named = AcpNamedCustomCommands();
+    if (named.HasKey(selected))
+    {
+        const auto command = named.Lookup(selected);
+        return Named::IsValidId(selected) && Named::IsValidCommand(command) ? command : winrt::hstring{};
+    }
+    return AcpCustomCommand();
 }
 
 winrt::hstring GlobalAppSettings::EffectiveDelegateAgent() const

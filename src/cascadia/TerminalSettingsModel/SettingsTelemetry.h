@@ -11,6 +11,7 @@
 
 #include "../inc/AgentPolicy.h"
 #include "../inc/CustomAgentId.h"
+#include "../inc/NamedCustomAcpCommands.h"
 
 namespace winrt::Microsoft::Terminal::Settings::Model::implementation
 {
@@ -26,6 +27,7 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
                 "acpModel",
                 "acpCustomCommand",
                 "acpCustomCommands",
+                "acpNamedCustomCommands",
                 "delegateAgent",
                 "delegateModel",
                 "delegateCustomCommand",
@@ -55,7 +57,8 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
             }
 
             // Also protect nested provider fields if change logging expands them later.
-            return setting.starts_with("customModelProviders.") || setting.starts_with("customModelProviders[");
+            return setting.starts_with("customModelProviders.") || setting.starts_with("customModelProviders[") ||
+                   setting.starts_with("acpNamedCustomCommands.") || setting.starts_with("acpNamedCustomCommands[");
         }
 
         const auto separator = change.find('.');
@@ -130,9 +133,10 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
 
         inline CustomInventory GetCustomInventory(const std::wstring_view selectedId,
                                                   const std::wstring_view legacyCommand,
-                                                  const winrt::Windows::Foundation::Collections::IVector<winrt::hstring>& commands)
+                                                  const winrt::Windows::Foundation::Collections::IVector<winrt::hstring>& commands,
+                                                  const ::Microsoft::Terminal::Settings::Model::NamedCustomAcpCommands::CommandMap& named = nullptr)
         {
-            // The editor keys custom entries by the derived executable ID, not command arguments.
+            namespace Named = ::Microsoft::Terminal::Settings::Model::NamedCustomAcpCommands;
             std::set<winrt::hstring> ids;
             const auto add = [&](const std::wstring_view command) {
                 const auto id = ::Microsoft::Terminal::Settings::Model::DeriveCustomAgentId(command);
@@ -148,7 +152,20 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
                     add(std::wstring_view{ command });
                 }
             }
-            add(legacyCommand);
+            if (!Named::HasSelectedBinding(winrt::hstring{ selectedId }, named))
+            {
+                add(legacyCommand);
+            }
+            if (named)
+            {
+                for (const auto& entry : named)
+                {
+                    if (Named::IsValidId(entry.Key()) && Named::IsValidCommand(entry.Value()))
+                    {
+                        ids.insert(winrt::hstring{ std::wstring_view{ entry.Key() }.substr(7) });
+                    }
+                }
+            }
 
             const auto selected = selectedId.starts_with(L"custom:");
             const auto configured = selected && ids.contains(winrt::hstring{ selectedId.substr(7) });
@@ -175,7 +192,7 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
             return {
                 ProviderId(selected),
                 ProviderId(effective),
-                primary ? GetCustomInventory(selected, globals.AcpCustomCommand(), globals.AcpCustomCommands()) :
+                primary ? GetCustomInventory(selected, globals.AcpCustomCommand(), globals.AcpCustomCommands(), globals.AcpNamedCustomCommands()) :
                           GetCustomInventory(selected, globals.DelegateCustomCommand(), globals.DelegateCustomCommands()),
             };
         }

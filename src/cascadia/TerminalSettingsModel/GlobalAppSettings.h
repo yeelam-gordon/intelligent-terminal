@@ -93,6 +93,7 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
         // overrides. If the selected agent is blocked by policy, returns
         // empty. If a feature is blocked by policy, returns false.
         hstring EffectiveAcpAgent() const;
+        hstring EffectiveAcpCustomCommand() const;
         hstring EffectiveDelegateAgent() const;
         bool EffectiveAutoErrorDetectionEnabled() const;
         bool EffectiveAutoFixEnabled() const;
