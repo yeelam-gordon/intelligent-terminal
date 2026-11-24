@@ -63,8 +63,10 @@ Save into the run folder defined by `SKILL.md`.
 
 ### Extension-compatible upload
 
-Discover `browser_evaluate` and `browser_drop`. Inspect the current CSV input
-(verified ID: `listing-import-filename`). Add a one-use drop handler on `main`
+Discover `browser_evaluate` and `browser_drop`. Verify the current CSV input in
+the page DOM before reusing the observed ID `listing-import-filename`.
+Add a one-use drop handler on the DOM `main` element (CSS selector `main`,
+not a browser tab handle)
 that prevents the default drop, verifies one file with the expected name,
 assigns `event.dataTransfer.files` to that input, and dispatches a bubbling
 `change` event. Use `browser_drop` on `main` with the exact import file path.
