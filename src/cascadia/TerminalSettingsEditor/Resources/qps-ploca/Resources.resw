@@ -3083,23 +3083,4 @@ Alt+Shift+/ enter a prompt; Alt+Shift+B launch without an initial prompt.</value
     <value>[!!_Ａｄｄｅｄ ａｆｔｅｒ ｔｈｅ ｎｏｒｍａｌ ｓｔａｒｔｕｐ ａｒｇｕｍｅｎｔｓ ｏｎｌｙ ｗｈｅｎ ｒｅｓｕｍｉｎｇ ａ ｓｅｓｓｉｏｎ. Ｔｈｅ ｓｅｓｓｉｏｎ ＩＤ ｉｓ ａｐｐｅｎｄｅｄ ａｕｔｏｍａｔｉｃａｌｌｙ._!!]</value>
     <comment>The user enters arguments, never a placeholder for the session identifier.</comment>
   </data>
-  <data name="AIAgents_AcpRegistry.Header" xml:space="preserve">
-    <value>ACP Registry</value>
-    <comment>{Locked} Name of the Agent Client Protocol registry preset picker.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistry.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
-    <value>ACP Registry</value>
-    <comment>{Locked} Accessible name of the Agent Client Protocol registry preset picker.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistryHelp.Text" xml:space="preserve">
-    <value>[!!_Ｒｅｖｉｅｗ ｔｈｅ ｃｏｍｍａｎｄ ａｎｄ ｐｒｏｖｉｄｅｒ ｓｅｔｕｐ ｉｎｓｔｒｕｃｔｉｏｎｓ ｂｅｆｏｒｅ ｓａｖｉｎｇ. Ｐａｃｋａｇｅ ｃｏｍｍａｎｄｓ ｍａｙ ｄｏｗｎｌｏａｄ ｓｏｆｔｗａｒｅ ｗｈｅｎ ｒｕｎ. Ｒｅｇｉｓｔｒｙ ｉｎｃｌｕｓｉｏｎ ｄｏｅｓ ｎｏｔ ｇｕａｒａｎｔｅｅ ｃｏｍｐａｔｉｂｉｌｉｔｙ._!!]</value>
-    <comment>Shown below the registry preset picker; choosing a preset does not run its command.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistrySetup.Text" xml:space="preserve">
-    <value>[!!_Ｍａｎｕａｌ ｓｅｔｕｐ ｒｅｑｕｉｒｅｄ: ｃｏｎｆｉｇｕｒｅ ａｎ ｉｎｓｔａｌｌｅｄ ｅｘｅｃｕｔａｂｌｅ ａｎｄ ａｎｙ ｒｅｑｕｉｒｅｄ ｅｎｖｉｒｏｎｍｅｎｔ ｖａｒｉａｂｌｅｓ ｕｓｉｎｇ ｔｈｅ ｐｒｏｖｉｄｅｒ ｉｎｓｔｒｕｃｔｉｏｎｓ._!!]</value>
-    <comment>Shown when a registry distribution cannot safely be represented as a plain command, such as an archive or a command requiring environment variables.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistryDocs.Content" xml:space="preserve">
-    <value>[!!_Ｐｒｏｖｉｄｅｒ ｓｅｔｕｐ ｉｎｓｔｒｕｃｔｉｏｎｓ_!!]</value>
-  </data>
 </root>

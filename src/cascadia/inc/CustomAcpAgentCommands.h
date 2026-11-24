@@ -4,14 +4,17 @@
 #pragma once
 
 #include "CustomAgentId.h"
-#include "NamedCustomAcpCommands.h"
+#include "AcpAgentCatalog.h"
 #include <algorithm>
 #include <json/json.h>
+#include <span>
 #include <stdexcept>
 
 namespace Microsoft::Terminal::Settings::Model
 {
-    inline Json::Value ProjectCustomAcpAgentCommands(const Json::Value& settings)
+    inline Json::Value ProjectCustomAcpAgentCommands(
+        const Json::Value& settings,
+        const std::span<const AcpAgentCatalog::InstalledAgent> installed = {})
     {
         if (!settings.isObject())
         {
@@ -47,33 +50,10 @@ namespace Microsoft::Terminal::Settings::Model
         {
             append(plural);
         }
-        const auto& named = settings["acpNamedCustomCommands"];
-        if (!named.isNull() && !named.isObject())
+        append(settings["acpCustomCommand"]);
+        for (const auto& agent : installed)
         {
-            throw std::invalid_argument("named custom ACP commands must be an object");
-        }
-        bool selectedMirror = false;
-        if (named.isObject())
-        {
-            const auto& selected = settings["acpAgent"];
-            selectedMirror = selected.isString() && named.isMember(selected.asString());
-            for (auto entry = named.begin(); entry != named.end(); ++entry)
-            {
-                if (!entry->isString())
-                {
-                    throw std::invalid_argument("named custom ACP command must be a string");
-                }
-                const auto key = entry.name();
-                if (NamedCustomAcpCommands::IsValidId(winrt::to_hstring(key)) &&
-                    NamedCustomAcpCommands::IsValidCommand(winrt::to_hstring(entry->asString())))
-                {
-                    commands[key] = *entry;
-                }
-            }
-        }
-        if (!selectedMirror)
-        {
-            append(settings["acpCustomCommand"]);
+            commands[winrt::to_string(AcpAgentCatalog::Id(*agent.metadata))] = winrt::to_string(agent.command);
         }
         return commands;
     }

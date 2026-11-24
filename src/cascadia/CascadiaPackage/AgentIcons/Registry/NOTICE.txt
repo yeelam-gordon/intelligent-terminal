@@ -22,11 +22,11 @@ Modifications for Intelligent Terminal:
 - Codebuddy viewport expanded from 16x16 to 21x21 to retain the complete paths.
 
 The following registry IDs are included:
-amp-acp, auggie, autohand, bob,
+amp-acp, autohand, bob,
 cline, codebuddy-code, cortex-code, corust-agent, crow-cli, cursor,
-devin, dimcode, dirac, factory-droid, fast-agent,
+devin, dimcode, dirac,
 glm-acp-agent, goose, grok-build, harn, junie, kilo, kimchi, kimi-code,
-kimi, kiro, minimax-code, mistral-vibe, muse-code, nova,
+minimax-code, mistral-vibe, nova,
 pi-acp, poolside, qoder, qwen-code, sigit, stakpak.
 
 Names, logos and other marks remain the property of their respective owners.

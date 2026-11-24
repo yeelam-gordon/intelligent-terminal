@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "AcpAgentPresets.h"
+#include "AcpAgentCatalog.h"
 
 namespace Microsoft::Terminal
 {
@@ -12,19 +12,6 @@ namespace Microsoft::Terminal
     {
         const auto uri = source.UriSource().AbsoluteUri();
         winrt::hstring originalPath;
-        for (const auto& preset : ::Microsoft::Terminal::Settings::Model::AcpAgentPresets::Presets)
-        {
-            if (!preset.builtinIcon.empty())
-            {
-                continue;
-            }
-            const auto path = winrt::hstring{ L"ms-appx:///AgentIcons/Registry/" } + winrt::hstring{ preset.id };
-            if (uri == path + L".svg" || uri == path + L"-light.svg")
-            {
-                originalPath = path;
-                break;
-            }
-        }
         for (const auto provider : { L"copilot", L"claude", L"codex", L"opencode", L"antigravity" })
         {
             const auto path = winrt::hstring{ L"ms-appx:///AgentIcons/" } + provider;
@@ -36,7 +23,21 @@ namespace Microsoft::Terminal
         }
         if (originalPath.empty())
         {
-            return;
+            namespace Catalog = ::Microsoft::Terminal::Settings::Model::AcpAgentCatalog;
+            for (const auto& agent : Catalog::Agents)
+            {
+                const auto path = Catalog::IconPath(agent);
+                const auto stem = path.substr(0, path.size() - 4);
+                if (uri == path || uri == stem + L"-light.svg")
+                {
+                    originalPath = winrt::hstring{ stem };
+                    break;
+                }
+            }
+            if (originalPath.empty())
+            {
+                return;
+            }
         }
 
         const auto update = [source, originalPath](const auto& sender, const auto&) {

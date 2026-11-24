@@ -24,10 +24,10 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         winrt::hstring Id() const { return _id; }
         winrt::hstring DisplayName() const { return _displayName; }
         winrt::hstring DisplayLabel() const;
+        winrt::hstring IconPath() const;
         bool IsInstalled() const { return _isInstalled; }
         bool IsAddNew() const { return _isAddNew; }
         winrt::hstring CustomCommand() const { return _customCommand; }
-        winrt::hstring IconPath() const;
         winrt::Windows::UI::Xaml::Visibility RemoveButtonVisibility() const noexcept
         {
             return _remove ?
@@ -129,12 +129,6 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         // Edit mode
         bool IsAddingCustomAcpAgent() const { return _isAddingCustomAcpAgent; }
         bool IsAddingCustomDelegateAgent() const { return _isAddingCustomDelegateAgent; }
-        winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry> AcpPresetList() const { return _acpPresetList; }
-        Editor::AgentEntry CurrentAcpPreset() const { return _currentAcpPreset; }
-        void CurrentAcpPreset(const Editor::AgentEntry& value);
-        bool IsChoosingAcpPreset() const { return _isAddingCustomAcpAgent && _editingCustomAcpAgentId.empty(); }
-        winrt::hstring AcpPresetDocumentationUri() const;
-        bool AcpPresetNeedsSetup() const { return _currentAcpPreset && _currentAcpPreset.CustomCommand().empty(); }
 
         winrt::hstring CustomAcpCommand() const { return _customAcpCommand; }
         void CustomAcpCommand(const winrt::hstring& value);
@@ -227,9 +221,6 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         winrt::hstring _customDelegateCommand;
         winrt::hstring _editingCustomAcpAgentId;
         winrt::hstring _editingCustomDelegateAgentId;
-        winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry> _acpPresetList;
-        Editor::AgentEntry _currentAcpPreset{ nullptr };
-        winrt::hstring _newCustomAcpAgentId;
         winrt::hstring _newCustomModelProviderBaseUrl;
         winrt::hstring _newCustomModelId;
         winrt::hstring _newCustomModelProviderApiKey;
@@ -308,9 +299,6 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
             winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry>& list,
             const winrt::Windows::Foundation::Collections::IVector<winrt::hstring>& commands,
             bool isAcpAgent);
-        void _AppendNamedAcpEntries(
-            const Model::GlobalAppSettings& settings,
-            const winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry>& list);
         void _NormalizeCustomAcpSettings(
             const Model::GlobalAppSettings& settings,
             winrt::Windows::Foundation::Collections::IObservableVector<Editor::AgentEntry>& list);

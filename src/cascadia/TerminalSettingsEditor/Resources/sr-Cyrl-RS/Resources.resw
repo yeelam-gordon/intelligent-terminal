@@ -3130,23 +3130,4 @@ Alt+Shift+/ унесите упит; Alt+Shift+B покрените без по�
     <value>Додају се после уобичајених аргумената за покретање само при наставку сесије. Идентификатор сесије се аутоматски додаје на крај.</value>
     <comment>The user enters arguments, never a placeholder for the session identifier.</comment>
   </data>
-  <data name="AIAgents_AcpRegistry.Header" xml:space="preserve">
-    <value>ACP Registry</value>
-    <comment>{Locked} Name of the Agent Client Protocol registry preset picker.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistry.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
-    <value>ACP Registry</value>
-    <comment>{Locked} Accessible name of the Agent Client Protocol registry preset picker.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistryHelp.Text" xml:space="preserve">
-    <value>Пре чувања проверите команду и упутства добављача за подешавање. Команде пакета могу да преузму софтвер при извршавању. Уврштавање у регистар не гарантује компатибилност.</value>
-    <comment>Shown below the registry preset picker; choosing a preset does not run its command.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistrySetup.Text" xml:space="preserve">
-    <value>Потребно је ручно подешавање: конфигуришите инсталирану извршну датотеку и све потребне променљиве окружења према упутствима добављача.</value>
-    <comment>Shown when a registry distribution cannot safely be represented as a plain command, such as an archive or a command requiring environment variables.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistryDocs.Content" xml:space="preserve">
-    <value>Упутства добављача за подешавање</value>
-  </data>
 </root>

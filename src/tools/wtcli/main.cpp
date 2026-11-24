@@ -687,7 +687,9 @@ int wmain(int argc, wchar_t** argv)
         {
             try
             {
-                settings = Microsoft::Terminal::Settings::Model::ProjectCustomAcpAgentCommands(settings);
+                settings = Microsoft::Terminal::Settings::Model::ProjectCustomAcpAgentCommands(
+                    settings,
+                    Microsoft::Terminal::Settings::Model::AcpAgentCatalog::Discover());
             }
             catch (...)
             {

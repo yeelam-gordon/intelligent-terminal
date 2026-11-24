@@ -210,11 +210,6 @@ namespace Microsoft.Terminal.Settings.Model
 
         INHERITABLE_SETTING(Boolean, AgentProfileStartingDirectoryMigrationCompleted);
 
-        // Written out because the inheritable-setting macro cannot accept a comma in its type.
-        IMap<String, String> AcpNamedCustomCommands { get; set; };
-        Boolean HasAcpNamedCustomCommands { get; };
-        void ClearAcpNamedCustomCommands();
-        // Resolves the selected named binding before the legacy command, subject to custom-agent policy.
         String EffectiveAcpCustomCommand { get; };
     }
 }

@@ -2386,20 +2386,6 @@
       "description": "Properties that affect the entire window, regardless of the profile settings.",
       "type": "object",
       "properties": {
-        "acpNamedCustomCommands": {
-          "description": "ACP stdio commands keyed by stable custom identity. Registry presets use custom:acp-registry-<registry-id>. These remain custom agents for policy; native profile launch and resume commands are configured separately.",
-          "type": "object",
-          "propertyNames": {
-            "pattern": "^custom:(?!(?:copilot|claude|codex|gemini|opencode|antigravity)$)[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$"
-          },
-          "additionalProperties": {
-            "type": "string",
-            "pattern": "[^ \\t\\r\\n]",
-            "not": {
-              "pattern": "\\u0000"
-            }
-          }
-        },
         "alwaysOnTop": {
           "default": false,
           "description": "When set to true, the window is created on top of all other windows. If multiple windows are all \"always on top\", the most recently focused one will be the topmost",

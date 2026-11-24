@@ -3133,23 +3133,4 @@ Alt+Shift+/ הזן הנחיה; Alt+Shift+B הפעל ללא הנחיה התחלת
     <value>נוספים אחרי ארגומנטי האתחול הרגילים רק בעת חידוש הפעלה. מזהה ההפעלה מצורף בסוף באופן אוטומטי.</value>
     <comment>The user enters arguments, never a placeholder for the session identifier.</comment>
   </data>
-  <data name="AIAgents_AcpRegistry.Header" xml:space="preserve">
-    <value>ACP Registry</value>
-    <comment>{Locked} Name of the Agent Client Protocol registry preset picker.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistry.[using:Windows.UI.Xaml.Automation]AutomationProperties.Name" xml:space="preserve">
-    <value>ACP Registry</value>
-    <comment>{Locked} Accessible name of the Agent Client Protocol registry preset picker.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistryHelp.Text" xml:space="preserve">
-    <value>לפני השמירה, בדוק את הפקודה ואת הוראות ההגדרה של הספק. פקודות של חבילות עשויות להוריד תוכנה בעת הפעלתן. הכללה במאגר אינה מבטיחה תאימות.</value>
-    <comment>Shown below the registry preset picker; choosing a preset does not run its command.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistrySetup.Text" xml:space="preserve">
-    <value>נדרשת הגדרה ידנית: הגדר קובץ הפעלה מותקן ואת כל משתני הסביבה הנדרשים בהתאם להוראות הספק.</value>
-    <comment>Shown when a registry distribution cannot safely be represented as a plain command, such as an archive or a command requiring environment variables.</comment>
-  </data>
-  <data name="AIAgents_AcpRegistryDocs.Content" xml:space="preserve">
-    <value>הוראות ההגדרה של הספק</value>
-  </data>
 </root>

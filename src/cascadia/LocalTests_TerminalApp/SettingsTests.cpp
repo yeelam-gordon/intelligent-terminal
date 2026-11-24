@@ -9,7 +9,6 @@
 #include "../TerminalApp/TerminalPage.h"
 #include "../inc/AgentAvailability.h"
 #include "../inc/CustomAcpAgentCommands.h"
-#include "../inc/AcpAgentPresets.h"
 #include "../UnitTests_SettingsModel/TestUtils.h"
 #include "../TerminalSettingsAppAdapterLib/TerminalSettings.h"
 #include "CppWinrtTailored.h"
@@ -68,7 +67,6 @@ namespace TerminalAppLocalTests
         END_TEST_CLASS()
 
         TEST_METHOD(TestIterateCommands);
-        TEST_METHOD(TestRegistryPresetLifecycle);
         TEST_METHOD(TestIterateOnGeneratedNamedCommands);
         TEST_METHOD(TestIterateOnBadJson);
         TEST_METHOD(TestNestedCommands);
@@ -247,82 +245,6 @@ namespace TerminalAppLocalTests
         }));
     }
 
-    void SettingsTests::TestRegistryPresetLifecycle()
-    {
-        VERIFY_SUCCEEDED(RunOnUIThread([&]() {
-            namespace Presets = ::Microsoft::Terminal::Settings::Model::AcpAgentPresets;
-            const CascadiaSettings settings{ LR"({"acpAgent":"custom:legacy","delegateAgent":"","acpCustomCommand":"legacy --acp","profiles":[]})", {} };
-            const auto globals = settings.GlobalSettings();
-            Editor::AIAgentsViewModel viewModel{ globals };
-            VERIFY_ARE_EQUAL(42u, viewModel.AcpPresetList().Size());
-            const auto find = [](const auto& list, const winrt::hstring& id) -> Editor::AgentEntry {
-                for (const auto& entry : list)
-                {
-                    if (entry.Id() == id)
-                        return entry;
-                }
-                return nullptr;
-            };
-            const auto add = [&]() {
-                const auto entry = find(viewModel.AcpAgentList(), L"__add_new__");
-                VERIFY_IS_NOT_NULL(entry);
-                viewModel.CurrentAcpAgent(entry);
-            };
-            uint32_t selectionChanges = 0;
-            const auto selectionToken = viewModel.PropertyChanged([&](const auto&, const auto& args) {
-                if (args.PropertyName() == L"CurrentAcpPreset" && viewModel.CurrentAcpPreset())
-                {
-                    ++selectionChanges;
-                    // Reproduce the two-way SelectedItem binding's write-back.
-                    viewModel.CurrentAcpPreset(viewModel.CurrentAcpPreset());
-                }
-            });
-            for (const auto id : { L"bob", L"cline" })
-            {
-                add();
-                const auto settingsId = winrt::hstring{ L"custom:acp-registry-" + std::wstring{ id } };
-                const auto preset = find(viewModel.AcpPresetList(), settingsId);
-                VERIFY_IS_NOT_NULL(preset);
-                viewModel.CurrentAcpPreset(preset);
-                VERIFY_ARE_EQUAL(winrt::hstring{ Presets::Find(id)->command }, viewModel.CustomAcpCommand());
-                VERIFY_ARE_EQUAL(winrt::hstring{ Presets::IconPath(*Presets::Find(id), true) }, preset.IconPath());
-                // Never execute/download a registry provider during the test.
-                viewModel.CustomAcpCommand(L"registry-test-unavailable --acp");
-                viewModel.CurrentAcpPreset(preset);
-                VERIFY_ARE_EQUAL(winrt::hstring{ L"registry-test-unavailable --acp" }, viewModel.CustomAcpCommand());
-                viewModel.SaveCustomAcpAgent();
-                VERIFY_ARE_EQUAL(settingsId, globals.AcpAgent());
-                VERIFY_ARE_EQUAL(winrt::hstring{ L"registry-test-unavailable --acp" }, globals.EffectiveAcpCustomCommand());
-            }
-            VERIFY_ARE_EQUAL(2u, selectionChanges);
-            viewModel.PropertyChanged(selectionToken);
-            VERIFY_ARE_EQUAL(2u, globals.AcpNamedCustomCommands().Size());
-            VERIFY_ARE_EQUAL(1u, globals.AcpCustomCommands().Size());
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"legacy --acp" }, globals.AcpCustomCommands().GetAt(0));
-            const auto bob = find(viewModel.AcpAgentList(), L"custom:acp-registry-bob");
-            viewModel.CurrentAcpAgent(bob);
-            viewModel.EditCustomAcpAgent();
-            viewModel.CustomAcpCommand(L"registry-test-edited --acp");
-            viewModel.SaveCustomAcpAgent();
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"custom:acp-registry-bob" }, globals.AcpAgent());
-            VERIFY_ARE_EQUAL(2u, globals.AcpNamedCustomCommands().Size());
-            // Recreate the page: the named mirror must not become another legacy executable entry.
-            viewModel = Editor::AIAgentsViewModel{ globals };
-            VERIFY_ARE_EQUAL(1u, globals.AcpCustomCommands().Size());
-            find(viewModel.AcpAgentList(), L"custom:acp-registry-cline").Remove();
-            VERIFY_ARE_EQUAL(1u, globals.AcpNamedCustomCommands().Size());
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"custom:acp-registry-bob" }, globals.AcpAgent());
-            add();
-            viewModel.CurrentAcpPreset(find(viewModel.AcpPresetList(), L"custom:acp-registry-auggie"));
-            VERIFY_IS_TRUE(viewModel.AcpPresetNeedsSetup());
-            VERIFY_IS_TRUE(viewModel.CustomAcpCommand().empty());
-            viewModel.SaveCustomAcpAgent();
-            VERIFY_ARE_EQUAL(1u, globals.AcpNamedCustomCommands().Size());
-            viewModel.CancelCustomAcpAgent();
-            VERIFY_ARE_EQUAL(winrt::hstring{ L"custom:acp-registry-bob" }, globals.AcpAgent());
-        }));
-    }
-
     void SettingsTests::TestAgentSettingsReloadRejectsAgentConfigurationChanges()
     {
         VERIFY_SUCCEEDED(RunOnUIThread([&]() {
@@ -351,11 +273,6 @@ namespace TerminalAppLocalTests
             checkChanged([](const auto& globals) { globals.CustomModelProviders().GetAt(0).ApiKeyCredential(L"different-credential-reference"); });
             checkChanged([](const auto& globals) { globals.CustomModelProviders().GetAt(0).Models().GetAt(0).Name(L"Renamed model"); });
             checkChanged([](const auto& globals) { globals.RenderAgentMarkdown(true); });
-            checkChanged([](const auto& globals) {
-                auto named = winrt::single_threaded_map<winrt::hstring, winrt::hstring>();
-                named.Insert(L"custom:explicit", L"missing-agent --acp");
-                globals.AcpNamedCustomCommands(named);
-            });
         }));
     }
 

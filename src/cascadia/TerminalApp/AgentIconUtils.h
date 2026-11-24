@@ -4,15 +4,16 @@
 #pragma once
 
 #include "../inc/AgentRegistry.h"
-#include "../inc/AcpAgentPresets.h"
+#include "../inc/AcpAgentCatalog.h"
 
 namespace Microsoft::Terminal::UI::AgentIcons
 {
     inline winrt::hstring IconPathForProvider(const std::wstring_view providerId)
     {
-        if (const auto preset = ::Microsoft::Terminal::Settings::Model::AcpAgentPresets::FindByCustomId(providerId))
+        namespace Catalog = ::Microsoft::Terminal::Settings::Model::AcpAgentCatalog;
+        if (const auto agent = Catalog::Find(providerId))
         {
-            return winrt::hstring{ ::Microsoft::Terminal::Settings::Model::AcpAgentPresets::IconPath(*preset) };
+            return winrt::hstring{ Catalog::IconPath(*agent) };
         }
         for (const auto& agent : ::Microsoft::Terminal::Settings::Model::AgentRegistry::BuiltinAcpAgents)
         {
@@ -34,13 +35,13 @@ namespace Microsoft::Terminal::UI::AgentIcons
             return {};
         }
         const auto id = path.substr(prefix.size(), path.size() - prefix.size() - suffix.size());
-        if (id.starts_with(L"Registry/"))
+        namespace Catalog = ::Microsoft::Terminal::Settings::Model::AcpAgentCatalog;
+        for (const auto& agent : Catalog::Agents)
         {
-            if (const auto preset = ::Microsoft::Terminal::Settings::Model::AcpAgentPresets::Find(id.substr(9)))
+            if (Catalog::IconPath(agent) == path)
             {
-                return winrt::hstring{ ::Microsoft::Terminal::Settings::Model::AcpAgentPresets::IconPath(*preset, true) };
+                return winrt::hstring{ Catalog::IconPath(agent, true) };
             }
-            return {};
         }
         if (id != L"generic" && std::ranges::none_of(::Microsoft::Terminal::Settings::Model::AgentRegistry::BuiltinAcpAgents,
                                                     [&](const auto& agent) { return agent.id == id; }))

@@ -36,6 +36,6 @@ namespace winrt::Microsoft::Terminal::Settings::Model
         void GenerateProfiles(std::vector<winrt::com_ptr<implementation::Profile>>& profiles) const override;
 
     private:
-        std::vector<std::wstring> _customAgentIds;
+        std::vector<winrt::hstring> _customCommands;
     };
 }
