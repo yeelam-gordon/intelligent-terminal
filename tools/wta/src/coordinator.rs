@@ -812,11 +812,11 @@ fn validate_action(action: &RecommendedAction) -> Result<()> {
 /// Delegate prompts and the general terminal-input APIs have separate contracts.
 pub(crate) fn validate_shell_command_input(input: &str) -> Result<()> {
     ensure_non_empty("input", input)?;
-    if input
-        .chars()
-        .any(|ch| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'))
-    {
-        bail!("shell commands must be a single line without control characters");
+    // SendProtocolInput maps LF to CR; C0/DEL can affect the terminal line
+    // editor (Enter, escape sequences, deletion, etc.). C1 and Unicode line
+    // separators are forwarded as Unicode text, not translated into Enter.
+    if input.chars().any(|ch| ch.is_ascii_control()) {
+        bail!("shell commands must not contain ASCII control characters (U+0000–U+001F or U+007F)");
     }
     Ok(())
 }
@@ -2448,9 +2448,6 @@ mod tests {
             "git\tstatus",
             "echo \u{1b}[2Ksecond",
             "echo \u{7f}second",
-            "echo \u{85}second",
-            "echo first\u{2028}echo second",
-            "echo first\u{2029}echo second",
         ] {
             for insert_only in [false, true] {
                 for workspace in [false, true] {
@@ -2503,7 +2500,7 @@ mod tests {
 
     #[test]
     fn recommendation_shell_commands_reject_controls_but_preserve_delegate_tasks() {
-        for control in (0..=0x1f).chain(0x7f..=0x9f) {
+        for control in (0..=0x1f).chain([0x7f]) {
             let input = format!("echo first{}echo second", char::from_u32(control).unwrap());
             let json = json!({
                 "choices": [{
@@ -2527,6 +2524,46 @@ mod tests {
             }]
         });
         assert!(parse_recommendation_set(&json.to_string()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn shell_command_unicode_text_preserves_run_and_insert_semantics() {
+        let input = format!(
+            "  Write-Output '{}\u{85}\u{2028}\u{2029}'  ",
+            "long ".repeat(1000)
+        );
+        for insert_only in [false, true] {
+            let channel = Arc::new(RecordingWtChannel::default());
+            let shell = ShellManager::new().with_wt_channel(channel.clone() as Arc<dyn WtChannel>);
+            let (event_tx, _event_rx) = mpsc::unbounded_channel();
+            let choice = RecommendationChoice {
+                choice: 1,
+                title: "Review command".into(),
+                rationale: String::new(),
+                actions: vec![RecommendedAction::Send {
+                    parent: "target-pane".into(),
+                    input: input.clone(),
+                }],
+            };
+            execute_choice(&choice, insert_only, &shell, &[], &event_tx)
+                .await
+                .unwrap();
+            let expected = if insert_only {
+                input.clone()
+            } else {
+                format!("{input}\r")
+            };
+            assert_eq!(
+                channel.requests.lock().unwrap().as_slice(),
+                [
+                    (
+                        "send_input".into(),
+                        json!({"session_id": "target-pane", "text": expected})
+                    ),
+                    ("focus_pane".into(), json!({"session_id": "target-pane"})),
+                ]
+            );
+        }
     }
 
     #[tokio::test]

@@ -21,6 +21,11 @@ fn render_content(frame: &mut Frame, app: &mut App) {
     app.queue_control_hits.clear();
     app.recommendation_rendered = false;
     app.recommendation_approval = None;
+    app.sync_recommendation_full_view();
+    if app.recommendation_full_view.is_some() {
+        recommendations::render_full_view(frame, app, area);
+        return;
+    }
 
     // Auth mode: show auth screen above the input box
     if app.mode == AppMode::Auth {

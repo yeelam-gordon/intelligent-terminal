@@ -566,7 +566,7 @@ fn mcp_command_property(destination: &str) -> serde_json::Value {
         "minLength": 1,
         "pattern": r"\S",
         "maxLength": MAX_INPUT_CHARS,
-        "description": format!("Exact single-line shell command to run {destination}, without control characters.")
+        "description": format!("Exact single-line shell command to run {destination}, without ASCII control characters (U+0000–U+001F or U+007F).")
     })
 }
 
@@ -576,7 +576,7 @@ fn mcp_create_workspace_command_property() -> serde_json::Value {
         "minLength": 1,
         "pattern": r"\S",
         "maxLength": MAX_INPUT_CHARS,
-        "description": "Single-line shell command without control characters to run after creating the workspace. Omit only when the requested outcome is an empty workspace."
+        "description": "Single-line shell command without ASCII control characters (U+0000–U+001F or U+007F) to run after creating the workspace. Omit only when the requested outcome is an empty workspace."
     })
 }
 
@@ -978,8 +978,7 @@ mod tests {
     #[test]
     fn mcp_shell_commands_reject_terminal_controls() {
         for input in (0..=0x1f)
-            .chain(0x7f..=0x9f)
-            .chain([0x2028, 0x2029])
+            .chain([0x7f])
             .map(|code| format!("echo first{}echo second", char::from_u32(code).unwrap()))
             .chain(["git status\r\n".to_string()])
         {
@@ -1025,6 +1024,7 @@ mod tests {
             r#"Get-Item "C:\path with spaces\file.txt""#,
             "echo first; echo second",
             "printf '\\n'",
+            "Write-Output 'a\u{85}b\u{2028}c\u{2029}d'",
         ] {
             let payload = serde_json::json!({
                 "summary": "Review command",

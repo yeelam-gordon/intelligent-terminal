@@ -321,6 +321,7 @@ impl App {
 
     pub(super) fn chat_input_has_edit_focus(&self) -> bool {
         self.chat_input_context_has_focus()
+            && self.recommendation_full_view.is_none()
             && self.current_tab().current_view == View::Chat
             && self.current_tab().input_has_nav_focus()
     }
@@ -403,6 +404,7 @@ impl App {
             || !tab.input_can_receive_nav_focus()
             || self.help_overlay_visible
             || self.command_popup_visible()
+            || self.recommendation_full_view.is_some()
         {
             return None;
         }
@@ -519,6 +521,7 @@ impl App {
             None
         };
         self.handle_event_inner(event);
+        self.sync_recommendation_full_view();
         self.dispatch_prompt_queues();
         if let Some(owned_input) = owned_input {
             let owns_input = self.tab_sessions.get(self.active_tab_key()).map(|tab| {
@@ -568,6 +571,12 @@ impl App {
             }
             AppEvent::Key(key) => {
                 self.cancel_completed_turn_click();
+                if self.recommendation_full_view.is_some() {
+                    // The read-only modal owns keys before generic selection/copy.
+                    self.text_selection.clear();
+                    self.handle_key(key);
+                    return;
+                }
                 if !self.chat_input_has_edit_focus() && !self.current_tab().paste_pending {
                     self.current_tab_mut().input_all_selected = false;
                     self.current_tab_mut().input_vertical_goal = None;
@@ -621,6 +630,16 @@ impl App {
                 if !self.chat_input_has_edit_focus() && !self.current_tab().paste_pending {
                     self.current_tab_mut().input_all_selected = false;
                     self.current_tab_mut().input_vertical_goal = None;
+                }
+            }
+            AppEvent::Mouse(mouse) if self.recommendation_full_view.is_some() => {
+                let code = match mouse.kind {
+                    crossterm::event::MouseEventKind::ScrollUp => Some(KeyCode::Up),
+                    crossterm::event::MouseEventKind::ScrollDown => Some(KeyCode::Down),
+                    _ => None,
+                };
+                if let Some(code) = code {
+                    self.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
                 }
             }
             AppEvent::Mouse(mouse) => match mouse.kind {
