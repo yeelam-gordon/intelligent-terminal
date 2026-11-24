@@ -22,7 +22,9 @@ Examples assume PowerShell on Windows; the current browser workflow uses Edge on
 ## Workflow
 
 Track progress with a TODO list. Keep run artifacts under
-`Generated Files\store-listing-localizer\<YYYY-MM-DD>`.
+`Generated Files\store-listing-localizer\<YYYY-MM-DD>` beneath the repository
+root; copy tool-saved exports into this run folder if output routing saves them
+elsewhere.
 
 1. **Connect and export** using the
    [browser workflow](./references/partner-center-mcp-workflow.md). Initiate the

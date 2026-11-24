@@ -70,7 +70,7 @@ not a browser tab handle)
 that prevents the default drop, verifies one file with the expected name,
 assigns `event.dataTransfer.files` to that input, and dispatches a bubbling
 `change` event. Use `browser_drop` on `main` with the exact import file path.
-Remove the dragover handler after the drop. This invokes the page's normal
+This invokes the page's normal
 import validation without the unsupported file-picker operation.
 
 ## Persisted verification
