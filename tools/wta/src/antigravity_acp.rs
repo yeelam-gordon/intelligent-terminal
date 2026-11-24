@@ -982,9 +982,15 @@ mod tests {
             zip::CompressionMethod::Deflated,
         ] {
             for index in 0..2 {
-                // Change a local-header name, CRC, size, method, flags or timestamp
-                // without changing the corresponding central-directory metadata.
-                for field in [30, 14, 22, 8, 6, 10] {
+                // Change only the local header, preserving central-directory metadata.
+                for (field_name, offset) in [
+                    ("file name", 30),
+                    ("CRC32", 14),
+                    ("uncompressed size", 22),
+                    ("compression method", 8),
+                    ("general-purpose flags", 6),
+                    ("last modification time", 10),
+                ] {
                     let root = fixture();
                     let names = Platform::WindowsX64.files();
                     let zip = archive_with_compression(&root, &names, compression);
@@ -992,21 +998,23 @@ mod tests {
                     let mut reader = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
                     let header = reader.by_index(index).unwrap().header_start() as usize;
                     drop(reader);
-                    bytes[header + field] ^= 1;
+                    bytes[header + offset] ^= 1;
                     fs::write(&zip, bytes).unwrap();
                     let stage = root.join("stage");
                     fs::create_dir(&stage).unwrap();
                     let error = extract_archive(&zip, &stage, Platform::WindowsX64)
-                        .expect_err("inconsistent headers must not be extracted");
+                        .expect_err(&format!(
+                            "entry {index}, local field {field_name} at offset {offset}, {compression:?}: inconsistent headers must not be extracted"
+                        ));
                     assert_eq!(
                         error.to_string(),
                         "the ACP archive has inconsistent headers",
-                        "unexpected error: {error:#}"
+                        "entry {index}, local field {field_name} at offset {offset}, {compression:?}: unexpected error: {error:#}"
                     );
                     assert_eq!(
                         fs::read_dir(&stage).unwrap().count(),
                         0,
-                        "entry {index}, local field {field}, {compression:?}"
+                        "entry {index}, local field {field_name} at offset {offset}, {compression:?}"
                     );
                     fs::remove_dir_all(root).unwrap();
                 }
