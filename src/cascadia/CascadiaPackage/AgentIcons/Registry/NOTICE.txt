@@ -17,8 +17,9 @@ Modifications for Intelligent Terminal:
 - artwork converted to transparent 128x128 PNG alpha masks;
 - Qoder's external SVG 1.1 DTD declaration removed without resolving it;
 - no artwork geometry or provider lettering was deliberately redesigned;
-- Dirac PNG text rendered using local Windows Georgia italic according to
-  its supplied font family.
+- Dirac text converted to a local Windows Georgia italic glyph outline
+  according to its supplied font family, removing the runtime font dependency;
+- Codebuddy viewport expanded from 16x16 to 21x21 to retain the complete paths.
 
 The following registry IDs are included:
 amp-acp, auggie, autohand, bob,

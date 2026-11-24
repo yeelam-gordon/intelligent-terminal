@@ -12,8 +12,17 @@ import argparse
 import json
 from pathlib import Path
 import re
+import xml.etree.ElementTree as ET
 
 REVISION = "2a27ff18b5816f47d7ec538e22943ff194e05131"
+
+
+def check_registry_svg(path, id_):
+    root = ET.parse(path).getroot()
+    assert root.find(".//{http://www.w3.org/2000/svg}text") is None, f"{id_}: native SVG cannot render text"
+    if id_ == "codebuddy-code":
+        # The pinned source's paths extend beyond its original 16x16 canvas.
+        assert root.attrib["viewBox"] == "0 0 21 21", f"{id_}: artwork would be clipped"
 
 
 def main():
@@ -60,6 +69,9 @@ def main():
             icon_id = builtin_icon or id_
             for path in [icon_root / (icon_id + ".svg"), icon_root / "Masks" / (icon_id + ".png")]:
                 assert path.is_file(), f"missing shared choice/profile icon: {path}"
+            if not builtin_icon:
+                for suffix in [".svg", "-light.svg"]:
+                    check_registry_svg(icon_root / (icon_id + suffix), id_)
         binary = distribution.get("binary", {})
         matrix.append({
             "id": id_,
