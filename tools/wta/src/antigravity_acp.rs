@@ -998,8 +998,9 @@ mod tests {
                     fs::create_dir(&stage).unwrap();
                     let error = extract_archive(&zip, &stage, Platform::WindowsX64)
                         .expect_err("inconsistent headers must not be extracted");
-                    assert!(
-                        format!("{error:#}").contains("header"),
+                    assert_eq!(
+                        error.to_string(),
+                        "the ACP archive has inconsistent headers",
                         "unexpected error: {error:#}"
                     );
                     assert_eq!(
