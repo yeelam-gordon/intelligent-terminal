@@ -7313,8 +7313,8 @@ impl App {
 
     /// Recompute `rec_scroll.max` from the current card heights and the
     /// panel's available cards region. Called from layout.rs before
-    /// `recommendations::render` so any wheel-driven over-scroll is clamped
-    /// before paint.
+    /// `recommendations::render` so the renderer stays `&App` and any
+    /// wheel-driven over-scroll is clamped before paint.
     pub fn sync_rec_scroll_max(&mut self, panel_width: u16, panel_height: u16) {
         let panel_cards_h = panel_height as usize;
         self.current_tab_mut().rec_viewport_height = panel_height;
@@ -7928,10 +7928,10 @@ impl App {
     }
 
     /// Returns the number of buttons for the currently selected choice card.
-    /// Insert-eligible choices have 2 buttons; all other choices have 1.
+    /// Send actions have 2 buttons (Run, Insert); OpenAndSend has 1 button.
     fn button_count_for_selected(&self) -> usize {
         self.selected_recommendation_choice()
-            .map(|c| if c.supports_insert() { 2 } else { 1 })
+            .map(|c| if c.allows_insert() { 2 } else { 1 })
             .unwrap_or(1)
     }
 
@@ -7960,13 +7960,6 @@ impl App {
     }
 
     /// Returns true if the choice's primary action is Send (shell command).
-    fn is_send_choice(&self, choice: &RecommendationChoice) -> bool {
-        choice
-            .actions
-            .iter()
-            .any(|a| matches!(a, crate::coordinator::RecommendedAction::Send { .. }))
-    }
-
     fn log_selection_phase_for(&self, session_id: &str, phase: &str, details: &str) {
         // log against the in-flight tab so traces stay coherent with where
         // the prompt was submitted, even after the user switches tabs.

@@ -710,9 +710,8 @@ impl App {
             prompt.text
         };
         let mut details = tab.take_current_turn_details();
-        // Unresolved choices are transient, authoritative chat content. Store
-        // their resolved summary only after confirmation/cancellation, rather
-        // than duplicating pending or nonselected commands in history.
+        // Pending choices remain authoritative transient chat content.
+        // Only resolved Run/Insert/cancel summaries belong in history.
         if let Some(summary) = summary {
             details.push(ChatMessage::Agent(summary));
         }
@@ -766,11 +765,6 @@ impl App {
             return;
         };
         let tab = self.session_tab(session_id);
-        let insert_only = match tab.selected_button {
-            0 => false,
-            1 if choice.supports_insert() => true,
-            _ => return,
-        };
         let TurnState::Surfaced {
             outcome: TurnOutcome::Recommendation(_),
             prompt,
@@ -784,6 +778,11 @@ impl App {
             .session_tab(session_id)
             .active_direct_proposal_id
             .clone();
+        let insert_only = match self.session_tab(session_id).selected_button {
+            0 => false,
+            1 if choice.allows_insert() => true,
+            _ => return,
+        };
         let command_label = if insert_only {
             t!("chat.tool_kind.insert")
         } else {
@@ -877,8 +876,8 @@ impl App {
                 summary: executed_summary,
             }
         } else {
-            // AgentMessageEnd committed prose/tools, but not the unresolved
-            // choices. Record only the selected action in that same turn.
+            // AgentMessageEnd committed prose/tools but not unresolved choices.
+            // Append the selected action to that same completed turn.
             if let Some((index, last)) = tab.completed_turns.iter_mut().enumerate().next_back() {
                 last.details.push(ChatMessage::Agent(executed_summary));
                 tab.agent_markdown.borrow_mut().invalidate(index);
