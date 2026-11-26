@@ -155,6 +155,11 @@ namespace Microsoft.Terminal.Settings.Model
         // Policy-aware effective getters — return the setting value after
         // applying GPO overrides. Consumers should prefer these over the
         // raw INHERITABLE_SETTING properties for runtime decisions.
+        // Explicit process startup / Agents-page navigation boundaries.
+        // Reading selections or the list never performs executable discovery.
+        void InitializeAcpAgentCatalog();
+        void RefreshAcpAgentCatalog();
+        Windows.Foundation.Collections.IVectorView<String> InstalledAcpAgents { get; };
         String EffectiveAcpAgent { get; };
         String EffectiveDelegateAgent { get; };
         Boolean EffectiveAutoErrorDetectionEnabled { get; };

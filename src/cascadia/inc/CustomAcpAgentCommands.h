@@ -4,17 +4,13 @@
 #pragma once
 
 #include "CustomAgentId.h"
-#include "AcpAgentCatalog.h"
 #include <algorithm>
 #include <json/json.h>
-#include <span>
 #include <stdexcept>
 
 namespace Microsoft::Terminal::Settings::Model
 {
-    inline Json::Value ProjectCustomAcpAgentCommands(
-        const Json::Value& settings,
-        const std::span<const AcpAgentCatalog::InstalledAgent> installed = {})
+    inline Json::Value ProjectCustomAcpAgentCommands(const Json::Value& settings)
     {
         if (!settings.isObject())
         {
@@ -51,10 +47,6 @@ namespace Microsoft::Terminal::Settings::Model
             append(plural);
         }
         append(settings["acpCustomCommand"]);
-        for (const auto& agent : installed)
-        {
-            commands[winrt::to_string(AcpAgentCatalog::Id(*agent.metadata))] = winrt::to_string(agent.command);
-        }
         return commands;
     }
 }

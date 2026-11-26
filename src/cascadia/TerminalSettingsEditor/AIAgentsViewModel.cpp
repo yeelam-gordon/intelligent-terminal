@@ -551,8 +551,6 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     {
         namespace Reg = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
 
-        _GlobalSettings.ClearAgentPaneYoloModeIfUnavailableDefault();
-
         // Refresh PATH from the Windows registry so SearchPathW can find
         // CLIs installed after Terminal launched (e.g. WinGet\Links).
         try
@@ -563,6 +561,11 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         {
             LOG_CAUGHT_EXCEPTION();
         }
+
+        // This view-model is created for each navigation into Agents. This is
+        // the only refresh after application startup, not a dropdown/getter probe.
+        _GlobalSettings.RefreshAcpAgentCatalog();
+        _GlobalSettings.ClearAgentPaneYoloModeIfUnavailableDefault();
 
         // ACP-capable agents — use GPO-filtered list so only policy-allowed
         // agents appear in the dropdown. Also skip agents whose CLI isn't
@@ -587,12 +590,15 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         if (!_GlobalSettings.IsCustomAgentPolicyLocked())
         {
             namespace Catalog = ::Microsoft::Terminal::Settings::Model::AcpAgentCatalog;
-            for (const auto& installed : Catalog::Discover())
+            for (const auto& id : _GlobalSettings.InstalledAcpAgents())
             {
-                _acpAgentList.Append(winrt::make<AgentEntry>(
-                    winrt::hstring{ Catalog::Id(*installed.metadata) },
-                    winrt::hstring{ installed.metadata->name },
-                    true));
+                if (const auto agent = Catalog::Find(id))
+                {
+                    _acpAgentList.Append(winrt::make<AgentEntry>(
+                        id,
+                        winrt::hstring{ agent->name },
+                        true));
+                }
             }
             _NormalizeCustomAcpSettings(_GlobalSettings, _acpAgentList);
             _AppendAddNewEntry(_acpAgentList);
