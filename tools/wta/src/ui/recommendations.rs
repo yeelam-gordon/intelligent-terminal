@@ -20,7 +20,7 @@ use crate::ui::card::{self, CARD_MIN_SIZE};
 /// The complete active proposal is rendered in chat; cards keep their
 /// original summary/action layout. Only selected, painted actions count.
 pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect, mode: PanelMode) -> Option<Rect> {
-    let Some(recs) = app.current_tab().turn.recommendations().cloned() else {
+    let Some(recs) = app.current_tab().turn.recommendations() else {
         return None;
     };
     if mode == PanelMode::Hidden || area.width == 0 || area.height == 0 {
@@ -76,7 +76,7 @@ pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect, mode: PanelMode) 
 }
 
 fn render_compact(frame: &mut Frame, app: &App, area: Rect) -> bool {
-    let Some(recommendations) = app.current_tab().turn.recommendations().cloned() else {
+    let Some(recommendations) = app.current_tab().turn.recommendations() else {
         return false;
     };
     let selected = app
