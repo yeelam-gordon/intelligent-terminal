@@ -16982,7 +16982,7 @@ fn recommendation_hint_uses_panel_horizontal_inset() {
     let rendered = render_to_text(&mut app, 80, 40);
     let command_line = rendered
         .lines()
-        .find(|line| line.contains("PADDING_XYZ"))
+        .find(|line| line.contains("PADDING_XYZ") && line.contains('│'))
         .unwrap_or_else(|| panic!("recommendation command must be visible:\n{rendered}"));
     assert_eq!(
         command_line.chars().nth(1),
@@ -26067,6 +26067,944 @@ fn flush_error_fix_telemetry_frame(app: &mut App, width: u16, height: u16) -> St
 }
 
 #[test]
+fn preserved_regression_hidden_pane_cannot_confirm_pending_action() {
+    for hide_after_paint in [false, true] {
+        let mut app = test_app();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        app.recommendation_tx = tx;
+        let (id, mut final_rx) = stage_error_fix_telemetry_proposal(&mut app, false);
+        assert!(app.commit_terminal_action_proposal(&id));
+        if hide_after_paint {
+            render_to_text(&mut app, 100, 30);
+        }
+        app.handle_event(AppEvent::WtEvent {
+            method: "set_agent_state".into(),
+            pane_id: String::new(),
+            tab_id: Some(DEFAULT_TAB_ID.into()),
+            params: json!({"tab_id": DEFAULT_TAB_ID, "pane_open": false}),
+        });
+        if !hide_after_paint {
+            render_to_text(&mut app, 100, 30);
+        }
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(rx.try_recv().is_err(), "hidden pane dispatched an action");
+        assert!(
+            final_rx.try_recv().is_err(),
+            "hidden pane confirmed the proposal"
+        );
+    }
+}
+
+#[test]
+fn preserved_regression_replacement_session_cannot_confirm_prior_action() {
+    let mut app = test_app();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.recommendation_tx = tx;
+    let (id, mut final_rx) = stage_error_fix_telemetry_proposal(&mut app, false);
+    assert!(app.commit_terminal_action_proposal(&id));
+    render_to_text(&mut app, 100, 30);
+    app.handle_event(AppEvent::SessionAttached {
+        tab_id: DEFAULT_TAB_ID.into(),
+        session_id: "replacement-session".into(),
+        prompt_id: None,
+        available_models: Vec::new(),
+        current_model_id: None,
+    });
+    app.handle_event(AppEvent::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+    assert!(
+        rx.try_recv().is_err(),
+        "replacement session dispatched prior action"
+    );
+    assert!(!matches!(
+        final_rx.try_recv(),
+        Ok(crate::agent_tools::action_proposal::channel::ProposalFinalStatus::Confirmed)
+    ));
+    render_to_text(&mut app, 100, 30);
+    app.handle_event(AppEvent::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+    assert!(
+        rx.try_recv().is_err(),
+        "repainting must not transfer the old proposal to a replacement session"
+    );
+}
+
+#[test]
+fn preserved_regression_resize_requires_fresh_action_frame() {
+    for (width, height) in [(80, 9), (24, 6)] {
+        let mut app = test_app();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        app.recommendation_tx = tx;
+        let (id, mut final_rx) = stage_error_fix_telemetry_proposal(&mut app, false);
+        assert!(app.commit_terminal_action_proposal(&id));
+        render_to_text(&mut app, 80, 24);
+        app.handle_event(AppEvent::Resize(width, height));
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(rx.try_recv().is_err(), "resize reused an unpainted action");
+        assert!(final_rx.try_recv().is_err());
+        render_to_text(&mut app, width, height);
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(rx.try_recv().is_ok(), "fresh frame did not recover");
+    }
+}
+
+#[test]
+fn preserved_regression_clipped_action_label_cannot_confirm() {
+    for selected in [0, 1] {
+        let mut app = test_app();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        app.recommendation_tx = tx;
+        let (id, mut final_rx) = stage_error_fix_telemetry_proposal(&mut app, false);
+        assert!(app.commit_terminal_action_proposal(&id));
+        app.current_tab_mut().selected_button = selected;
+        render_to_text(&mut app, 2, 30);
+        app.handle_event(AppEvent::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(rx.try_recv().is_err(), "unreadable action label dispatched");
+        assert!(final_rx.try_recv().is_err());
+    }
+}
+
+#[test]
+fn preserved_regression_no_chat_row_cannot_confirm() {
+    let mut app = test_app();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.recommendation_tx = tx;
+    let (id, mut final_rx) = stage_error_fix_telemetry_proposal(&mut app, false);
+    assert!(app.commit_terminal_action_proposal(&id));
+    render_to_text(&mut app, 80, 5);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        rx.try_recv().is_err(),
+        "no chat row exists for the authoritative proposal"
+    );
+    assert!(final_rx.try_recv().is_err());
+    render_to_text(&mut app, 80, 6);
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        rx.try_recv().is_ok(),
+        "one visible chat row restores normal execution"
+    );
+}
+
+#[test]
+fn preserved_regression_hidden_debug_traffic_preserves_enter() {
+    let mut app = test_app();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.recommendation_tx = tx;
+    let (id, _) = stage_error_fix_telemetry_proposal(&mut app, false);
+    assert!(app.commit_terminal_action_proposal(&id));
+    render_to_text(&mut app, 100, 40);
+    let debug = AppEvent::DebugPipeMessage(crate::app_contracts::DebugMessage {
+        timestamp: 0.0,
+        direction: crate::app_contracts::DebugDir::Received,
+        content: "unrelated diagnostic".into(),
+    });
+    assert!(!app.event_requires_redraw(&debug));
+    app.handle_event(debug);
+    app.handle_event(AppEvent::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )));
+    assert!(matches!(
+        rx.try_recv().unwrap().choice.actions.as_slice(),
+        [RecommendedAction::Send { input, .. }] if input == "Get-Date"
+    ));
+}
+
+#[test]
+fn preserved_regression_unicode_and_allowed_controls_dispatch_exact_bytes() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    for command in [
+        "#\u{fe0f}".to_string(),
+        "\u{915}\u{94d}\u{937}\u{94d}\u{92e}\u{94d}\u{915}".to_string(),
+        format!("a\u{85}{}", "b".repeat(51)),
+        "  Write-Output '你好 🌍 a\u{2028}b\u{2029}c'  ".to_string(),
+    ] {
+        for insert_only in [false, true] {
+            let mut app = test_app();
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            app.recommendation_tx = tx;
+            let (id, _) = stage_error_fix_telemetry_proposal(&mut app, false);
+            assert!(app.commit_terminal_action_proposal(&id));
+            let TurnState::Surfaced {
+                outcome: TurnOutcome::Recommendation(set),
+                ..
+            } = &mut app.current_tab_mut().turn
+            else {
+                panic!("expected recommendation")
+            };
+            set.choices[0].actions[0] = RecommendedAction::Send {
+                parent: "pane-9".into(),
+                input: command.clone(),
+            };
+            let text = render_to_text(&mut app, 120, 40);
+            if command.starts_with('a') {
+                assert!(text.contains(&format!("a{}", "b".repeat(51))), "{text}");
+            }
+            if insert_only {
+                app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+                render_to_text(&mut app, 120, 40);
+            }
+            app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            let execution = rx.try_recv().unwrap();
+            assert_eq!(execution.insert_only, insert_only);
+            assert!(matches!(
+                execution.choice.actions.as_slice(),
+                [RecommendedAction::Send { input, .. }] if input == &command
+            ));
+        }
+    }
+}
+
+#[test]
+fn preserved_regression_delegated_workspace_keeps_agent_and_exact_task() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    for target in ["tab", "panel"] {
+        for agent in [None, Some("claude")] {
+            let mut app = test_app();
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            app.recommendation_tx = tx;
+            let (id, _) = stage_error_fix_telemetry_proposal(&mut app, false);
+            assert!(app.commit_terminal_action_proposal(&id));
+            let input = "  echo 'EXACT task'  ";
+            let TurnState::Surfaced {
+                outcome: TurnOutcome::Recommendation(set),
+                ..
+            } = &mut app.current_tab_mut().turn
+            else {
+                panic!("expected recommendation")
+            };
+            set.choices[0].actions[0] = serde_json::from_value(json!({
+                "type": "open_and_send", "target": target, "agent": agent,
+                "input": input, "parent": if target == "panel" { Some("pane-9") } else { None }
+            }))
+            .unwrap();
+            let expected = app.selected_recommendation_choice().unwrap().clone();
+            let text = render_to_text(&mut app, 120, 30);
+            assert!(text.contains(input), "{text}");
+            if let Some(agent) = agent {
+                assert!(text.contains(agent), "{text}");
+            }
+            app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            assert_eq!(rx.try_recv().unwrap().choice, expected);
+        }
+    }
+}
+
+#[test]
+fn preserved_regression_arabic_insert_label_is_complete() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("ar-SA");
+    for compact in [false, true] {
+        let mut app = test_app();
+        let (id, _) = stage_error_fix_telemetry_proposal(&mut app, false);
+        assert!(app.commit_terminal_action_proposal(&id));
+        app.current_tab_mut().selected_button = 1;
+        let run = t!("recommendations.button_run_command").into_owned();
+        let insert = t!("recommendations.button_insert_in_terminal").into_owned();
+        let width = unicode_width::UnicodeWidthStr::width(run.as_str())
+            + unicode_width::UnicodeWidthStr::width(insert.as_str())
+            + 3;
+        let text = render_to_text(
+            &mut app,
+            width as u16 + if compact { 2 } else { 8 },
+            if compact { 6 } else { 30 },
+        );
+        if text.contains(&run) {
+            assert!(text.contains(&insert), "{text}");
+        } else {
+            assert!(
+                text.contains(t!("chat.tool_kind.insert").as_ref()),
+                "{text}"
+            );
+        }
+    }
+}
+
+fn baseline_feasibility_chat_text(app: &mut App) -> String {
+    use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    terminal
+        .draw(|frame| {
+            crate::ui::chat::render(
+                frame,
+                app,
+                Rect::new(0, 0, 119, 40),
+                Rect::new(119, 0, 1, 40),
+            );
+        })
+        .unwrap();
+    buffer_to_text(terminal.backend().buffer())
+}
+
+#[test]
+fn baseline_feasibility_active_choice_and_all_actions_are_literal_in_chat() {
+    let mut app = test_app();
+    let (id, _) = stage_error_fix_telemetry_proposal(&mut app, false);
+    assert!(app.commit_terminal_action_proposal(&id));
+    if let TurnState::Surfaced {
+        outcome: TurnOutcome::Recommendation(set),
+        ..
+    } = &mut app.current_tab_mut().turn
+    {
+        set.choices[0].actions = vec![
+            RecommendedAction::Send {
+                parent: "pane-9".into(),
+                input: "echo '<tag> **literal** `ticks` 你好'".into(),
+            },
+            RecommendedAction::Send {
+                parent: "pane-9".into(),
+                input: "echo SECOND_ACTION".into(),
+            },
+        ];
+        let mut other = set.choices[0].clone();
+        other.choice = 2;
+        other.actions = vec![RecommendedAction::Send {
+            parent: "pane-9".into(),
+            input: "echo OTHER_ONLY".into(),
+        }];
+        set.choices.push(other);
+    }
+    let text = baseline_feasibility_chat_text(&mut app);
+    assert!(text.contains("echo '<tag> **literal** `ticks`"), "{text}");
+    assert!(text.contains("echo SECOND_ACTION"), "{text}");
+    assert!(!text.contains("OTHER_ONLY"), "{text}");
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let text = baseline_feasibility_chat_text(&mut app);
+    assert!(text.contains("OTHER_ONLY"), "{text}");
+    assert!(!text.contains("SECOND_ACTION"), "{text}");
+}
+
+#[test]
+fn baseline_feasibility_long_tail_and_head_use_existing_chat_paging() {
+    let mut app = test_app();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.recommendation_tx = tx;
+    let (id, mut final_rx) = stage_error_fix_telemetry_proposal(&mut app, false);
+    assert!(app.commit_terminal_action_proposal(&id));
+    if let TurnState::Surfaced {
+        outcome: TurnOutcome::Recommendation(set),
+        ..
+    } = &mut app.current_tab_mut().turn
+    {
+        set.choices[0].actions[0] = RecommendedAction::Send {
+            parent: "pane-9".into(),
+            input: format!("LITERAL_HEAD{}UNBROKEN_TAIL", "x".repeat(2400)),
+        };
+    }
+    assert!(render_to_text(&mut app, 70, 18).contains("UNBROKEN_TAIL"));
+    let mut reached_head = false;
+    for _ in 0..100 {
+        app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        render_to_text(&mut app, 70, 18);
+        app.text_selection.select_all();
+        reached_head = app
+            .text_selection
+            .selected_text()
+            .unwrap_or_default()
+            .contains("LITERAL_HEAD");
+        app.text_selection.clear();
+        if reached_head {
+            break;
+        }
+    }
+    assert!(
+        reached_head,
+        "existing chat paging must reach the literal head"
+    );
+    for _ in 0..100 {
+        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        render_to_text(&mut app, 70, 18);
+        if app.current_tab().chat_scroll.offset == 0 {
+            break;
+        }
+    }
+    assert_eq!(app.current_tab().chat_scroll.offset, 0);
+    assert!(render_to_text(&mut app, 70, 18).contains("UNBROKEN_TAIL"));
+    assert!(rx.try_recv().is_err());
+    assert!(final_rx.try_recv().is_err());
+}
+
+#[test]
+fn baseline_feasibility_multiline_rejection_is_retryable_without_card_or_dispatch() {
+    use crate::agent_tools::action_proposal::{
+        channel::{ProposalChannelManager, ProposalValidationStatus},
+        pipe::ProposalPayloadSource,
+        schema::McpActionTool,
+    };
+    for newline in ["\r", "\n", "\r\n"] {
+        for tool in [
+            McpActionTool::RunCommandInCurrentShell,
+            McpActionTool::CreateWorkspace,
+        ] {
+            let mut app = test_app();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            app.recommendation_tx = tx;
+            stage_proposal_session(&mut app, "feasibility");
+            submit_proposal_prompt(&mut app, "feasibility");
+            let manager = Arc::new(ProposalChannelManager::new());
+            app.set_proposal_channels(Arc::clone(&manager));
+            let channel = manager
+                .issue("feasibility".into(), 99, Some("pane-9".into()), false)
+                .unwrap();
+            let context = manager.begin_validation(&channel).unwrap();
+            let mut payload = serde_json::json!({
+                "summary": "Review command",
+                "command": format!("echo first{newline}echo second")
+            });
+            if matches!(tool, McpActionTool::CreateWorkspace) {
+                payload["placement"] = serde_json::json!("new_tab");
+            }
+            let decision = app.evaluate_direct_terminal_action_proposal(
+                &context,
+                &payload.to_string(),
+                ProposalPayloadSource::Mcp(tool),
+            );
+            assert_eq!(decision.status, ProposalValidationStatus::InvalidSchema);
+            assert!(decision.retryable);
+            let reason = decision.reason.unwrap();
+            assert!(reason.contains("Provide a single-line command"));
+            assert!(reason.contains("delegate_task_in_new_workspace"));
+            assert!(app.current_tab().turn.recommendations().is_none());
+            assert!(!app.commit_terminal_action_proposal(&context.proposal_id));
+            assert!(rx.try_recv().is_err());
+            payload["command"] =
+                serde_json::json!(format!("echo WRAPPED_VALID {}", "x".repeat(500)));
+            let corrected = app.evaluate_direct_terminal_action_proposal(
+                &context,
+                &payload.to_string(),
+                ProposalPayloadSource::Mcp(tool),
+            );
+            assert_eq!(corrected.status, ProposalValidationStatus::Accepted);
+            assert!(rx.try_recv().is_err(), "validation must not execute");
+        }
+    }
+}
+
+#[test]
+fn baseline_feasibility_pending_history_does_not_duplicate_or_show_other_choice() {
+    let mut app = test_app();
+    let (id, _) = stage_error_fix_telemetry_proposal(&mut app, false);
+    assert!(app.commit_terminal_action_proposal(&id));
+    if let TurnState::Surfaced {
+        outcome: TurnOutcome::Recommendation(set),
+        ..
+    } = &mut app.current_tab_mut().turn
+    {
+        let mut other = set.choices[0].clone();
+        other.choice = 2;
+        other.actions[0] = RecommendedAction::Send {
+            parent: "pane-9".into(),
+            input: "echo OTHER_ONLY".into(),
+        };
+        set.choices.push(other);
+    }
+    let text = baseline_feasibility_chat_text(&mut app);
+    assert_eq!(
+        text.matches("Get-Date").count(),
+        1,
+        "before agent end there is only one chat projection"
+    );
+    app.handle_event(AppEvent::AgentMessageEnd {
+        session_id: "fix-telemetry".into(),
+    });
+    let text = baseline_feasibility_chat_text(&mut app);
+    assert_eq!(text.matches("Get-Date").count(), 1, "{text}");
+    assert!(!text.contains("OTHER_ONLY"), "{text}");
+}
+
+#[test]
+fn baseline_feasibility_key_enter_preserves_exact_choice_history_and_draft() {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    for insert_only in [false, true] {
+        for ended in [false, true] {
+            let mut app = test_app();
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            app.recommendation_tx = tx;
+            let (id, mut final_rx) = stage_error_fix_telemetry_proposal(&mut app, false);
+            assert!(app.commit_terminal_action_proposal(&id));
+            if let TurnState::Surfaced {
+                outcome: TurnOutcome::Recommendation(set),
+                ..
+            } = &mut app.current_tab_mut().turn
+            {
+                let mut other = set.choices[0].clone();
+                other.choice = 2;
+                other.actions[0] = RecommendedAction::Send {
+                    parent: "pane-9".into(),
+                    input: "echo '<tag> **literal** `ticks` 你好'".into(),
+                };
+                set.choices.push(other);
+            }
+            app.handle_event(AppEvent::AgentMessageChunk {
+                session_id: "fix-telemetry".into(),
+                text: "Service explanation.".into(),
+            });
+            app.current_tab_mut()
+                .replace_input("/help untouched".into());
+            app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+            assert_eq!(app.current_tab().selected_recommendation, 1);
+            if ended {
+                app.handle_event(AppEvent::AgentMessageEnd {
+                    session_id: "fix-telemetry".into(),
+                });
+            }
+            let expected = app.selected_recommendation_choice().unwrap().clone();
+            if insert_only {
+                app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+            }
+            assert_eq!(app.current_tab().selected_button, usize::from(insert_only));
+            assert!(rx.try_recv().is_err());
+            assert!(final_rx.try_recv().is_err());
+            render_to_text(&mut app, 120, 40);
+            let pending = baseline_feasibility_chat_text(&mut app);
+            assert_eq!(
+                pending.matches("**literal** `ticks`").count(),
+                1,
+                "{pending}"
+            );
+            app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            let execution = rx
+                .try_recv()
+                .expect("actual Enter must dispatch selected choice");
+            assert_eq!(execution.choice, expected);
+            assert_eq!(execution.insert_only, insert_only);
+            assert!(rx.try_recv().is_err());
+            assert_eq!(
+                final_rx.try_recv().unwrap(),
+                crate::agent_tools::action_proposal::channel::ProposalFinalStatus::Confirmed
+            );
+            assert_eq!(app.current_tab().input, "/help untouched");
+            assert!(!app.help_overlay_visible);
+            assert!(app.current_tab().prompt_queue.entries.is_empty());
+            if !ended {
+                app.handle_event(AppEvent::AgentMessageEnd {
+                    session_id: "fix-telemetry".into(),
+                });
+            }
+            let turns = &app.current_tab().completed_turns;
+            assert_eq!(turns.len(), 1);
+            assert_eq!(turns[0].trailing_marker, None);
+            assert!(turns[0]
+                .details
+                .contains(&ChatMessage::Agent("Service explanation.".into())));
+            let label = if insert_only { "Insert" } else { "Run" };
+            let history = format!("{:?}", turns[0].details);
+            assert!(history.contains(&format!("{label}: echo")));
+            assert_eq!(history.matches("**literal** `ticks`").count(), 1);
+            assert!(!history.contains("Get-Date"));
+            let resolved = baseline_feasibility_chat_text(&mut app);
+            assert_eq!(
+                resolved.matches("**literal** `ticks`").count(),
+                1,
+                "{resolved}"
+            );
+        }
+    }
+}
+
+#[test]
+fn baseline_feasibility_escape_before_and_after_end_preserves_prose_once() {
+    baseline_feasibility_assert_key_cancel(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+}
+
+#[test]
+fn baseline_feasibility_ctrl_c_before_and_after_end_preserves_prose_once() {
+    baseline_feasibility_assert_key_cancel(KeyEvent::new(
+        KeyCode::Char('c'),
+        KeyModifiers::CONTROL,
+    ));
+}
+
+fn baseline_feasibility_assert_key_cancel(key: KeyEvent) {
+    let _locale = crate::test_support::lock_locale();
+    rust_i18n::set_locale("en-US");
+    for ended in [false, true] {
+        let mut app = test_app();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        app.recommendation_tx = tx;
+        let (id, mut final_rx) = stage_error_fix_telemetry_proposal(&mut app, false);
+        assert!(app.commit_terminal_action_proposal(&id));
+        app.handle_event(AppEvent::AgentMessageChunk {
+            session_id: "fix-telemetry".into(),
+            text: "Service explanation.".into(),
+        });
+        if ended {
+            app.handle_event(AppEvent::AgentMessageEnd {
+                session_id: "fix-telemetry".into(),
+            });
+        }
+        baseline_feasibility_chat_text(&mut app);
+        app.handle_key(key);
+        assert_eq!(
+                final_rx
+                    .try_recv()
+                    .unwrap_or_else(|error| panic!("RED: {key:?}, after AgentMessageEnd={ended}: unresolved proposal: {error:?}; turn={:?}", app.current_tab().turn)),
+                crate::agent_tools::action_proposal::channel::ProposalFinalStatus::Cancelled
+            );
+        assert!(rx.try_recv().is_err());
+        app.handle_event(AppEvent::PromptCancellationSettled {
+            prompt_id: 99,
+            started: true,
+        });
+        let turns = &app.current_tab().completed_turns;
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].trailing_marker, None);
+        assert_eq!(
+            turns[0].details,
+            vec![
+                ChatMessage::Agent("Service explanation.".into()),
+                ChatMessage::Agent("Get-Date (canceled)".into()),
+            ]
+        );
+        let text = baseline_feasibility_chat_text(&mut app);
+        assert_eq!(text.matches("Get-Date").count(), 1, "{text}");
+        assert_eq!(text.matches("Service explanation.").count(), 1, "{text}");
+    }
+}
+
+#[test]
+fn baseline_feasibility_mixed_legacy_insert_never_dispatches_open_and_send() {
+    let mut app = test_app();
+    app.state = ConnectionState::Connected;
+    stage_proposal_session(&mut app, DEFAULT_TAB_ID);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.recommendation_tx = tx;
+    let mut choice = send_choice("pane-9", "echo INSERT_ONLY");
+    choice.actions.push(RecommendedAction::OpenAndSend {
+        target: OpenTarget::Tab,
+        parent: None,
+        direction: None,
+        profile: None,
+        cwd: None,
+        agent: None,
+        title: None,
+        input: "echo MUST_NOT_RUN".into(),
+    });
+    stage_surfaced_recommendation(&mut app, vec![choice], 0, None);
+    render_to_text(&mut app, 120, 40);
+    // A queued stale Insert index must not become an implicit Run after the
+    // current choice stops allowing Insert.
+    app.current_tab_mut().selected_button = 1;
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(rx.try_recv().is_err(), "stale Insert must not become Run");
+    assert!(
+        app.current_tab().turn.recommendations().is_some(),
+        "invalid action must not consume the choice"
+    );
+}
+
+#[test]
+fn baseline_feasibility_mixed_choice_does_not_focus_an_invisible_insert() {
+    let mut app = test_app();
+    app.state = ConnectionState::Connected;
+    stage_proposal_session(&mut app, DEFAULT_TAB_ID);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.recommendation_tx = tx;
+    let mut choice = send_choice("pane-9", "echo FIRST");
+    choice.actions.push(RecommendedAction::OpenAndSend {
+        target: OpenTarget::Tab,
+        parent: None,
+        direction: None,
+        profile: None,
+        cwd: None,
+        agent: None,
+        title: None,
+        input: "echo SECOND".into(),
+    });
+    stage_surfaced_recommendation(&mut app, vec![choice], 0, None);
+    let text = render_to_text(&mut app, 120, 40);
+    assert!(!text.contains("Insert in Terminal"), "{text}");
+    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(
+        app.current_tab().selected_button,
+        0,
+        "only the visible execution action exists"
+    );
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let execution = rx
+        .try_recv()
+        .expect("the visible Run executes the whole choice");
+    assert!(!execution.insert_only);
+    assert_eq!(execution.choice.actions.len(), 2);
+}
+
+#[test]
+fn baseline_feasibility_existing_cancel_route_works_after_end() {
+    let mut app = test_app();
+    let (id, mut final_rx) = stage_error_fix_telemetry_proposal(&mut app, false);
+    assert!(app.commit_terminal_action_proposal(&id));
+    app.handle_event(AppEvent::AgentMessageEnd {
+        session_id: "fix-telemetry".into(),
+    });
+    let tab_id = app.active_tab_key().to_string();
+    app.request_turn_cancel_for_tab(&tab_id);
+    assert_eq!(
+        final_rx.try_recv().unwrap(),
+        crate::agent_tools::action_proposal::channel::ProposalFinalStatus::Cancelled
+    );
+    assert!(app.current_tab().turn.recommendations().is_none());
+}
+
+#[test]
+fn baseline_feasibility_legacy_open_send_and_multi_send_keep_insert() {
+    for open in [false, true] {
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        stage_proposal_session(&mut app, DEFAULT_TAB_ID);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        app.recommendation_tx = tx;
+        let mut choice = send_choice("pane-9", "echo FIRST");
+        if open {
+            choice.actions.insert(
+                0,
+                RecommendedAction::Open {
+                    target: OpenTarget::Tab,
+                    parent: None,
+                    cwd: None,
+                    title: None,
+                    direction: None,
+                    profile: None,
+                },
+            );
+        } else {
+            choice.actions.push(RecommendedAction::Send {
+                parent: "pane-9".into(),
+                input: "echo SECOND".into(),
+            });
+        }
+        stage_surfaced_recommendation(&mut app, vec![choice.clone()], 0, None);
+        render_to_text(&mut app, 120, 40);
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(app.current_tab().selected_button, 1);
+        render_to_text(&mut app, 120, 40);
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let execution = rx.try_recv().expect("legacy Insert remains available");
+        assert!(execution.insert_only);
+        assert_eq!(execution.choice, choice);
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+async fn dispatch_chat_projection_mcp_proposal(
+    app: &mut App,
+    manager: &crate::agent_tools::action_proposal::channel::ProposalChannelManager,
+    tool: &str,
+    arguments: serde_json::Value,
+) -> serde_json::Value {
+    use crate::agent_tools::action_proposal::{
+        channel::ProposalValidationStatus,
+        pipe::{ProposalPayloadSource, ProposalValidationResponse, ValidationPhase},
+    };
+    crate::agent_tools::session_mcp::dispatch(
+        json!({
+            "jsonrpc": "2.0", "id": 1442, "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments}
+        }),
+        |tool, arguments| async move {
+            // Adapt the helper event loop; validation and MCP serialization stay real.
+            let context = manager.begin_mcp_validation("mcp-chat-feedback").unwrap();
+            let proposal_id = context.proposal_id.clone();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            app.handle_event(AppEvent::DirectTerminalActionProposal {
+                context,
+                payload: arguments.to_string(),
+                source: ProposalPayloadSource::Mcp(tool),
+                responder: tx,
+            });
+            let decision = rx.await.unwrap();
+            let accepted = decision.status == ProposalValidationStatus::Accepted;
+            let retryable = if accepted {
+                assert!(manager.accept_validation_detached(&proposal_id));
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                app.handle_event(AppEvent::DirectTerminalActionProposalCommit {
+                    proposal_id: proposal_id.clone(),
+                    responder: tx,
+                });
+                assert!(rx.await.unwrap());
+                false
+            } else {
+                manager.reject_validation(&proposal_id, decision.retryable)
+            };
+            Ok(ProposalValidationResponse {
+                phase: ValidationPhase::Validation,
+                status: decision.status,
+                proposal_id: accepted.then_some(proposal_id),
+                reason: decision.reason,
+                retryable,
+            })
+        },
+        |_| async { panic!("terminal action must not ask a clarification question") },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mcp_chat_projection_line_break_feedback_and_single_line_retry() {
+    use crate::agent_tools::action_proposal::channel::ProposalChannelManager;
+    let line_break_expected = "Terminal action request rejected: malformed payload: This command contains a line break. Provide a single-line command, or, if the task needs multiple steps and the tool is available, propose delegating it with `delegate_task_in_new_workspace`.";
+    let control_expected = "Terminal action request rejected: malformed payload: shell commands must not contain ASCII control characters (U+0000–U+001F or U+007F)";
+    let separators = ["\r", "\n", "\r\n"]
+        .into_iter()
+        .map(str::to_string)
+        .chain(
+            (0u8..=0x1f)
+                .chain(std::iter::once(0x7f))
+                .filter(|ch| !matches!(ch, b'\r' | b'\n'))
+                .map(|ch| char::from(ch).to_string()),
+        )
+        .collect::<Vec<_>>();
+    for tool in ["run_command_in_current_shell", "create_workspace"] {
+        for separator in &separators {
+            let expected = if separator.contains(['\r', '\n']) {
+                line_break_expected
+            } else {
+                control_expected
+            };
+            let mut app = test_app();
+            app.state = ConnectionState::Connected;
+            app.current_tab_mut().pane_open = true;
+            stage_proposal_session(&mut app, "mcp-chat-feedback");
+            submit_proposal_prompt(&mut app, "mcp-chat-feedback");
+            let manager = Arc::new(ProposalChannelManager::new());
+            app.set_proposal_channels(Arc::clone(&manager));
+            let channel = manager
+                .issue("mcp-chat-feedback".into(), 99, Some("pane-9".into()), false)
+                .unwrap();
+            let (tx, mut execution_rx) = mpsc::unbounded_channel();
+            app.recommendation_tx = tx;
+            let mut arguments = json!({
+                "summary": "Review command",
+                "command": format!("echo first{separator}echo second")
+            });
+            if tool == "create_workspace" {
+                arguments["placement"] = json!("new_tab");
+            }
+            let response =
+                dispatch_chat_projection_mcp_proposal(&mut app, &manager, tool, arguments.clone())
+                    .await;
+            println!("{tool} {separator:?}: {response}");
+            assert_eq!(response["result"]["structuredContent"]["retryable"], true);
+            assert_eq!(response["result"]["content"][0]["text"], expected);
+            assert_eq!(
+                response["result"]["structuredContent"]["status"],
+                "rejected"
+            );
+            assert_eq!(response["result"]["isError"], true);
+            assert!(app.current_tab().pending_terminal_action_proposal.is_none());
+            assert!(app.current_tab().turn.recommendations().is_none());
+            assert!(app.current_tab().pending_queue_action.is_none());
+            assert!(!baseline_feasibility_chat_text(&mut app).contains("echo first"));
+            assert!(execution_rx.try_recv().is_err());
+            manager
+                .validate_permission("mcp-chat-feedback", &channel)
+                .unwrap();
+            arguments["command"] = json!("echo corrected");
+            let response =
+                dispatch_chat_projection_mcp_proposal(&mut app, &manager, tool, arguments).await;
+            println!("{tool} {separator:?} corrected: {response}");
+            assert_eq!(
+                response["result"]["structuredContent"]["status"],
+                "accepted"
+            );
+            assert_eq!(response["result"]["isError"], false);
+            let set = app.current_tab().turn.recommendations().unwrap();
+            assert_eq!(set.choices.len(), 1);
+            assert_eq!(set.choices[0].actions.len(), 1);
+            assert!(
+                execution_rx.try_recv().is_err(),
+                "acceptance is not confirmation"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mcp_chat_projection_visual_wrap_and_multiline_delegation_remain_single_action() {
+    use crate::agent_tools::action_proposal::channel::ProposalChannelManager;
+    let command = format!("Write-Output 'WRAP_HEAD{}WRAP_TAIL'", "x".repeat(900));
+    let task = "Inspect the code.\r\nExplain the results.\nSuggest next steps.";
+    for tool in [
+        "run_command_in_current_shell",
+        "create_workspace",
+        "delegate_task_in_new_workspace",
+    ] {
+        let mut app = test_app();
+        app.state = ConnectionState::Connected;
+        app.current_tab_mut().pane_open = true;
+        app.delegate_agents = Some(Arc::new(std::sync::Mutex::new(
+            crate::coordinator::default_delegate_agent_runtimes(Some("copilot"), None, None),
+        )));
+        stage_proposal_session(&mut app, "mcp-chat-feedback");
+        submit_proposal_prompt(&mut app, "mcp-chat-feedback");
+        let manager = Arc::new(ProposalChannelManager::new());
+        app.set_proposal_channels(Arc::clone(&manager));
+        manager
+            .issue("mcp-chat-feedback".into(), 99, Some("pane-9".into()), false)
+            .unwrap();
+        let (tx, mut execution_rx) = mpsc::unbounded_channel();
+        app.recommendation_tx = tx;
+        let mut arguments = json!({"summary": "Review command"});
+        if tool == "delegate_task_in_new_workspace" {
+            arguments["task"] = json!(task);
+        } else {
+            arguments["command"] = json!(command);
+        }
+        if tool != "run_command_in_current_shell" {
+            arguments["placement"] = json!("new_tab");
+        }
+        let response =
+            dispatch_chat_projection_mcp_proposal(&mut app, &manager, tool, arguments).await;
+        println!("{tool} valid: {response}");
+        assert_eq!(
+            response["result"]["structuredContent"]["status"],
+            "accepted"
+        );
+        assert_eq!(response["result"]["isError"], false);
+        render_to_text(&mut app, 60, 18);
+        let set = app.current_tab().turn.recommendations().unwrap();
+        assert_eq!(set.choices.len(), 1);
+        assert_eq!(set.choices[0].actions.len(), 1);
+        let input = match &set.choices[0].actions[0] {
+            RecommendedAction::Send { input, .. }
+            | RecommendedAction::OpenAndSend { input, .. } => input,
+            other => panic!("unexpected action: {other:?}"),
+        };
+        if tool == "delegate_task_in_new_workspace" {
+            assert_eq!(input, task);
+        } else {
+            assert_eq!(input, &command, "visual wrapping must not mutate payload");
+            assert!(!input.contains(['\r', '\n']));
+            assert!(app.current_tab().chat_scroll.max > 0);
+        }
+        assert!(
+            execution_rx.try_recv().is_err(),
+            "no action before confirmation"
+        );
+    }
+}
+
+#[test]
 fn error_fix_telemetry_requires_display_then_run_and_deduplicates() {
     use crate::telemetry::capture::{take, Event};
     take();
@@ -26233,7 +27171,14 @@ fn error_fix_telemetry_overlapping_autocomplete_and_clipping_suppress_offer() {
     for (width, height) in [(100, 12), (1, 1)] {
         assert!(app.command_popup_state().is_some());
         let text = flush_error_fix_telemetry_frame(&mut app, width, height);
-        assert!(!text.contains("Get-Date"), "command is obscured or clipped");
+        if width == 100 {
+            assert!(
+                text.contains("Get-Date"),
+                "literal chat projection remains visible"
+            );
+        } else {
+            assert!(!text.contains("Get-Date"), "command is clipped");
+        }
         assert!(!app.recommendation_rendered);
         assert!(take().is_empty(), "no offer at {width}x{height}");
     }
@@ -26639,10 +27584,16 @@ fn executing_committed_recommendation_keeps_compact_summary() {
     app.handle_event(AppEvent::AgentMessageEnd {
         session_id: session_id.into(),
     });
-    assert!(matches!(
-        app.session_tab(session_id).completed_turns[0].details.last(),
-        Some(ChatMessage::Agent(text)) if text == "Restart-Service foo"
-    ));
+    assert!(!app.session_tab(session_id).completed_turns[0]
+        .details
+        .iter()
+        .any(|message| matches!(message, ChatMessage::Agent(text) if text.contains("Restart-Service foo"))));
+    assert_eq!(
+        baseline_feasibility_chat_text(&mut app)
+            .matches("Restart-Service foo")
+            .count(),
+        1
+    );
 
     app.turn_execute_card(session_id);
 
@@ -27826,6 +28777,7 @@ fn recommendation_card_enter_wins_over_draft_input() {
     stage_surfaced_recommendation(&mut app, vec![send_choice("pane-A", "ls")], 0, None);
     app.current_tab_mut().input = "/help".into();
     app.current_tab_mut().cursor_pos = "/help".len();
+    render_to_text(&mut app, 80, 24);
 
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -27995,6 +28947,7 @@ fn stage_surfaced_recommendation(
         choices,
     };
     let tab = app.tab_mut(DEFAULT_TAB_ID);
+    tab.pane_open = true;
     tab.selected_recommendation = selected;
     tab.turn = TurnState::Surfaced {
         prompt,

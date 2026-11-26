@@ -51,6 +51,18 @@ pub struct RecommendationChoice {
     pub actions: Vec<RecommendedAction>,
 }
 
+impl RecommendationChoice {
+    pub fn allows_insert(&self) -> bool {
+        self.actions
+            .iter()
+            .any(|action| matches!(action, RecommendedAction::Send { .. }))
+            && !self
+                .actions
+                .iter()
+                .any(|action| matches!(action, RecommendedAction::OpenAndSend { .. }))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenTarget {
@@ -422,6 +434,12 @@ async fn execute_choice(
     delegate_agents: &[DelegateAgentRuntime],
     event_tx: &mpsc::UnboundedSender<AppEvent>,
 ) -> Result<()> {
+    if insert_only && !choice.allows_insert() {
+        bail!("this choice does not support Insert");
+    }
+    for action in &choice.actions {
+        validate_action(action)?;
+    }
     for action in &choice.actions {
         match action {
             RecommendedAction::Send { parent, input } => {
@@ -770,7 +788,7 @@ fn validate_action(action: &RecommendedAction) -> Result<()> {
     match action {
         RecommendedAction::Send { parent: _, input } => {
             // parent may be empty for auto-fix actions (filled in at execution time)
-            ensure_non_empty("input", input)?;
+            validate_shell_command_input(input)?;
         }
         RecommendedAction::OpenAndSend {
             parent,
@@ -780,6 +798,9 @@ fn validate_action(action: &RecommendedAction) -> Result<()> {
             ..
         } => {
             ensure_non_empty("input", input)?;
+            if agent.is_none() {
+                validate_shell_command_input(input)?;
+            }
             if let Some(parent) = parent.as_deref() {
                 ensure_non_empty("parent", parent)?;
             }
@@ -798,6 +819,18 @@ fn validate_action(action: &RecommendedAction) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Shell commands are literal single-line text; delegated tasks are separate.
+pub(crate) fn validate_shell_command_input(input: &str) -> Result<()> {
+    ensure_non_empty("input", input)?;
+    if input.contains(['\r', '\n']) {
+        bail!("This command contains a line break. Provide a single-line command, or, if the task needs multiple steps and the tool is available, propose delegating it with `delegate_task_in_new_workspace`.");
+    }
+    if input.chars().any(|ch| ch.is_ascii_control()) {
+        bail!("shell commands must not contain ASCII control characters (U+0000–U+001F or U+007F)");
+    }
     Ok(())
 }
 
@@ -2430,7 +2463,7 @@ mod tests {
             rationale: String::new(),
             actions: vec![RecommendedAction::Send {
                 parent: "target-pane".to_string(),
-                input: "git status\r\n".to_string(),
+                input: "git status".to_string(),
             }],
         };
 
@@ -2452,6 +2485,153 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn preserved_regression_shell_controls_rejected_but_delegate_newlines_allowed() {
+        for control in (0..=0x1f).chain([0x7f]) {
+            let input = format!("echo first{}echo second", char::from_u32(control).unwrap());
+            let payload = json!({"choices": [{
+                "choice": 1, "title": "Review command",
+                "actions": [{"type": "send", "input": input}]
+            }]});
+            assert!(
+                parse_recommendation_set(&payload.to_string()).is_err(),
+                "accepted {input:?}"
+            );
+        }
+        let payload = json!({"choices": [{
+            "choice": 1, "title": "Delegate task", "actions": [{
+                "type": "open_and_send", "target": "tab", "agent": "copilot",
+                "input": "Inspect the code.\nExplain the results."
+            }]
+        }]});
+        assert!(parse_recommendation_set(&payload.to_string()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn preserved_regression_invalid_later_command_has_no_terminal_side_effects() {
+        for input in [
+            "echo first\necho second",
+            "echo first\recho second",
+            "git status\r\n",
+            "git\tstatus",
+            "echo \u{1b}[2Ksecond",
+            "echo \u{7f}second",
+        ] {
+            for insert_only in [false, true] {
+                for workspace in [false, true] {
+                    let channel = Arc::new(RecordingWtChannel::default());
+                    let shell =
+                        ShellManager::new().with_wt_channel(channel.clone() as Arc<dyn WtChannel>);
+                    let (event_tx, _event_rx) = mpsc::unbounded_channel();
+                    let action = if workspace {
+                        RecommendedAction::OpenAndSend {
+                            target: OpenTarget::Tab,
+                            parent: None,
+                            input: input.into(),
+                            agent: None,
+                            cwd: None,
+                            title: None,
+                            direction: None,
+                            profile: None,
+                        }
+                    } else {
+                        RecommendedAction::Send {
+                            parent: "target-pane".into(),
+                            input: input.into(),
+                        }
+                    };
+                    let choice = RecommendationChoice {
+                        choice: 1,
+                        title: "Review command".into(),
+                        rationale: String::new(),
+                        actions: vec![
+                            RecommendedAction::Send {
+                                parent: "target-pane".into(),
+                                input: "echo first".into(),
+                            },
+                            action,
+                        ],
+                    };
+                    assert!(
+                        execute_choice(&choice, insert_only, &shell, &[], &event_tx)
+                            .await
+                            .is_err(),
+                        "accepted {input:?}"
+                    );
+                    assert!(
+                        channel.requests.lock().unwrap().is_empty(),
+                        "invalid choice reached terminal: {input:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn preserved_regression_mixed_workspace_insert_rejected_before_side_effects() {
+        for agent in [None, Some("copilot")] {
+            for reverse in [false, true] {
+                let mut choice: RecommendationChoice = serde_json::from_value(json!({
+                    "choice": 1, "title": "Mixed workspace", "actions": [
+                        {"type": "open_and_send", "target": "tab", "agent": agent, "input": "echo WORKSPACE"},
+                        {"type": "send", "parent": "target-pane", "input": "echo ORIGINAL"}
+                    ]
+                })).unwrap();
+                if reverse {
+                    choice.actions.reverse();
+                }
+                let channel = Arc::new(RecordingWtChannel::default());
+                let shell =
+                    ShellManager::new().with_wt_channel(channel.clone() as Arc<dyn WtChannel>);
+                let (event_tx, _event_rx) = mpsc::unbounded_channel();
+                assert!(execute_choice(&choice, true, &shell, &[], &event_tx)
+                    .await
+                    .is_err());
+                assert!(channel.requests.lock().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn preserved_regression_unicode_shell_run_and_insert_forward_exact_text() {
+        let input = format!(
+            "  Write-Output '{}\u{85}\u{2028}\u{2029}'  ",
+            "long ".repeat(1000)
+        );
+        for insert_only in [false, true] {
+            let channel = Arc::new(RecordingWtChannel::default());
+            let shell = ShellManager::new().with_wt_channel(channel.clone() as Arc<dyn WtChannel>);
+            let (event_tx, _event_rx) = mpsc::unbounded_channel();
+            let choice = RecommendationChoice {
+                choice: 1,
+                title: "Review command".into(),
+                rationale: String::new(),
+                actions: vec![RecommendedAction::Send {
+                    parent: "target-pane".into(),
+                    input: input.clone(),
+                }],
+            };
+            execute_choice(&choice, insert_only, &shell, &[], &event_tx)
+                .await
+                .unwrap();
+            let expected = if insert_only {
+                input.clone()
+            } else {
+                format!("{input}\r")
+            };
+            assert_eq!(
+                channel.requests.lock().unwrap().as_slice(),
+                [
+                    (
+                        "send_input".into(),
+                        json!({"session_id": "target-pane", "text": expected})
+                    ),
+                    ("focus_pane".into(), json!({"session_id": "target-pane"})),
+                ]
+            );
+        }
     }
 
     #[tokio::test]

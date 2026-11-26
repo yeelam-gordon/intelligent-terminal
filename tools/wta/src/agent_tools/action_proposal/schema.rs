@@ -23,8 +23,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::coordinator::{
-    validate_recommendation_set, OpenTarget, RecommendationChoice, RecommendationSet,
-    RecommendedAction,
+    validate_recommendation_set, validate_shell_command_input, OpenTarget, RecommendationChoice,
+    RecommendationSet, RecommendedAction,
 };
 
 /// The only wire schema version this build understands. Bumped only on a
@@ -387,6 +387,7 @@ pub fn parse_mcp_action_payload(
                 MAX_RATIONALE_CHARS,
             )?;
             validate_mcp_required_text("command", &wire.command, MAX_INPUT_CHARS)?;
+            validate_proposal_shell_command(&wire.command)?;
             (
                 wire.summary,
                 wire.reason.unwrap_or_default(),
@@ -408,6 +409,9 @@ pub fn parse_mcp_action_payload(
                 wire.command.as_deref(),
                 MAX_INPUT_CHARS,
             )?;
+            if let Some(command) = wire.command.as_deref() {
+                validate_proposal_shell_command(command)?;
+            }
             validate_mcp_optional_nonempty_text(
                 "working_directory",
                 wire.working_directory.as_deref(),
@@ -560,7 +564,7 @@ fn mcp_command_property(destination: &str) -> serde_json::Value {
         "minLength": 1,
         "pattern": r"\S",
         "maxLength": MAX_INPUT_CHARS,
-        "description": format!("Exact shell command to run {destination}.")
+        "description": format!("Exact single-line shell command to run {destination}, without ASCII control characters (U+0000–U+001F or U+007F).")
     })
 }
 
@@ -570,7 +574,7 @@ fn mcp_create_workspace_command_property() -> serde_json::Value {
         "minLength": 1,
         "pattern": r"\S",
         "maxLength": MAX_INPUT_CHARS,
-        "description": "Command to run after creating the workspace. Omit only when the requested outcome is an empty workspace."
+        "description": "Single-line shell command without ASCII control characters (U+0000–U+001F or U+007F) to run after creating the workspace. Omit only when the requested outcome is an empty workspace."
     })
 }
 
@@ -739,6 +743,7 @@ pub fn build_recommendation_set(
         check_len("title", &choice.title, MAX_TITLE_CHARS)?;
         check_len("rationale", &choice.rationale, MAX_RATIONALE_CHARS)?;
         check_len("input", input, MAX_INPUT_CHARS)?;
+        validate_proposal_shell_command(input)?;
         let set = RecommendationSet {
             recommended_choice: Some(choice.choice),
             choices: vec![RecommendationChoice {
@@ -805,6 +810,7 @@ fn convert_terminal_agent_action(
     match action {
         ProposalActionWire::Send { input } => {
             check_len("input", input, MAX_INPUT_CHARS)?;
+            validate_proposal_shell_command(input)?;
             Ok(RecommendedAction::Send {
                 parent: require_active_target(trusted_active_target)?,
                 input: input.clone(),
@@ -834,6 +840,9 @@ fn convert_terminal_agent_action(
             profile,
         } => {
             check_len("input", input, MAX_INPUT_CHARS)?;
+            if !delegate {
+                validate_proposal_shell_command(input)?;
+            }
             Ok(RecommendedAction::OpenAndSend {
                 target: (*target).into(),
                 parent: panel_parent(*target, trusted_active_target)?,
@@ -846,6 +855,18 @@ fn convert_terminal_agent_action(
             })
         }
     }
+}
+
+fn validate_proposal_shell_command(input: &str) -> Result<(), ProposalError> {
+    validate_shell_command_input(input).map_err(|error| {
+        if input.contains(['\r', '\n'])
+            || (!input.trim().is_empty() && input.chars().any(|ch| ch.is_ascii_control()))
+        {
+            ProposalError::Malformed(error.to_string())
+        } else {
+            ProposalError::PolicyViolation(error.to_string())
+        }
+    })
 }
 
 fn require_active_target(active_target: Option<&str>) -> Result<String, ProposalError> {
@@ -1894,5 +1915,82 @@ mod tests {
         assert_eq!(ProposalStatus::Stale.as_str(), "stale");
         assert_eq!(ProposalStatus::Rejected.as_str(), "rejected");
         assert_eq!(ProposalStatus::Unavailable.as_str(), "unavailable");
+    }
+
+    #[test]
+    fn preserved_regression_mcp_shell_commands_reject_terminal_controls() {
+        for code in (0..=0x1f).chain([0x7f]) {
+            let input = format!("echo first{}echo second", char::from_u32(code).unwrap());
+            for is_autofix in [false, true] {
+                let payload = serde_json::json!({"summary": "Review command", "command": input});
+                assert!(
+                    matches!(
+                        parse_mcp_action_payload(
+                            McpActionTool::RunCommandInCurrentShell,
+                            &serde_json::to_vec(&payload).unwrap(),
+                            is_autofix,
+                        ),
+                        Err(ProposalError::Malformed(_))
+                    ),
+                    "accepted {input:?}"
+                );
+            }
+            for placement in ["new_tab", "new_split"] {
+                let payload = serde_json::json!({
+                    "summary": "Review command", "command": input, "placement": placement
+                });
+                assert!(
+                    matches!(
+                        parse_mcp_action_payload(
+                            McpActionTool::CreateWorkspace,
+                            &serde_json::to_vec(&payload).unwrap(),
+                            false,
+                        ),
+                        Err(ProposalError::Malformed(_))
+                    ),
+                    "accepted workspace command {input:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_shell_command_preserves_policy_classification() {
+        for input in ["", " ", "\t", "\u{b}", "\u{c}", " \t\u{b}\u{c} "] {
+            assert!(
+                matches!(
+                    validate_proposal_shell_command(input),
+                    Err(ProposalError::PolicyViolation(_))
+                ),
+                "changed empty input classification for {input:?}"
+            );
+        }
+        for input in ["\r", "\n", " \r\n\t"] {
+            assert!(matches!(
+                validate_proposal_shell_command(input),
+                Err(ProposalError::Malformed(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn preserved_regression_fallback_line_breaks_rejected_for_both_origins() {
+        for mut wire in [terminal_agent_wire(), autofix_wire()] {
+            let is_autofix = wire.origin == ProposalOrigin::Autofix;
+            for input in ["echo first\necho second", "echo first\recho second"] {
+                wire.choices[0].actions[0] = ProposalActionWire::Send {
+                    input: input.into(),
+                };
+                let parsed = parse_proposal_payload(&serde_json::to_vec(&wire).unwrap()).unwrap();
+                assert!(build_recommendation_set(
+                    &parsed,
+                    is_autofix,
+                    None,
+                    Some("host-pane"),
+                    None
+                )
+                .is_err());
+            }
+        }
     }
 }

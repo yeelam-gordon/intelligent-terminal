@@ -503,6 +503,11 @@ impl App {
     }
 
     pub(super) fn handle_event(&mut self, event: AppEvent) {
+        let invalidates_card = self.event_requires_redraw(&event)
+            && !matches!(
+                &event,
+                AppEvent::Key(_) | AppEvent::Tick | AppEvent::RevealTick | AppEvent::Mouse(_)
+            );
         self.sync_agent_markdown_selection();
         // Async cards can take and release draft ownership without a key/focus event.
         // Typing targets only the active tab; switching/renaming closes the affected groups.
@@ -519,6 +524,9 @@ impl App {
             None
         };
         self.handle_event_inner(event);
+        if invalidates_card {
+            self.recommendation_rendered = false;
+        }
         self.dispatch_prompt_queues();
         if let Some(owned_input) = owned_input {
             let owns_input = self.tab_sessions.get(self.active_tab_key()).map(|tab| {
@@ -1218,6 +1226,14 @@ impl App {
                     return;
                 }
                 let is_active_tab = self.active_tab_key() == tab_id;
+                if self.tab_sessions.get(&tab_id).is_some_and(|tab| {
+                    tab.session_id
+                        .as_deref()
+                        .is_some_and(|previous| previous != session_id)
+                        && tab.turn.recommendations().is_some()
+                }) {
+                    self.request_turn_cancel_for_tab(&tab_id);
+                }
                 let replaced_session_ids: Vec<String> = self
                     .session_to_tab
                     .iter()

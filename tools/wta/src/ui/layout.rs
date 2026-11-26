@@ -237,7 +237,10 @@ fn render_content(frame: &mut Frame, app: &mut App) {
     app.sync_rec_scroll_max(main_area.width, panel_layout.recommendation_height);
     let recommendation_area =
         recommendations::render(frame, app, h_rec[1], panel_layout.recommendation_mode);
-    app.recommendation_rendered = recommendation_area.is_some();
+    app.recommendation_rendered = app.current_tab().pane_open
+        && h_chat[1].height > 0
+        && h_chat[1].width > 0
+        && recommendation_area.is_some();
     if !app.current_tab().permission.is_empty() {
         permission::render(frame, app, h_perm[1]);
     }

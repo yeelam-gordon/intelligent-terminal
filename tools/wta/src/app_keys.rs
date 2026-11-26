@@ -20,8 +20,10 @@ impl App {
         self.current_tab_mut().pause_pending_prompts();
         let tab = self.current_tab();
         let cancelling = tab.turn.is_cancelling();
-        let has_active_request =
-            tab.turn.is_in_flight() || !tab.user_input.is_empty() || !tab.permission.is_empty();
+        let has_active_request = tab.turn.is_in_flight()
+            || tab.turn.recommendations().is_some()
+            || !tab.user_input.is_empty()
+            || !tab.permission.is_empty();
         if has_active_request || cancelling {
             let tab_id = self.active_tab_key().to_string();
             self.request_turn_cancel_for_tab(&tab_id);
@@ -838,6 +840,12 @@ impl App {
                 if self.current_tab().turn.recommendations().is_some()
                     && self.current_tab().recommendation_focus == RecommendationFocus::Button
                 {
+                    if !self.recommendation_rendered
+                        || !self.current_tab().pane_open
+                        || self.help_overlay_visible
+                    {
+                        return;
+                    }
                     // A card button owns focus even when the input box already
                     // has draft text. Keep the draft intact and route Enter to
                     // the selected action.
@@ -851,7 +859,7 @@ impl App {
                             let insert_only = self.current_tab().selected_button == 1
                                 && self
                                     .selected_recommendation_choice()
-                                    .map(|c| self.is_send_choice(c))
+                                    .map(|c| c.allows_insert())
                                     .unwrap_or(false);
                             tracing::info!(
                                 target: "autofix",

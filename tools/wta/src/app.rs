@@ -7339,6 +7339,7 @@ impl App {
     /// already fits in the full panel viewport. Compact mode renders only the
     /// selected card, so it never needs a canvas offset.
     fn scroll_rec_to_selected(&mut self, panel_width: u16) {
+        self.recommendation_rendered = false;
         let Some(recs) = self.current_tab().turn.recommendations().cloned() else {
             return;
         };
@@ -7930,7 +7931,7 @@ impl App {
     /// Send actions have 2 buttons (Run, Insert); OpenAndSend has 1 button.
     fn button_count_for_selected(&self) -> usize {
         self.selected_recommendation_choice()
-            .map(|c| if self.is_send_choice(c) { 2 } else { 1 })
+            .map(|c| if c.allows_insert() { 2 } else { 1 })
             .unwrap_or(1)
     }
 
@@ -7942,24 +7943,23 @@ impl App {
 
     fn focus_next_recommendation_action(&mut self) {
         let button_count = self.button_count_for_selected();
+        if button_count > 1 {
+            self.recommendation_rendered = false;
+        }
         let tab = self.current_tab_mut();
         tab.selected_button = (tab.selected_button + 1) % button_count;
     }
 
     fn focus_previous_recommendation_action(&mut self) {
         let button_count = self.button_count_for_selected();
+        if button_count > 1 {
+            self.recommendation_rendered = false;
+        }
         let tab = self.current_tab_mut();
         tab.selected_button = (tab.selected_button + button_count - 1) % button_count;
     }
 
     /// Returns true if the choice's primary action is Send (shell command).
-    fn is_send_choice(&self, choice: &RecommendationChoice) -> bool {
-        choice
-            .actions
-            .iter()
-            .any(|a| matches!(a, crate::coordinator::RecommendedAction::Send { .. }))
-    }
-
     fn log_selection_phase_for(&self, session_id: &str, phase: &str, details: &str) {
         // log against the in-flight tab so traces stay coherent with where
         // the prompt was submitted, even after the user switches tabs.

@@ -64,7 +64,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect, mode: PanelMode) -> Opti
                 width: area.width,
                 height: render_h,
             };
-            if render_card(frame, app, card_area, choice, idx) {
+            if render_card(frame, app, card_area, choice, idx)
+                && idx == app.current_tab().selected_recommendation
+            {
                 rendered = Some(rendered.map_or(card_area, |bounds| bounds.union(card_area)));
             }
         }
@@ -110,7 +112,7 @@ fn render_compact(frame: &mut Frame, app: &App, area: Rect) -> bool {
         Rect { height: 1, ..area },
     );
 
-    if area.height > 1 {
+    let actionable = if area.height > 1 {
         let button_area = Rect {
             y: area.y + 1,
             height: 1,
@@ -119,9 +121,11 @@ fn render_compact(frame: &mut Frame, app: &App, area: Rect) -> bool {
         let focused = (app.current_tab().recommendation_focus
             == crate::app::RecommendationFocus::Button)
             .then_some(app.current_tab().selected_button);
-        card::render_buttons(frame, button_area, &buttons, focused);
-    }
-    summary_width > 1
+        render_action_buttons(frame, button_area, &buttons, focused)
+    } else {
+        false
+    };
+    summary_width > 1 && actionable
 }
 
 fn truncate_compact(text: &str, width: usize) -> String {
@@ -205,7 +209,7 @@ fn render_card(
     }
 
     let button_inner = card::inset_horizontal(button_area, 2);
-    if button_inner.width > 0 {
+    let actionable = if button_inner.width > 0 {
         let focused = if is_selected
             && app.current_tab().recommendation_focus == crate::app::RecommendationFocus::Button
         {
@@ -213,9 +217,64 @@ fn render_card(
         } else {
             None
         };
-        card::render_buttons(frame, button_inner, &buttons, focused);
+        render_action_buttons(frame, button_inner, &buttons, focused)
+    } else {
+        false
+    };
+    is_selected && content_inner.width > 0 && content_inner.height > 0 && actionable
+}
+
+fn painted_text_width(text: &str) -> usize {
+    Span::raw(text)
+        .styled_graphemes(Style::default())
+        .map(|grapheme| grapheme.symbol.width())
+        .sum()
+}
+
+/// Keep the focused action legible, falling back only when the original row
+/// does not fit. Measure the graphemes that the native renderer paints.
+fn render_action_buttons(
+    frame: &mut Frame,
+    area: Rect,
+    labels: &[String],
+    focused: Option<usize>,
+) -> bool {
+    let selected = focused.unwrap_or(0);
+    if selected >= labels.len() {
+        return false;
     }
-    content_inner.width > 0 && content_inner.height > 0
+    // Match the three-space gap inserted by card::render_buttons.
+    const BUTTON_GAP_WIDTH: usize = 3;
+    let row_width = |labels: &[String]| {
+        labels
+            .iter()
+            .map(|label| painted_text_width(label))
+            .sum::<usize>()
+            + BUTTON_GAP_WIDTH * labels.len().saturating_sub(1)
+    };
+    if row_width(labels) <= area.width as usize {
+        card::render_buttons(frame, area, labels, focused);
+        return true;
+    }
+    let short = if labels.len() == 2 {
+        vec![
+            t!("chat.tool_kind.run").into_owned(),
+            t!("chat.tool_kind.insert").into_owned(),
+        ]
+    } else {
+        labels.to_vec()
+    };
+    if row_width(&short) <= area.width as usize {
+        card::render_buttons(frame, area, &short, focused);
+    } else {
+        card::render_buttons(
+            frame,
+            area,
+            std::slice::from_ref(&short[selected]),
+            focused.map(|_| 0),
+        );
+    }
+    painted_text_width(&short[selected]) <= area.width as usize
 }
 
 enum CardBodyKind {
@@ -225,7 +284,15 @@ enum CardBodyKind {
 
 fn extract_card_content(choice: &RecommendationChoice) -> (String, Vec<String>, CardBodyKind) {
     let display = recommendation_display_text(choice);
-    let (buttons, body_kind) = match choice.actions.first() {
+    let action = if choice.allows_insert() {
+        choice
+            .actions
+            .iter()
+            .find(|action| matches!(action, RecommendedAction::Send { .. }))
+    } else {
+        choice.actions.first()
+    };
+    let (buttons, body_kind) = match action {
         Some(RecommendedAction::Send { .. }) => (
             vec![
                 t!("recommendations.button_run_command").into_owned(),
@@ -252,13 +319,38 @@ fn extract_card_content(choice: &RecommendationChoice) -> (String, Vec<String>, 
             CardBodyKind::Description,
         ),
     };
+    let buttons = if choice.actions.len() > 1 && !choice.allows_insert() {
+        vec![t!("recommendations.button_execute").into_owned()]
+    } else {
+        buttons
+    };
     (display, buttons, body_kind)
 }
 
 pub(super) fn recommendation_display_text(choice: &RecommendationChoice) -> String {
-    match choice.actions.first() {
-        Some(RecommendedAction::Send { input, .. }) => input.clone(),
-        Some(RecommendedAction::OpenAndSend { input, agent, .. }) => {
+    choice
+        .actions
+        .first()
+        .map(recommendation_action_display_text)
+        .unwrap_or_else(|| choice.title.clone())
+}
+
+pub(super) fn recommendation_full_display_text(choice: &RecommendationChoice) -> String {
+    if choice.actions.is_empty() {
+        return choice.title.clone();
+    }
+    choice
+        .actions
+        .iter()
+        .map(recommendation_action_display_text)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn recommendation_action_display_text(action: &RecommendedAction) -> String {
+    match action {
+        RecommendedAction::Send { input, .. } => input.clone(),
+        RecommendedAction::OpenAndSend { input, agent, .. } => {
             let fallback = t!("recommendations.agent_fallback").into_owned();
             let agent_label = agent.as_deref().unwrap_or(&fallback);
             t!(
@@ -268,13 +360,13 @@ pub(super) fn recommendation_display_text(choice: &RecommendationChoice) -> Stri
             )
             .into_owned()
         }
-        Some(RecommendedAction::Open {
+        RecommendedAction::Open {
             target,
             cwd,
             title,
             direction,
             ..
-        }) => {
+        } => {
             let kind = match target {
                 OpenTarget::Tab => t!("recommendations.open_kind_tab").into_owned(),
                 OpenTarget::Panel => match direction.as_deref() {
@@ -309,13 +401,71 @@ pub(super) fn recommendation_display_text(choice: &RecommendationChoice) -> Stri
                 _ => t!("recommendations.open_new_empty", kind = kind.as_str()).into_owned(),
             }
         }
-        None => choice.title.clone(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn primary_card_choice() -> RecommendationChoice {
+        RecommendationChoice {
+            choice: 1,
+            title: "summary".into(),
+            rationale: String::new(),
+            actions: vec![RecommendedAction::Send {
+                parent: "pane-9".into(),
+                input: "  echo '你好 e\u{301} 👩‍💻'  ".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn recommendation_primary_card_display_ignores_large_second_legacy_action() {
+        let mut choice = primary_card_choice();
+        let primary = recommendation_display_text(&choice);
+        choice.actions.push(RecommendedAction::Send {
+            parent: "pane-9".into(),
+            input: "SECOND_ACTION ".repeat(500),
+        });
+        assert_eq!(recommendation_display_text(&choice), primary);
+        assert_eq!(extract_card_content(&choice).0, primary);
+    }
+
+    #[test]
+    fn recommendation_primary_card_height_ignores_large_second_legacy_action() {
+        let mut choice = primary_card_choice();
+        let primary_height = recommendation_card_height(&choice, 40);
+        choice.actions.push(RecommendedAction::Send {
+            parent: "pane-9".into(),
+            input: "SECOND_ACTION ".repeat(500),
+        });
+        assert_eq!(recommendation_card_height(&choice, 40), primary_height);
+    }
+
+    #[test]
+    fn baseline_feasibility_shared_formatter_preserves_exact_action_text() {
+        let inputs = [
+            "  echo '<tag> **literal** `ticks` 你好 e\u{301} 👩‍💻'  ",
+            "echo SECOND_ACTION",
+        ];
+        let choice = RecommendationChoice {
+            choice: 1,
+            title: "summary".into(),
+            rationale: String::new(),
+            actions: inputs
+                .iter()
+                .map(|input| RecommendedAction::Send {
+                    parent: "pane-9".into(),
+                    input: (*input).into(),
+                })
+                .collect(),
+        };
+        assert_eq!(
+            recommendation_full_display_text(&choice),
+            inputs.join("\n\n")
+        );
+    }
 
     #[test]
     fn compact_summary_paragraph_right_aligns_for_rtl() {
