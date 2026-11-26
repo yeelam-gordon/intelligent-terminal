@@ -3,7 +3,6 @@ use crate::coordinator::{RecommendationChoice, RecommendationSet};
 use unicode_width::UnicodeWidthStr;
 
 use super::card::{card_content_width, CARD_MIN_SIZE};
-use super::recommendations::recommendation_display_text;
 
 pub(crate) const COMPACT_RECOMMENDATION_HEIGHT: u16 = 2;
 const COMPACT_PERMISSION_HEIGHT: u16 = 1;
@@ -164,9 +163,9 @@ pub(crate) fn recommendation_panel_height(
 /// Rendered recommendation-card height, including one inter-card gap row.
 pub(crate) fn recommendation_card_height(choice: &RecommendationChoice, panel_width: u16) -> usize {
     let inner_width = card_content_width(panel_width);
-    let text = recommendation_display_text(choice);
+    let text = &choice.title;
 
-    let content_lines = super::recommendations::full_command_lines(&text, inner_width).len();
+    let content_lines = wrapped_line_count(text, inner_width);
     CARD_MIN_SIZE as usize + content_lines.saturating_sub(1) + 1
 }
 

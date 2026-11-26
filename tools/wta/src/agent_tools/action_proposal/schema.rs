@@ -107,7 +107,7 @@ pub enum ProposalError {
     /// Raw payload exceeded [`MAX_PAYLOAD_BYTES`] — rejected before parsing.
     TooLarge { size: usize },
     /// `serde_json` (or the strict wire schema's `deny_unknown_fields`)
-    /// rejected the payload outright.
+    /// rejected the payload or a tool field violates its wire contract.
     Malformed(String),
     /// `schema_version` in the payload doesn't match [`SCHEMA_VERSION`].
     UnsupportedSchemaVersion(u32),
@@ -387,8 +387,7 @@ pub fn parse_mcp_action_payload(
                 MAX_RATIONALE_CHARS,
             )?;
             validate_mcp_required_text("command", &wire.command, MAX_INPUT_CHARS)?;
-            validate_shell_command_input(&wire.command)
-                .map_err(|e| ProposalError::PolicyViolation(e.to_string()))?;
+            validate_proposal_shell_command(&wire.command)?;
             (
                 wire.summary,
                 wire.reason.unwrap_or_default(),
@@ -411,8 +410,7 @@ pub fn parse_mcp_action_payload(
                 MAX_INPUT_CHARS,
             )?;
             if let Some(command) = wire.command.as_deref() {
-                validate_shell_command_input(command)
-                    .map_err(|e| ProposalError::PolicyViolation(e.to_string()))?;
+                validate_proposal_shell_command(command)?;
             }
             validate_mcp_optional_nonempty_text(
                 "working_directory",
@@ -745,6 +743,7 @@ pub fn build_recommendation_set(
         check_len("title", &choice.title, MAX_TITLE_CHARS)?;
         check_len("rationale", &choice.rationale, MAX_RATIONALE_CHARS)?;
         check_len("input", input, MAX_INPUT_CHARS)?;
+        validate_proposal_shell_command(input)?;
         let set = RecommendationSet {
             recommended_choice: Some(choice.choice),
             choices: vec![RecommendationChoice {
@@ -811,6 +810,7 @@ fn convert_terminal_agent_action(
     match action {
         ProposalActionWire::Send { input } => {
             check_len("input", input, MAX_INPUT_CHARS)?;
+            validate_proposal_shell_command(input)?;
             Ok(RecommendedAction::Send {
                 parent: require_active_target(trusted_active_target)?,
                 input: input.clone(),
@@ -840,6 +840,9 @@ fn convert_terminal_agent_action(
             profile,
         } => {
             check_len("input", input, MAX_INPUT_CHARS)?;
+            if !delegate {
+                validate_proposal_shell_command(input)?;
+            }
             Ok(RecommendedAction::OpenAndSend {
                 target: (*target).into(),
                 parent: panel_parent(*target, trusted_active_target)?,
@@ -852,6 +855,16 @@ fn convert_terminal_agent_action(
             })
         }
     }
+}
+
+fn validate_proposal_shell_command(input: &str) -> Result<(), ProposalError> {
+    validate_shell_command_input(input).map_err(|error| {
+        if input.contains(['\r', '\n']) {
+            ProposalError::Malformed(error.to_string())
+        } else {
+            ProposalError::PolicyViolation(error.to_string())
+        }
+    })
 }
 
 fn require_active_target(active_target: Option<&str>) -> Result<String, ProposalError> {

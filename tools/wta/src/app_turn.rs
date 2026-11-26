@@ -101,7 +101,6 @@ impl App {
         tab.selected_button = 0;
         tab.recommendation_focus = RecommendationFocus::Button;
         tab.rec_scroll.reset();
-        tab.rec_body_scroll.reset();
         tab.pending_terminal_action_proposal = None;
         tab.autofix.offer = is_autofix.then(|| super::autofix::ErrorFixOffer {
             id: uuid::Uuid::new_v4(),
@@ -873,7 +872,6 @@ impl App {
         tab.recommendation_focus = RecommendationFocus::Button;
         tab.active_direct_proposal_id = None;
         tab.rec_scroll.reset();
-        tab.rec_body_scroll.reset();
         let outcome = if end_pending {
             TurnOutcome::ResolvedRecommendation {
                 summary: executed_summary,
@@ -1101,7 +1099,6 @@ impl App {
         tab.selected_button = 0;
         tab.recommendation_focus = RecommendationFocus::Button;
         tab.rec_scroll.reset();
-        tab.rec_body_scroll.reset();
         tab.activity_frame = 0;
         tab.finish_thought();
         // Cancel pending session-MCP clarification responders. The user's
@@ -1219,7 +1216,6 @@ impl App {
         tab.selected_button = 0;
         tab.recommendation_focus = RecommendationFocus::Button;
         tab.rec_scroll.reset();
-        tab.rec_body_scroll.reset();
         tab.selection_visible_pending = true;
         tab.clear_completed_turn_selection();
         tab.activity_frame = 0;
@@ -1358,7 +1354,6 @@ impl App {
         tab.selected_button = 0;
         tab.recommendation_focus = RecommendationFocus::Button;
         tab.rec_scroll.reset();
-        tab.rec_body_scroll.reset();
         tab.activity_frame = 0;
         tab.finish_thought();
         tab.turn = TurnState::Surfaced {

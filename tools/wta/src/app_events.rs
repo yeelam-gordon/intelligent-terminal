@@ -636,22 +636,6 @@ impl App {
             AppEvent::Mouse(mouse) => match mouse.kind {
                 crossterm::event::MouseEventKind::ScrollUp
                 | crossterm::event::MouseEventKind::ScrollDown
-                    if self.recommendation_rendered
-                        && self.current_tab().rec_body_scroll.max > 0
-                        && self.recommendation_area.is_some_and(|area| {
-                            area.contains((mouse.column, mouse.row).into())
-                        }) =>
-                {
-                    self.scroll_recommendation_body(
-                        if matches!(mouse.kind, crossterm::event::MouseEventKind::ScrollUp) {
-                            -1
-                        } else {
-                            1
-                        },
-                    );
-                }
-                crossterm::event::MouseEventKind::ScrollUp
-                | crossterm::event::MouseEventKind::ScrollDown
                     if self.current_tab().current_view == View::Agents =>
                 {
                     self.cancel_completed_turn_click();

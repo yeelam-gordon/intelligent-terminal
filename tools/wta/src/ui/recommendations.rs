@@ -1,6 +1,6 @@
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthStr;
+use ratatui::widgets::{Paragraph, Wrap};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::App;
 use crate::coordinator::{OpenTarget, RecommendationChoice, RecommendedAction};
@@ -17,15 +17,9 @@ use crate::ui::card::{self, CARD_MIN_SIZE};
 /// rendered separately by `render_hint` so it can sit directly above the
 /// input box (see `layout.rs`).
 ///
-/// The selected card scrolls its body independently of its shell/buttons.
-/// Returns the selected
-/// actionable card's painted bounds, not unrelated cards.
-pub(crate) fn render(
-    frame: &mut Frame,
-    app: &mut App,
-    area: Rect,
-    mode: PanelMode,
-) -> Option<Rect> {
+/// The complete active proposal is rendered in chat; cards keep their
+/// original summary/action layout. Only selected, painted actions count.
+pub(crate) fn render(frame: &mut Frame, app: &App, area: Rect, mode: PanelMode) -> Option<Rect> {
     let Some(recs) = app.current_tab().turn.recommendations().cloned() else {
         return None;
     };
@@ -81,7 +75,7 @@ pub(crate) fn render(
     rendered
 }
 
-fn render_compact(frame: &mut Frame, app: &mut App, area: Rect) -> bool {
+fn render_compact(frame: &mut Frame, app: &App, area: Rect) -> bool {
     let Some(recommendations) = app.current_tab().turn.recommendations().cloned() else {
         return false;
     };
@@ -102,13 +96,7 @@ fn render_compact(frame: &mut Frame, app: &mut App, area: Rect) -> bool {
     let prefix = format!("{marker}{position}");
     let summary_width =
         (area.width as usize).saturating_sub(UnicodeWidthStr::width(prefix.as_str()));
-    let lines = full_command_lines(&summary, summary_width.max(1));
-    let body_fits_width = command_lines_fit_width(&lines, summary_width);
-    app.current_tab_mut()
-        .rec_body_scroll
-        .set_max(lines.len().saturating_sub(1));
-    let offset = app.current_tab().rec_body_scroll.offset;
-    let summary = lines[offset].clone();
+    let summary = truncate_compact(&summary.replace(['\r', '\n'], " "), summary_width);
     let body_style = match body_kind {
         CardBodyKind::Code => theme::CARD_CODE,
         CardBodyKind::Description => theme::CARD_DESCRIPTION,
@@ -133,11 +121,31 @@ fn render_compact(frame: &mut Frame, app: &mut App, area: Rect) -> bool {
         let focused = (app.current_tab().recommendation_focus
             == crate::app::RecommendationFocus::Button)
             .then_some(app.current_tab().selected_button);
-        return summary_width >= 2
-            && render_action_buttons(frame, button_area, &buttons, focused)
-            && body_fits_width;
+        return summary_width >= 2 && render_action_buttons(frame, button_area, &buttons, focused);
     }
     false
+}
+
+fn truncate_compact(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_string();
+    }
+    let content_width = width.saturating_sub(1);
+    let mut used = 0;
+    let mut result = String::new();
+    for character in text.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used + character_width > content_width {
+            break;
+        }
+        result.push(character);
+        used += character_width;
+    }
+    result.push('…');
+    result
 }
 
 fn compact_summary_paragraph(line: Line<'static>, alignment: Alignment) -> Paragraph<'static> {
@@ -161,7 +169,7 @@ pub fn render_hint(frame: &mut Frame, area: Rect) {
 
 fn render_card(
     frame: &mut Frame,
-    app: &mut App,
+    app: &App,
     area: Rect,
     choice: &RecommendationChoice,
     idx: usize,
@@ -191,26 +199,10 @@ fn render_card(
         CardBodyKind::Description => theme::CARD_DESCRIPTION,
     };
     let content_inner = card::inset_horizontal(content_area, 2);
-    let mut body_fits_width = false;
     if content_inner.width > 0 {
-        let lines = full_command_lines(&command_text, content_inner.width as usize);
-        body_fits_width = command_lines_fit_width(&lines, content_inner.width as usize);
-        let max = lines.len().saturating_sub(content_inner.height as usize);
-        let body_offset = if is_selected {
-            app.current_tab_mut().rec_body_scroll.set_max(max);
-            app.current_tab().rec_body_scroll.offset
-        } else {
-            0
-        };
-        let content = Paragraph::new(
-            lines
-                .into_iter()
-                .skip(body_offset.min(max))
-                .take(content_inner.height as usize)
-                .map(Line::from)
-                .collect::<Vec<_>>(),
-        )
-        .style(body_style);
+        let content = Paragraph::new(command_text)
+            .style(body_style)
+            .wrap(Wrap { trim: false });
         frame.render_widget(content, content_inner);
     }
 
@@ -225,8 +217,7 @@ fn render_card(
         };
         return content_inner.width >= 2
             && content_inner.height > 0
-            && render_action_buttons(frame, button_inner, &buttons, focused)
-            && body_fits_width;
+            && render_action_buttons(frame, button_inner, &buttons, focused);
     }
     false
 }
@@ -303,44 +294,11 @@ pub(super) fn recommendation_display_text(choice: &RecommendationChoice) -> Stri
         .join("\n\n")
 }
 
-fn command_lines_fit_width(lines: &[String], width: usize) -> bool {
-    lines.iter().all(|line| painted_text_width(line) <= width)
-}
-
 fn painted_text_width(text: &str) -> usize {
     Span::raw(text)
         .styled_graphemes(Style::default())
         .map(|grapheme| grapheme.symbol.width())
         .sum()
-}
-
-pub(super) fn full_command_lines(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    // Cell wrapping, rather than word wrapping, preserves whitespace and long
-    // unbroken shell arguments at every scroll position.
-    for logical_line in text.split('\n') {
-        let mut line = String::new();
-        let mut used = 0;
-        let mut consumed = 0;
-        let span = Span::raw(logical_line);
-        for grapheme in span.styled_graphemes(Style::default()) {
-            let cells = grapheme.symbol.width();
-            if used + cells > width && !line.is_empty() {
-                lines.push(std::mem::take(&mut line));
-                used = 0;
-            }
-            // Ratatui filters nonprinting controls during segmentation. Keep
-            // their original bytes rather than rewriting the bound text.
-            let end = grapheme.symbol.as_ptr().addr() - logical_line.as_ptr().addr()
-                + grapheme.symbol.len();
-            line.push_str(&logical_line[consumed..end]);
-            consumed = end;
-            used += cells;
-        }
-        line.push_str(&logical_line[consumed..]);
-        lines.push(line);
-    }
-    lines
 }
 
 enum CardBodyKind {
@@ -349,7 +307,7 @@ enum CardBodyKind {
 }
 
 fn extract_card_content(choice: &RecommendationChoice) -> (String, Vec<String>, CardBodyKind) {
-    let display = recommendation_display_text(choice);
+    let display = choice.title.clone();
     let (buttons, body_kind) = if choice.supports_insert() {
         (
             action_buttons(
@@ -462,23 +420,6 @@ fn recommendation_action_display_text(action: &RecommendedAction) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn full_command_wrap_preserves_spaces_long_tokens_and_unicode() {
-        let command = format!(
-            "  echo '{}你好 e\u{301}👨‍👩‍👧‍👦\u{85}\u{2028}\u{2029}'  ; tail",
-            "x".repeat(300)
-        );
-        for width in [2, 3, 10, 79] {
-            let lines = full_command_lines(&command, width);
-            assert_eq!(lines.concat(), command);
-            assert!(lines.iter().all(|line| Span::raw(line.as_str())
-                .styled_graphemes(Style::default())
-                .map(|grapheme| grapheme.symbol.width())
-                .sum::<usize>()
-                <= width));
-        }
-    }
 
     #[test]
     fn compact_summary_paragraph_right_aligns_for_rtl() {

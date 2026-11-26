@@ -827,6 +827,9 @@ fn validate_action(action: &RecommendedAction) -> Result<()> {
 /// Delegate prompts and the general terminal-input APIs have separate contracts.
 pub(crate) fn validate_shell_command_input(input: &str) -> Result<()> {
     ensure_non_empty("input", input)?;
+    if input.contains(['\r', '\n']) {
+        bail!("This command contains a line break. Provide a single-line command, or, if the task needs multiple steps and the tool is available, propose delegating it with `delegate_task_in_new_workspace`.");
+    }
     // SendProtocolInput maps LF to CR; C0/DEL can affect the terminal line
     // editor (Enter, escape sequences, deletion, etc.). C1 and Unicode line
     // separators are forwarded as Unicode text, not translated into Enter.
