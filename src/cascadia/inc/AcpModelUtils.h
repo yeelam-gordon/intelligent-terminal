@@ -238,6 +238,12 @@ namespace Microsoft::Terminal::AcpModels
         const std::optional<std::wstring_view> model = std::nullopt,
         const bool runsInWsl = false)
     {
+        // Logical custom IDs are not executable commands. Callers must resolve
+        // their configured command first; unavailable selections stay empty.
+        if (agentId.starts_with(L"custom:"))
+        {
+            return {};
+        }
         return BuildAgentCommandLine(
             agentId,
             ::Microsoft::Terminal::Settings::Model::AgentRegistry::SupportsLiveModelSwitch(agentId) ? std::nullopt : model,

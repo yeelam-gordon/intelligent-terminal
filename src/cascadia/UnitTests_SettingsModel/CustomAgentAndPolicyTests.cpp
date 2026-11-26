@@ -471,9 +471,28 @@ namespace SettingsModelUnitTests
         installed = true;
         globals.RefreshAcpAgentCatalog();
         VERIFY_ARE_EQUAL(std::wstring{ L"\"C:\\inert\\bob.exe\" acp" }, resolve());
+        VERIFY_ARE_EQUAL(resolve(), Models::BuildProbeCommandLine(globals.EffectiveAcpCustomCommand()));
         installed = false;
         globals.RefreshAcpAgentCatalog();
         VERIFY_IS_TRUE(resolve().empty());
+        VERIFY_ARE_EQUAL(size_t{ 0 }, fallbacks);
+        VERIFY_ARE_EQUAL(size_t{ 0 }, builtinCommands);
+        // A saved ID from a newer/removed catalog is still an explicit catalog
+        // choice, not a handwritten command or an executable to probe.
+        for (const auto id : { L"custom:acp-registry:unknown-future-agent", L"custom:acp-registry:" })
+        {
+            globals.AcpAgent(id);
+            globals.AcpModel(L"saved-catalog-model");
+            VERIFY_ARE_EQUAL(winrt::hstring{ id }, globals.EffectiveAcpAgent());
+            VERIFY_IS_TRUE(globals.EffectiveAcpCustomCommand().empty());
+            VERIFY_IS_TRUE(resolve().empty());
+            VERIFY_IS_TRUE(Models::BuildProbeCommandLine(globals.EffectiveAcpAgent()).empty());
+            VERIFY_ARE_EQUAL(winrt::hstring{ L"saved-catalog-model" }, globals.AcpModel());
+        }
+        VERIFY_IS_TRUE(Models::BuildProbeCommandLine(L"custom:acp-registry:bob").empty());
+        // A similarly named original handwritten ID is not in the namespace.
+        globals.AcpAgent(L"custom:acp-registry-bob");
+        VERIFY_ARE_EQUAL(std::wstring{ L"unrelated-command --stdio" }, resolve());
         VERIFY_ARE_EQUAL(size_t{ 0 }, fallbacks);
         VERIFY_ARE_EQUAL(size_t{ 0 }, builtinCommands);
         // No selection still uses the existing allowed built-in fallback.

@@ -385,7 +385,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         for (uint32_t i = 0; i < list.Size();)
         {
             if (_StartsWithCustom(list.GetAt(i).Id()) &&
-                (!isAcpAgent || !::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::Find(list.GetAt(i).Id())))
+                (!isAcpAgent || !::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::IsCatalogId(list.GetAt(i).Id())))
             {
                 list.RemoveAt(i);
             }
@@ -457,7 +457,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         }
         _RebuildCustomEntries(list, commands, true);
         if (_StartsWithCustom(selectedId) && selectedCommand.empty() &&
-            !::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::Find(selectedId))
+            !::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::IsCatalogId(selectedId))
         {
             const auto idStr = winrt::to_string(selectedId);
             const auto bareId = winrt::to_hstring(idStr.substr(7));
@@ -1139,7 +1139,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         {
             if (!preferred.IsAddNew() &&
                 (!_StartsWithCustom(preferred.Id()) ||
-                 ::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::Find(preferred.Id())))
+                 ::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::IsCatalogId(preferred.Id())))
             {
                 return preferred;
             }
@@ -1150,7 +1150,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
             const auto entry = list.GetAt(i);
             if (!entry.IsAddNew() &&
                 (!_StartsWithCustom(entry.Id()) ||
-                 ::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::Find(entry.Id())))
+                 ::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::IsCatalogId(entry.Id())))
             {
                 return entry;
             }
@@ -1177,7 +1177,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         // was applied.
         if (_GlobalSettings.IsCustomAgentPolicyLocked()) return false;
         return _StartsWithCustom(_GlobalSettings.AcpAgent()) &&
-               !::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::Find(_GlobalSettings.AcpAgent());
+               !::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::IsCatalogId(_GlobalSettings.AcpAgent());
     }
 
     winrt::hstring AIAgentsViewModel::CustomAcpCommandPreview()
@@ -1356,7 +1356,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         }
         auto idStr = winrt::to_string(value.Id());
         if (idStr.starts_with("custom:") &&
-            !::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::Find(value.Id()))
+            !::Microsoft::Terminal::Settings::Model::AcpAgentCatalog::IsCatalogId(value.Id()))
         {
             if (_GlobalSettings.AcpAgent() == value.Id())
             {
@@ -1923,10 +1923,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         if (winrt::to_string(acpAgent).starts_with("custom:"))
         {
             const auto customCmd = _GlobalSettings.EffectiveAcpCustomCommand();
-            if (!customCmd.empty())
-            {
-                return std::wstring{ customCmd };
-            }
+            return std::wstring{ customCmd };
         }
 
         const auto acpModel = _GlobalSettings.AcpModel();

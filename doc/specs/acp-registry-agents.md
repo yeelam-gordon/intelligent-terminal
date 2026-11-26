@@ -20,6 +20,8 @@ Registry-derived entries use stable IDs `custom:acp-registry:<id>` (for example,
 
 An unavailable explicit catalog selection keeps its ID but resolves to an empty command. It is not treated as “no selection”: the production resolver does not auto-detect a different provider, reuse an unrelated custom command or execute the logical ID. The shared-pane path rejects a selection with no launch command before acquiring a master/helper. Normal absent-selection and policy-allowed built-in fallback behavior is unchanged.
 
+IDs from a newer catalog remain in this reserved namespace even if this build has no metadata for them. They keep the saved selection and model, never use legacy custom commands, and never reach executable model probes.
+
 These are **custom agents**, not new built-in `AllowedAgents` values. [`AgentPolicy.h`](../../src/cascadia/inc/AgentPolicy.h) defines `AllowCustomAgents`: `0` blocks custom agents; `1` or an absent policy allows them. `AllowedAgents` is the built-in allowlist and does not individually allowlist these catalog IDs. Blocking custom agents hides these choices and prevents their effective selection/discovery; the handwritten custom flow is governed by the same existing policy. A found executable is trusted local executable configuration, not a sandbox.
 
 Source relationships (explanatory evidence, **not runtime proof**):

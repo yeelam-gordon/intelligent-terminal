@@ -723,7 +723,7 @@ winrt::hstring GlobalAppSettings::EffectiveAcpCustomCommand() const
     {
         return {};
     }
-    if (Catalog::Find(AcpAgent()))
+    if (Catalog::IsCatalogId(AcpAgent()))
     {
         return InstalledAcpCommand(AcpAgent());
     }

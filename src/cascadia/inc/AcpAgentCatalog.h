@@ -82,21 +82,29 @@ namespace Microsoft::Terminal::Settings::Model::AcpAgentCatalog
         Agent{ L"stakpak", L"Stakpak", L"stakpak", L"acp" },
     };
 
+    inline constexpr std::wstring_view IdPrefix{ L"custom:acp-registry:" };
+
+    // Namespace ownership does not depend on this build's metadata revision.
+    // A newer/removed ID remains a catalog selection, never a legacy command.
+    inline bool IsCatalogId(const std::wstring_view id) noexcept
+    {
+        return id.starts_with(IdPrefix);
+    }
+
     inline std::wstring Id(const Agent& agent)
     {
         // A separate namespace avoids claiming legacy executable-derived IDs
         // such as custom:acp-registry-bob for handwritten wrapper commands.
-        return L"custom:acp-registry:" + std::wstring{ agent.id };
+        return std::wstring{ IdPrefix } + std::wstring{ agent.id };
     }
 
     inline const Agent* Find(const std::wstring_view id) noexcept
     {
-        constexpr std::wstring_view prefix{ L"custom:acp-registry:" };
-        if (id.starts_with(prefix))
+        if (IsCatalogId(id))
         {
             for (const auto& agent : Agents)
             {
-                if (agent.id == id.substr(prefix.size()))
+                if (agent.id == id.substr(IdPrefix.size()))
                 {
                     return &agent;
                 }
