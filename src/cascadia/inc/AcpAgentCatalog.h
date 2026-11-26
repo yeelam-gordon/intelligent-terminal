@@ -11,6 +11,17 @@
 
 namespace Microsoft::Terminal::Settings::Model::AcpAgentCatalog
 {
+    // Rebuilding an already-open Agents page (reload/reset) is not page entry.
+    // Keep this side-effect boundary shared with the countable lifecycle tests.
+    template<typename Refresh>
+    void RefreshOnAgentsPageEntry(const bool wasAgentsPage, const Refresh& refresh)
+    {
+        if (!wasAgentsPage)
+        {
+            refresh();
+        }
+    }
+
     // Bundled metadata, not a remote feed or a provider installer.
     // Executables/arguments: pinned registry manifests and exact-version npm
     // package.json bin metadata; see doc/specs/acp-registry-agents.md.

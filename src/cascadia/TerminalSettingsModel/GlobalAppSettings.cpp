@@ -703,10 +703,9 @@ winrt::hstring GlobalAppSettings::EffectiveAcpAgent() const
         {
             return winrt::hstring{};
         }
-        if (Catalog::Find(agent) && InstalledAcpCommand(agent).empty())
-        {
-            return {};
-        }
+        // Preserve an explicit catalog selection even if its cached command is
+        // unavailable. Empty means "auto-detect" to launchers, not "unavailable".
+        // EffectiveAcpCustomCommand stays empty and the launch must fail closed.
         return agent;
     }
 

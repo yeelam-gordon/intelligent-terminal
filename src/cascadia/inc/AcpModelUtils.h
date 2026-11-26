@@ -212,6 +212,27 @@ namespace Microsoft::Terminal::AcpModels
         return commandLine;
     }
 
+    // Empty selection permits default discovery. An explicit custom/catalog
+    // selection with an empty command is unavailable, never "choose another".
+    template<typename DetectFallback, typename BuildBuiltin>
+    std::wstring ResolveEffectiveCommandLine(
+        const std::wstring_view selectedAgent,
+        const std::wstring_view customCommand,
+        const DetectFallback& detectFallback,
+        const BuildBuiltin& buildBuiltin)
+    {
+        if (selectedAgent.starts_with(L"custom:"))
+        {
+            return std::wstring{ customCommand };
+        }
+        std::wstring agent{ selectedAgent };
+        if (agent.empty())
+        {
+            agent = detectFallback();
+        }
+        return agent.empty() ? std::wstring{} : buildBuiltin(agent);
+    }
+
     inline std::wstring BuildProbeCommandLine(
         const std::wstring_view agentId,
         const std::optional<std::wstring_view> model = std::nullopt,

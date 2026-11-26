@@ -551,20 +551,8 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
     {
         namespace Reg = ::Microsoft::Terminal::Settings::Model::AgentRegistry;
 
-        // Refresh PATH from the Windows registry so SearchPathW can find
-        // CLIs installed after Terminal launched (e.g. WinGet\Links).
-        try
-        {
-            ::Microsoft::Terminal::WtaProcess::RefreshProcessPath();
-        }
-        catch (...)
-        {
-            LOG_CAUGHT_EXCEPTION();
-        }
-
-        // This view-model is created for each navigation into Agents. This is
-        // the only refresh after application startup, not a dropdown/getter probe.
-        _GlobalSettings.RefreshAcpAgentCatalog();
+        // Construction also happens during settings reload/reset. Only MainPage
+        // owns the genuine page-entry refresh; reconstruction reuses its snapshot.
         _GlobalSettings.ClearAgentPaneYoloModeIfUnavailableDefault();
 
         // ACP-capable agents — use GPO-filtered list so only policy-allowed
