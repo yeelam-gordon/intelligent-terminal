@@ -214,7 +214,7 @@ namespace Microsoft.Terminal.Settings.Model
 
         // Explicit process startup / Agents-page navigation boundaries.
         // Reading selections or the list never performs executable discovery.
-        // Append-only: preserve every pre-existing default-interface slot.
+        // Append-only: preserve every preexisting default-interface slot.
         void InitializeAcpAgentCatalog();
         void RefreshAcpAgentCatalog();
         Windows.Foundation.Collections.IVectorView<String> InstalledAcpAgents { get; };
