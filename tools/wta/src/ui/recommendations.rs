@@ -243,12 +243,14 @@ fn render_action_buttons(
     if selected >= labels.len() {
         return false;
     }
+    // Match the three-space gap inserted by card::render_buttons.
+    const BUTTON_GAP_WIDTH: usize = 3;
     let row_width = |labels: &[String]| {
         labels
             .iter()
             .map(|label| painted_text_width(label))
             .sum::<usize>()
-            + 3 * labels.len().saturating_sub(1)
+            + BUTTON_GAP_WIDTH * labels.len().saturating_sub(1)
     };
     if row_width(labels) <= area.width as usize {
         card::render_buttons(frame, area, labels, focused);
