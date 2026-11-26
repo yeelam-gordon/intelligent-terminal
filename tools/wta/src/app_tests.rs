@@ -26072,6 +26072,42 @@ fn flush_error_fix_telemetry_frame(app: &mut App, width: u16, height: u16) -> St
 }
 
 #[test]
+fn recommendation_projection_after_agent_end_is_once_and_only_active_choice() {
+    let mut app = test_app();
+    let (id, _) = stage_error_fix_telemetry_proposal(&mut app, false);
+    assert!(app.commit_terminal_action_proposal(&id));
+    if let TurnState::Surfaced {
+        outcome: TurnOutcome::Recommendation(set),
+        ..
+    } = &mut app.current_tab_mut().turn
+    {
+        let mut other = set.choices[0].clone();
+        other.choice = 2;
+        other.title = "Other choice".into();
+        other.actions[0] = RecommendedAction::Send {
+            parent: "pane-9".into(),
+            input: "echo OTHER_ONLY".into(),
+        };
+        set.choices.push(other);
+    }
+    app.handle_event(AppEvent::AgentMessageEnd {
+        session_id: "fix-telemetry".into(),
+    });
+    render_to_text(&mut app, 120, 40);
+    app.text_selection.select_all();
+    let text = app.text_selection.selected_text().unwrap();
+    assert_eq!(text.matches("Get-Date").count(), 1, "{text}");
+    assert!(!text.contains("OTHER_ONLY"), "{text}");
+    app.text_selection.clear();
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    render_to_text(&mut app, 120, 40);
+    app.text_selection.select_all();
+    let text = app.text_selection.selected_text().unwrap();
+    assert_eq!(text.matches("OTHER_ONLY").count(), 1, "{text}");
+    assert!(!text.contains("Get-Date"), "{text}");
+}
+
+#[test]
 fn recommendation_active_literal_is_in_chat_before_confirmation() {
     let mut app = test_app();
     let (proposal_id, _) = stage_error_fix_telemetry_proposal(&mut app, false);
@@ -28268,10 +28304,19 @@ fn executing_committed_recommendation_keeps_compact_summary() {
     app.handle_event(AppEvent::AgentMessageEnd {
         session_id: session_id.into(),
     });
-    assert!(matches!(
-        app.session_tab(session_id).completed_turns[0].details.last(),
-        Some(ChatMessage::Agent(text)) if text == "Restart-Service foo"
-    ));
+    assert!(
+        app.session_tab(session_id).completed_turns[0]
+            .details
+            .iter()
+            .all(|message| !matches!(message, ChatMessage::Agent(text) if text.contains("Restart-Service foo"))),
+        "unresolved commands belong only to the active chat projection"
+    );
+    assert_eq!(
+        render_to_text(&mut app, 80, 24)
+            .matches("Restart-Service foo")
+            .count(),
+        1
+    );
 
     app.turn_execute_card(session_id);
 
@@ -28846,7 +28891,7 @@ fn rec_card_height_handles_open_action_synthesis() {
 }
 
 #[test]
-fn rec_card_height_uses_localized_open_panel_direction_display() {
+fn rec_card_height_uses_summary_with_localized_open_panel_in_chat() {
     let _locale = crate::test_support::lock_locale();
     rust_i18n::set_locale("en-US");
     let choice = RecommendationChoice {
@@ -28863,16 +28908,23 @@ fn rec_card_height_uses_localized_open_panel_direction_display() {
         }],
     };
 
-    // The renderer displays "New panel (left) (logs) in C:/repo", which wraps
-    // at the 32-cell content width. The old planner omitted "(left)".
+    // The short card summary fits; the complete localized action is in chat,
+    // including direction, rather than inflating the action area's height.
     assert_eq!(
         recommendation_card_height(&choice, 40) as u16,
-        CARD_MIN_SIZE + 2
+        CARD_MIN_SIZE + 1
+    );
+    let mut app = test_app();
+    install_recs(&mut app, vec![choice]);
+    let text = render_to_text(&mut app, 80, 30);
+    assert!(
+        text.contains("New panel (left) (logs) in C:/repo"),
+        "{text}"
     );
 }
 
 #[test]
-fn rec_card_height_uses_localized_open_and_send_fallback() {
+fn rec_card_height_uses_summary_with_localized_open_and_send_in_chat() {
     let _locale = crate::test_support::lock_locale();
     rust_i18n::set_locale("es-ES");
     let choice = RecommendationChoice {
@@ -28891,13 +28943,16 @@ fn rec_card_height_uses_localized_open_and_send_fallback() {
         }],
     };
 
-    // The localized renderer text is "agente: aaaaaaaa" (16 chars), which
-    // wraps at the 15-character content width. The old hard-coded "agent"
-    // label fit on one row.
+    // Localized action text remains complete in chat, independent of the
+    // card summary's height.
     assert_eq!(
         recommendation_card_height(&choice, 23) as u16,
-        CARD_MIN_SIZE + 2
+        CARD_MIN_SIZE + 1
     );
+    let mut app = test_app();
+    install_recs(&mut app, vec![choice]);
+    let text = render_to_text(&mut app, 80, 30);
+    assert!(text.contains("agente: aaaaaaaa"), "{text}");
 }
 
 #[test]
@@ -28936,7 +28991,8 @@ fn rec_card_height_matches_predict_and_render_paths() {
     // inner_width 42 (W=50, chrome=8), but spills to 2 rows at
     // inner_width 40 (the old buggy basis).
     let text = "a".repeat(42);
-    let choice = rec_send(&text);
+    let mut choice = rec_send(&text);
+    choice.title = text;
     let mut app = test_app();
     app.terminal_cols = w;
     app.terminal_rows = 30;

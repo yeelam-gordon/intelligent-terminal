@@ -547,19 +547,15 @@ impl App {
         // target the same ordered source of truth.
         let surfaced_commit = match &self.session_tab(session_id).turn {
             TurnState::Surfaced {
-                outcome: TurnOutcome::Recommendation(recommendations),
+                outcome: TurnOutcome::Recommendation(_),
                 end_pending: true,
                 ..
-            } => Some((
-                format_recommendations_for_chat(recommendations, None),
-                None,
-                true,
-            )),
+            } => Some((None, None, true)),
             TurnState::Surfaced {
                 outcome: TurnOutcome::ResolvedRecommendation { summary },
                 end_pending: true,
                 ..
-            } => Some((summary.clone(), None, false)),
+            } => Some((Some(summary.clone()), None, false)),
             TurnState::Surfaced {
                 end_pending: true, ..
             } => {
@@ -703,7 +699,7 @@ impl App {
     fn turn_commit_recommendation_history(
         &mut self,
         session_id: &str,
-        summary: String,
+        summary: Option<String>,
         trailing_marker: Option<String>,
     ) {
         let tab = self.session_tab_mut(session_id);
@@ -714,7 +710,12 @@ impl App {
             prompt.text
         };
         let mut details = tab.take_current_turn_details();
-        details.push(ChatMessage::Agent(summary));
+        // Unresolved choices are transient, authoritative chat content. Store
+        // their resolved summary only after confirmation/cancellation, rather
+        // than duplicating pending or nonselected commands in history.
+        if let Some(summary) = summary {
+            details.push(ChatMessage::Agent(summary));
+        }
         tab.completed_turns.push(CompletedTurn {
             prompt: prompt_label,
             details,
@@ -771,7 +772,7 @@ impl App {
             _ => return,
         };
         let TurnState::Surfaced {
-            outcome: TurnOutcome::Recommendation(recommendations),
+            outcome: TurnOutcome::Recommendation(_),
             prompt,
             ..
         } = &tab.turn
@@ -779,7 +780,6 @@ impl App {
             return;
         };
         let prompt_id = prompt.id;
-        let recommendation_summary = format_recommendations_for_chat(recommendations, None);
         let direct_proposal_id = self
             .session_tab(session_id)
             .active_direct_proposal_id
@@ -877,15 +877,11 @@ impl App {
                 summary: executed_summary,
             }
         } else {
-            // AgentMessageEnd already committed the recommendation list while
-            // the card was visible. Replace it with only the selected action.
+            // AgentMessageEnd committed prose/tools, but not the unresolved
+            // choices. Record only the selected action in that same turn.
             if let Some((index, last)) = tab.completed_turns.iter_mut().enumerate().next_back() {
-                if let Some(ChatMessage::Agent(text)) = last.details.last_mut() {
-                    if text == &recommendation_summary {
-                        *text = executed_summary;
-                        tab.agent_markdown.borrow_mut().invalidate(index);
-                    }
-                }
+                last.details.push(ChatMessage::Agent(executed_summary));
+                tab.agent_markdown.borrow_mut().invalidate(index);
                 last.trailing_marker = None;
                 tab.invalidate_completed_turn_height(index);
             }
@@ -1062,12 +1058,9 @@ impl App {
                 outcome: TurnOutcome::Recommendation(recommendations),
                 end_pending: false,
                 ..
-            } => Some((
-                format_recommendations_for_chat(recommendations, None),
-                format_recommendations_for_chat(
-                    recommendations,
-                    user_cancelled.then_some(canceled_marker.as_str()),
-                ),
+            } => Some(format_recommendations_for_chat(
+                recommendations,
+                user_cancelled.then_some(canceled_marker.as_str()),
             )),
             _ => None,
         };
@@ -1082,14 +1075,10 @@ impl App {
                 expanded: true,
                 trailing_marker,
             });
-        } else if let Some((summary, canceled_summary)) = canceled_card_summary {
+        } else if let Some(canceled_summary) = canceled_card_summary {
             if let Some((index, last)) = tab.completed_turns.iter_mut().enumerate().next_back() {
-                if let Some(ChatMessage::Agent(text)) = last.details.last_mut() {
-                    if text == &summary {
-                        *text = canceled_summary;
-                        tab.agent_markdown.borrow_mut().invalidate(index);
-                    }
-                }
+                last.details.push(ChatMessage::Agent(canceled_summary));
+                tab.agent_markdown.borrow_mut().invalidate(index);
                 last.trailing_marker = None;
                 tab.invalidate_completed_turn_height(index);
             }
